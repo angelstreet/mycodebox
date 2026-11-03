@@ -59,7 +59,7 @@ test('a non-manager session is refused: no approval, one manager event, and the 
 
 test('a coalesce carrying a claim from another session is refused the same way, once', async () => {
   const w = makeWorld(); w.branch('feat', { 'new.js': 'x\n' });
-  const { lane, journal, refusals } = mk(w, { cfg: { settleMs: 5000 }, lane: { managerSessions: () => MANAGERS } });
+  const { lane, journal, refusals } = mk(w, { cfg: { settleMs: 5000 }, lane: { managerSessions: () => MANAGERS, settleQuietMs: 0 } });
   const first = lane.enqueue({ repo: 'env-a', branch: 'feat', session: 'worker' });
   assert.equal(lane.get(first.id).state, 'queued');
   const again = lane.enqueue({ repo: 'env-a', branch: 'feat', session: 'worker', approvedBy: 'manager' });
@@ -80,7 +80,7 @@ test('a coalesce carrying a claim from another session is refused the same way, 
 
 test('a claim from a caller that names no session is refused, even on a manager session\'s request', async () => {
   const w = makeWorld(); w.branch('feat', { 'new.js': 'x\n' });
-  const { lane, journal, refusals } = mk(w, { cfg: { settleMs: 5000 }, lane: { managerSessions: () => MANAGERS } });
+  const { lane, journal, refusals } = mk(w, { cfg: { settleMs: 5000 }, lane: { managerSessions: () => MANAGERS, settleQuietMs: 0 } });
   const first = lane.enqueue({ repo: 'env-a', branch: 'feat', session: 'manager' });
   const again = lane.enqueue({ repo: 'env-a', branch: 'feat', approvedBy: 'manager' });   // no session of its own
   assert.equal(again.id, first.id);

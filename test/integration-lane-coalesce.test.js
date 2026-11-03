@@ -24,7 +24,7 @@ async function until(fn, ms = 5000) {
 
 test('two requests for the same branch while queued coalesce into one entry with the newest tip', async () => {
   const w = makeWorld(); w.branch('feat', { 'a.js': '1\n' });
-  const { lane, events } = mk(w, { cfg: { settleMs: 5000 } });       // long window: the first request stays queued
+  const { lane, events } = mk(w, { cfg: { settleMs: 5000 }, lane: { settleQuietMs: 0 } });       // long window: the first request stays queued
   const first = lane.enqueue({ repo: 'env-a', branch: 'feat', session: 's1', note: 'first note' });
   assert.equal(lane.get(first.id).state, 'queued');
   // the session pushes again and re-requests
@@ -68,7 +68,7 @@ test('a request for a branch whose request is running becomes a second entry, ma
 
 test('a queued request waits out its settle window, and a coalesce restarts it', async () => {
   const w = makeWorld(); w.branch('feat', { 'a.js': '1\n' });
-  const { lane } = mk(w, { cfg: { settleMs: 700 } });
+  const { lane } = mk(w, { cfg: { settleMs: 700 }, lane: { settleQuietMs: 0 } });
   const base = w.main();
   const q = lane.enqueue({ repo: 'env-a', branch: 'feat' });
   await tick(300);
@@ -98,7 +98,7 @@ test('settleMs 0 picks a queued request at once', async () => {
 
 test('different branches never coalesce', async () => {
   const w = makeWorld(); w.branch('one', { 'a.js': '1\n' }); w.branch('two', { 'b.js': '2\n' });
-  const { lane } = mk(w, { cfg: { settleMs: 5000 } });
+  const { lane } = mk(w, { cfg: { settleMs: 5000 }, lane: { settleQuietMs: 0 } });
   const a = lane.enqueue({ repo: 'env-a', branch: 'one' }), b = lane.enqueue({ repo: 'env-a', branch: 'two' });
   const again = lane.enqueue({ repo: 'env-a', branch: 'two' });
   assert.notEqual(a.id, b.id);
@@ -110,7 +110,7 @@ test('different branches never coalesce', async () => {
 
 test('a coalesce takes the newest explicit scope and the newest manager flags and takes the newest manager flags', async () => {
   const w = makeWorld(); w.branch('feat', { 'a.js': '1\n' });
-  const { lane } = mk(w, { cfg: { settleMs: 5000, deploy: { env: 'env-a', defaultScope: 'full' } } });
+  const { lane } = mk(w, { cfg: { settleMs: 5000, deploy: { env: 'env-a', defaultScope: 'full' } }, lane: { settleQuietMs: 0 } });
   const first = lane.enqueue({ repo: 'env-a', branch: 'feat', session: 's1', deploy: 'frontend', note: 'n1' });
   const narrow = lane.enqueue({ repo: 'env-a', branch: 'feat', session: 's1', deploy: 'server', approvedBy: 'manager' });
   assert.equal(narrow.id, first.id);
@@ -143,11 +143,25 @@ test('settleMs config: global default, per repo override, invalid values dropped
 });
 test('a plain re-request keeps the scope; frontend then host becomes full, not host (bug-51061123)', async () => {
   const w = makeWorld(); w.branch('feat', { 'a.js': '1\n' });
-  const { lane } = mk(w, { cfg: { settleMs: 5000, deploy: { env: 'env-a', defaultScope: 'host' } } });
+  const { lane } = mk(w, { cfg: { settleMs: 5000, deploy: { env: 'env-a', defaultScope: 'host' } }, lane: { settleQuietMs: 0 } });
   const first = lane.enqueue({ repo: 'env-a', branch: 'feat', session: 's1', deploy: 'frontend' });
   lane.enqueue({ repo: 'env-a', branch: 'feat', session: 's1' });   // no --deploy: changes nothing
   assert.equal(lane.get(first.id).deployScope, 'frontend');
   lane.enqueue({ repo: 'env-a', branch: 'feat', session: 's1', deploy: 'host' });
   assert.equal(lane.get(first.id).deployScope, 'full', 'frontend + host duplicates of one request deploy both');
+  lane.stop();
+});
+
+test('the first request of a quiet branch skips the settle window; a re-request inside the quiet window settles', async () => {
+  const w = makeWorld(); w.branch('feat', { 'a.js': '1\n' });
+  const { lane } = mk(w, { cfg: { settleMs: 5000 } });   // default quiet window: 10 min
+  const first = lane.enqueue({ repo: 'env-a', branch: 'feat', session: 's1' });
+  assert.equal(lane.get(first.id).settleUntil, null, 'no history for the branch: picked at once');
+  const r = await lane.wait(first.id, 30000);
+  assert.equal(r.state, 'merged', JSON.stringify(r));
+  w.branch('feat', { 'a.js': '1\n', 'b.js': '2\n' });
+  const again = lane.enqueue({ repo: 'env-a', branch: 'feat', session: 's1' });
+  assert.ok(lane.get(again.id).settleUntil, 'the branch had a request a moment ago: the burst guard applies');
+  assert.equal(lane.get(again.id).state, 'queued');
   lane.stop();
 });
