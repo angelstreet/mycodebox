@@ -42,7 +42,7 @@ export function message(r) {
   return [
     `${TAG} AGENTS.md on origin/main changed after this session started (${stamp(r)}).`,
     'Its dated owner rules win over your task doc, handover and brief where they differ. For example, since 2026-10-14 you commit, push, merge your own tested work and deploy by the normal procedure yourself, and you never hand the owner commands to run. Since 2026-10-28 a bug outside your scope is fixed or filed with `found-bug`, and a `STATUS: done` line ends with `bugs: none | fixed <what> | reported <id>`.',
-    'Read it now (git show origin/main:AGENTS.md) and carry on with what you were doing. Do not answer this message and do not ask anything about it. If you have unfinished work that does not depend on a job, continue it. Only if everything left depends on a named job, repeat your STATUS line unchanged. If you were idle with nothing pending, write only `STATUS: acknowledged`. Never write `STATUS: done` while something is left: write `STATUS: not fully confirmed: <what remains>` (or `partial`) and keep working or go blocked.',
+    'Read it now (git show origin/main:AGENTS.md) and carry on with what you were doing. Do not answer this message and do not ask anything about it. If you have unfinished work that does not depend on a job, continue it. Only if everything left depends on a named job, repeat your STATUS line unchanged. If you were idle with nothing pending, write only `STATUS: acknowledged`. Since 2026-11-03 a session ends only when everything is finished: `STATUS: not fully confirmed` and `partial` are not end states; finish the work, or stop with `waiting:` (system wait id), `blocked:` or `needs-owner:` and a real reason.',
   ].join(' ');
 }
 

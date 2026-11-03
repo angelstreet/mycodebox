@@ -215,5 +215,5 @@ test('nudge text lets sessions with unfinished work continue (2026-11-01)', asyn
 
 test('nudge text forbids done with leftovers (2026-11-01)', async () => {
   const { message } = await import('../rules-watch.js');
-  assert.match(message({ hash: 'a'.repeat(40), at: 0 }), /Never write `STATUS: done` while something is left: write `STATUS: not fully confirmed: <what remains>`/);
+  assert.match(message({ hash: 'a'.repeat(40), at: 0 }), /`STATUS: not fully confirmed` and `partial` are not end states/);
 });

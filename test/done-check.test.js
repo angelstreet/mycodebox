@@ -130,5 +130,24 @@ test('leftovers nudge: a done line with leftovers or "not fully confirmed" is se
   assert.deepEqual(leftoverItemsOf('STATUS: done'), []);
   assert.match(leftoverItemsOf('STATUS: done — merged; not fully confirmed: device run')[0], /not fully confirmed: device run/);
   assert.match(leftoverItemsOf('Left to do:\n- run the validation\nSTATUS: done')[0], /run the validation/);
-  assert.match(leftoversMessage(['run the validation']), /Do not write STATUS: done while something is left.*STATUS: not fully confirmed: <what remains>/);
+  assert.match(leftoversMessage(['run the validation']), /Finish it now.*not an end state/);
+});
+
+test('unconfirmed STATUS (2026-11-03): not fully confirmed / partial are leftovers; waiting/blocked are real stops', async () => {
+  const { unconfirmedStatusOf, leftoverItemsOf } = await import('../done-check.js');
+  assert.equal(unconfirmedStatusOf('STATUS: not fully confirmed: live, replay'), 'live, replay');
+  assert.equal(unconfirmedStatusOf('STATUS: partial'), '');
+  assert.equal(unconfirmedStatusOf('STATUS: waiting: not fully confirmed run'), null);
+  assert.equal(unconfirmedStatusOf('STATUS: blocked: x'), null);
+  assert.equal(unconfirmedStatusOf('STATUS: done; bugs: none'), null);
+  assert.deepEqual(leftoverItemsOf('STATUS: not fully confirmed: live'), ['not fully confirmed: live']);
+});
+
+test('unconfirmed STATUS: pushed once per distinct list, capped at 3 a day, then the manager is told once', async (t) => {
+  let n = 0;
+  const h = harness(t, { sessions: () => [{ name: 'a', cwd: '/w/clean', text: `STATUS: not fully confirmed: item ${n}` }] });
+  for (n = 0; n < 5; n++) { await h.w.tick(); await h.w.tick(); }
+  assert.equal(h.sent.length, 3);
+  assert.match(h.sent[0][1], /not an end state/);
+  assert.equal(h.events.filter((k) => k === 'done-check-left-cap:a').length, 1);
 });

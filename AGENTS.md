@@ -67,10 +67,9 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
   shipped without stopping to ask "which one next?". Keep the queue explicit, rank it yourself, and take the fixes one
   at a time. Ask only on a hard-floor item, a conflict between two of the owner's requests, or a request too ambiguous
   to act on. `STATUS: done` is only honest when the queue is empty.
-- Never `STATUS: done` with leftovers (owner, 2026-11-01): when anything is left, write `STATUS: not fully confirmed: <what remains>` (or `partial`)
-  and keep working or go blocked. The done-check sends a session whose done line lists leftovers or "not fully confirmed" back to finish them.
-- Never write work-in-progress into the live checkout (`~/ghosty-sessions`), including doc edits. It blocks deploys and
-  risks committing secrets. Every change, docs included, goes in a worktree.
+- A session ends only when everything is finished (owner, 2026-11-03, supersedes 2026-11-01): `STATUS: not fully confirmed` and `partial` are
+  not end states. Finish the work, or stop with `STATUS: waiting: <system wait id>`, `blocked: <reason + what you tried>` or `needs-owner:` for a
+  hard-floor item. The done-check sends a session that ends on "not fully confirmed", `partial` or a done line with leftovers back to finish (max 3 pushes a day, then the manager is told).
 - UI icons come from `public/icons.js`; add an icon there instead of pasting emoji or one-off SVG.
 - Match the surrounding code: terse comments that explain why, no new dependencies without a reason.
 

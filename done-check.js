@@ -59,14 +59,29 @@ export function bugsMessage() {
   return 'Done check: your STATUS: done line has no bugs field. Add `bugs: none | fixed <what> | reported <id>` to it (for example `STATUS: done — branch x merged; bugs: none`). If you saw anything outside your scope that errored, misbehaved or that you worked around, fix it or run `found-bug --title ... --error ...` first. End with a STATUS line.';
 }
 
-// Owner rule 2026-11-01: never `STATUS: done` with something left. A done line that lists leftovers or says "not fully confirmed" is sent back to finish.
+// Owner rule 2026-11-03: a session ends only when everything is finished. `STATUS: done` with leftovers, `STATUS: not fully confirmed`
+// and `STATUS: partial` are not end states: the session is sent back to finish. Real stops are waiting: / blocked: / needs-owner: / needs-manager:.
+export const LEFT_PUSHES_PER_DAY = 3;
 export function leftoversMessage(items) {
-  return `Done check: your STATUS says done, but you listed work still left: ${items.slice(0, 3).join(' | ').slice(0, 280)}. Do not write STATUS: done while something is left: finish it now (or keep working / go blocked), and use \`STATUS: not fully confirmed: <what remains>\` (or partial) until it is all done.`;
+  return `Done check: your STATUS is not an end state, work is still left: ${items.slice(0, 3).join(' | ').slice(0, 280)}. Finish it now. The only acceptable stops are \`STATUS: waiting: <system wait id>\`, \`STATUS: blocked: <hard-floor/physical/lease reason + what you tried>\` or \`STATUS: needs-owner:\` for a hard-floor item. Never ask the owner for anything you can do yourself. "Not fully confirmed" is not an end state.`;
+}
+// Pure. The last STATUS line of the text, if it is a literal not-fully-confirmed / partial -> the remaining list ('' when none named), else null.
+export function unconfirmedStatusOf(text) {
+  const lines = String(text || '').split('\n');
+  let at = -1;
+  lines.forEach((l, i) => { if (/^\W*STATUS:/i.test(l.trim())) at = i; });
+  if (at < 0) return null;
+  let line = lines[at].trim();
+  for (let j = at + 1; j < lines.length && /^\s{2,}\S/.test(lines[j]) && !/^\W*STATUS:/i.test(lines[j].trim()); j++) line += ' ' + lines[j].trim();
+  const m = /^\W*STATUS:[*_`]*\s*(?:not fully confirmed|partial)\b[*_`]*[\s:—–-]*(.*)$/i.exec(line);
+  return m ? m[1].trim() : null;
 }
 export function leftoverItemsOf(text) {
   const items = pushableItems(text) || [];
   const m = /^\W*STATUS:\s*(?:done|ok|complete|completed|finished)\b.*?\bnot fully confirmed\b[:\s-]*(.*)$/im.exec(String(text || ''));
   if (m) items.push(`not fully confirmed${m[1] ? ': ' + m[1].trim() : ''}`);
+  const u = unconfirmedStatusOf(text);
+  if (u !== null) items.push(`not fully confirmed${u ? ': ' + u : ''}`);
   return items;
 }
 
@@ -203,7 +218,8 @@ export function createDoneCheck({
         catch (e) { log.error?.('[done-check] send bugs', s.name, e.message); }
       }
       // (B) a done STATUS that lists leftovers / "not fully confirmed" is sent back to finish them, once per distinct list
-      st.toldLeft ||= {};
+      st.toldLeft ||= {}; st.leftCount ||= {};
+      for (const n of Object.keys(st.leftCount)) if (!live.has(n)) delete st.leftCount[n];
       for (const n of Object.keys(st.toldLeft)) if (!live.has(n)) delete st.toldLeft[n];
       for (const s of sessions) {
         if (s.working) continue;
@@ -211,9 +227,15 @@ export function createDoneCheck({
         if (!items.length) continue;
         const sig = createHash('sha1').update(items.join('\0')).digest('hex').slice(0, 12);
         if (st.toldLeft[s.name] === sig) continue;
+        const day = new Date(now()).toISOString().slice(0, 10), cnt = st.leftCount[s.name];
+        const used = cnt?.day === day ? cnt.n : 0;
+        if (used >= LEFT_PUSHES_PER_DAY) {   // cap reached: report to the manager once, then stay quiet
+          if (m !== 'dry' && !cnt.reported) { cnt.reported = true; await record({ key: `done-check-left-cap:${s.name}`, title: `${s.name} keeps stopping with leftovers`, body: items.join(' | ').slice(0, 300), url: '/', priority: 'default' }).catch(() => {}); }
+          continue;
+        }
         if (m === 'dry') { await note({ dry: true, session: s.name, leftovers: items }); continue; }
         if (!quiet || nudged >= MAX_NUDGES_PER_TICK) continue;
-        try { await send(s.name, leftoversMessage(items)); st.toldLeft[s.name] = sig; nudged++; await note({ session: s.name, leftovers: items }); }
+        try { await send(s.name, leftoversMessage(items)); st.toldLeft[s.name] = sig; st.leftCount[s.name] = { day, n: used + 1, reported: false }; nudged++; await note({ session: s.name, leftovers: items }); }
         catch (e) { log.error?.('[done-check] send leftovers', s.name, e.message); }
       }
       await save(st);
