@@ -17,13 +17,20 @@
 #   -H  handover file: the session reads it, summarises state and open items, then does the work (owner autonomy rule)
 #   -W  with -H: review only — summarise, propose the next step, then wait for the owner
 #   -f  prompt file, used verbatim;  -t  prompt text
-#   -x  dry run: print the launch command, start nothing
+#   -w  worktree branch (default <type>/<name>: fix/ for BUG*, docs/ for docs*, else feat/; name lowercased)
+#   -N  no worktree: start in DIR itself
+#   -x  dry run: print the launch command (and the worktree step), start nothing
+# Worktree (before the first prompt): when DIR is the main checkout of a git repo (not a linked worktree) and is not
+#   listed in ~/.config/cbsession/no-worktree (one path per line: live checkouts of services), cbsession runs
+#   `git worktree add ~/<repo>-<name> -b <branch> main` (origin/main when it exists) and starts the session there.
+#   An existing ~/<repo>-<name> worktree, or an existing branch, is reused (idempotent).
 # Env: MCODE_NODE_DIR (node bin dir for mcode), GHOSTY_STATE_DIR, GHOSTY_PORT (default $PORT or 7777) (to report the start to the dashboard history).
 set -euo pipefail
-NAME= DIR= PROV=claude MODEL= BILL=sub HANDOVER= PFILE= TEXT= DRY=0 WAIT=0
-while getopts "n:d:p:m:b:H:f:t:xWh" o; do case $o in
+q() { printf '%q' "$1"; }
+NAME= DIR= PROV=claude MODEL= BILL=sub HANDOVER= PFILE= TEXT= DRY=0 WAIT=0 WTB= NOWT=0
+while getopts "n:d:p:m:b:H:f:t:w:NxWh" o; do case $o in
   n) NAME=$OPTARG;; d) DIR=$OPTARG;; p) PROV=$OPTARG;; m) MODEL=$OPTARG;; b) BILL=$OPTARG;; H) HANDOVER=$OPTARG;;
-  f) PFILE=$OPTARG;; t) TEXT=$OPTARG;; x) DRY=1;; W) WAIT=1;; *) sed -n 2,21p "$0"; exit 2;; esac; done
+  f) PFILE=$OPTARG;; t) TEXT=$OPTARG;; w) WTB=$OPTARG;; N) NOWT=1;; x) DRY=1;; W) WAIT=1;; *) sed -n 2,29p "$0"; exit 2;; esac; done
 [[ $NAME =~ ^[A-Za-z0-9_-]{1,40}$ ]] || { echo "cbsession: -n NAME required (A-Z a-z 0-9 _ -, max 40)" >&2; exit 2; }
 [ -d "$DIR" ] || { echo "cbsession: -d DIR must be an existing directory" >&2; exit 2; }
 DIR=$(cd "$DIR" && pwd)
@@ -34,6 +41,29 @@ if [ "$BILL" != sub ]; then
   [ -s "$KF" ] || { echo "cbsession: billing key $KF not found (one line, chmod 600)" >&2; exit 2; }
 fi
 tmux has-session -t "=$NAME" 2>/dev/null && { echo "cbsession: tmux session '$NAME' already exists" >&2; exit 1; }
+
+# Own worktree before the first prompt (see header). Sets DIR to the worktree; WTCMD is what the dry run prints.
+WTCMD=
+TOP=$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null || true)
+if [ "$NOWT" != 1 ] && [ -n "$TOP" ] \
+   && [ "$(git -C "$TOP" rev-parse --absolute-git-dir)" = "$(git -C "$TOP" rev-parse --path-format=absolute --git-common-dir)" ] \
+   && ! { [ -r "$HOME/.config/cbsession/no-worktree" ] && grep -qxF "$TOP" "$HOME/.config/cbsession/no-worktree"; }; then
+  if [ -z "$WTB" ]; then
+    LN=$(tr '[:upper:]' '[:lower:]' <<<"$NAME")
+    case $LN in bug*) WTB=fix/$LN;; docs*) WTB=docs/$LN;; *) WTB=feat/$LN;; esac
+  fi
+  WT="$HOME/$(basename "$TOP")-$NAME"; SUB=${DIR#"$TOP"}
+  BASE=main; git -C "$TOP" rev-parse --verify -q origin/main >/dev/null && BASE=origin/main
+  if [ -d "$WT" ]; then WTCMD="reuse $WT"
+  elif git -C "$TOP" rev-parse --verify -q "refs/heads/$WTB" >/dev/null; then WTCMD="git -C $(q "$TOP") worktree add $(q "$WT") $(q "$WTB")"
+  else WTCMD="git -C $(q "$TOP") worktree add $(q "$WT") -b $(q "$WTB") $BASE"; fi
+  if [ "$DRY" != 1 ] && [ "${WTCMD%% *}" = git ]; then
+    eval "$WTCMD" >/dev/null 2>&1 || { echo "cbsession: could not create the worktree: $WTCMD" >&2; exit 1; }
+  fi
+  [ -d "$WT" ] && git -C "$WT" rev-parse --git-dir >/dev/null 2>&1 || [ "$DRY" = 1 ] \
+    || { echo "cbsession: $WT exists but is not a git worktree" >&2; exit 1; }
+  DIR=$WT$SUB
+fi
 
 H="$HOME/handovers"; mkdir -p "$H"; P="$H/$NAME.prompt.md"; L="$H/$NAME.launch.sh"
 if [ -n "$HANDOVER" ]; then
@@ -79,11 +109,11 @@ elif [ -n "$PFILE" ]; then cp "$PFILE" "$P"; BUGRULE=1
 elif [ -n "$TEXT" ]; then printf '%s\n' "$TEXT" > "$P"; BUGRULE=1
 else echo "cbsession: give -H HANDOVER, -f PROMPT_FILE or -t TEXT" >&2; exit 2; fi
 
+[ -n "$WTCMD" ] && printf '\nYour worktree is ready: %s (branch %s, made by cbsession from main before this prompt). Work only there; rename the branch if the task needs another name.\n' "$DIR" "$WTB" >> "$P"
 # -f / -t prompts get the found-bugs rule too (every provider launches from this one file; owner 2026-10-28)
 [ "${BUGRULE:-}" = 1 ] && printf '\nFirst command: `git worktree list`; create or reuse your worktree and work only there, never in a shared checkout.\n' >> "$P"
 [ "${BUGRULE:-}" = 1 ] && printf '\nBug outside your scope: fix it in a worktree, or run `found-bug --title ... --repro ... --error ... --blocking yes|no`; never leave it in a closing line. A STATUS: done line ends with `bugs: none | fixed <what> | reported <id>`.\n' >> "$P"
 
-q() { printf '%q' "$1"; }
 # -b NAME: settings file with an apiKeyHelper that reads the key file at launch (the key never lands in a file here).
 CS=
 if [ "$BILL" != sub ]; then
@@ -113,7 +143,7 @@ mcode -m $(q "$M") \"\$(cat $(q "$P"))\""
   *) echo "cbsession: -p must be claude|codex|minimax|opencode" >&2; exit 2;;
 esac
 printf '#!/usr/bin/env bash\ncd %s\n%s\n' "$(q "$DIR")" "$CMD" > "$L"; chmod +x "$L"
-if [ "$DRY" = 1 ]; then echo "prompt: $P"; echo "launch: $L"; cat "$L"; exit 0; fi
+if [ "$DRY" = 1 ]; then [ -n "$WTCMD" ] && echo "worktree: $WTCMD"; echo "prompt: $P"; echo "launch: $L"; cat "$L"; exit 0; fi
 
 tmux new-session -d -s "$NAME" -c "$DIR" -x 160 -y 45 "bash $(q "$L"); exec bash -l"
 # Claude: accept the folder-trust dialog if it appears (the selected option differs by version), then wait for Remote Control.
@@ -128,7 +158,7 @@ for i in $(seq 1 30); do
 done
 S=$(tmux capture-pane -p -t "=$NAME:" 2>/dev/null || true)
 URL=$(grep -o "https://claude.ai/code/session_[A-Za-z0-9]*" <<<"$S" | tail -1 || true)
-echo "started: $NAME ($PROV${MODEL:+ $MODEL}${CS:+, billing $BILL}) in $DIR"
+echo "started: $NAME ($PROV${MODEL:+ $MODEL}${CS:+, billing $BILL}) in $DIR${WTCMD:+ (worktree: $WTCMD)}"
 [ "$PROV" = claude ] && { [ -n "$URL" ] && echo "remote control: $URL" || echo "remote control: not confirmed yet — check: tmux capture-pane -p -t $NAME"; }
 echo "prompt: $P"
 
