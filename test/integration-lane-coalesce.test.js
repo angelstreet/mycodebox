@@ -108,13 +108,13 @@ test('different branches never coalesce', async () => {
   lane.stop();
 });
 
-test('a coalesce keeps the wider deploy scope and takes the newest manager flags', async () => {
+test('a coalesce takes the newest explicit scope and the newest manager flags and takes the newest manager flags', async () => {
   const w = makeWorld(); w.branch('feat', { 'a.js': '1\n' });
   const { lane } = mk(w, { cfg: { settleMs: 5000, deploy: { env: 'env-a', defaultScope: 'full' } } });
   const first = lane.enqueue({ repo: 'env-a', branch: 'feat', session: 's1', deploy: 'frontend', note: 'n1' });
   const narrow = lane.enqueue({ repo: 'env-a', branch: 'feat', session: 's1', deploy: 'server', approvedBy: 'manager' });
   assert.equal(narrow.id, first.id);
-  assert.equal(lane.get(first.id).deployScope, 'server', 'the wider scope wins');
+  assert.equal(lane.get(first.id).deployScope, 'full', 'frontend + server are independent targets: only full deploys both');
 
   const wide = lane.enqueue({ repo: 'env-a', branch: 'feat', session: 's1', deploy: 'full', migrationApplied: true });
   assert.equal(wide.id, first.id);
@@ -140,4 +140,14 @@ test('settleMs config: global default, per repo override, invalid values dropped
   assert.equal(bad.settleMs, null);
   assert.equal(bad.errors.length, 3);
   assert.equal(DEFAULT_SETTLE_MS, 60000);
+});
+test('a plain re-request keeps the scope; frontend then host becomes full, not host (bug-51061123)', async () => {
+  const w = makeWorld(); w.branch('feat', { 'a.js': '1\n' });
+  const { lane } = mk(w, { cfg: { settleMs: 5000, deploy: { env: 'env-a', defaultScope: 'host' } } });
+  const first = lane.enqueue({ repo: 'env-a', branch: 'feat', session: 's1', deploy: 'frontend' });
+  lane.enqueue({ repo: 'env-a', branch: 'feat', session: 's1' });   // no --deploy: changes nothing
+  assert.equal(lane.get(first.id).deployScope, 'frontend');
+  lane.enqueue({ repo: 'env-a', branch: 'feat', session: 's1', deploy: 'host' });
+  assert.equal(lane.get(first.id).deployScope, 'full', 'frontend + host duplicates of one request deploy both');
+  lane.stop();
 });

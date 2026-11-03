@@ -2,7 +2,7 @@
 // (and CI) wait outside the lane, and a later request's deploy carries earlier merges of the same repo.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createIntegrationLane } from '../integration-lane.js';
+import { createIntegrationLane, scopeCovers, scopeUnion } from '../integration-lane.js';
 import { makeWorld } from './helpers-lane.js';
 import { tmp } from './helpers-tmp.js';
 
@@ -75,5 +75,41 @@ test('if the covering request is returned, the earlier one deploys itself', asyn
   assert.equal(asked.length, 1);
   assert.equal(asked[0], lane.get(a.id).sha);
   assert.equal(lane.get(a.id).coveredBy, undefined);
+  await lane.idle(); lane.stop();
+});
+
+// bug-51061123: a host deploy does not deploy the frontend or the server target; only full covers all three.
+test('scope containment: only full covers other scopes', () => {
+  for (const s of ['frontend', 'server', 'host', 'full']) assert.ok(scopeCovers(s, s));
+  for (const a of ['frontend', 'server', 'host']) for (const b of ['frontend', 'server', 'host']) if (a !== b) assert.equal(scopeCovers(a, b), false, `${a} must not carry ${b}`);
+  for (const b of ['frontend', 'server', 'host']) { assert.ok(scopeCovers('full', b)); assert.equal(scopeCovers(b, 'full'), false); }
+  assert.equal(scopeUnion('frontend', 'host'), 'full');
+  assert.equal(scopeUnion('server', 'frontend'), 'full');
+  assert.equal(scopeUnion('host', 'full'), 'full');
+  assert.equal(scopeUnion('server', 'server'), 'server');
+});
+
+test('a later host request does not carry an earlier frontend request (bug-51061123)', async () => {
+  const w = makeWorld(); w.branch('a', { 'a.js': '1\n' }); w.branch('b', { 'b.js': '2\n' });
+  const asked = [];
+  const deploys = { request: async (o) => { asked.push(o.scope); return { id: `d${asked.length}` }; }, wait: async () => ({ ok: true, version: 'v' }) };
+  const lane = mk(w, deploys);
+  const a = lane.enqueue({ repo: 'env-a', branch: 'a', deploy: 'frontend' });
+  const b = lane.enqueue({ repo: 'env-a', branch: 'b', deploy: 'host' });
+  await until(() => lane.get(a.id).state === 'deployed' && lane.get(b.id).state === 'deployed');
+  assert.deepEqual(asked.sort(), ['frontend', 'host'], 'each target gets its own deploy');
+  assert.equal(lane.get(a.id).coveredBy, undefined);
+  await lane.idle(); lane.stop();
+});
+
+test('a later full request still carries an earlier frontend request', async () => {
+  const w = makeWorld(); w.branch('a', { 'a.js': '1\n' }); w.branch('b', { 'b.js': '2\n' });
+  const asked = [];
+  const deploys = { request: async (o) => { asked.push(o.scope); return { id: `d${asked.length}` }; }, wait: async () => ({ ok: true, version: 'v' }) };
+  const lane = mk(w, deploys);
+  const a = lane.enqueue({ repo: 'env-a', branch: 'a', deploy: 'frontend' });
+  const b = lane.enqueue({ repo: 'env-a', branch: 'b', deploy: 'full' });
+  await until(() => lane.get(a.id).state === 'deployed' && lane.get(b.id).state === 'deployed');
+  assert.deepEqual(asked, ['full']);
   await lane.idle(); lane.stop();
 });
