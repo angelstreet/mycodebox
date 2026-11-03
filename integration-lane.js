@@ -32,6 +32,9 @@ export const scopeUnion = (a, b) => scopeCovers(a, b) ? a : scopeCovers(b, a) ? 
 // A queued request waits this long without changing before the lane picks it: a session that pushes commit after commit and
 // re-requests must not restart the target's CI once per commit (2026-10-20: three merges of one branch in three minutes).
 export const DEFAULT_SETTLE_MS = 60_000;
+// A branch with no request of its own in this long is not mid-burst: its first request skips the settle window (2026-11-03,
+// median queue wait was exactly the 60 s settle). A re-request inside the window still settles, so the CI-per-commit guard holds.
+export const DEFAULT_SETTLE_QUIET_MS = 10 * 60_000;
 // A pushed request waits at most this long for a later request's deploy to carry it (one deploy of the latest main instead of one each).
 export const DEFAULT_DEPLOY_COALESCE_MS = 300_000;
 const MAX_SETTLE_MS = 3_600_000;
@@ -311,6 +314,7 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
   // function returning the current manager session names (server.js passes loadManagerSessions). Absent = older wiring / tests:
   // every caller keeps today's behaviour, so an un-wired lane is never suddenly stricter.
   managerSessions = null,
+  settleQuietMs = DEFAULT_SETTLE_QUIET_MS,   // 0 = every request settles (the first of a branch included)
   pollMs = 15_000, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), restart = createTmuxRestart(), pidAlive = waiterAlive } = {}) {
   if (!stateDir) throw coded('E_CONFIG', 'integration lane: stateDir required');
   const dir = path.join(stateDir, 'integration');
@@ -350,6 +354,11 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
   // A queued request may only be picked once it has sat unchanged for its repo's settleMs. `settleUntil` is the moment the
   // window ends (ISO), set at enqueue and pushed back by every coalesce. Absent = an older record or settleMs 0: pick at once.
   const settleUntilOf = (repo) => { const ms = settleOf(repo); return ms > 0 ? new Date(now() + ms).toISOString() : null; };
+  // First request for the branch within the quiet window (any state, incl. cancelled): no settle, nothing to debounce yet.
+  const quietBranch = (repo, branch, target) => {
+    const cut = now() - settleQuietMs;
+    return settleQuietMs > 0 && ![...reqs.values()].some((x) => x.repo === repo && x.branch === branch && x.target === target && (Date.parse(x.createdAt) || 0) > cut);
+  };
   const settleLeft = (r) => (r.settleUntil ? Math.max(0, Date.parse(r.settleUntil) - now()) : 0);
   const settled = (r) => settleLeft(r) <= 0;
   // The lane is serial per repo (one worker), so a queued request behind a running one already waits for it; this is only the
@@ -1171,7 +1180,7 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
         deployScope, deployExplicit: !!input.deploy, worktree, note: input.note ? String(input.note).slice(0, 500) : null, by: input.by ? String(input.by).slice(0, 80) : null,
         state: 'queued', createdAt: iso(), updatedAt: iso(), startedAt: null, endedAt: null, step: null, steps: [], reason: null, tail: '',
         sha: null, branchSha: null, ci: null, deployed: null,
-        settleUntil: settleUntilOf(key), afterId: null };
+        settleUntil: quietBranch(key, branch, c.target) ? null : settleUntilOf(key), afterId: null };
       // --approved-by / --migration-applied: honoured only when the requesting session is a manager session (2026-10-20); a claim from
       // any other session is ignored and the request is evaluated as if none was given.
       const ap = applyApproval(r, input, session);

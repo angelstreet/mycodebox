@@ -68,7 +68,7 @@ test('route: --for a live session is passed to the lane; an unknown or malformed
 
 test('lane: forSession is stored on the request, a re-request coalesces to the newest --for', async () => {
   const w = makeWorld(); w.branch('feat', { 'a.js': '1\n' });
-  const lane = createIntegrationLane({ stateDir: tmp('lane-for-'), config: { repos: { 'env-a': w.cfg({ settleMs: 5000 }) } }, pollMs: 2, sleep: () => new Promise((r) => setTimeout(r, 1)) });
+  const lane = createIntegrationLane({ stateDir: tmp('lane-for-'), config: { repos: { 'env-a': w.cfg({ settleMs: 5000 }) } }, settleQuietMs: 0, pollMs: 2, sleep: () => new Promise((r) => setTimeout(r, 1)) });
   lane.start();
   const q = lane.enqueue({ repo: 'env-a', branch: 'feat', session: 'manager', forSession: 'worker-a' });
   assert.equal(lane.get(q.id).forSession, 'worker-a'); assert.equal(lane.get(q.id).session, 'manager');
