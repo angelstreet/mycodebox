@@ -23,8 +23,12 @@ export const STATES = Object.freeze(['queued', 'running', ...FINAL]);
 const BRANCH_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
 const KEY_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const SCOPES = new Set(['frontend', 'server', 'host', 'full']);   // the deploy queue's scopes
-// How wide a deploy scope reaches, so a coalesce keeps the wider of two (`--deploy frontend` then `--deploy full` deploys).
-const SCOPE_WIDTH = Object.freeze({ frontend: 1, server: 2, host: 3, full: 4 });
+// What a deploy scope reaches: sets, not a width order. frontend, server and host are independent targets; only `full` covers all three
+// (bug-51061123: a host deploy ended a frontend request as "deployed" though the frontend target never moved).
+const SCOPE_REACH = Object.freeze({ frontend: ['frontend'], server: ['server'], host: ['host'], full: ['frontend', 'server', 'host'] });
+export const scopeCovers = (a, b) => !!SCOPE_REACH[a] && !!SCOPE_REACH[b] && SCOPE_REACH[b].every((t) => SCOPE_REACH[a].includes(t));
+// The one scope that deploys both: the one that covers the other, else `full`.
+export const scopeUnion = (a, b) => scopeCovers(a, b) ? a : scopeCovers(b, a) ? b : 'full';
 // A queued request waits this long without changing before the lane picks it: a session that pushes commit after commit and
 // re-requests must not restart the target's CI once per commit (2026-10-20: three merges of one branch in three minutes).
 export const DEFAULT_SETTLE_MS = 60_000;
@@ -948,7 +952,7 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
 
   // The first later request (same repo, equal or wider scope) that has not ended: its deploy will carry request r.
   const coverOf = (r) => [...reqs.values()].filter((x) => x.repo === r.repo && x.seq > r.seq && !x.revertOf && x.deployScope && !FINAL.includes(x.state)
-    && (SCOPE_WIDTH[x.deployScope] ?? 0) >= (SCOPE_WIDTH[r.deployScope] ?? 0)).sort((a, b) => a.seq - b.seq)[0] || null;
+    && scopeCovers(x.deployScope, r.deployScope)).sort((a, b) => a.seq - b.seq)[0] || null;
   function waitFinal(id, ms) {
     const x = reqs.get(id);
     if (!x || FINAL.includes(x.state)) return Promise.resolve();
@@ -1070,8 +1074,12 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
       const merged = [...new Set(parts)].join('\n');
       r.note = merged.length > 500 ? `…${merged.slice(merged.length - 499)}` : merged;
     }
-    if (v.explicit || !r.deployScope) { r.deployScope = v.deployScope; r.deployExplicit = r.deployExplicit || v.explicit; }
-    else if (v.deployScope && (SCOPE_WIDTH[v.deployScope] ?? 0) > (SCOPE_WIDTH[r.deployScope] ?? 0)) r.deployScope = v.deployScope;   // the wider scope wins
+    if (!r.deployScope) { r.deployScope = v.deployScope; r.deployExplicit = r.deployExplicit || v.explicit; }
+    else if (v.deployScope) {   // a scope that covers the other wins; unrelated explicit scopes (frontend, then host) become full, never silently one of them
+      r.deployScope = r.deployExplicit ? scopeUnion(r.deployScope, v.deployScope) : v.deployScope;
+      r.deployExplicit = r.deployExplicit || v.explicit;
+    }
+
     // --approved-by / --migration-applied attest to a request; the newest one wins, and a request that no longer carries one loses it.
     if (v.session && !r.session) r.session = v.session;
     if (v.forSession) r.forSession = v.forSession;   // the newest --for wins
