@@ -181,3 +181,14 @@ test('external-result always wakes the manager (not dropped, not deduped across 
   assert.deepEqual(kinds(run(env, line)), ['external-result']);
   assert.deepEqual(kinds(run(env, line)), ['external-result']);
 });
+
+test('the deploy runner\'s per-host narrowing is dropped; narrowed by another agent or without the done-on purpose still passes', () => {
+  const dir = tmp('ghosty-filt-');
+  const env = { ...process.env, GHOSTY_STATE_DIR: dir };
+  const own = ev({ key: 'lease:narrowed', kind: 'lease', state: 'narrowed', title: 'lease narrowed to host: e/host-a,host-b (agent manager:deploy)', body: 'lease 1 by manager:deploy (deploy abc123: done on host-c); purpose: deploy abc123' });
+  const other = ev({ key: 'lease:narrowed', kind: 'lease', state: 'narrowed', title: 'lease narrowed to host: e/host-a (agent web)', body: 'lease 2 by web (deploy abc123: done on host-c); purpose: x' });
+  const odd = ev({ key: 'lease:narrowed', kind: 'lease', state: 'narrowed', title: 'lease narrowed to host: e/host-a (agent manager:deploy)', body: 'lease 3 by manager:deploy (stuck); purpose: deploy abc123' });
+  assert.deepEqual(kinds(run(env, own)), []);
+  assert.deepEqual(kinds(run(env, other)), ['lease']);
+  assert.deepEqual(kinds(run(env, odd)), ['lease']);
+});

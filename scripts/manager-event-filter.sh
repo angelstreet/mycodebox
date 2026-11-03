@@ -3,7 +3,8 @@
 # drops routine deploy start/done, the deploy runner's own lease releases (manager:deploy), deploy events and lease releases Jev says "ignore" at >= 0.9 (the runner starts a waiting deploy on release itself)
 # (never for asks/waiting/hold/quota/disk/credits or failed/orphan deploys), and repeats of the same stop (per run).
 # Every routine lease released/expired event is dropped (bug-0809f1cc: CI sweep and dispatch leases woke the manager every 2-10 min);
-# lease events that need a human (denied, stuck/overdue, narrowed, ...) still pass. A `system-wait` (a session waiting on a live ticket or
+# lease events that need a human (denied, stuck/overdue, narrowed by another agent, ...) still pass.
+# The deploy runner's own per-host narrowing (agent manager:deploy, "deploy <id>: done on <host>") is dropped (one host deploy woke the manager ~20 times, 2026-11-03). A `system-wait` (a session waiting on a live ticket or
 # a running deploy, owner 2026-10-31) is dropped too: the queue or the runner resolves it, the lease watchdog tells the session.
 # Routine integration success (`int-<id>:merged` / `int-<id>:deployed`, default priority; owner 2026-11-02, wake noise): dropped here, still in
 # manager-events.jsonl; manager-status-scan.sh prints the hourly count. returned / failed / blocked / cancelled / CI-red integrations pass.
@@ -49,6 +50,7 @@ jq -c --unbuffered --argjson policy "$POLICY" '
     or ((.jev.pick=="ignore") and ((.jev.confidence//0) >= 0.9) and (.kind=="deploy") and (.state!="failed") and (.state!="orphan"))
     or ((.jev.pick=="ignore") and ((.jev.confidence//0) >= 0.9) and (.kind=="lease") and (.state=="released"))
     or ((.kind=="lease") and (.state=="released") and (((.title//"")|test("\\((agent )?manager:deploy\\)")) or ((.body//"")|test("by manager:deploy \\(deploy-finished\\)"))))
+    or ((.kind=="lease") and (.state=="narrowed") and ((.title//"")|test("\\(agent manager:deploy\\)$")) and ((.body//"")|test("by manager:deploy \\(deploy [0-9a-f]+: done on [^)]+\\)")))
     or (((.kind//"")|tostring|test("^int-[0-9a-f]+:(merged|deployed)$")) and ((.priority//"default")=="default"))
     or ((.kind=="told") or ((.kind//"")|tostring|test("^unseen:")))
     or ((.kind=="lease") and (.state=="released" or .state=="expired" or .state=="system-wait"))
