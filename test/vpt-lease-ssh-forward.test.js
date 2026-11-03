@@ -20,9 +20,17 @@ node -e 'require("fs").appendFileSync(process.argv[1], JSON.stringify(process.ar
 [ -n "$FAKE_SSH_EXIT" ] && { echo "ssh: connect failed" >&2; exit "$FAKE_SSH_EXIT"; }
 # FAKE_SSH_FAIL_N=n: the first n calls drop (255), later ones work; FAKE_SSH_FAIL_AFTER=n: every call after the n-th drops
 c="${sshLog}.n"; n=$(cat "$c" 2>/dev/null || echo 0); echo $((n+1)) > "$c"
-[ -n "$FAKE_SSH_FAIL_N" ] && [ "$n" -lt "$FAKE_SSH_FAIL_N" ] && { echo "ssh: dropped" >&2; exit 255; }
+for last; do :; done
+case "$last" in *" claim "*) cc="${sshLog}.c"; m=$(cat "$cc" 2>/dev/null || echo 0); echo $((m+1)) > "$cc";; *) m=99;; esac
+[ -n "$FAKE_SSH_FAIL_N" ] && [ "$m" -lt "$FAKE_SSH_FAIL_N" ] && { echo "ssh: dropped" >&2; exit 255; }
 [ -n "$FAKE_SSH_FAIL_AFTER" ] && [ "$n" -ge "$FAKE_SSH_FAIL_AFTER" ] && { echo "ssh: dropped" >&2; exit 255; }
 for last; do :; done
+# FAKE_SSH_TERM255=1: like real ssh, SIGTERM ends the client with 255 (and the remote command is orphaned unless its stdin closes)
+if [ -n "$FAKE_SSH_TERM255" ]; then
+  sh -c "$last" & kid=$!
+  trap 'kill $kid 2>/dev/null; exit 255' TERM
+  wait $kid; exit $?
+fi
 exec sh -c "$last"
 `, { mode: 0o755 });
 // fake central client (the remote vpt-lease): logs its args and env marks, canned output per subcommand
@@ -31,10 +39,12 @@ fs.writeFileSync(fakeRemote, `#!/bin/sh
 node -e 'require("fs").appendFileSync(process.argv[1], JSON.stringify({args: process.argv.slice(3), mode: process.env.VPT_LEASE_MODE, fwd: process.env.VPT_LEASE_FORWARDED}) + "\\n")' "${remoteLog}" -- "$@"
 echo "$1" >> "${order}"
 case "$1" in
-  claim) echo "L-42"; exit \${FAKE_CLAIM_CODE:-0};;
+  claim) if [ -n "$FAKE_CLAIM_HANG" ]; then echo "$$" > "${tmp}/claim.pid"; exec sleep 30; fi
+         echo "L-42"; exit \${FAKE_CLAIM_CODE:-0};;
   heartbeat) echo ok; exit \${FAKE_HB_CODE:-0};;
   release) echo "released 1"; exit 0;;
-  list) if [ -n "$FAKE_LIST_JSON" ]; then echo "$FAKE_LIST_JSON"; else echo "out:$*"; fi; exit 0;;
+  list) if [ -n "$FAKE_LIST_JSON_FIRST" ] && [ ! -e "${tmp}/list.n" ]; then touch "${tmp}/list.n"; echo "$FAKE_LIST_JSON_FIRST"; exit 0
+        elif [ -n "$FAKE_LIST_JSON" ]; then echo "$FAKE_LIST_JSON"; else echo "out:$*"; fi; exit 0;;
   deploy) cat; exit 0;;
   *) echo "out:$*"; exit \${FAKE_CODE:-0};;
 esac
@@ -46,7 +56,7 @@ fs.writeFileSync(localCmd, `#!/bin/sh\necho local-cmd >> "${order}"\nsleep \${LO
 
 after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 const lines = (f) => (fs.existsSync(f) ? fs.readFileSync(f, 'utf8').trim().split('\n').filter(Boolean) : []);
-const reset = () => { for (const f of [sshLog, sshLog + '.n', remoteLog, order]) fs.rmSync(f, { force: true }); };
+const reset = () => { for (const f of [sshLog, sshLog + '.n', sshLog + '.c', remoteLog, order, path.join(tmp, 'list.n'), path.join(tmp, 'claim.pid')]) fs.rmSync(f, { force: true }); };
 
 function run(args, { env = {}, input } = {}) {
   return new Promise((resolve) => {
@@ -200,4 +210,30 @@ test('no VPT_LEASE_SSH_TARGET: VPT_LEASE_LEGACY (an ssh wrapper to the registry 
   assert.match(fs.readFileSync(path.join(tmp, 'wrapper.log'), 'utf8'), /ticket T1 --wait/);
   assert.equal(lines(sshLog).length, 0);
   assert.equal((await run(['list'], { env })).code, 5);
+});
+
+test('SIGTERM on a waiting claim --wait exits within 2 s (143), is not read as a dropped ssh, and cancels its own ticket only', async () => {
+  reset();
+  const after = JSON.stringify({ tickets: [{ id: 'T-new', env: 'env-a', resources: ['env-a/host:x'], agent: 'a' }, { id: 'T-other', env: 'env-a', resources: ['env-a/host:x'], agent: 'someone-else' }] });
+  const p = spawn('python3', ['-I', CLIENT, 'claim', 'env-a', 'x', '--agent', 'a', '--wait'], { env: { PATH: `${bin}:${process.env.PATH}`, HOME: tmp, LANG: 'C',
+    VPT_LEASE_MODE: 'central-through-ssh', VPT_LEASE_SSH_TARGET: '<registry-host>', VPT_LEASE_REMOTE_CMD: fakeRemote, VPT_LEASE_TEST_FAST: '1',
+    FAKE_SSH_TERM255: '1', FAKE_CLAIM_HANG: '1', FAKE_LIST_JSON: after } });
+  let err = ''; p.stderr.on('data', (c) => (err += c));
+  const done = new Promise((res) => p.on('exit', (code) => res(code)));
+  for (let i = 0; i < 50 && !fs.existsSync(path.join(tmp, 'claim.pid')); i++) await new Promise((r) => setTimeout(r, 100));
+  await new Promise((r) => setTimeout(r, 600)); const t0 = Date.now(); p.kill('SIGTERM');
+  const code = await Promise.race([done, new Promise((r) => setTimeout(() => r('timeout'), 4000))]);
+  if (code === 'timeout') p.kill('SIGKILL');
+  assert.notEqual(code, 'timeout', 'must exit on SIGTERM'); assert.ok(Date.now() - t0 < 2500);
+  assert.equal(code, 143, err); assert.doesNotMatch(err, /retrying in|UNAVAILABLE/);
+  const cancels = lines(remoteLog).map((l) => JSON.parse(l).args).filter((a) => a[0] === 'ticket');
+  assert.deepEqual(cancels, [['ticket', 'T-new', '--cancel']]);   // someone else's ticket is never touched
+});
+
+test('the forwarded waiter watches its stdin: the ssh side marks it, so a killed client (stdin EOF) ends the remote claim', async () => {
+  reset();
+  const r = await run(['claim', 'env-a', 'x', '--agent', 'a', '--wait']);
+  assert.equal(r.code, 0, r.err);
+  const cmd = JSON.parse(lines(sshLog)[0]).at(-1);
+  assert.match(cmd, /VPT_LEASE_STDIN_WATCH=1/);
 });
