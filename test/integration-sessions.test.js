@@ -381,3 +381,12 @@ test('a deploy covered by a newer one is followed to its result and says so', as
   const w = await d.wait('d1');
   assert.equal(w.ok, true); assert.equal(w.coalescedInto, 'd2'); assert.match(w.note, /newer host deploy d2/);
 });
+
+test('deploy adapter: onRequested fires once the deploy is queued, never for a refused request, and its failure is harmless', async () => {
+  const seen = [];
+  const ok = createIntegrationDeploys({ registry: async () => ({ code: 0, stdout: 'd-9\n', stderr: '' }), onRequested: (id) => { seen.push(id); throw new Error('boom'); } });
+  assert.equal((await ok.request({ env: 'env-a', scope: 'frontend', ref: 'main', agent: 'integration:i1' })).ok, true);
+  const no = createIntegrationDeploys({ registry: async () => ({ code: 3, stdout: '', stderr: 'E_HELD' }), onRequested: (id) => seen.push(id) });
+  assert.equal((await no.request({ env: 'env-a', scope: 'frontend', ref: 'main', agent: 'integration:i1' })).ok, false);
+  assert.deepEqual(seen, ['d-9']);
+});

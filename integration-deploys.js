@@ -44,7 +44,9 @@ function pickVersion(map, { id, scope, agent } = {}) {
   return e ? String(e.version || '') : '';
 }
 
-export function createIntegrationDeploys({ registry, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), now = Date.now, pollMs = 5000, timeoutMin = 60 } = {}) {
+export function createIntegrationDeploys({ registry, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), now = Date.now, pollMs = 5000, timeoutMin = 60,
+  // Called once a deploy is queued: the runner ticks at once instead of on its 30 s poll (2026-11-03, saves up to 30 s per deploy).
+  onRequested = null } = {}) {
   const reg = async (argv, opts) => { try { return await registry(argv, opts); } catch (e) { return { code: 255, stdout: '', stderr: String(e?.message || e) }; } };
   // -> { ok, id } | { ok: false, error }
   async function request({ env, scope, ref, sha, agent } = {}) {
@@ -55,6 +57,7 @@ export function createIntegrationDeploys({ registry, sleep = (ms) => new Promise
     const r = await reg(requestArgv({ env, scope, ref, agent }));
     const id = String(r.stdout || '').trim().split(/\s+/).pop() || '';
     if (r.code !== 0 || !id) return { ok: false, error: String(r.stderr || `deploy request exit ${r.code}`).trim().slice(0, 300) };
+    try { onRequested?.(id); } catch { /* best effort: the poll still starts it */ }
     return { ok: true, id, sha: sha || null };
   }
   async function listed(id) {

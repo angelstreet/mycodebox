@@ -2788,7 +2788,7 @@ const progressWatch = createProgressWatch({
   mode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).progressWatch; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
   log: console,
 });
-const integrationDeploys = createIntegrationDeploys({ registry: leaseSource.deployRegistry() });
+const integrationDeploys = createIntegrationDeploys({ registry: leaseSource.deployRegistry(), onRequested: () => { deployRunner.tick().catch(() => {}); } });
 const externalResult = createExternalResult({ stateDir: STATE_DIR, managerEvent: (e) => managerEvents.record(e), ownerPush: (item) => push.record(item), log: (r) => logEvent(r) });
 setInterval(() => { try { externalResult.sweep(); } catch { /* best effort */ } }, 60000).unref();
 integrationHooks.notify = async (r, e) => { const out = await integrationNotify(r, e); await externalResult.relay(r); return out; };
