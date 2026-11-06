@@ -1213,6 +1213,28 @@ Journal and feed: `health:session-quota-resumed:<session>`, `health:session-quot
 `health:session-login-stop:<session>` through the manager events, like crash resumes. Switch: `quotaResume` in
 `manager.json` (default on). Tests: `test/quota-resume.test.js`.
 
+**Claude account rotation (`claude-accounts.js`, owner 2026-11-06).** Several Claude subscriptions (for example a personal
+Max plan, then two team seats) are used one after the other. Each extra account is its own Claude config dir
+(`CLAUDE_CONFIG_DIR`, default `~/.claude-accounts/<id>`), logged in once; the default account is `~/.claude`. A new dir
+links `projects`, `sessions`, `settings.json`, `CLAUDE.md`, `hooks`, `agents`, `commands`, `skills`, `plugins` and the
+other conversation data from `~/.claude`, so a conversation resumes on any account and the board keeps finding its
+sessions; the login (`.credentials.json`, `.claude.json`) is never linked, read or copied. New Claude sessions, resumes
+and crash resumes start as `CLAUDE_CONFIG_DIR=<dir> GHOSTY_CLAUDE_ACCOUNT=<id> claude ...` on the **active** account:
+the first one in list order whose 5 h and weekly windows are under 95 % and that carries no limit mark (list order is
+the preference, so new sessions go back to the first account once its window resets). The status-line script writes
+each account's windows to `claude-rate-limits.<id>.json` (the default keeps `claude-rate-limits.json`); the `claude`
+quota plan shows the active account and lists all of them. A Claude pane whose tail shows a usage-limit stop
+("usage limit reached", "5-hour / weekly limit reached", "You've hit your limit") marks its account used up (until the
+window's reset, else 1 h) and, with `autoSwapSessions` on (default) and another account free, is parked (Escape first;
+the limit stop waives the "waiting" and pending-question checks, never the lease, job or attached-terminal ones) and
+resumed on that account, then gets `continue` after 15 s. A manager or paused session, a failed park, or no account
+left is pushed to the owner instead. Each row shows its account; the row's switch button moves a session by hand.
+State: `$GHOSTY_STATE_DIR/claude-accounts.json`. API: `GET/POST /api/claude-accounts`, `POST /api/claude-accounts/settings`
+`{active?, auto?, autoSwapSessions?, order?, clearMark?}`, `DELETE /api/claude-accounts/:id`,
+`POST /api/claude-accounts/:id/login` (tmux session `login-<id>` running claude on that account),
+`POST /api/sessions/:name/claude-account {account}`. CLI: `scripts/claude-account` (list, add, login, use, auto, swap,
+order, clear, move, remove). Tests: `test/claude-accounts.test.js`.
+
 Env: `CODEX_BIN` (default `~/.local/bin/codex`), `MINIMAX_AUTH_FILE` (mcode login file, default the `en`/prod one),
 `CLAUDE_RATE_LIMITS_FILE` override the paths.
 

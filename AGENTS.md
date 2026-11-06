@@ -75,6 +75,11 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
 
 ## Safety rules of the product
 
+- Claude account rotation (owner, 2026-11-06): when the Claude account in use hits its usage limit, new sessions start
+  on the next account with headroom and a session stopped on the limit is parked and resumed on it (same conversation,
+  then `continue`). This restart is owner-requested and is not an auto-close. Switch: `autoSwapSessions` in
+  `claude-accounts.json` (`claude-account swap off`). Logins are set up by the owner only (`claude-account login <id>`).
+
 - Sessions are never auto-closed (owner, 2026-10-30, bug-9e811bf0): no ghosty tick sends `/exit`, `/quit` or kills a session on
   its own. Only the owner, the manager (`DELETE /api/sessions/<s>?confirm=<s>`) or the agent that spawned the session may close
   it. The old worker auto-close (2026-10-18) is removed; `workerAutoClose` in `manager.json` is ignored.
