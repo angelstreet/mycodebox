@@ -294,8 +294,49 @@ function agentBadgeHtml(name, { model = true } = {}) {
   const a = agentOf(name);
   const m = (state.status[name] || {}).model;
   // the model is the badge's tooltip; the nav list shows no model text (no room), cards and rows show it when they have space
-  return `<span class="agent ${a}"${m ? ` title="${escapeHtml(m)}"` : ''}>${AGENT_LABEL[a] || a}</span>${m && model ? `<span class="agent-model"> · ${escapeHtml(m)}</span>` : ''}${reporterMarkHtml(name)}`;
+  return `<span class="agent ${a}"${m ? ` title="${escapeHtml(m)}"` : ''}>${AGENT_LABEL[a] || a}</span>${acctBadgeHtml(name)}${m && model ? `<span class="agent-model"> · ${escapeHtml(m)}</span>` : ''}${reporterMarkHtml(name)}`;
 }
+// Claude account rotation (claude-accounts.js): which account a Claude session runs on, shown once there is more than one.
+const claudeAccountsOf = () => state.quota?.plans?.find((p) => p.plan === 'claude')?.accounts || null;
+function acctBadgeHtml(name) {
+  const accts = claudeAccountsOf(), id = (state.status[name] || {}).claudeAccount;
+  if (!accts || !id) return '';
+  const a = accts.find((x) => x.id === id);
+  return `<span class="agent-acct${a?.exhausted ? ' out' : ''}" title="Claude account${a?.exhausted ? `: used up (${escapeHtml(a.why || '')})` : ''}"> · ${escapeHtml(a?.label || id)}</span>`;
+}
+const canSwitchAccount = (n) => agentOf(n) === 'claude' && !!claudeAccountsOf() && !!(state.status[n] || {}).claudeAccount;
+function openAccountSheet(name) {
+  const accts = claudeAccountsOf() || [], cur = (state.status[name] || {}).claudeAccount;
+  openSheet(`Claude account for ${name}`, ({ body, close }) => {
+    body.innerHTML = accts.map((a) => {
+      const w = (a.windows || []).map((x) => `${x.name} ${x.usedPercent == null ? '?' : Math.round(x.usedPercent) + '%'}`).join(' · ') || 'no reading yet';
+      return `<div class="prow-s"><span class="pn"><b>${escapeHtml(a.label)}</b><small>${escapeHtml(a.exhausted ? `used up: ${a.why || ''}` : w)}</small></span>${a.id === cur ? '<span class="dim">current</span>' : `<button class="sbtn" data-acct="${escapeHtml(a.id)}">Move here</button>`}</div>`;
+    }).join('') + '<div class="sheet-empty">Moving parks the session and resumes the same conversation on that account.</div>';
+    body.onclick = async (e) => {
+      const b = e.target.closest('[data-acct]');
+      if (!b) return;
+      b.disabled = true;
+      toast(`moving ${name}…`, 4000);
+      try {
+        const r = await fetch(`/api/sessions/${encodeURIComponent(name)}/claude-account`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ account: b.dataset.acct }) });
+        const j = await r.json().catch(() => ({}));
+        if (r.ok) { toast(`${name} now on ${b.dataset.acct}`, 2400); close(); }
+        else topToast(parkRefusal(name, j, r.status).replace("Can't park", "Can't move"), 9000);
+      } catch (err) { topToast(`Can't move ${name}: ${err.message}`, 9000); }
+    };
+  });
+}
+// Accounts panel actions (quota section): use one / auto on-off.
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-acct-use],[data-acct-auto]');
+  if (!b) return;
+  const body = b.dataset.acctUse ? { active: b.dataset.acctUse } : { auto: b.dataset.acctAuto === 'on' };
+  try {
+    const r = await fetch('/api/claude-accounts/settings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({}));
+    toast(r.ok ? (body.active ? `new Claude sessions use ${body.active}` : `automatic account choice ${body.auto ? 'on' : 'off'}`) : (j.error || `HTTP ${r.status}`), 2400);
+  } catch (err) { toast(err.message); }
+});
 
 // ⚡ = the ghosty-reporter plugin is live in this Claude session (exact answers / prompts, subagents). The
 // tooltip lists the subagents: count and statuses.
@@ -1752,6 +1793,7 @@ function buildSideRow(s) {
     <button class="edit pin" aria-label="Pin" title="Pin to the top">${icon('pin', 15)}</button>
     <button class="edit" aria-label="Rename">${icon('pencil', 15)}</button>
     <button class="edit park" aria-label="Park session" title="Park: save the conversation, free its RAM (Resume brings it back)">${icon('archive', 15)}</button>
+    <button class="edit acct" aria-label="Switch Claude account" title="Move this conversation to another Claude account" hidden>${icon('refresh', 15)}</button>
     <button class="edit kill" aria-label="Kill session">${icon('x', 15)}</button></span>`;
   // hover devices: the action bar floats to the right of the list (never covers the rows), level with this row
   li.addEventListener('mouseenter', () => {
@@ -1774,7 +1816,8 @@ function buildSideRow(s) {
     saveLayout(); sortSessions(); renderTabStrip(); if (state.mode === 'grid') renderGrid(); syncAll();
   };
   li.querySelector('.park').onclick = (e) => { e.stopPropagation(); parkSession(s.name); };
-  li.querySelector('.edit:not(.kill):not(.pin):not(.park):not(.hide)').onclick = (e) => { e.stopPropagation(); beginRename(li, s.name); };
+  li.querySelector('.acct').onclick = (e) => { e.stopPropagation(); openAccountSheet(s.name); };
+  li.querySelector('.edit:not(.kill):not(.pin):not(.park):not(.acct):not(.hide)').onclick = (e) => { e.stopPropagation(); beginRename(li, s.name); };
   li.querySelector('.kill').onclick = (e) => { e.stopPropagation(); confirmKill(s.name); };
   return li;
 }
@@ -1804,6 +1847,7 @@ function syncSide() {
     if (agEl.innerHTML !== ag) agEl.innerHTML = ag;
     li.querySelector('.sst').textContent = badgeText(n);   // the dot's colour says the state (its tooltip names it); the row shows only the time
     li.querySelector('.park').hidden = !parkable(n);
+    li.querySelector('.acct').hidden = !canSwitchAccount(n);
     const pr = li.querySelector('.pr'), ph = prioBadgeHtml(n);
     if (pr.dataset.h !== ph) { pr.dataset.h = ph; pr.innerHTML = ph; }
     syncPill(li.querySelector('.pp'), n);
@@ -3361,8 +3405,15 @@ function quotaPaceHtml(q, onlyAgent) {
       const verdict = resetText(w);
       return `<div class="qp"><span class="qn">${escapeHtml(w.name)}</span><span class="qb ${lvl}"><i style="width:${used}%"></i>${pc ? `<u style="left:${Math.round(pc.frac * 100)}%" title="time elapsed in this window"></u>` : ''}</span><span class="qv ${lvl}">${Math.round(w.usedPercent)}%</span></div><div class="u2 qverdict">${verdict}</div>`;
     }).join('');
-    return `<div class="urow">${head}${rows}</div>`;
+    return `<div class="urow">${head}${rows}${p.accounts ? accountsHtml(p.accounts) : ''}</div>`;
   }).join('');
+}
+function accountsHtml(accts) {
+  return `<div class="u2 qaccts">${accts.map((a) => {
+    const w = (a.windows || []).map((x) => `${x.name} ${x.usedPercent == null ? '?' : Math.round(x.usedPercent) + '%'}`).join(' · ') || 'no reading';
+    const st = a.exhausted ? `used up${a.reset ? `, back ${new Date(a.reset).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}` : w;
+    return `<div class="qacct${a.active ? ' on' : ''}${a.exhausted ? ' out' : ''}"><b>${a.active ? '&#9679; ' : ''}${escapeHtml(a.label)}</b> <span class="dim">${escapeHtml(st)}</span>${a.active ? '' : ` <button class="sbtn" data-acct-use="${escapeHtml(a.id)}">Use</button>`}</div>`;
+  }).join('')}<div class="dim">New sessions take the first account with headroom; a session stopped on a limit moves to the next. "Use" pins one account; <button class="sbtn" data-acct-auto="on">Auto</button> goes back to rotating.</div></div>`;
 }
 // ---- usage views: Over time (stacked bars) and Trending (sparklines) ----
 const PAL = ['#c678dd', '#f5b942', '#ef8a52', '#5aa9e6', '#6ed1c0'], OTHER_C = '#8a8d96', OTHERS = '\u0000others';

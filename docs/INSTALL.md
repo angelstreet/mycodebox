@@ -144,6 +144,7 @@ Optional does not mean every background reader defaults off. The server starts p
 | ntfy | Private `NTFY_TOPIC`, optional `NTFY_URL`, `PUBLIC_URL` | Topic is secret; default provider is external |
 | Claude reporter | Merge the plugin setting from [REFERENCE](REFERENCE.md#session-reporter-task-44-phase-8) into existing Claude settings; compatible Claude version; new sessions | Loopback URL plus `reporter.token`; do not overwrite other settings |
 | Voice | Install `faster-whisper` into the Python environment used by `transcribe.js`; see reference/source for `WHISPER_MODEL` | First use downloads a model; choose a virtual environment instead of changing system Python |
+| Claude account rotation | Status-line script installed (each account shares `~/.claude/settings.json`); `scripts/claude-account add <id> --label <name>`, then `scripts/claude-account login <id>` and log in from the `login-<id>` card; see [REFERENCE](REFERENCE.md) "Claude account rotation" | One Claude login per config dir (`~/.claude-accounts/<id>`), never copied; state in `claude-accounts.json` |
 | Image attach | Available in dashboard | Stored separately in `~/.ghosty/uploads/` |
 | AI manager | Review [manager settings](REFERENCE.md#ai-manager); automatic sends default off | Optional Jev/reviewer endpoint credentials; requests can include session text |
 | Usage and evaluation | `usage/ingest.js`, optional adapted `systemd/ghosty-usage.service`; see [usage](REFERENCE.md#usage-langfuse) | CLI transcripts, local ledger; optional Langfuse keys/data |

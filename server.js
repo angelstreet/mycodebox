@@ -19,6 +19,12 @@
 //   DELETE /api/sessions/:name?confirm=<name> → kill session
 //   POST /api/sessions/:name/park   → record the conversation (Claude id / Codex id / MiniMax cwd), quit the agent (/exit, /quit), kill the tmux session (refuses when not idle / lease held / job running)
 //   (auto) a Claude session archived in the Claude app (Remote Control code 4090 in its transcript, no bridge) is parked every 30 s when done and lease-free; manager.json autoParkArchived:false turns it off
+//   GET  /api/claude-accounts   → Claude account rotation: {auto, autoSwapSessions, active, accounts:[{id,label,configDir,active,exhausted,reset,why,windows}]}
+//   POST /api/claude-accounts   → {id, label, configDir?} add an account (creates its config dir, links ~/.claude's shared parts)
+//   POST /api/claude-accounts/settings → {active?, auto?, autoSwapSessions?, order?, clearMark?}
+//   DELETE /api/claude-accounts/:id → forget an account (its config dir and login stay on disk)
+//   POST /api/claude-accounts/:id/login → start a tmux session `login-<id>` running claude on that account and type /login
+//   POST /api/sessions/:name/claude-account → {account} park the Claude session and resume the same conversation on that account
 //   POST /api/sessions/:name/resume → recreate the tmux session in the same folder and run `claude --resume <id>` / `codex resume <id>` / `mcode -c`
 //   GET  /api/parking               → { cap, live, over, candidates[], parked[], manual[], ramSavedMb } (manual notes read from <STATE_DIR>/parked.json, never counted in ramSavedMb or in parked)
 //   GET  /api/manager           → AI manager config (auto-answer settings, disabled sessions, Jev budget, today counts)
@@ -129,13 +135,14 @@ import { sampleHealth } from './health.js';
 import { createDiskGuard } from './disk-guard.js';
 import { createPush, createAlerts, tierConfig, isQuietHours } from './push.js';
 import { launchConfig, launchWarnings } from './launch-config.js';
-import { trustFolder } from './trust.js';
+import { trustFolder, trustClaude } from './trust.js';
 import { sessionDirectory } from './session-directory.js';
 import { createLayoutStore } from './layout.js';
 import { createSessionMeta } from './session-meta.js';
 import { createSessionHistory } from './session-history.js';
 import { createHistoryView } from './history-view.js';
-import { createQuota } from './quota.js';
+import { createQuota, defaults as quotaDefaults } from './quota.js';
+import { createClaudeAccounts, rateFile as claudeRateFile, accountOfPid, scanClaudeLimit, DEFAULT_ID as CLAUDE_DEFAULT_ACCOUNT } from './claude-accounts.js';
 import { createMinimaxMeter, meterConfig, newShareAlerts } from './minimax-meter.js';
 import { createCredits } from './credits.js';
 import { createAnthropicSpend } from './anthropic-spend.js';
@@ -1209,7 +1216,17 @@ const sharedCheckoutGuard = createSharedCheckoutGuard({
 });
 const anthropicSpend = createAnthropicSpend({ stateDir: STATE_DIR, onChange: (a) => broadcastStatus({ type: 'anthropic', anthropic: a }) });
 const credits = createCredits({ jevUrl: process.env.JEV_URL || '', apiKey: process.env.JEV_API_KEY || '', alert, onChange: (c) => broadcastStatus({ type: 'credits', credits: c }) });
-const quota = createQuota({ alert, onChange: (q) => broadcastStatus({ type: 'quota', quota: q }) });
+// Claude account rotation (claude-accounts.js, owner 2026-11-06): new Claude sessions start on the first account with headroom;
+// the `claude` quota plan shows that account, with every account listed under it.
+const claudeAccounts = createClaudeAccounts({ file: join(STATE_DIR, 'claude-accounts.json'), stateDir: STATE_DIR });
+const quotaCfg = quotaDefaults();
+const defaultClaudeRateFile = quotaCfg.claudeFile;
+const quota = createQuota({
+  cfg: { ...quotaCfg,
+    claudeFile: () => { const id = claudeAccounts.config().active; return id === CLAUDE_DEFAULT_ACCOUNT ? defaultClaudeRateFile : claudeRateFile(STATE_DIR, id); },
+    claudeAccounts: () => (claudeAccounts.config().accounts.length > 1 ? claudeAccounts.view() : null) },
+  alert, onChange: (q) => broadcastStatus({ type: 'quota', quota: q }),
+});
 // Per-session MiniMax calls in the plan's 5h window and the last 24 h, from the ledger (minimax-meter.js); read-only.
 const minimaxMeterConfig = () => { try { return meterConfig(JSON.parse(readFileSync(managerConfigFile, 'utf8'))); } catch { return meterConfig({}); } };
 const minimaxMeter = createMinimaxMeter({ ledgerFile: join(STATE_DIR, 'usage-ledger.jsonl'), quota: () => quota.get(), config: minimaxMeterConfig, isManager: (n) => loadOwnerHiddenSessions().includes(n) });
@@ -1486,7 +1503,8 @@ async function pollOnce() {
     v.lastActivity = la ? la.at : null;
     v.lastActivitySource = la ? la.source : null;
     v.claudeSessionId = c ? c.info.sessionId : null;
-    if (c?.info?.sessionId) crashResumeKnown.set(k, { claudeSessionId: c.info.sessionId, model: v.model, base: launch.commands.claude });
+    if (c?.info?.sessionId) crashResumeKnown.set(k, { claudeSessionId: c.info.sessionId, model: v.model, base: claudeAccounts.commandFor(launch.commands.claude) });
+    v.claudeAccount = c ? claudeAccountOfPid(c.pid) : null;
     v.rssMb = c && table.rss.get(c.pid) ? Math.round(table.rss.get(c.pid) / 1024) : null;
   }
   Object.assign(status, remote.statusRows());   // round 9: sessions of other machines, posted by the Mac Stop hook (remote-stops.js)
@@ -1686,10 +1704,12 @@ async function tmuxCreated(name) {   // tmux #{session_created} (seconds), or nu
   try { const { stdout } = await exec(TMUX, ['display-message', '-p', '-t', `=${name}:`, '#{session_created}']); return Number(stdout.trim()) || null; } catch { return null; }
 }
 
-async function createSession({ name, agent, cwd, priority, model, prompt, handover }) {
+async function createSession({ name, agent, cwd, priority, model, prompt, handover, claudeAccount }) {
   if (priority !== undefined && !isPriority(priority)) throw httpError(400, 'priority must be P0, P1 or P2');
   if (typeof name !== 'string' || !NAME_RE.test(name)) throw httpError(400, 'invalid name (A-Z a-z 0-9 _ . -, max 40)');
   if (!Object.hasOwn(AGENT_CMDS, agent)) throw httpError(400, 'agent must be claude|codex|minimax|bash');
+  if (claudeAccount != null && (agent !== 'claude' || !claudeAccounts.byId(claudeAccount))) throw httpError(400, 'unknown claude account');
+  const acct = agent === 'claude' ? (claudeAccount || claudeAccounts.config().active) : null;
   const dir = await sessionDirectory(cwd || HOME, HOME);
   // tmux silently rewrites '.' and ':' in session names to '_'.
   const real = name.replace(/[.:]/g, '_');
@@ -1702,9 +1722,12 @@ async function createSession({ name, agent, cwd, priority, model, prompt, handov
     throw httpError(/duplicate session/.test(err.stderr || '') ? 409 : 500, String(err.stderr || err.message).trim().slice(0, 200));
   }
   try { await trustFolder(agent, dir); } catch { /* best effort: the agent just asks */ }
+  const acctJson = acct ? claudeAccounts.claudeJsonFor(acct) : null;   // another account keeps its own .claude.json
+  if (acctJson) { try { await trustClaude(dir, acctJson); } catch { /* best effort */ } }
   // Claude always gets Remote Control under the session name (owner, 2026-10-15), unless an AGENT_CMD_CLAUDE override sets it.
-  const cmd = agent === 'claude' && AGENT_CMDS.claude && !/--remote-control\b/.test(AGENT_CMDS.claude)
+  let cmd = agent === 'claude' && AGENT_CMDS.claude && !/--remote-control\b/.test(AGENT_CMDS.claude)
     ? `${AGENT_CMDS.claude} --remote-control '${real}' -n '${real}'` : AGENT_CMDS[agent];
+  if (acct && cmd) cmd = claudeAccounts.commandFor(cmd, acct);   // CLAUDE_CONFIG_DIR=<dir> GHOSTY_CLAUDE_ACCOUNT=<id> claude ...
   if (cmd) {
     await exec(TMUX, ['send-keys', '-t', `=${real}:`, '-l', '--', cmd]);
     await exec(TMUX, ['send-keys', '-t', `=${real}:`, 'Enter']);
@@ -1717,7 +1740,7 @@ async function createSession({ name, agent, cwd, priority, model, prompt, handov
   try { sessionMeta.setStartedBy(real, 'owner'); } catch (e) { console.error('[createSession] setStartedBy', e.message); }
   latest = null;
   } finally { historyStarting.delete(real); }
-  return { ok: true, name: real, agent, cwd: dir, priority: sessionMeta.priority(real) };
+  return { ok: true, name: real, agent, cwd: dir, priority: sessionMeta.priority(real), ...(acct ? { claudeAccount: acct } : {}) };
 }
 
 async function killSession(name, confirm) {
@@ -1789,9 +1812,13 @@ async function parkFacts(name) {
   };
 }
 
-async function parkSession(name) {
+// limitStop: the pane shows a Claude usage-limit stop (claude-accounts.js). The board may read that stop as "waiting" or
+// a pending question; it is neither, so those two checks are waived. Leases, jobs and an attached terminal still refuse.
+async function parkSession(name, { limitStop = false } = {}) {
   if (typeof name !== 'string' || !NAME_RE.test(name)) throw httpError(400, 'invalid session name');
-  const rec = await parking.park(name, await parkFacts(name), {
+  const facts = await parkFacts(name);
+  if (limitStop) { facts.state = 'idle'; facts.reporterWaiting = false; }
+  const rec = await parking.park(name, facts, {
     claudeAlive: pidAlive,
     readPane: async (n) => (await exec(TMUX, ['capture-pane', '-p', '-t', `=${n}:`], { timeout: 5000 })).stdout,
     busyNow: async () => { const f = await parkFacts(name); return f.busy; },
@@ -1821,18 +1848,23 @@ async function autoParkTick() {
   });
 }
 
-async function resumeSession(name) {
+// claudeAccount: the Claude account to resume on (default: the active one, so a session parked on a used-up account comes back on one with headroom).
+async function resumeSession(name, { claudeAccount } = {}) {
   const rec = await parking.get(name);
   if (!rec) throw httpError(404, 'not parked');
   // Claude entries have no `agent` field (legacy); MiniMax entries store agent:'minimax', Codex agent:'codex'. Dispatch on that.
   const agent = rec.agent === 'minimax' || rec.agent === 'codex' ? rec.agent : 'claude';
-  const base = AGENT_CMDS[agent];
+  if (claudeAccount != null && (agent !== 'claude' || !claudeAccounts.byId(claudeAccount))) throw httpError(400, 'unknown claude account');
+  const acct = agent === 'claude' ? (claudeAccount || claudeAccounts.config().active) : null;
+  const base = acct ? claudeAccounts.commandFor(AGENT_CMDS[agent], acct) : AGENT_CMDS[agent];
   const trustAgent = agent;
   const out = await parking.resume(name, {
     base,
     validate: async (r) => { r.cwd = await sessionDirectory(r.cwd, HOME); },
     start: async (n, r, cmd) => {
       try { await trustFolder(trustAgent, r.cwd); } catch { /* best effort */ }
+      const acctJson = acct ? claudeAccounts.claudeJsonFor(acct) : null;
+      if (acctJson) { try { await trustClaude(r.cwd, acctJson); } catch { /* best effort */ } }
       await exec(TMUX, ['send-keys', '-t', `=${n}:`, '-l', '--', cmd]);
       await exec(TMUX, ['send-keys', '-t', `=${n}:`, 'Enter']);
       sessionMeta.reset(n);
@@ -1841,7 +1873,70 @@ async function resumeSession(name) {
     },
   });
    latest = null;
-  return { ok: true, resumed: out };
+  return { ok: true, resumed: out, ...(acct ? { claudeAccount: acct } : {}) };
+}
+
+// ---- Claude account rotation (claude-accounts.js, owner 2026-11-06) ----
+const claudeAccountPids = new Map();   // claude pid -> account id (its environment never changes)
+function claudeAccountOfPid(pid) {
+  if (!pid) return null;
+  if (claudeAccountPids.has(pid)) return claudeAccountPids.get(pid);
+  const id = accountOfPid(pid);
+  if (claudeAccountPids.size > 500) claudeAccountPids.clear();
+  if (id) claudeAccountPids.set(pid, id);
+  return id;
+}
+async function claudeAccountsRefresh() {
+  const r = await claudeAccounts.refresh();
+  if (!r.changed) return r;
+  quota.poll().catch(() => {});   // the `claude` plan follows the active account: show the switch now, not at the next minute
+  const from = claudeAccounts.byId(r.from), to = claudeAccounts.byId(r.to), st = claudeAccounts.states()[r.from];
+  logEvent({ type: 'claude-account-active', from: r.from, to: r.to, why: st?.why || null });
+  await push.record({ title: `New Claude sessions now use ${to?.label || r.to}`, body: st?.exhausted ? `${from?.label || r.from}: ${st.why}` : `${from?.label || r.from} has headroom again`, url: '/', tag: 'claude-account' }).catch(() => {});
+  return r;
+}
+// Park the Claude session and resume the same conversation on `account`, then say "continue" (the last prompt hit the limit).
+async function swapClaudeAccount(name, account, by, { limitStop = false } = {}) {
+  if (!claudeAccounts.byId(account)) throw httpError(400, 'unknown claude account');
+  const row = latest?.status?.[name];
+  if (row && row.agent !== 'claude') throw httpError(400, 'not a Claude session');
+  if (limitStop) { try { await sendKey(name, 'Escape'); await new Promise((r) => setTimeout(r, 1500)); } catch { /* the limit menu may be gone already */ } }
+  await parkSession(name, { limitStop });
+  const out = await resumeSession(name, { claudeAccount: account });
+  logEvent({ type: 'claude-account-swap', session: name, by, account });
+  if (limitStop && !sessionMeta.isPaused(name)) {
+    setTimeout(() => { sendKeys(name, 'continue', true).then(() => logSend(name, 'claude-accounts', { keys: 'continue' })).catch((e) => console.error('[claude-accounts] continue', e.message)); }, 15000).unref?.();
+  }
+  return { ok: true, session: name, claudeAccount: account, resumed: out.resumed };
+}
+// A Claude session stopped on its usage limit: mark that account used up and, with another account free, restart the session
+// on it (manager.json-independent switch: claude-accounts.json autoSwapSessions, default on). One handling per stop and account.
+const claudeLimitSeen = new Map();
+async function claudeLimitTick(status) {
+  if (claudeAccounts.config().accounts.length < 2) return;
+  const managers = new Set(loadManagerSessions());
+  for (const [name, v] of Object.entries(status)) {
+    if (v.agent !== 'claude') continue;
+    const st = crashResumeStates.get(name);
+    if (!st || st.agent !== 'claude' || !scanClaudeLimit(st.lines)) { claudeLimitSeen.delete(name); continue; }
+    const acct = v.claudeAccount || CLAUDE_DEFAULT_ACCOUNT;
+    if (claudeLimitSeen.get(name) === acct) continue;
+    claudeLimitSeen.set(name, acct);
+    await claudeAccounts.markExhausted(acct, { reason: `usage limit stop in ${name}` });
+    await claudeAccountsRefresh();
+    const next = claudeAccounts.nextFor(acct);
+    const label = (id) => claudeAccounts.byId(id)?.label || id;
+    const url = `/?s=${encodeURIComponent(name)}`;
+    if (!next) { await push.record({ title: `Every Claude account is used up: ${name} waits`, body: `${label(acct)} hit its limit and no other account has headroom`, url, tag: 'claude-account' }).catch(() => {}); continue; }
+    const why = !claudeAccounts.config().autoSwapSessions ? 'automatic switch is off' : managers.has(name) ? 'manager session' : sessionMeta.isPaused(name) ? 'paused' : null;
+    if (why) { await push.record({ title: `${name} hit the ${label(acct)} limit`, body: `${label(next)} has headroom; not switched (${why}). Use "Switch account" on the card.`, url, tag: 'claude-account' }).catch(() => {}); continue; }
+    try {
+      await swapClaudeAccount(name, next, 'claude-accounts', { limitStop: true });
+      await managerEvents.record({ key: `health:claude-account-swap:${name}`, kind: 'health', title: `session moved to ${label(next)}: ${name}`, body: `${label(acct)} hit its usage limit; same conversation resumed on ${label(next)}` });
+    } catch (e) {
+      await push.record({ title: `${name} hit the ${label(acct)} limit, switch failed`, body: `to ${label(next)}: ${String(e.message).slice(0, 250)}`, url, tag: 'claude-account' }).catch(() => {});
+    }
+  }
 }
 
 async function parkingView() {
@@ -2386,6 +2481,39 @@ async function handleHttp(req, res) {
       return json(res, err.status || 500, { ok: false, error: err.message });
     }
   }
+  if (p === '/api/claude-accounts' || p.startsWith('/api/claude-accounts/')) {
+    try {
+      if (req.method === 'GET' && p === '/api/claude-accounts') { await claudeAccountsRefresh(); return json(res, 200, { ok: true, ...claudeAccounts.view() }); }
+      if (req.method === 'POST' && p === '/api/claude-accounts') { const out = await claudeAccounts.add(await readJsonBody(req)); quota.poll().catch(() => {}); return json(res, 200, { ok: true, ...out }); }
+      if (req.method === 'POST' && p === '/api/claude-accounts/settings') { const out = await claudeAccounts.set(await readJsonBody(req)); quota.poll().catch(() => {}); return json(res, 200, { ok: true, ...out }); }
+      const m = /^\/api\/claude-accounts\/([a-z0-9_-]+)(\/login)?$/.exec(p);
+      if (m && req.method === 'DELETE' && !m[2]) { const out = await claudeAccounts.remove(m[1]); quota.poll().catch(() => {}); return json(res, 200, out); }
+      if (m && req.method === 'POST' && m[2]) {
+        // A plain `claude` on that account: a fresh config dir walks through onboarding and the login (URL + code) in the card.
+        if (!claudeAccounts.byId(m[1])) throw httpError(404, 'no such account');
+        const name = `login-${m[1]}`.slice(0, 40).replace(/[.:]/g, '_');
+        if (await sessionExists(name)) return json(res, 200, { ok: true, name, existing: true });
+        await exec(TMUX, ['new-session', '-d', '-s', name, '-c', HOME, '-x', '120', '-y', '40']);
+        await exec(TMUX, ['send-keys', '-t', `=${name}:`, '-l', '--', claudeAccounts.commandFor('claude', m[1])]);
+        await exec(TMUX, ['send-keys', '-t', `=${name}:`, 'Enter']);
+        sessionMeta.reset(name); sessionMeta.sync([name]);
+        try { sessionMeta.setStartedBy(name, 'owner'); } catch { /* best effort */ }
+        latest = null;
+        return json(res, 200, { ok: true, name });
+      }
+      return json(res, 404, { ok: false, error: 'not found' });
+    } catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
+  }
+  {
+    const m = req.method === 'POST' && /^\/api\/sessions\/([^/]+)\/claude-account$/.exec(p);
+    if (m) {
+      try {
+        await diskGuard.assertStart('Resuming a session');
+        const body = await readJsonBody(req);
+        return json(res, 200, await swapClaudeAccount(decodeURIComponent(m[1]), String(body?.account || ''), actorOf(body) || 'owner'));
+      } catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message, reasons: err.reasons }); }
+    }
+  }
   if (req.method === 'GET' && p === '/api/parking') {
     try { return json(res, 200, await parkingView()); } catch (err) { return json(res, err.status || 500, { ok: false, error: err.message }); }
   }
@@ -2869,6 +2997,7 @@ async function tick() {
     const { status, changedSessions } = await poll();
     if (crashResumeEnabled()) await crashResumer.tick(Object.keys(status));
     if (quotaResumeEnabled()) await quotaResumer.tick(Object.keys(status)).catch((e) => console.error('[quota-resume]', e.message));
+    await claudeLimitTick(status).catch((e) => console.error('[claude-accounts]', e.message));
     await sendQueueTick(status);
     for (const name of changedSessions) {
       const c = lastSnapshots.get(name);
@@ -3029,7 +3158,7 @@ server.listen(PORT, HOST, async () => {
   const usageTick = () => usage.get().catch(() => {});   // one small file read per 30 s keeps the status field cheap
   usageTick();
   setInterval(usageTick, 30000);
-  const quotaTick = () => quota.poll().then(() => { reevaluateHolds(); latest = null; }).catch((e) => console.error('[quota]', e.message));
+  const quotaTick = () => claudeAccountsRefresh().then(() => quota.poll()).then(() => { reevaluateHolds(); latest = null; }).catch((e) => console.error('[quota]', e.message));
   quotaTick();
   deployRunner.start();
   await handoffs.load();

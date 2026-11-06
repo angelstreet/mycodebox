@@ -1023,6 +1023,12 @@ body.has-ask-pill .cell .jump{ bottom:84px; }
   .mlog .ml .x{ grid-column:auto; }
 }
 .agent-model{ color:var(--ink-3); font-size:10.5px; white-space:nowrap; }
+/* Claude account rotation: the account a Claude session runs on, and the accounts list under the Claude quota */
+.agent-acct{ color:var(--ink-3); font-size:10.5px; white-space:nowrap; }
+.agent-acct.out{ text-decoration:line-through; }
+.qaccts{ display:flex; flex-direction:column; gap:4px; margin-top:6px; }
+.qacct{ display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.qacct.out b{ text-decoration:line-through; opacity:.7; }
 
 /* hide the per-card move arrows and top/bottom jump buttons (Aa menu toggle) */
 body.no-cardctl .cell .h .mv, body.no-cardctl .cell .jump{ display:none !important; }

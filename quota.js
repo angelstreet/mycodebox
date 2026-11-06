@@ -124,18 +124,24 @@ export async function readCodex(cfg, now) {
   return { ...out, windows: out.windows.map((w) => finishWindow(w, now)) };
 }
 
+// With account rotation (claude-accounts.js) the `claude` plan is the account new sessions start on: cfg.claudeFile is then
+// a function returning that account's file, and cfg.claudeAccounts() the view of every account (shown under the plan).
 export async function readClaude(cfg, now) {
-  const base = { plan: 'claude', label: 'Claude Max', price: '200 EUR/month', windows: [], source: 'status-line hook', at: null, stale: true };
+  const acct = cfg.claudeAccounts?.() || null;
+  const active = acct?.accounts?.find((a) => a.active) || null;
+  const label = active && acct.accounts.length > 1 ? `Claude (${active.label})` : 'Claude Max';
+  const base = { plan: 'claude', label, price: '200 EUR/month', windows: [], source: 'status-line hook', at: null, stale: true, ...(acct && acct.accounts.length > 1 ? { account: active?.id ?? null, accounts: acct.accounts } : {}) };
+  const file = typeof cfg.claudeFile === 'function' ? cfg.claudeFile() : cfg.claudeFile;
   let j;
-  try { j = JSON.parse(await fs.readFile(cfg.claudeFile, 'utf8')); }
-  catch { return { ...base, note: 'not available: install scripts/claude-statusline-ratelimits.sh as the Claude Code status line' }; }
+  try { j = JSON.parse(await fs.readFile(file, 'utf8')); }
+  catch { return { ...base, note: active && active.id !== 'default' ? `no reading yet for ${active.label} (one reply on that account writes it)` : 'not available: install scripts/claude-statusline-ratelimits.sh as the Claude Code status line' }; }
   const rl = j.rate_limits || j;
   const windows = [];
   for (const [k, name] of [['five_hour', '5h'], ['seven_day', 'week']]) {
     const w = rl[k];
     if (w && Number.isFinite(w.used_percentage)) windows.push(finishWindow({ name, usedPercent: pctOf(w.used_percentage), resetsAt: Number.isFinite(w.resets_at) ? w.resets_at : null }, now));
   }
-  const at = Number(j.at) || (await fs.stat(cfg.claudeFile).then((s) => s.mtimeMs, () => null));
+  const at = Number(j.at) || (await fs.stat(file).then((s) => s.mtimeMs, () => null));
   return { ...base, windows, at, stale: !at || now - at > 30 * 60e3, note: windows.length ? undefined : 'no rate_limits in the last status-line input (needs a Pro/Max login and one reply)' };
 }
 

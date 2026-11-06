@@ -1,0 +1,54 @@
+#!/usr/bin/env node
+// claude-account: Claude account rotation (claude-accounts.js, owner 2026-11-06). Talks to loopback /api/claude-accounts (PORT or 7777).
+//   claude-account list                               accounts in preference order, the active one, each one's 5h / week use
+//   claude-account add <id> [--label TEXT] [--dir PATH] new account: config dir (default ~/.claude-accounts/<id>) sharing ~/.claude's
+//                                                     conversations and settings, then `claude-account login <id>`
+//   claude-account login <id>                         tmux session login-<id> running claude on that account: log in from its card
+//   claude-account use <id>                           new sessions use this account (turns auto off)
+//   claude-account auto on|off                        auto: first account with headroom, in list order
+//   claude-account swap on|off                        restart a session stopped on a limit on the next account (default on)
+//   claude-account order <id> <id> ...                preference order
+//   claude-account clear <id>                         forget a "limit reached" mark on an account
+//   claude-account move <session> <id>                resume a Claude session's conversation on another account now
+//   claude-account remove <id>                        forget an account (its config dir and login stay on disk)
+const [cmd, ...rest] = process.argv.slice(2);
+const base = `http://127.0.0.1:${process.env.PORT || 7777}`;
+const die = (m, c = 1) => { console.error('claude-account: ' + m); process.exit(c); };
+async function api(method, path, body) {
+  let r;
+  try { r = await fetch(base + path, { method, headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined }); }
+  catch (e) { die(`service unreachable (${e.message})`, 5); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || j.ok === false) die(j.error || `HTTP ${r.status}`);
+  return j;
+}
+const opt = (name) => { const i = rest.indexOf(name); return i >= 0 ? rest[i + 1] : undefined; };
+const onOff = (v) => (v === 'on' ? true : v === 'off' ? false : die('expected on or off'));
+const when = (ms) => (ms ? new Date(ms).toISOString().slice(0, 16).replace('T', ' ') + ' UTC' : 'unknown');
+function print(v) {
+  console.log(`auto: ${v.auto ? 'on' : 'off'} · switch stopped sessions: ${v.autoSwapSessions ? 'on' : 'off'}`);
+  for (const a of v.accounts) {
+    const w = a.windows.map((x) => `${x.name} ${x.usedPercent == null ? '?' : Math.round(x.usedPercent) + '%'}`).join(' ') || 'no reading yet';
+    console.log(`${a.active ? '*' : ' '} ${a.id.padEnd(12)} ${a.label.padEnd(28)} ${w}${a.exhausted ? `  USED UP (${a.why}) until ${when(a.reset)}` : ''}${a.configDir ? `  ${a.configDir}` : ''}`);
+  }
+}
+if (!cmd || cmd === 'list') print(await api('GET', '/api/claude-accounts'));
+else if (cmd === 'add') {
+  if (!rest[0]) die('usage: claude-account add <id> [--label TEXT] [--dir PATH]');
+  const r = await api('POST', '/api/claude-accounts', { id: rest[0], label: opt('--label'), configDir: opt('--dir') });
+  console.log(`added ${r.id} at ${r.configDir} (linked: ${r.linked.join(', ') || 'nothing'})\nnext: claude-account login ${r.id}`);
+} else if (cmd === 'login') {
+  if (!rest[0]) die('usage: claude-account login <id>');
+  const r = await api('POST', `/api/claude-accounts/${encodeURIComponent(rest[0])}/login`);
+  console.log(`${r.existing ? 'already open' : 'started'}: tmux session ${r.name}. Finish the login in its card (or tmux attach -t ${r.name}), then /exit.`);
+} else if (cmd === 'use') print(await api('POST', '/api/claude-accounts/settings', { active: rest[0] }));
+else if (cmd === 'auto') print(await api('POST', '/api/claude-accounts/settings', { auto: onOff(rest[0]) }));
+else if (cmd === 'swap') print(await api('POST', '/api/claude-accounts/settings', { autoSwapSessions: onOff(rest[0]) }));
+else if (cmd === 'order') print(await api('POST', '/api/claude-accounts/settings', { order: rest }));
+else if (cmd === 'clear') print(await api('POST', '/api/claude-accounts/settings', { clearMark: rest[0] }));
+else if (cmd === 'move') {
+  if (!rest[1]) die('usage: claude-account move <session> <id>');
+  const r = await api('POST', `/api/sessions/${encodeURIComponent(rest[0])}/claude-account`, { account: rest[1] });
+  console.log(`${r.session} resumed on ${r.claudeAccount}`);
+} else if (cmd === 'remove') { await api('DELETE', `/api/claude-accounts/${encodeURIComponent(rest[0] || '')}`); console.log('removed'); }
+else die(`unknown command ${cmd} (list|add|login|use|auto|swap|order|clear|move|remove)`);
