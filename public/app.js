@@ -370,11 +370,11 @@ function getTerm(session) {
     disableStdin: true,
     allowProposedApi: true,
     theme: {
-      background: '#0f1014', foreground: '#e6e8ee', cursor: '#6ed1c0',
-      cursorAccent:'#0f1014', selectionBackground: 'rgba(232,154,74,0.25)',
-      black:'#0f1014', red:'#ff7a7a', green:'#4ec07a', yellow:'#e89a4a',
+      background: '#262624', foreground: '#dddbd2', cursor: '#6ed1c0',
+      cursorAccent:'#262624', selectionBackground: 'rgba(232,154,74,0.25)',
+      black:'#262624', red:'#ff7a7a', green:'#4ec07a', yellow:'#e89a4a',
       blue:'#7aa7ff', magenta:'#c08cf0', cyan:'#6ed1c0', white:'#e6e8ee',
-      brightBlack:'#5f6571', brightRed:'#ff9a9a', brightGreen:'#7ed99a',
+      brightBlack:'#85837b', brightRed:'#ff9a9a', brightGreen:'#7ed99a',
       brightYellow:'#ffc4a0', brightBlue:'#9ab1ff', brightMagenta:'#d4adff',
       brightCyan:'#9adcd0', brightWhite:'#ffffff',
     },
@@ -2826,7 +2826,7 @@ const COARSE = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').ma
 
 const dk = {
   prompts: $('#prompts'), chips: $('#pchips'), histBtn: $('#histBtn'), multiBtn: $('#multiBtn'),
-  mt: $('#mtargets'), stat: $('#dstat'), tchip: $('#tchip'), tdot: $('#tdot'), tname: $('#tname'),
+  mt: $('#mtargets'), stat: $('#dstat'), tchip: $('#tchip'), tdot: $('#tdot'), tname: $('#tname'), dmodel: $('#dmodel'),
 };
 const dock = {
   prompts: [], hist: [], multi: false, sel: new Set(), pending: null, hideTimer: 0,
@@ -4257,8 +4257,20 @@ function syncDock() {
     els.sendInput.placeholder = isPhone() ? 'type text' : (n ? `→ ${displayName(n)}` : 'no session');
   }
   els.dock.classList.toggle('target-waiting', !!n && !dock.multi && listStateOf(n) === 'waiting');
+  syncDockModel(dock.multi ? '' : n);
   renderPrompts();
   checkDelivery();
+}
+
+// provider · model of the send target, bottom right under the input like the Claude Code app (owner 2026-11-06)
+const PROVIDER_LABEL = { claude: 'Claude', codex: 'Codex', minimax: 'MiniMax' };
+function syncDockModel(n) {
+  const a = n ? agentOf(n) : '', m = n ? (state.status[n] || {}).model || '' : '';
+  const html = PROVIDER_LABEL[a] ? `<span class="dp ${a}">${PROVIDER_LABEL[a]}</span>${m ? `<span class="dm">${escapeHtml(m)}</span>` : ''}` : '';
+  if (dk.dmodel.dataset.h === html) return;
+  dk.dmodel.dataset.h = html;
+  dk.dmodel.innerHTML = html;
+  dk.dmodel.classList.toggle('hidden', !html);
 }
 
 function renderMultiRow() {

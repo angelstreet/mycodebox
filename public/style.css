@@ -6,15 +6,17 @@
      the text content for readability ... they dont use the full area"). 820px is what
      the reader already used, and what the VirtualPyTest agent chat uses. */
   --measure:    820px;
-  --bg:        #0d0e12;
-  --bg-2:      #15171d;
-  --bg-3:      #1d2029;
-  --bg-term:   #0f1014;
-  --line:      rgba(255,255,255,0.07);
-  --line-2:    rgba(255,255,255,0.13);
-  --ink:       #e6e8ee;
-  --ink-2:     #9aa0ac;
-  --ink-3:     #646a77;
+  /* warm grey, not near-black, with softer grey text: the Claude Code app's dark palette reads better (owner 2026-11-06) */
+  --bg:        #262624;
+  --bg-2:      #1f1e1d;
+  --bg-3:      #34332f;
+  --bg-term:   #262624;
+  --bg-in:     #1a1918;   /* inputs and the grid backdrop: one step below the panel */
+  --line:      rgba(255,255,255,0.08);
+  --line-2:    rgba(255,255,255,0.15);
+  --ink:       #e3e1d8;
+  --ink-2:     #aeaca3;
+  --ink-3:     #85837b;
   --accent:    #e89a4a;
 
   --working:   #3fcf7a;
@@ -351,7 +353,7 @@ body{ display:flex; flex-direction:column; }
 .reader pre{
   margin:0 0 .8em; padding:8px 10px; overflow-x:auto; white-space:pre; tab-size:4;
   font-family:'JetBrains Mono', ui-monospace, monospace; font-size:calc(var(--tf, 12) * 1px); line-height:1.45;
-  background:#0a0b0e; border:1px solid var(--line); border-radius:8px; color:#cfd3dc;
+  background:var(--bg-in); border:1px solid var(--line); border-radius:8px; color:#cfd3dc;
 }
 .reader .rd-empty{ color:var(--ink-3); font-size:13px; padding:20px 0; text-align:center; }
 /* QF-16 — per-reply copy-to-clipboard + audio-transcript row at the bottom
@@ -491,6 +493,10 @@ body{ display:flex; flex-direction:column; }
 .dock .keys button:active{ background:var(--bg-3); color:var(--ink); }
 .dock .keys button.danger{ color:var(--waiting); }
 .dock .row{ display:flex; gap:6px; align-items:flex-end; }
+.dock .dmodel{ display:flex; justify-content:flex-end; gap:8px; padding:0 8px; margin-top:-2px; font-size:11.5px; line-height:16px; white-space:nowrap; overflow:hidden; }
+.dock .dmodel .dp{ color:var(--ink); }
+.dock .dmodel .dm{ color:var(--ink-3); overflow:hidden; text-overflow:ellipsis; }
+@media (max-width: 720px){ .dock .dmodel{ display:none; } }   /* phones: the terminal keeps the height */
 .dock textarea{
   flex:1 1 auto; min-width:0;
   background:var(--bg-2);
@@ -557,7 +563,7 @@ body{ display:flex; flex-direction:column; }
 .session-list li.editing{ background:var(--bg-3); padding:8px; }
 .session-list li.editing .edit, .session-list li.editing .dot{ display:none; }
 .session-list .name-input{
-  flex:1; background:#0a0b0e; border:1px solid var(--accent);
+  flex:1; background:var(--bg-in); border:1px solid var(--accent);
   border-radius:6px; padding:6px 8px; color:var(--ink);
   font-family:inherit; font-size:13px; outline:none; user-select:text;
 }
@@ -712,7 +718,7 @@ body{ display:flex; flex-direction:column; }
 /* QF-01: picker header — title + search input on one row. */
 .sheet-head{ display:flex; align-items:center; gap:10px; padding:8px 12px 6px; flex-shrink:0; }
 .sheet-htitle{ font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-3); flex-shrink:0; padding-left:4px; }
-.sheet-hsearch{ display:flex; align-items:center; gap:8px; flex:1; min-width:0; height:36px; padding:0 10px; background:#0a0b0e; border:1px solid var(--line-2); border-radius:10px; color:var(--ink-3); }
+.sheet-hsearch{ display:flex; align-items:center; gap:8px; flex:1; min-width:0; height:36px; padding:0 10px; background:var(--bg-in); border:1px solid var(--line-2); border-radius:10px; color:var(--ink-3); }
 .sheet-hsearch:focus-within{ border-color:var(--accent); color:var(--ink); }
 .sheet-hsearch input{ flex:1; min-width:0; background:transparent; border:0; outline:0; color:var(--ink); font-size:13px; padding:0; -webkit-appearance:none; appearance:none; }
 .sheet-hsearch input::placeholder{ color:var(--ink-3); }
@@ -730,7 +736,7 @@ body{ display:flex; flex-direction:column; }
 .sbtn.danger.solid{ background:var(--waiting); color:#1a0606; border-color:transparent; font-weight:700; }
 .sbtn:disabled{ opacity:.4; }
 .sheet-ta, .sheet-in{
-  width:100%; background:#0a0b0e; color:var(--ink); border:1px solid var(--line-2); border-radius:10px;
+  width:100%; background:var(--bg-in); color:var(--ink); border:1px solid var(--line-2); border-radius:10px;
   padding:10px 12px; font-family:inherit; font-size:14px; outline:none; resize:none; user-select:text;
 }
 .sheet-in{ height:42px; flex-shrink:0; }
@@ -1916,7 +1922,7 @@ svg.spin{ animation:spin 1.3s linear infinite; }
 /* wide screens with a mouse: docked, collapsible session list (hamburger / chevron); "full list" = the board view */
 .dock-only{ display:none; }
 @media (min-width: 1000px) and (hover: hover){
-  :root{ --sidew: 290px; }
+  :root{ --sidew: 380px; }   /* wide enough for a one-line row: name, priority, agent, age (owner 2026-11-06) */
   body.side-dockable .dock-only{ display:inline-flex; }
   body.side-docked #side{ transform:none; top:calc(var(--top-h) + env(safe-area-inset-top)); width:var(--sidew); max-width:none; padding-top:0; z-index:8; box-shadow:none; }
   body.side-docked > :is(#quota, #quickRow, #diskBanner, #alertRow, #tabs, #main, #dock){ margin-left:var(--sidew); }
@@ -1962,6 +1968,11 @@ body.side-docked #tabs{ display:none; }
   .session-list li:not(:hover):not(.pinned) .edit.pin{ display:none; }
 }
 body.side-docked .side-head{ gap:2px; padding:8px 8px 8px 14px; }
+/* docked list: one line per session, like the Claude Code app; the name gives way (ellipsis) before the chips do */
+body.side-docked .session-list .meta{ flex-direction:row; flex-wrap:wrap; align-items:center; gap:3px 8px; }
+body.side-docked .session-list .name{ flex:1 1 0; min-width:0; }   /* basis 0: a long name shrinks to an ellipsis instead of pushing the chips to a second line */
+body.side-docked .session-list .sub{ flex:0 1 auto; max-width:62%; }
+body.side-docked .session-list .sub.rb{ flex:1 0 100%; max-width:none; }   /* repo · branch, when shown, keeps a second line */
 body.side-docked .side-head .icon-btn{ width:28px; height:30px; }
 body.side-docked .side-head .ttl{ letter-spacing:.12em; }
 
@@ -2355,9 +2366,9 @@ body.side-dockable #menuBtn{ display:inline-flex !important; }
 /* web: the filter bar keeps its row when hidden, so showing / hiding it never moves the page */
 
 /* grid: cards stand out from the page - darker gutter, a clearer frame, a lighter header band */
-.view-grid .grid-pane{ background:#06070a; gap:12px; padding:12px; }
+.view-grid .grid-pane{ background:var(--bg-in); gap:12px; padding:12px; }
 .grid-pane .cell{ border:1px solid rgba(255,255,255,.22); box-shadow:0 4px 16px rgba(0,0,0,.65); }
-.grid-pane .cell .h{ background:#1c1f28; border-bottom:1px solid rgba(255,255,255,.14); }
+.grid-pane .cell .h{ background:var(--bg-2); border-bottom:1px solid rgba(255,255,255,.14); }
 .grid-pane .cell.focus{ border-color:var(--accent); }
 
 /* every row has the same room, highlighted or not, so selecting a session never moves anything - only the frame changes */
