@@ -1715,6 +1715,7 @@ repository, run by the server in its own clone, one request at a time per repo (
 
 - **Config** `<state>/integration.json`: `{ repos: { <key>: { clone, remote: 'origin', target: 'main', test: '<cmd>'|null, testTimeoutMin: 30,
   ci: 'github'|null, ciTimeoutMin: 60, deploy: { env, defaultScope }|null, conventions: ['VERSION.txt'], conventionResolver: 'take-target'|'max-plus-one' } } }`.
+- **Several repos, several keys.** One key per remote: a repo whose `origin` is a bare repo (a local path such as `~/git/<name>.git`) gets its own entry and lane clone (`git clone <bare> <state-or-home>/integration-lane/<key>`), or `repoForUrl` finds nothing and the request lands on a different key's clone (`origin/<branch> does not exist`, bug-47b0e612: `evolai_app` is not `evolai`). Pass `--repo <key>` if the origin cannot be matched.
 - **API** (loopback + reporter token; remote clients with the `integrate` token flag): `POST /api/integration/requests { repo?, branch, session?, deploy?, note? }`
   -> `{ id, position }` (repo from the key, else matched from the session's `origin`); `GET /api/integration/requests?repo=&state=&limit=`;
   `GET /api/integration/requests/:id`; `GET /api/integration/requests/:id/wait?timeout=30` (long-poll to a final state);
