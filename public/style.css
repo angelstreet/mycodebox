@@ -407,9 +407,9 @@ body{ display:flex; flex-direction:column; }
      and squeezed the text to a sliver on a wide window */
   .view-card .card-pane .cell > .b,
   .view-card .card-pane .cell > .docview{ max-width:var(--measure); margin-inline:auto; width:100%; }
-  /* .jump is absolutely positioned against the card, so pin it to the column's edge
-     instead of letting it drift to the far right of a wide window. */
-  .view-card .card-pane .cell > .jump{ right:max(10px, calc((100% - var(--measure)) / 2)); }
+  /* .jump is absolutely positioned against the card: keep it in the gutter right of the text column (it covered the text when pinned to
+     the column's edge), and at the card edge when the window is too narrow for a gutter (owner 2026-11-07) */
+  .view-card .card-pane .cell > .jump{ right:max(8px, calc((100% - var(--measure)) / 2 - 48px)); }
 }
 .cell .xterm{ height:100% !important; padding:0; }
 .cell .xterm-viewport{ background:transparent !important; }
