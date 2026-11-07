@@ -413,6 +413,9 @@ body{ display:flex; flex-direction:column; }
 }
 .cell .xterm{ height:100% !important; padding:0; }
 .cell .xterm-viewport{ background:transparent !important; }
+/* the classic always-visible scrollbar (macOS "show always", Windows) painted over the last ~15 px of every line; wheel and touch scrolling still work */
+.cell .xterm-viewport{ scrollbar-width:none; }
+.cell .xterm-viewport::-webkit-scrollbar{ display:none; }
 
 /* Zen / true-fullscreen: double-tap the card body in card mode to hide the header so
    the terminal or reader gets the full vertical space. Tapping the header (now collapsed)
