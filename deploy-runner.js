@@ -545,7 +545,9 @@ export function createDeployRunner({
             if (running.has(key) || deploys.some((d) => d.env === env && d.state === 'running' && (d.scope === 'frontend') === fe)) continue;
             const queue = deploys.filter((d) => d.env === env && d.state === 'queued' && (d.scope === 'frontend') === fe && flagsFor(d.scope)).sort((a, b) => a.created - b.created);
             for (const d of queue) {
-              if (isCatchUp(d) && d.hosts?.length) {
+              // a strict catch-up (re-armed after a skip) is not capped or backed off: `deploy start` refuses it while a lease is in the
+              // way (cheap), the registry gives it a cooldown, and once ready it blocks new claims (bug-ceb52215), so it must get its turn
+              if (isCatchUp(d) && d.hosts?.length && !d.strict) {
                 const ent = d.hosts.map((h) => ({ h, e: catchUpTries.get(`${d.env}|${d.ref}|${h}`), n: triesOf(d, h, deploys) }));
                 const capped = ent.filter((x) => x.n >= CATCHUP_CAP);
                 if (capped.length) {

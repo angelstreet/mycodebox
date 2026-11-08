@@ -24,7 +24,7 @@ function fakeRegistry({ leases = [], deploys = [], armCatchUp = false } = {}) {
     if (sub === 'start') {
       if (!d || d.state !== 'queued') return { code: 1, stdout: '', stderr: 'not queued' };
       if (st.deploys.some((x) => x.env === d.env && x.state === 'running' && !((x.scope === 'frontend' && d.scope === 'host') || (x.scope === 'host' && d.scope === 'frontend')))) return { code: 3, stdout: '', stderr: 'running' };
-      if (st.leases.some((l) => l.env === d.env && l.agent !== 'manager:deploy' && touches(d.scope, l.resource))) return { code: 3, stdout: '', stderr: 'leases' };
+      if (st.leases.some((l) => l.env === d.env && l.agent !== 'manager:deploy' && (touches(d.scope, l.resource) || (d.strict && d.hosts?.includes(l.resource))))) return { code: 3, stdout: '', stderr: 'leases' };
       d.state = 'running'; if (st.grantLease) st.leases.push({ id: `L${d.id}`, env: d.env, resource: 'server', agent: 'manager:deploy', deploy_id: d.id }); return { code: 0, stdout: 'running', stderr: '' };
     }
     if (sub === 'finish') {

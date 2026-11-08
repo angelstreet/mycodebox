@@ -1200,3 +1200,20 @@ test('deploy queue: unrestricted queued host deploys coalesce into the newest re
   assert.equal((await get(a.id)).state, 'done'); assert.equal((await get(a.id)).coalescedInto, b.id);
   assert.equal((await get(cu.id)).state, 'queued');
 });
+
+// ---- bug-ceb52215: a bot that re-claims the host back-to-back must not starve its catch-up deploy ----------------------------
+test('a ready strict catch-up blocks a new claim of its host (bounded), a plain queued one does not', async () => {
+  const h = harness();
+  const d = h.svc.deploy;
+  const r = await d.request({ env: 'env-a', scope: 'host', ref: 'abc', agent: 'ag', hosts: ['host-1'], approved: true, purpose: 'catch-up for x: skipped host-1' });
+  assert.ok((await d.start({ id: r.id, skip_leased: true })).ok);
+  const f = await d.finish({ id: r.id, status: 'done', skipped_hosts: 'host-1' });   // strict re-arm, cooldown
+  assert.ok((await h.claim('bot', 'host:host-1')).ok, 'in cooldown: the bot still gets the host');
+  await h.svc.release({ agent: 'bot' });
+  await h.advance(11 * MIN);
+  const c = await h.claim('bot', 'host:host-1');
+  assert.equal(c.ok, false, 'cooldown over: the strict catch-up goes first');
+  assert.ok((await d.start({ id: f.catchup })).ok, 'and it starts');
+  await d.finish({ id: f.catchup, status: 'done' });
+  assert.ok((await h.claim('bot', 'host:host-1')).ok, 'after it, the bot runs again');
+});
