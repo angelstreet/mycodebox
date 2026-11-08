@@ -781,7 +781,7 @@ test('back-off: a catch-up that skipped its host is not started again at once', 
 test('a catch-up that skips a leased host leaves the strict re-arm queued; it starts when the lease is released', async () => {
   const reg = fakeRegistry({ deploys: [catchUp('5')], armCatchUp: true });
   const ranIds = [];
-  const { runner } = make(reg, { backoffBaseMs: 20, run: async (env, o) => { ranIds.push(o.id); if (o.id === '5') o.onLine('SKIPPED_HOSTS=host-a'); return { code: 0 }; } });
+  const { runner } = make(reg, { backoffBaseMs: 20, run: async (env, o) => { ranIds.push(o.id); if (o.id === '5') { o.onLine('SKIPPED_HOSTS=host-a'); reg.leases.push({ id: 'L1', env: 'node1-vpt', resource: 'host-a', agent: 'codebox:run' }); } return { code: 0 }; } });   // the lease is there before the re-arm exists: no race with the runner's next poll
   await runner.tick();
   await until(() => reg.deploys.find((d) => d.id === '5').state === 'done');
   const rearm = reg.deploys.find((d) => d.id !== '5');
@@ -789,7 +789,6 @@ test('a catch-up that skips a leased host leaves the strict re-arm queued; it st
   assert.equal(rearm.strict, true, 'strict: the re-arm waits for the host to be free');
   assert.deepEqual(rearm.hosts, ['host-a']);
   assert.equal(reg.deploys.filter((d) => isCatchUp(d)).length, 2, 'one re-arm, no chain');
-  reg.leases.push({ id: 'L1', env: 'node1-vpt', resource: 'host-a', agent: 'codebox:run' });
   await sleep(40);                                       // the back-off between two tries
   await runner.tick(); await sleep(40);
   assert.equal(reg.deploys.find((d) => d.id === rearm.id).state, 'queued', 'the re-arm waits while the host is leased');
