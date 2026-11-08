@@ -61,7 +61,7 @@ test('crashed breaker left <res>.break next to a stale lock: a dead breaker\'s .
 
 test('crashed breaker left <res>.moved (owner gone, no .lock): lockers back off and fail closed; recovers once .moved is removed', async () => {
   const dir = await tmp();
-  const auth = createLeaseAuthority({ backend: fileBackend({ dir, lockWaitMs: 200, staleLockMs: 10 }) });
+  const auth = createLeaseAuthority({ backend: fileBackend({ dir, lockWaitMs: 200, staleLockMs: 60_000 }) });  // a tiny stale age lets a slow peer break the other's brief lock under load and rename over the orphan .moved
   const moved = join(dir, `${K}.moved`);
   await writeFile(moved, JSON.stringify({ nonce: 'orphan', pid: 2 ** 22 + 1, host: hostname() }));
   await ageFile(moved);
