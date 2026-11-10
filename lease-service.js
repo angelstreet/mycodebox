@@ -420,8 +420,9 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
       const t = etaOf(tk, ahead);
       const hs = heldConflicts(tk);
       Object.assign(out, { behind: ahead.map((a) => a.id), position: ahead.length + 1, priority_since: iso(tk.created), eta: iso(t), eta_latest: iso(latestOf(tk)), eta_in_min: Math.max(0, Math.ceil((t - now()) / MIN)), holders: hs.map(leaseView) });
-      const eqv = freeEquivalents(tk), hint = deviceOnlyHint(tk, hs);
+      const bad = [], eqv = freeEquivalents(tk, bad), hint = deviceOnlyHint(tk, hs);
       if (eqv.length) out.equivalents_free = eqv;
+      if (bad.length) out.equivalents_unhealthy = bad;
       if (hint) out.hint = hint;
     }
     if (tk.alts) out.alternatives = tk.alts;
@@ -614,13 +615,36 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
   }
   // Is the single-resource option `virt` free right now (no holder, no ticket ahead, no deploy in the way)?
   const freeNow = (virt) => !heldConflicts(virt).length && !aheadOf(virt, null).length && (virt.system || !pendingFor(virt.env, virt, virt.deployId).length);
-  // Free members of the groups a named waiting ticket's resource belongs to: what the watchdog offers the waiter.
-  function freeEquivalents(tk) {
+  // Health (owner 2026-11-10: "free" is not "usable"): cfg.health(env) -> { hosts: { "<host>": { up: bool, reason } }, devices: { "<host>/<device>": { present: bool, reason } } }
+  // (scripts/lease-serve.js reads <LEASE_DIR>/health.json, written by scripts/lease-health-probe.js). A host that is down makes every
+  // device on it unhealthy; a device reported absent is unhealthy; no data = unknown = healthy (a dead probe never empties a group).
+  // -> null when healthy or unknown, else the reason string.
+  function unhealthyWhy(env, c) {
+    let h; try { h = typeof cfg.health === 'function' ? cfg.health(env) : cfg.health; } catch { h = null; }
+    if (!h || typeof h !== 'object') return null;
+    const p = P(c);
+    const host = p.host ? String(p.host).toLowerCase() : null;
+    const hv = host && h.hosts?.[host];
+    if (hv && hv.up === false) return hv.reason || `host ${host} does not answer`;
+    if (p.type === 'device' && host) {
+      const dv = h.devices?.[`${host}/${String(p.device).toLowerCase()}`] ?? h.devices?.[legacyName(p)];
+      if (dv && dv.present === false) return dv.reason || `device ${legacyName(p)} is not present`;
+    }
+    return null;
+  }
+  // Free AND healthy members of the groups a named waiting ticket's resource belongs to: what the watchdog offers the waiter.
+  // `unhealthy` (when asked for) lists the free members that were left out and why: shown, never offered, never switched to.
+  function freeEquivalents(tk, unhealthy = null) {
     if (tk.alts || tk.resources.length !== 1) return [];
     const c = tk.resources[0], out = [];
     for (const [g, ms] of Object.entries(groupsOf(tk.env))) {
       if (!ms.includes(c)) continue;
-      for (const m of ms) if (m !== c && !out.some((x) => x.resource === m) && freeNow({ ...tk, resources: [m] })) out.push({ group: g, resource: m, legacy: legacyName(P(m)) });
+      for (const m of ms) {
+        if (m === c || out.some((x) => x.resource === m) || !freeNow({ ...tk, resources: [m] })) continue;
+        const why = unhealthyWhy(tk.env, m);
+        if (why) { unhealthy?.push({ group: g, resource: m, legacy: legacyName(P(m)), reason: why }); continue; }
+        out.push({ group: g, resource: m, legacy: legacyName(P(m)) });
+      }
     }
     return out.slice(0, 5);
   }
@@ -674,7 +698,10 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
       anyGroup = String(a.any).trim().toLowerCase();
       const gs = groupsOf(envL);
       if (!gs[anyGroup]) return fail('E_INVALID', `unknown resource group ${JSON.stringify(anyGroup.slice(0, 40))} on ${envL} (known: ${Object.keys(gs).join(', ') || 'none: add it to the inventory'})`);
-      for (const m of gs[anyGroup]) optLists.push([m]);
+      // an unhealthy member (host down, device absent) is never an option: a free-looking box that cannot run the work costs more than a wait
+      const okMembers = gs[anyGroup].filter((m) => !unhealthyWhy(envL, m));
+      if (!okMembers.length) return fail('E_INVALID', `no healthy member in group ${anyGroup} on ${envL}: ${gs[anyGroup].map((m) => `${legacyName(P(m))} (${unhealthyWhy(envL, m)})`).join('; ')}`);
+      for (const m of okMembers) optLists.push([m]);
     }
     if (a.alternatives != null) {
       if (!Array.isArray(a.alternatives)) return fail('E_INVALID', 'alternatives must be a list of resource lists');
@@ -876,6 +903,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
         return read(() => (S.tickets[id] ? { ok: true, ticket: ticketView(S.tickets[id]) } : fail('E_NOT_FOUND', 'no such ticket')));
       }
       if (!r.ok || r.ticket.state !== 'waiting' || Date.now() >= deadline) return r;
+      if (opts.eq && r.ticket.equivalents_free?.length) return r;   // a healthy equivalent is free: the poller (auto-equivalent) is told at once, not at the end of its long poll
       await sleepUntilWake(Math.min(1000, deadline - Date.now()));
     }
   }
@@ -1036,7 +1064,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     const env = a.env.toLowerCase();
     return read(() => {
       const virt = (c) => ({ env, mode: 'exclusive', agent: '\0inventory', shared: false, resources: [c], kind: 'host' });
-      const groups = Object.entries(groupsOf(env)).map(([group, ms]) => ({ group, members: ms.map((c) => ({ resource: legacyName(P(c)), free: freeNow(virt(c)), held_by: [...new Set(heldConflicts(virt(c)).map((l) => l.agent))] })) }));
+      const groups = Object.entries(groupsOf(env)).map(([group, ms]) => ({ group, members: ms.map((c) => { const why = unhealthyWhy(env, c); return { resource: legacyName(P(c)), free: freeNow(virt(c)), healthy: !why, ...(why ? { health_reason: why } : {}), held_by: [...new Set(heldConflicts(virt(c)).map((l) => l.agent))] }; }) }));
       return { ok: true, env, groups };
     });
   }

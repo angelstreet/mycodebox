@@ -113,11 +113,11 @@ test('watchdog: a ticket waiting 5+ min while an equivalent is free gets one lin
   const [n] = planNudges({ now, view: view([tk()]), sessionOf });
   assert.equal(n.session, 'devinfo');
   assert.ok(n.waiter);
-  assert.match(n.text, /equivalent is free now: host-a/);
+  assert.match(n.text, /healthy equivalent is free now: host-a/);
   assert.match(n.text, /vpt-lease ticket t-1 --cancel/);
   assert.match(n.text, /vpt-lease claim node1-vpt host-a --agent codebox:devinfo --kind host --wait/);
   assert.match(n.text, /--any web/);
-  assert.equal(planNudges({ now, view: view([tk({ createdMs: now - 3 * 60000 })]), sessionOf }).length, 0, 'under 5 min: nothing');
+  assert.equal(planNudges({ now, view: view([tk({ createdMs: now - 20000 })]), sessionOf }).length, 0, 'under 30 s: nothing');
   assert.equal(planNudges({ now, view: view([tk({ equivalents: [] })]), sessionOf }).length, 0, 'unique hardware: nothing');
   assert.equal(planNudges({ now, view: view([tk({ any: 'web' })]), sessionOf }).length, 0, 'an --any ticket already waits on all of them');
   assert.equal(planNudges({ now, view: view([tk()]), sessionOf, last: new Map([['codebox:devinfo|t-1|waiter', now - 60000]]) }).length, 0, 'cooldown');

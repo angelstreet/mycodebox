@@ -317,6 +317,9 @@ def wait_advice(r):
         groups = sorted({e.get("group") for e in eq if e.get("group")})
         out.append("FREE EQUIVALENT NOW: %s — claim it instead of waiting (or claim --any %s next time)"
                    % (", ".join(e.get("legacy") or e.get("resource") or "?" for e in eq), "|".join(groups) or "<group>"))
+    bad = r.get("equivalents_unhealthy") or []
+    if bad:
+        out.append("not offered (unhealthy): %s" % ", ".join("%s (%s)" % (e.get("legacy") or "?", e.get("reason") or "unhealthy") for e in bad))
     if r.get("hint"):
         out.append("HINT: %s" % r["hint"])
     for o in r.get("options") or []:
@@ -517,7 +520,8 @@ def backoff_sleep(state, why):
     time.sleep(state["delay"])
 
 
-SWITCH_AFTER = float(os.environ.get("VPT_LEASE_SWITCH_AFTER") or (1 if FAST else 120))
+# owner 2026-11-10: never wait on a named device while a healthy equivalent is free -> switch at once (0); VPT_LEASE_SWITCH_AFTER=<s> delays it
+SWITCH_AFTER = float(os.environ.get("VPT_LEASE_SWITCH_AFTER") or 0)
 
 
 def verify_profile(cmd, env, res):
@@ -557,7 +561,7 @@ def poll_ticket(tid, can_requeue=False, switch=None):
         if orphaned():
             raise Orphaned()
         try:
-            r = api("GET", "/tickets/" + urllib.parse.quote(tid), query={"wait": 1 if FAST else 30},
+            r = api("GET", "/tickets/" + urllib.parse.quote(tid), query={"wait": 1 if FAST else 30, **({"eq": 1} if switch is not None else {})},
                     timeout=(5 if FAST else 45))
             state = {}
         except Unavailable as e:
@@ -587,10 +591,22 @@ def poll_ticket(tid, can_requeue=False, switch=None):
             eprint(line)
             last = line
         if switch is not None and t.get("equivalents_free") and time.monotonic() - t0 >= SWITCH_AFTER:
-            for e in t["equivalents_free"]:     # auto-equivalent: waited long enough and an equivalent member is free
+            for e in t["equivalents_free"]:     # auto-equivalent: a healthy equivalent member is free (the service already left out unhealthy ones)
                 res = e.get("legacy") or e.get("resource")
                 if res and verify_profile(switch, t.get("env") or "", res):
                     return "switch", res
+            time.sleep(0.2 if FAST else 5)      # every free member failed --verify-profile: the early-return poll must not spin
+
+
+def switch_target(t, a):
+    """The first healthy free equivalent of a ticket that passes --verify-profile, or None (auto-equivalent off, none free)."""
+    if not auto_equiv_on(a):
+        return None
+    for e in t.get("equivalents_free") or []:
+        res = e.get("legacy") or e.get("resource")
+        if res and verify_profile(getattr(a, "verify_profile", None) or "", t.get("env") or "", res):
+            return res
+    return None
 
 
 def auto_equiv_on(a):
@@ -623,12 +639,19 @@ def claim_wait(a):
                 if a.ticket_id_out is not None:
                     a.ticket_id_out.append(tid)
                 eprint(progress_line(val))
+                eq = switch_target(val, a)
+                if eq:      # a healthy equivalent is free right now: no poll, no wait
+                    with contextlib.suppress(Exception):
+                        api("DELETE", "/tickets/" + urllib.parse.quote(tid), timeout=5)
+                    eprint("auto-equivalent: %s is busy and %s is free and healthy: took %s at once (--no-auto-equivalent to wait)" % (a.resources[0], eq, eq))
+                    a.resources, a.auto_equivalent, tid = [eq], False, None
+                    continue
             res, val = poll_ticket(tid, True, (getattr(a, "verify_profile", None) or "") if auto_equiv_on(a) else None)
             if res == "switch":
                 with contextlib.suppress(Exception):
                     api("DELETE", "/tickets/" + urllib.parse.quote(tid), timeout=5)
-                eprint("auto-equivalent: waited %ds on %s, took the free equivalent %s instead (--no-auto-equivalent to wait)"
-                       % (SWITCH_AFTER, a.resources[0], val))
+                eprint("auto-equivalent: %s is busy and %s freed up (healthy): took %s instead (--no-auto-equivalent to wait)"
+                       % (a.resources[0], val, val))
                 a.resources, a.auto_equivalent, tid = [val], False, None
                 continue
             if res == "requeue":
@@ -736,12 +759,13 @@ def cmd_list(a):
     show(leases)
     show_deploys(deploys)
     for t in r.get("tickets") or []:
-        print("TICKET %s  %s/%s  agent=%s  position=%s  eta=%s%s%s%s" % (
+        print("TICKET %s  %s/%s  agent=%s  position=%s  eta=%s%s%s%s%s" % (
             t.get("id"), t.get("env", "?"), ",".join(legacy_res(x, t.get("env", "")) for x in t.get("resources") or []),
             t.get("agent", "?"), t.get("position", "?"), hhmm(t.get("eta")),
             "  priority=%s" % t["priority"] if t.get("priority") else "",
             "  any=%s" % t["any"] if t.get("any") else "",
-            "  free-equivalent=%s" % ",".join(e.get("legacy") or "?" for e in t["equivalents_free"]) if t.get("equivalents_free") else ""))
+            "  free-equivalent=%s" % ",".join(e.get("legacy") or "?" for e in t["equivalents_free"]) if t.get("equivalents_free") else "",
+            "  unhealthy-equivalent=%s" % ",".join("%s (%s)" % (e.get("legacy") or "?", e.get("reason") or "unhealthy") for e in t["equivalents_unhealthy"]) if t.get("equivalents_unhealthy") else ""))
     return 0
 
 
@@ -755,7 +779,7 @@ def cmd_inventory(a):
     if not r.get("groups"):
         print("no groups of equivalent resources on %s (the registry host's inventory.json: docs/LEASE-INVENTORY.md)" % r.get("env"))
     for g in r.get("groups") or []:
-        print("%s: %s" % (g["group"], "  ".join("%s%s" % (m["resource"], " (free)" if m.get("free") else (" (held by %s)" % ",".join(m["held_by"]) if m.get("held_by") else " (busy)"))
+        print("%s: %s" % (g["group"], "  ".join("%s%s" % (m["resource"], " (UNHEALTHY: %s)" % (m.get("health_reason") or "down") if m.get("healthy") is False else " (free)" if m.get("free") else (" (held by %s)" % ",".join(m["held_by"]) if m.get("held_by") else " (busy)"))
                                                 for m in g.get("members") or [])))
     return 0
 

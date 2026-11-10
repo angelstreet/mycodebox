@@ -47,13 +47,21 @@ Hours were lost waiting on one web host while the other was free. When the work 
   firmware work there, and run on it. Report the hosts that work so the manager adds them to the group; a host that fails the check
   is named in one line with what is missing. The lease watchdog sends this advice after 15 minutes on a ticket with no free equivalent.
 - Verification that needs the deploy to finish (integration lane) is not a device wait: do not hold or queue for a device before the deploy is done.
-- Auto-equivalent (owner, 2026-11-01): a `claim --wait` / `run` of ONE named resource that belongs to a group no longer waits
-  forever. After 2 minutes of waiting, when a group member is free, the client cancels its ticket, claims that member and
-  prints `auto-equivalent: waited ... took the free equivalent <resource>`. Read `VPT_LEASE_RESOURCE` (set by `run`) instead
-  of assuming the name you asked for. Opt out with `--no-auto-equivalent` for work tied to that one unit (its account,
+- Auto-equivalent (owner, 2026-11-01; immediate and health-aware since 2026-11-10): a `claim --wait` / `run` of ONE named resource that
+  belongs to a group never waits while a healthy member is free. If one is free when the ticket is made, the client cancels the ticket
+  and claims that member at once; a ticket already waiting is re-evaluated at every poll, so the moment something frees the claim moves.
+  It prints `auto-equivalent: <named> is busy and <member> is free and healthy: took <member> at once`. Read `VPT_LEASE_RESOURCE` (set by
+  `run`) instead of assuming the name you asked for. Opt out with `--no-auto-equivalent` for work tied to that one unit (its account,
   firmware, a physical setup). `--verify-profile "<cmd>"` is a hook: before switching, `<cmd>` runs with
   `VPT_LEASE_CANDIDATE=<resource>`; a non-zero exit skips that member (use it to check the app, login or firmware).
-  `VPT_LEASE_SWITCH_AFTER=<seconds>` changes the 2 minutes. Central mode only. `vpt-lease inventory` shows the holder per member.
+  `VPT_LEASE_SWITCH_AFTER=<seconds>` adds a delay (default 0). Central mode only. `vpt-lease inventory` shows the holder per member.
+- Healthy only: a member whose host does not answer or whose device is absent is `UNHEALTHY` in `vpt-lease inventory` / `list`, never
+  `free-equivalent`, never switched to, and skipped by `--any` ([LEASE-INVENTORY](LEASE-INVENTORY.md) "Health").
+- Enforcement (owner, 2026-11-10): the watchdog types the exact command into a waiting session's chat after 30 s (not 5 min) when its
+  ticket has a healthy free equivalent. A final `STATUS: waiting: lease ...` while one exists is refused by the done-check: one push with
+  the command, then the manager is told if the session stops on it again. Use `--any <group>` from the start.
+- Wide and narrow groups: use the operator-wide group (`stb-<operator>-any`) when the run does not depend on the box model, the narrow
+  one (`stb-<model>`) when it does ([LEASE-INVENTORY](LEASE-INVENTORY.md) "Which group a script may use").
 - Only unique hardware (one Mi box, the Apple TV, a specific set-top box or firmware) is worth a queue. The groups are data on
   the registry host ([LEASE-INVENTORY](LEASE-INVENTORY.md)); a missing group is fixed there, not by waiting.
 

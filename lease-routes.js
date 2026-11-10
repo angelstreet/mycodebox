@@ -121,7 +121,7 @@ export function createLeaseRoutes({ service, dir, cidrs = process.env.LEASE_ALLO
     return { op, args: { ...b, client: client.name, ...(exempt === undefined ? {} : { exempt }) } };
   });
   post('/claim', 'claim');
-  route('GET', '/tickets/([^/]+)', ({ m, query }) => ({ op: 'ticket', args: { id: m[1], wait_s: Math.min(MAX_WAIT_S, Math.max(0, num(query.wait) || 0)) } }));
+  route('GET', '/tickets/([^/]+)', ({ m, query }) => ({ op: 'ticket', args: { id: m[1], wait_s: Math.min(MAX_WAIT_S, Math.max(0, num(query.wait) || 0)), eq: query.eq === '1' } }));
   route('DELETE', '/tickets/([^/]+)', ({ m, client }) => ({ op: 'cancelTicket', args: { id: m[1], client: client.name } }));
   route('GET', '/leases/([^/]+)', ({ m, query }) => ({ op: 'get', args: { id: m[1], generation: query.generation === undefined ? undefined : Number(query.generation) } }));
   post('/release', 'release');

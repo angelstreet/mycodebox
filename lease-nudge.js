@@ -17,6 +17,8 @@ import { normLease, renewalIdleMin } from './lease-source.js';
 
 export const WAIT_MS = 5 * 60 * 1000;       // a deploy or ticket waits this long before its holders (and the waiter) are told (owner 2026-10-31: 5 min)
 export const PROBE_MS = 15 * 60 * 1000;     // a ticket on a named resource with no known equivalent waits this long before the waiter is told to probe other hosts (owner 2026-11-01)
+export const EQ_WAIT_MS = 30 * 1000;        // a ticket with a healthy free equivalent is told after 30 s, not 5 min (owner 2026-11-10: never wait while an equivalent is free)
+export const EQ_COOLDOWN_MS = 10 * 60 * 1000;  // ... and again every 10 min while it still waits
 export const IDLE_MIN = 20;                 // no finished turn for this long = idle
 export const COOLDOWN_MS = 30 * 60 * 1000;  // one nudge per (holder, lease)
 export const TICK_MS = 2 * 60 * 1000;
@@ -69,9 +71,10 @@ export function planNudges({ now, deploys = [], view = null, sessionOf = () => n
     const known = !!(t.equivalents?.length || t.hint);
     // no group member free and no device-only block: after PROBE_MS the waiter is told to try other hosts of the same kind itself
     const probe = !known && !t.any && waitedMs > PROBE_MS;
-    if (!(waitedMs > waitMs) || t.any || !(known || probe)) continue;
+    const eqNow = !!t.equivalents?.length;
+    if (!(waitedMs > (eqNow ? Math.min(waitMs, EQ_WAIT_MS) : waitMs)) || t.any || !(known || probe)) continue;
     const key = `${t.agent}|${t.id}|waiter`;
-    if (now - (last.get(key) || 0) < cooldownMs) continue;
+    if (now - (last.get(key) || 0) < (eqNow ? Math.min(cooldownMs, EQ_COOLDOWN_MS) : cooldownMs)) continue;
     const session = /^mac:/i.test(t.agent || '') ? null : sessionOf(t.agent);
     if (!session) continue;                  // only a chat can act on it; no manager event for this (the system resolves it)
     const env = clean(t.env, 20), res = (t.resources || []).map((r) => clean(r, 40)).join(',') || '*', waitedMin = mins(waitedMs);
@@ -79,7 +82,7 @@ export function planNudges({ now, deploys = [], view = null, sessionOf = () => n
     const text = probe
       ? `Lease watchdog: your ticket ${clean(t.id, 16)} on ${env}/${res} has waited ${waitedMin} min and no listed equivalent is free. Do not keep waiting on one host: list the other hosts of the same kind (vpt-lease inventory ${env}, vpt-lease list ${env}), pick a free one, vpt-lease ticket ${clean(t.id, 16)} --cancel, claim it, check read-only that your login/profile/firmware works there, and run on it. Report which hosts work so they join the inventory group (docs/LEASE-INVENTORY.md).`
       : eq.length
-      ? `Lease watchdog: your ticket ${clean(t.id, 16)} on ${env}/${res} has waited ${waitedMin} min, but an equivalent is free now: ${eq.join(', ')}. If it fits your work: vpt-lease ticket ${clean(t.id, 16)} --cancel, then vpt-lease claim ${env} ${eq[0]} --agent ${clean(t.agent, 60)} --kind host --wait (or claim ${env} --any ${clean(t.groups?.[0] || '<group>', 30)}: never waits while a member is free).`
+      ? `Lease watchdog: STOP WAITING: your ticket ${clean(t.id, 16)} on ${env}/${res} is queued while a healthy equivalent is free now: ${eq.join(', ')}. Run: vpt-lease ticket ${clean(t.id, 16)} --cancel && vpt-lease claim ${env} ${eq[0]} --agent ${clean(t.agent, 60)} --kind host --wait   (next time: vpt-lease claim ${env} --any ${clean(t.groups?.[0] || '<group>', 30)} --wait, which never waits while a member is free). Only keep waiting if your work needs exactly ${res} (say why in your STATUS line).`
       : `Lease watchdog: your ticket ${clean(t.id, 16)} on ${env}/${res} has waited ${waitedMin} min and only device runs block it: ${clean(t.hint, 220)}. If you need one device, vpt-lease ticket ${clean(t.id, 16)} --cancel and claim ${env} <host>/<device> --kind host --wait.`;
     out.set(key, { key, leaseId: null, ticketId: t.id, waiter: true, agent: t.agent, session, env: t.env, resources: t.resources || [], what: `ticket ${t.id}`, waitedMin, reasons: [probe ? `no free equivalent after ${waitedMin} min` : eq.length ? `free equivalent ${eq.join(',')}` : 'host blocked only by device leases'], text });
   }
