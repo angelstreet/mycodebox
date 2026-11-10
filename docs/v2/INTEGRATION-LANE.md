@@ -166,3 +166,6 @@ migration only when the text says it is destructive (drop / truncate / delete / 
 ## `integrate request --for <session>` (2026-11-02)
 
 `integrate request <branch> --for <session>` (JSON field `forSession`) names the session that gets the result: the wake message, the pending-wake queue (a busy session gets it at its next stop) and the own-job watch (the named session's `STATUS: waiting: integration <id>` line) all go to that session. The requester is told the final state too. The route checks the name against the live tmux sessions; an unknown name falls back to the requester and the answer carries `forNote` (printed by the script). Typical use: the manager queues a branch for a worker, so the worker is woken, not the manager.
+
+## Worktree cleanup after a merge (2026-11-10)
+When a request ends `merged` or `deployed`, the lane removes the requesting worktree and local branch if clean, fully merged, unused by a live tmux session and lease-free; otherwise it leaves it and journals why. Guards, journal and the `worktreeCleanup` switch: [REFERENCE](../REFERENCE.md) "Integration lane".
