@@ -11,7 +11,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createLeaseService } from '../lease-service.js';
 import { createLeaseRoutes } from '../lease-routes.js';
 import { healthReader } from '../scripts/lease-serve.js';
-import { probe } from '../scripts/lease-health-probe.js';
+import { probe, tcpUp } from '../scripts/lease-health-probe.js';
 import { planNudges } from '../lease-nudge.js';
 import { refusal, applyEquivalence, equivalenceReader } from '../lease-equivalence.js';
 import { mergedHealth } from '../scripts/lease-serve.js';
@@ -274,4 +274,18 @@ test('done-check: a waiting line that names a real difference is accepted; "need
     await w.tick();
     assert.equal(sent, expectSent, text);
   }
+});
+
+test('probe tcpUp: connect-only target is up; an "expect" target needs the banner; a silent listener is down', async () => {
+  const net = await import('node:net');
+  const mk = (banner) => new Promise((r) => { const sv = net.createServer((c) => { if (banner) c.write(banner); }); sv.listen(0, '127.0.0.1', () => r(sv)); });
+  const ssh = await mk('SSH-2.0-test\r\n'), silent = await mk('');
+  const at = (sv) => `127.0.0.1:${sv.address().port}`;
+  try {
+    assert.equal((await tcpUp(at(silent), 300)).up, true, 'connect only: up');
+    assert.equal((await tcpUp({ addr: at(ssh), expect: 'SSH-' }, 500)).up, true);
+    const bad = await tcpUp({ addr: at(silent), expect: 'SSH-' }, 300);
+    assert.equal(bad.up, false); assert.match(bad.reason, /no banner/);
+    assert.equal((await tcpUp('nonsense')).up, false);
+  } finally { ssh.close(); silent.close(); }
 });
