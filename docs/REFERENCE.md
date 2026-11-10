@@ -1085,8 +1085,14 @@ Equivalent resources (owner 2026-10-31, [design](tasks/LEASE-EQUIVALENTS.md)): `
 views carry `equivalents_free` and, for a host claim blocked only by device leases, `hint`. `GET /inventory?env=` lists the groups.
 `POST /deploy/release-hosts` (runner client) drops finished hosts from a running deploy's lease (the rolling release): the deploy runner (`rollingTracker`,
 `GHOSTY_DEPLOY_ROLLING=off` disables it) calls it for each host update_core.sh has finished. `lease-nudge.js` tells a waiter
-about a free equivalent after 5 min; `systemResolvable` keeps lease/deploy stops with a live ticket or running deploy from
+about a free equivalent after 30 s (cooldown 10 min; other nudges keep 5 min) with the exact cancel-and-claim command; `systemResolvable` keeps lease/deploy stops with a live ticket or running deploy from
 waking the manager (`lease:system-wait`).
+Health and enforcement (owner 2026-11-10): `config.health(env)` (lease-serve reads `<LEASE_DIR>/health.json`, 15 min freshness, written by
+`scripts/lease-health-probe.js`) makes a member unhealthy when its host is `up: false` or its device `present: false`; `equivalents_free`
+and `--any` leave it out, ticket views add `equivalents_unhealthy`, `GET /inventory` members carry `healthy` / `health_reason`.
+`GET /tickets/:id?wait=..&eq=1` returns as soon as a healthy equivalent is free; the `vpt-lease` client switches at once
+(`VPT_LEASE_SWITCH_AFTER`, default 0). done-check (D): a final `STATUS: waiting: lease ...` while the session's own ticket has a healthy free
+equivalent is pushed once with the command (`waitingOnLeaseStatus`, `equivalentWaitMessage`, dep `equivalentOf`), the manager is told on the second stop.
 
 Deploy duration follows progress (owner 2026-11-01): `POST /deploy/progress` (runner client; `vpt-lease deploy progress <id>`) renews the
 running deploy's lease to now + `deployLeaseMin` (12), never past start + `deployCeilingMin` (45); `release-hosts` renews too. The runner calls it

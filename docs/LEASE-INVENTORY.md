@@ -30,7 +30,7 @@ because it names real hosts.
   Method for building the groups (the survey itself names real hosts, so it stays in the manager's state dir, not here):
   list every host and device from the backends' host listing, take kind, model and app from it, check login state per
   member, then count each member's idle share from `vpt-lease events`. Members that match on all three go in one group.
-- Sessions that name one member and wait are moved to a free group member by `vpt-lease` itself after 2 minutes
+- Sessions that name one member and wait are moved to a healthy free group member by `vpt-lease` itself at once
   (auto-equivalent, [LEASE-RULES](LEASE-RULES.md)); that makes a wrong member costly, so keep groups strict.
 - A resource may be in several groups (a host that runs both the web app and an Android device).
 
@@ -47,3 +47,40 @@ A group that is too small makes sessions wait while compatible hosts sit idle (2
 session waited ~3 h). When a session reports that another host passed the read-only check (same app, same login or browser
 profile, same firmware line), add it to the group. Do not wait for the next incident: sweep each environment's hosts of a kind
 and list them. A host that failed the check stays out; note what is missing (login, profile, driver) in the manager's journal.
+
+## Health: "free" is not "usable" (owner, 2026-11-10)
+
+An equivalent counts only if it is healthy. `<LEASE_DIR>/health.json` (read again when it changes) says which hosts answer and which
+devices are present; the service uses it everywhere it offers or picks a member:
+
+```json
+{ "<env>": { "at": "<ISO time>", "hosts": { "<host>": { "up": false, "reason": "host <host> does not answer" } },
+             "devices": { "<host>/<deviceN>": { "present": false, "reason": "..." } } } }
+```
+
+- A host with `up: false` makes every device on it unhealthy; a device with `present: false` is unhealthy on its own.
+- An unhealthy member is shown as `(UNHEALTHY: <reason>)` in `vpt-lease inventory`, listed as `unhealthy-equivalent=` on a ticket
+  in `vpt-lease list`, never offered as `free-equivalent`, never auto-switched to, and skipped by `claim --any <group>` (every
+  member unhealthy: `E_INVALID no healthy member in group ...`).
+- No data, or data older than 15 minutes, means unknown, and unknown counts as healthy: a dead probe never empties a group.
+- `scripts/lease-health-probe.js` writes the file: run it from a 1-minute timer on the registry host. It makes one TCP connect per
+  host named in `<LEASE_DIR>/health-targets.json` (`{ "<env>": { "hosts": { "<host>": "<address>:<port>" }, "devices": { ... } } }`),
+  3 s timeout, so no polling storm. Both files name real hosts and stay out of the repository. A device census may write
+  `devices` entries too.
+
+## Which group a script may use
+
+Two groups per STB family, because runs differ in what they need:
+
+| Group | Members | Use it for |
+|---|---|---|
+| `stb-<model>` (for example `stb-stb4`) | the boxes of one model | a run that needs that variant: model-specific UI, firmware line, a keymap |
+| `stb-<operator>-any` (for example `stb-orchtnet-any`) | every box of the operator's STB app: each model and each copy of a model | a run that does not depend on the box model: navigation, home tabs, settings read, live TV, capture-level checks |
+
+A script declares "any STB is fine" by how its runner claims: `vpt-lease run <env> --any stb-<operator>-any -- <cmd>`, then it reads
+`VPT_LEASE_RESOURCE` (`<host>/<device>`) to learn which box it got and never hard-codes the name. A virtual script / test case states
+its group in its description (`lease group: stb-<operator>-any`) so a reviewer can see it. A script that needs one model or variant
+uses the narrow group and says why. A member of both groups is fine (a resource may be in several groups). Keep the rule of this file: a run
+that reads model-specific text (version strings, About page) must not use the wide group. The member list of the wide group
+is the union of the operator's STB groups; the real host and device ids live in the registry host's `inventory.json`, proposed in the
+manager's state dir (`inventory-proposal.json`, journaled by the manager when applied).

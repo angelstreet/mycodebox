@@ -101,6 +101,11 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
   `vpt-lease claim <env> --any <group> --wait` (groups: `vpt-lease inventory <env>`, data in [docs/LEASE-INVENTORY.md](docs/LEASE-INVENTORY.md)),
   or claim the free one by name (a named `--wait` claim of a group member switches to a free one after 2 minutes by itself;
   `--no-auto-equivalent` opts out); claim `<host>/<device>` for a device run, `<host>` only to restart or deploy the host.
+- Never wait on a named device (owner, 2026-11-10): use `vpt-lease claim <env> --any <group> --wait`; never wait on a named device
+  or end a turn with `STATUS: waiting: lease ...` while `vpt-lease list` shows a free-equivalent for your ticket. A named `--wait` claim
+  of a group member switches at once to a healthy free member (`--no-auto-equivalent` only for hardware with its own account or
+  firmware); unhealthy members (host down, device absent) are never offered. The done-check refuses such a waiting line
+  ([LEASE-RULES](docs/LEASE-RULES.md), [LEASE-INVENTORY](docs/LEASE-INVENTORY.md)).
 - Leases (deploys, restarts, test devices): follow [docs/LEASE-RULES.md](docs/LEASE-RULES.md). Never ask the owner about a
   lease: wait with `vpt-lease claim ... --wait` or `vpt-lease run ... -- <cmd>`; never poll, never `--force`.
 

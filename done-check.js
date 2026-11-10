@@ -118,6 +118,18 @@ export function unconfirmedStatusOf(text) {
   const m = /^\W*STATUS:[*_`]*\s*(?:not fully confirmed|partial)\b[*_`]*[\s:—–-]*(.*)$/i.exec(line);
   return m ? m[1].trim() : null;
 }
+// (D) Wait while an equivalent is free (owner 2026-11-10): a final `STATUS: waiting: lease ...` / `ticket ...` is not accepted while the
+// session's own ticket has a healthy free equivalent (lease service `equivalents_free`). One push with the exact command; the manager is
+// told when a later stop (a different STATUS line) still waits on that ticket. Pure. -> true when the last STATUS is a lease/ticket wait.
+export function waitingOnLeaseStatus(text) {
+  const line = lastStatusLine(text);
+  return /^\W*STATUS:[*_`]*\s*waiting\b/i.test(line) && /\b(?:lease|ticket|t-[0-9a-f]{6,}|vpt-lease|device\d*|host)\b/i.test(line);
+}
+export function equivalentWaitMessage(eq) {
+  const r = (eq.resources || []).join(',') || '?';
+  const cmd = `vpt-lease ticket ${eq.ticketId} --cancel && vpt-lease claim ${eq.env} ${eq.equivalents[0]} --agent ${eq.agent || '<your agent>'} --kind host --wait`;
+  return `Done check: your STATUS: waiting line is not accepted: your ticket ${eq.ticketId} on ${eq.env}/${r} waits while a healthy equivalent is free now (${eq.equivalents.slice(0, 4).join(', ')}). Never wait on a named device while an equivalent is free. Run: ${cmd}  (next time claim ${eq.env} --any ${eq.group || '<group>'} --wait, see vpt-lease inventory ${eq.env}). Then continue with your work. If your work needs exactly ${r} (a model, firmware or account only it has), say why in the STATUS line and use --no-auto-equivalent.`;
+}
 export function leftoverItemsOf(text) {
   const items = pushableItems(text) || [];
   const m = /^\W*STATUS:\s*(?:done|ok|complete|completed|finished)\b.*?\bnot fully confirmed\b[:\s-]*(.*)$/im.exec(String(text || ''));
@@ -139,7 +151,7 @@ export function uncommittedOf(porcelain) {
 }
 
 export function createDoneCheck({
-  stateDir, git, listDone, send, record = async () => {}, mode = () => 'live', home = process.env.HOME || '',
+  stateDir, git, listDone, send, record = async () => {}, equivalentOf = async () => null, mode = () => 'live', home = process.env.HOME || '',
   pressure = () => ({ loadPerCore: 0, ramAvailPct: 100 }), now = Date.now, pollMs = POLL_MS, log = console, ignoreBranches = () => DEFAULT_IGNORE_BRANCHES,
 } = {}) {
   const stFile = join(stateDir, 'done-check.json');
@@ -308,8 +320,30 @@ export function createDoneCheck({
         try { await send(s.name, leftoversMessage(items)); st.toldLeft[s.name] = sig; st.leftCount[s.name] = { day, n: used + 1, reported: false }; nudged++; await note({ session: s.name, leftovers: items }); }
         catch (e) { log.error?.('[done-check] send leftovers', s.name, e.message); }
       }
+      // (D) a lease wait while a healthy equivalent is free: one push; the manager is told on the second distinct stop
+      st.toldEq ||= {};
+      for (const n of Object.keys(st.toldEq)) if (!live.has(n)) delete st.toldEq[n];
+      const waitEq = [];
+      for (const s of sessions) {
+        if (s.working || s.draft || !waitingOnLeaseStatus(s.text)) continue;
+        let eq = null; try { eq = await equivalentOf(s.name); } catch { eq = null; }
+        if (!eq?.equivalents?.length) continue;
+        waitEq.push(s.name);
+        const sig = createHash('sha1').update(lastStatusLine(s.text)).digest('hex').slice(0, 12);
+        const t = st.toldEq[s.name];
+        if (t?.sig === sig) continue;   // once per stop
+        if (m === 'dry') { await note({ dry: true, session: s.name, waitWhileEquivalentFree: eq.ticketId }); continue; }
+        if (t?.n >= 2) { if (!t.reported) { t.reported = true; await record({ key: `done-check-eq:${s.name}`, title: `${s.name} keeps waiting on a lease while an equivalent is free`, body: `ticket ${eq.ticketId} on ${eq.env}/${(eq.resources || []).join(',')}; free: ${eq.equivalents.join(', ')}`, url: '/?leases=1', priority: 'default' }).catch(() => {}); } continue; }
+        if (!quiet || nudged >= MAX_NUDGES_PER_TICK) continue;
+        try {
+          if (t?.n >= 1) { st.toldEq[s.name] = { sig, n: t.n + 1, reported: true }; await record({ key: `done-check-eq:${s.name}`, title: `${s.name} keeps waiting on a lease while an equivalent is free`, body: `ticket ${eq.ticketId} on ${eq.env}/${(eq.resources || []).join(',')}; free: ${eq.equivalents.join(', ')}`, url: '/?leases=1', priority: 'default' }).catch(() => {}); await note({ session: s.name, waitWhileEquivalentFree: eq.ticketId, told: 'manager' }); continue; }
+          await send(s.name, equivalentWaitMessage(eq));
+          st.toldEq[s.name] = { sig, n: 1, reported: false }; nudged++;
+          await note({ session: s.name, waitWhileEquivalentFree: eq.ticketId, equivalents: eq.equivalents });
+        } catch (e) { log.error?.('[done-check] send equivalent wait', s.name, e.message); }
+      }
       await save(st);
-      return (last = { at: now(), mode: m, checked: sessions.length, missingBugsField: missing, missingClosingReview: missingReview, findings: findings.map(({ name, text }) => ({ name, text })), held: quiet ? null : 'host busy' });
+      return (last = { at: now(), mode: m, checked: sessions.length, waitingWhileEquivalentFree: waitEq, missingBugsField: missing, missingClosingReview: missingReview, findings: findings.map(({ name, text }) => ({ name, text })), held: quiet ? null : 'host busy' });
     } catch (e) {
       log.error?.('[done-check]', e.message);
       return (last = { ...last, at: now(), error: e.message });

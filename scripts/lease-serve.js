@@ -6,6 +6,8 @@
 //   LEASE_DIR   state dir: journal, snapshot, clients.json, shadow store (default ~/.local/state/mycodebox-lease)
 //   LEASE_ENVS  comma-separated valid environments (empty: any sane name)
 //   <LEASE_DIR>/inventory.json  groups of equivalent resources for `claim --any <group>` (docs/LEASE-INVENTORY.md); re-read when it changes
+//   <LEASE_DIR>/health.json     which hosts answer / devices are present, per env (scripts/lease-health-probe.js writes it); an unhealthy member is
+//                               never offered as a free equivalent nor switched to. Missing or older than 15 min = unknown = healthy.
 // Tokens: node scripts/lease-token.js add <name> --dir "$LEASE_DIR" [--exempt ...] [--owner]
 import http from 'node:http';
 import os from 'node:os';
@@ -29,10 +31,27 @@ export function inventoryReader(file, log = console) {
   };
 }
 
+export const HEALTH_MAX_AGE_MS = 15 * 60 * 1000;
+// -> (env) => { hosts, devices } | null. { "<env>"|"*": { at: ISO, hosts: { h: { up, reason? } }, devices: { "h/dN": { present, reason? } } } }.
+export function healthReader(file, log = console, now = Date.now) {
+  const read = inventoryReader(file, log);
+  return (env) => {
+    const j = read();
+    const out = { hosts: {}, devices: {} };
+    for (const e of [j['*'], j[env]]) {
+      if (!e || typeof e !== 'object') continue;
+      const at = Date.parse(e.at);
+      if (!Number.isFinite(at) || now() - at > HEALTH_MAX_AGE_MS) continue;   // stale data is no data
+      Object.assign(out.hosts, e.hosts || {}); Object.assign(out.devices, e.devices || {});
+    }
+    return out;
+  };
+}
+
 export function startLeaseServer({ dir, port = 17777, host = '127.0.0.1', envs = [], ownServers = {}, log = console } = {}) {
   // No tmux here: liveness is unknown (never releases anything); holders are reclaimed by TTL and declared heartbeats only.
   const service = createLeaseService({ dir, sessions: { isAlive: () => undefined, trackable: () => false },
-    onEvent: (ev) => log.log(`[lease] ${ev.kind || 'event'} ${ev.id || ''} ${ev.agent || ''}`.trim()), config: { envs, ownServers, inventory: inventoryReader(path.join(dir, 'inventory.json'), log) } });
+    onEvent: (ev) => log.log(`[lease] ${ev.kind || 'event'} ${ev.id || ''} ${ev.agent || ''}`.trim()), config: { envs, ownServers, inventory: inventoryReader(path.join(dir, 'inventory.json'), log), health: healthReader(path.join(dir, 'health.json'), log) } });
   const routes = createLeaseRoutes({ service, dir });
   const server = http.createServer(async (req, res) => {
     try {
