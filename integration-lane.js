@@ -16,6 +16,7 @@ import os from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { spawn, execFile } from 'node:child_process';
 import { gitFacts, mergeFloor, isConvention, migrationReasons } from './merge-policy.js';
+import { mergeReleaseNote } from './release-note-merge.js';
 import { cleanupWorktree } from './worktree-cleanup.js';
 import { attribute, readLedgerTail, rowCwdMatchesWorktree } from './usage-window.js';
 
@@ -137,6 +138,9 @@ export function validateConfig(raw) {
 export function loadConfig(stateDir) {
   try { return validateConfig(JSON.parse(fs.readFileSync(path.join(stateDir, 'integration.json'), 'utf8'))); } catch { return { repos: {}, settleMs: null, errors: [] }; }
 }
+
+const isReleaseNote = (f) => /(^|\/)release_note\/README\.md$/.test(f);
+const RN_SHIPPED = /release note: "## build \d+" (differs from what tag|did not exist at tag)/;
 
 // ---- convention files: the build number -----------------------------------------------------------------------------------
 // A convention file (VERSION.txt and friends) carries a build number: the last number of its build line. The build
@@ -531,15 +535,19 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
     try {
       for (const f of files) {
         const [b, o, t] = await Promise.all([1, 2, 3].map((s) => git(['show', `:${s}:${f}`], { cwd: wt })));
-        if (b.code !== 0 || o.code !== 0 || t.code !== 0) return false;   // a rename/delete side has no content to union
+        if (b.code !== 0 || o.code !== 0 || t.code !== 0) return { ok: false };   // a rename/delete side has no content to union
         const [bp, op, tp] = ['base', 'ours', 'theirs'].map((n) => path.join(tmp, n));
         fs.writeFileSync(bp, b.out); fs.writeFileSync(op, o.out); fs.writeFileSync(tp, t.out);
-        const m = await git(['merge-file', '--union', '--stdout', op, bp, tp], { cwd: wt });
-        if (m.code !== 0) return false;
-        fs.writeFileSync(path.join(wt, f), m.out);
-        if ((await git(['add', '--', f], { cwd: wt })).code !== 0) return false;
+        // a release note (has "## Unreleased"): main's file plus only the branch's added entries, shipped sections untouched
+        const rn = isReleaseNote(f) ? mergeReleaseNote(b.out, o.out, t.out) : null;
+        if (rn && !rn.ok) return { ok: false, tail: `release note conflict with main: ${rn.error}` };
+        const m = rn ? { code: 0, out: rn.text } : await git(['merge-file', '--union', '--stdout', op, bp, tp], { cwd: wt });
+        const merged = m.out;
+        if (m.code !== 0) return { ok: false };
+        fs.writeFileSync(path.join(wt, f), merged);
+        if ((await git(['add', '--', f], { cwd: wt })).code !== 0) return { ok: false };
       }
-      return true;
+      return { ok: true };
     } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   }
 
@@ -691,7 +699,8 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
           const groups = classify(c, files.filter((f) => !conv.includes(f)));
           if (!groups.other.length) {
             let fine = conv.length ? await resolveConventions(r, c, wt, conv) : true;
-            if (fine && groups.union.length) fine = await resolveUnion(wt, groups.union);
+            let un = { ok: true };
+            if (fine && groups.union.length) { un = await resolveUnion(wt, groups.union); fine = un.ok; }
             const reg = fine && groups.regenerate.length ? await resolveRegenerate(c, wt, groups.regenerate) : { ok: true };
             fine = fine && reg.ok;
             const labels = [conv.length && `${conv.join(', ')} (${c.conventionResolver})`, groups.union.length && `${groups.union.join(', ')} (union)`,
@@ -701,6 +710,7 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
               if (!e.ok) return { ok: false, tail: e.tail, info: { error: true, convention: e.files } };
               return { ok: true, info: { conflicts: files, resolved: labels.join(', '), fixed: e.files } };
             }
+            if (!un.ok && un.tail) { await git(['merge', '--abort'], { cwd: wt }); return { ok: false, tail: un.tail, info: { releaseNote: un.tail, conflicts: groups.union } }; }
             if (!reg.ok) return { ok: false, tail: reg.tail, info: { error: true, regenerate: groups.regenerate.flatMap((g) => g.files) } };
           }
           await git(['merge', '--abort'], { cwd: wt });
@@ -708,6 +718,7 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
         });
         if (!m.ok) {
           const files = m.info?.conflicts || [];
+          if (m.info?.releaseNote) throw new Ret(m.info.releaseNote, m.tail, { conflicts: files });
           if (m.info?.convention) throw new Ret(`could not restore ${m.info.convention.join(', ')} to the target's version`, m.tail, { conflicts: m.info.convention });
           if (m.info?.regenerate) throw new Ret(`could not regenerate ${m.info.regenerate.join(', ')}`, m.tail, { conflicts: m.info.regenerate });
           if (m.info?.error) throw new Ret(r.revertOf ? 'revert failed' : 'merge failed', m.tail);
@@ -729,11 +740,14 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
               env: { GHOSTY_STATE_DIR: path.join(dir, 'tmp', r.id), CI: '1', V2_BASE_SHA: targetSha } });   // tests what the merge touches; full suite nightly (scripts/test-run.js)
             fs.rmSync(path.join(dir, 'tmp', r.id), { recursive: true, force: true });
             const ok = res.code === 0 && !res.timedOut;
+            // the merge's own release-note collision (a shipped section differs from its tag): not the branch's doing
+            if (!ok && RN_SHIPPED.test(res.out)) return { ok: false, tail: res.out, bounded: true, info: { code: res.code, releaseNote: true, failing: [] } };
             const f = ok ? { tail: res.out, failing: [] } : testFailure(res.out);
             return { ok, tail: f.tail, bounded: !ok, info: { code: res.code, timedOut: !!res.timedOut, failing: f.failing } };
           });
           const failing = t.info?.failing || [];
           const names = failing.length ? `: ${failing.length} failing: ${failing.slice(0, 3).map((n) => n.slice(0, 80)).join('; ')}${failing.length > 3 ? '; …' : ''}` : '';
+          if (!t.ok && t.info?.releaseNote) throw new Ret('release note conflict with main: merge origin/main and keep main\'s shipped sections', r.steps.at(-1).tail, { conflicts: ['docs/release_note/README.md'] });
           if (!t.ok) throw new Ret(t.info?.timedOut ? `tests timed out after ${c.testTimeoutMin} min` : `tests red (exit ${t.info?.code})${names}`, r.steps.at(-1).tail, failing.length ? { failing } : {});
         }
         if (c.deploy?.kind === 'self') {

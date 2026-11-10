@@ -164,6 +164,39 @@ test('union conflict: both sides entries are kept and the merge goes through', a
   assert.match(git(w.remote, 'log', '-1', '--format=%s', 'main').trim(), /; resolved docs\/release_note\/README\.md \(union\)$/);
 });
 
+test('release note: main promoted entries to a shipped build next to the branch addition: shipped sections stay main\'s, no duplicates', async () => {
+  const rn = (un, shipped) => `# Release Notes\n\n## Unreleased\n\n### Bug fixes\n${un}\n${shipped}`;
+  const old = '## build 5\n\n### Bug fixes\n- **old** ([BUG-1](x))\n';
+  const w = makeWorld({ base: { 'src.js': 'a\n', 'VERSION.txt': '1\n', 'docs/release_note/README.md': rn('- **p** ([BUG-2](x))', old) } });
+  w.branch('feat', { 'docs/release_note/README.md': rn('- **mine** ([BUG-9](x))\n- **p** ([BUG-2](x))', old) });
+  w.moveMain({ 'docs/release_note/README.md': rn('- **new main** ([BUG-3](x))', '## build 6\n\n### Bug fixes\n- **p** ([BUG-2](x))\n\n' + old.replace('## build 5', '## build 5')) });
+  const { lane } = mk(w, { cfg: { unionFiles: ['docs/release_note/README.md'] } });
+  const r = await go(lane, { branch: 'feat' });
+  assert.equal(r.state, 'merged', JSON.stringify(r));
+  const n = w.show('main', 'docs/release_note/README.md');
+  assert.match(n, /\*\*mine\*\*/); assert.match(n, /\*\*new main\*\*/);
+  assert.equal((n.match(/BUG-2/g) || []).length, 1, 'the promoted entry is not duplicated into Unreleased');
+  assert.ok(n.endsWith(n.slice(n.indexOf('## build 6'))) && n.indexOf('## build 6') > n.indexOf('mine'));
+});
+
+test('release note: a branch that edits a shipped section is returned with a message naming the line', async () => {
+  const rn = (un, shipped) => `# Release Notes\n\n## Unreleased\n\n### Bug fixes\n${un}\n## build 5\n\n- ${shipped}\n`;
+  const w = makeWorld({ base: { 'src.js': 'a\n', 'VERSION.txt': '1\n', 'docs/release_note/README.md': rn('- u', 'shipped') } });
+  w.branch('feat', { 'docs/release_note/README.md': rn('- u\n- mine', 'shipped EDITED') });
+  w.moveMain({ 'docs/release_note/README.md': rn('- u\n- main', 'shipped') });
+  const { lane } = mk(w, { cfg: { unionFiles: ['docs/release_note/README.md'] } });
+  const r = await go(lane, { branch: 'feat' });
+  assert.equal(r.state, 'returned', JSON.stringify(r));
+  assert.match(r.reason, /release note conflict with main.*shipped EDITED/);
+});
+
+test('a red test that says a shipped release-note section differs is reported as a conflict with main, not the branch', async () => {
+  const w = makeWorld(); w.branch('feat', { 'new.js': 'x\n' });
+  const { lane } = mk(w, { cfg: { test: `echo 'ERROR: release note: "## build 9" differs from what tag t carries'; exit 1` } });
+  const r = await go(lane, { branch: 'feat' });
+  assert.equal(r.state, 'returned'); assert.match(r.reason, /^release note conflict with main: merge origin\/main and keep main's shipped sections/);
+});
+
 test('regenerate conflict: the target version is taken, the generator runs and its output is staged', async () => {
   // a tiny stand-in for scripts/gen_docs_index.py: rewrite the index from the docs it finds, plus one sibling file
   const gen = `import { readdirSync, writeFileSync, mkdirSync } from 'node:fs';
