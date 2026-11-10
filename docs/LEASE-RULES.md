@@ -45,7 +45,7 @@ Hours were lost waiting on one web host while the other was free. When the work 
   lab hosts were free, because only two hosts were in the `web` group). If every member is busy for more than a few minutes, look at
   the other hosts of the same kind (`vpt-lease list <env>`), claim a free one, check read-only that the app, login or profile and
   firmware work there, and run on it. Report the hosts that work so the manager adds them to the group; a host that fails the check
-  is named in one line with what is missing. The lease watchdog sends this advice after 15 minutes on a ticket with no free equivalent.
+  is named in one line with what is missing. The lease watchdog says nothing when no healthy free equivalent exists (unique hardware, a single-member group, every other member busy or unhealthy): keep waiting.
 - Verification that needs the deploy to finish (integration lane) is not a device wait: do not hold or queue for a device before the deploy is done.
 - Auto-equivalent (owner, 2026-11-01; immediate and health-aware since 2026-11-10): a `claim --wait` / `run` of ONE named resource that
   belongs to a group never waits while a healthy member is free. If one is free when the ticket is made, the client cancels the ticket

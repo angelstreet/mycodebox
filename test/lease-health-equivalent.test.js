@@ -192,3 +192,19 @@ test('done-check: STATUS waiting on a lease while an equivalent is free: one pus
   const before = sent.length; await w.tick(); assert.equal(sent.length, before, 'no equivalent: the wait is accepted');
   assert.match(equivalentWaitMessage({ ticketId: 't', env: 'e', equivalents: ['a'], resources: ['b'] }), /not accepted/);
 });
+
+test('single-member group (the only Android TV box with the app): no equivalent exists, no push of any kind, however long it waits', async () => {
+  const svc = createLeaseService({ dir: fs.mkdtempSync(path.join(tmp, 'one-')), config: { envs: ['env-a'], inventory: { 'env-a': { 'tv-only': ['mi-1/device5'], other: ['pi-1/device1', 'pi-3/device1'] } }, health: () => ({ hosts: {}, devices: {} }) } });
+  await svc.claim({ env: 'env-a', resources: ['mi-1/device5'], agent: 'holder', kind: 'host' });
+  const tk = (await svc.claim({ env: 'env-a', resources: ['mi-1/device5'], agent: 'codebox:kpi-androidtv', kind: 'host', wait: 'ticket' })).ticket;
+  assert.equal(tk.equivalents_free, undefined, 'the group has no other member');
+  assert.equal(tk.equivalents_unhealthy, undefined);
+  const view = { ok: true, leases: [], tickets: [{ id: tk.id, env: 'env-a', resources: ['mi-1/device5'], agent: 'codebox:kpi-androidtv', createdMs: Date.now() - 3 * 3600000, holderIds: [], holders: ['holder'], equivalents: [], groups: [], any: null, hint: '' }] };
+  assert.equal(planNudges({ now: Date.now(), view, sessionOf: (a) => a.slice(8) }).length, 0, 'nudge: nothing');
+  let sent = 0;
+  const w = createDoneCheck({ stateDir: fs.mkdtempSync(path.join(tmp, 'dc1-')), git: async () => '', log: { error() {} }, pressure: () => ({ loadPerCore: 0, ramAvailPct: 90 }),
+    listDone: async () => [{ name: 'kpi-androidtv', cwd: '/w/k', text: 'STATUS: waiting: lease on mi-1/device5 (ticket ' + tk.id + ')' }],
+    equivalentOf: async () => null, send: async () => { sent++; }, record: async () => {} });
+  await w.tick();
+  assert.equal(sent, 0, 'done-check: the wait is accepted');
+});
