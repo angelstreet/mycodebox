@@ -36,7 +36,8 @@ function harness(t, sessions, over = {}) {
 }
 
 test('done-check: a clean done without the bugs field gets exactly one push; with the field, none; once per 12 h', async (t) => {
-  const h = harness(t, [{ name: 'a', cwd: '/w/a', text: 'STATUS: done — merged' }, { name: 'b', cwd: '/w/b', text: 'STATUS: done — merged; bugs: none' }]);
+  const cr = ' · closing review: docs none needed · leftovers none · unverified none';   // closing-review.test.js covers a done without it
+  const h = harness(t, [{ name: 'a', cwd: '/w/a', text: 'STATUS: done — merged' + cr }, { name: 'b', cwd: '/w/b', text: 'STATUS: done — merged' + cr + ' · bugs: none' }]);
   const r = await h.w.tick(); await h.w.tick();
   assert.deepEqual(h.sent.map((x) => x[0]), ['a']);
   assert.match(h.sent[0][1], /no bugs field/);

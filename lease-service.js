@@ -136,7 +136,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
   const now = () => { const t = nowIn(); if (!Number.isFinite(t)) throw new Error('wall clock is not finite'); return t; };   // wall clock: TTL and display only
   const mono = config.mono || (() => performance.now());       // heartbeat-miss, idle and ticket-poll clocks never follow the wall clock
   const cfg = {
-    envs: [], ttlDefaultMin: 120, ttlMaxMin: 480, ttlCapMin: 24 * 60, reserveMs: 60 * 1000, passMax: 3, strictAgeMs: 15 * MIN, catchUpYieldMs: 10 * MIN, catchUpCooldownMs: 10 * MIN, requestKeepMs: 24 * 60 * MIN, missFactor: 3, holderCheckMs: 30 * 1000, holderDeadChecks: 2, ticketIdleMs: 90 * 1000, goneGraceMs: 2 * MIN,
+    envs: [], ttlDefaultMin: 120, ttlMaxMin: 480, ttlCapMin: 24 * 60, reserveMs: 60 * 1000, passMax: 3, strictAgeMs: 15 * MIN, catchUpYieldMs: 10 * MIN, catchUpBlockMs: 30 * MIN,catchUpCooldownMs: 10 * MIN, requestKeepMs: 24 * 60 * MIN, missFactor: 3, holderCheckMs: 30 * 1000, holderDeadChecks: 2, ticketIdleMs: 90 * 1000, goneGraceMs: 2 * MIN,
     snapshotEvery: 200, runningMaxMin: 90, deployLeaseMin: 12, deployCeilingMin: 45,
     // Priority (owner 2026-10-20): every lease and ticket carries its holder's P0..P2 (P0 highest). A lease of priority `lowPriority` or lower is capped at
     // `lowPriorityMaxTtlMin` per claim/renew and cannot be renewed while a ticket of strictly higher priority waits on a resource it blocks (`yield`).
@@ -448,7 +448,11 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
   // A catch-up deploy is the runner's own opportunistic restart of a host it skipped: while it is only queued it never blocks a
   // claim or a ticket (it used to, so a catch-up that could not start held a device ticket for hours); it blocks once it runs.
   const isCatchUp = (d) => /^catch-up[ :]/.test(String(d.purpose || ''));
-  const pendingFor = (env, req, joinId) => S.deploys.filter((d) => d.id !== joinId && d.env === env && (d.state === 'running' || (d.state === 'queued' && !isCatchUp(d))) && deployTouches(d, req));
+  // Exception (bug-ceb52215): a STRICT catch-up (it already skipped its host once) that is past its cooldown blocks new claims for
+  // `catchUpBlockMs`, so back-to-back P1 bot runs (a cron dispatcher re-claiming the host the moment it releases) cannot starve the
+  // host of its deploy forever. Bounded: after the window it stops blocking and the next skip queues a fresh one.
+  const readyCatchUp = (d) => { const t = now(); const from = d.notBefore || d.created || t; return !!d.strict && t >= from && t < from + cfg.catchUpBlockMs; };
+  const pendingFor = (env, req, joinId) => S.deploys.filter((d) => d.id !== joinId && d.env === env && (d.state === 'running' || (d.state === 'queued' && (!isCatchUp(d) || readyCatchUp(d)))) && deployTouches(d, req));
   const ownServerHosts = (env) => new Set(((cfg.ownServers || {})[env] || []).map((h) => String(h).toLowerCase()));
   // every resource of the lease is a host or device on an own-server host (so it can only be disturbed by that Pi's server)
   const ownServerOnly = (l, own) => own.size > 0 && l.resources.length > 0 && l.resources.every((c) => { const r = P(c); return (r.type === 'host' || r.type === 'device') && own.has(r.host); });

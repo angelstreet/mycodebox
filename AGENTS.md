@@ -63,6 +63,18 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
   --repro ... --error "<exact text>" --workaround ... --blocking yes|no` (`scripts/found-bug`: POSIX sh, on PATH on codebox, installed on a Mac like `integrate` ([docs/MAC-HOOK.md](docs/MAC-HOOK.md)); check with `found-bug --help`; if it is missing, POST the same JSON to `$GHOSTY_URL/api/bugs` with curl as shown there and say so; an unreachable manager queues the report locally and `found-bug --flush` posts it); the manager then sends a
   worker. Never leave it in a closing line ("could not", "returned an error", "unrelated", "pre-existing"). A `STATUS: done` line ends
   with `bugs: none | fixed <what> | reported <id>`; without it the done-check pushes once.
+- Closing review before any `STATUS: done` (owner, 2026-11-10): the owner should never have to ask "any leftover, suggestion of
+  improvement or doc to update before we close?". Before the done line, do it yourself:
+  1. **Docs**: list every doc or skill your change makes stale (task doc, REFERENCE / MAP / INDEX, user guide, skill, API
+     inventory, release note) and update it now, in the repo; never leave a draft in a scratchpad.
+  2. **Leftovers**: fix each one now, or file it with `found-bug`.
+  3. **Suggestions for improvement**: file each with `found-bug --title "idea: ..." --blocking no`, not as prose.
+  4. **Unverified**: name what you did not verify.
+
+  The done line then carries `closing review: docs <updated list|none needed> · leftovers <none|filed ids> · unverified <none|list>`,
+  e.g. `STATUS: done — X merged · closing review: docs REFERENCE.md · leftovers none · unverified none · bugs: none`. A done line
+  without it gets one automatic push from the done-check with this checklist; leftovers named there that are neither `none` nor
+  filed ids are sent back to finish like any other leftover ([REFERENCE](docs/REFERENCE.md) "Closing review").
 - Owner-reported bug queues are drained, not negotiated (owner, 2026-10-21): work every reported problem through to
   shipped without stopping to ask "which one next?". Keep the queue explicit, rank it yourself, and take the fixes one
   at a time. Ask only on a hard-floor item, a conflict between two of the owner's requests, or a request too ambiguous
@@ -128,7 +140,7 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
   contents never read or printed. Each is decided and journaled by the manager with a rollback line. Sudoers, new credentials and production
   customer-facing app hosts stay floor), destructive or unreadable database migrations (additive ones are not a floor, owner 2026-10-21, below), force-push or history rewrites, pushing tags or publishing a
   package (full list, any verb form: [REFERENCE](docs/REFERENCE.md#autonomy-by-default-push-deploy-and-recommended-options-owner-2026-10-14)): the hard floor always wins for
-  those. Additive migrations (owner, 2026-10-21): a migration that only adds (CREATE TABLE / INDEX, ADD COLUMN, RLS and
+  those. Additive migrations (owner, 2026-10-21): a migration that only adds (CREATE TABLE / INDEX, ADD COLUMN, DROP NOT NULL and COMMENT ON, RLS and
   policies) can always be applied and merged without asking: the session applies it itself, then `integrate request`
   merges it with no `--approved-by` / `--migration-applied` (still accepted, ignored) and journals `migrationAdditive: true`;
   only a destructive or unreadable migration is returned to the owner. Merges are an evaluated manager decision (owner, 2026-10-14): the

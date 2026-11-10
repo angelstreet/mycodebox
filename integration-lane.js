@@ -16,6 +16,7 @@ import os from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { spawn, execFile } from 'node:child_process';
 import { gitFacts, mergeFloor, isConvention, migrationReasons } from './merge-policy.js';
+import { cleanupWorktree } from './worktree-cleanup.js';
 import { attribute, readLedgerTail, rowCwdMatchesWorktree } from './usage-window.js';
 
 export const FINAL = Object.freeze(['merged', 'deployed', 'returned', 'merged_ci_red', 'merged_ci_superseded', 'deploy_failed', 'cancelled']);
@@ -286,7 +287,7 @@ export async function defaultMergeEval({ cwd, branch, branchSha, target, remote,
   const mig = migrationReasons(facts, { approvedBy: approveInfra, migrationApplied });
   const reasons = base.filter((x) => !MIGRATION_REASON.test(x)).concat(mig);
   return { verdict: reasons.length ? 'escalate' : 'merge', reasons, facts, infra: { files, only: !approveInfra && files.length > 0 && rest.length === 0 },
-    migration: { files: (facts.sensitive || []).filter((s) => s.why === 'migration').map((s) => s.file), allowed: mig.length === 0 && base.length > 0, applied: !!migrationApplied } };
+    migration: { files: (facts.sensitive || []).filter((s) => s.why === 'migration').map((s) => s.file), allowed: mig.length === 0 && base.length > 0, applied: !!migrationApplied, removed: (facts.migrationDeleted || []).filter((f) => !(facts.migrationAdds || {})[f]) } };
 }
 
 // ---- the lane ----------------------------------------------------------------------------------------------------------
@@ -315,6 +316,9 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
   // every caller keeps today's behaviour, so an un-wired lane is never suddenly stricter.
   managerSessions = null,
   settleQuietMs = DEFAULT_SETTLE_QUIET_MS,   // 0 = every request settles (the first of a branch included)
+  // Worktree cleanup (2026-11-10): worktreeCleanup() -> bool (the lane.worktreeCleanup switch, default ON); liveCwds() -> cwds of live tmux sessions;
+  // leaseHeld(session, worktree) -> bool; liveCheckouts: paths never removed. Un-wired = nothing known about sessions/leases, so only the git guards apply.
+  worktreeCleanup = () => true, liveCwds = async () => [], leaseHeld = async () => false, liveCheckouts = [],
   pollMs = 15_000, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), restart = createTmuxRestart(), pidAlive = waiterAlive } = {}) {
   if (!stateDir) throw coded('E_CONFIG', 'integration lane: stateDir required');
   const dir = path.join(stateDir, 'integration');
@@ -392,6 +396,24 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
     persist(r);
     emit(r, { kind: final ? 'final' : state === 'running' ? 'running' : 'state', state, final, reason: r.reason ?? null, ...event });
     if (final) wake(r.id);
+    if (state === 'merged' || state === 'deployed') cleanup(r);
+  }
+
+  // After a merge: drop the requesting worktree + local branch when every guard passes (worktree-cleanup.js); else journal why not.
+  // Fire-and-forget and never throws: the request is already final. Once per request (r.worktreeCleanup).
+  const cleanups = new Set();
+  function cleanup(r) {
+    if (r.worktreeCleanup || !r.worktree || !r.pushed) return;
+    let on = true; try { on = worktreeCleanup() !== false; } catch { /* default on */ }
+    if (!on) return;
+    const c = repoCfg(r.repo); if (!c) return;
+    r.worktreeCleanup = { pending: true };
+    const p = (async () => {
+      const res = await cleanupWorktree({ worktree: r.worktree, branch: r.branch, session: r.session, target: c.target, remote: c.remote, laneClone: c.clone, git, liveCheckouts, liveCwds, leaseHeld });
+      r.worktreeCleanup = { ...res, at: iso() }; persist(r);
+      try { fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); fs.appendFileSync(path.join(dir, 'worktree-cleanup.jsonl'), `${JSON.stringify({ at: iso(), id: r.id, repo: r.repo, branch: r.branch, worktree: r.worktree, ...res })}\n`, { mode: 0o600 }); } catch (e) { log('cleanup journal failed', e.message); }
+    })().catch((e) => log('worktree cleanup failed', e?.message)).finally(() => cleanups.delete(p));
+    cleanups.add(p);
   }
 
   // One recorded step: start/end times, output tail. fn(setLive) -> { ok?, tail?, info? }; a throw is recorded and rethrown.
@@ -599,7 +621,7 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
       question: `Merge additive migration ${m.files.join(', ')}?`, chosen: 'approve',
       rationale: `Q199 (owner 2026-10-20, narrowed 2026-10-21): the migration floor goes by effect. These files only add objects (CREATE TABLE / CREATE INDEX / ADD COLUMN), which can always be applied and merged; the session applies them itself. A destructive or unreadable migration still returns to the owner`,
       evidence: [`migration files: ${m.files.join(', ')}`, 'effect: additive only (no DROP, ALTER ... TYPE/RENAME, or data writes)', ...(r.migrationApplied ? [`attestation (not required): migrationApplied (${r.migrationAppliedBy || r.approvedBy || 'manager'})`] : [])],
-      confidence: null, reversible: true, migrationAdditive: true, ...(r.migrationApplied ? { migrationApplied: true } : {}), migrationFiles: m.files, rollback: 'git revert -m 1 <merge commit> on the target branch (queued through the lane)',
+      confidence: null, reversible: true, migrationAdditive: true, ...(m.removed?.length ? { migrationRemoved: true } : {}), ...(r.migrationApplied ? { migrationApplied: true } : {}), migrationFiles: m.files, rollback: 'git revert -m 1 <merge commit> on the target branch (queued through the lane)',
       approvedBy: r.approvedBy, session: r.session, repo: r.repo, branch: r.branch, target: c.target, request: r.id });
   }
 
@@ -980,7 +1002,7 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
       if (!x) return null;
       await waitFinal(x.id, Math.min(limit - now(), 30_000));
       const y = reqs.get(x.id);
-      if (y && y.state === 'deployed' && y.deployed && y.pushed) return { id: y.id, deployed: y.deployed };
+      if (y && y.state === 'deployed' && y.deployed && y.pushed && scopeCovers(y.deployed.scope, r.deployScope)) return { id: y.id, deployed: y.deployed };
       // ended without deploying (returned, red, failed): look for another cover, else deploy ourselves
     }
     return null;
@@ -1012,7 +1034,7 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
       }
     }
     // a re-request of a branch that was already on the target changes nothing: it does not restart the service unless --deploy was explicit
-    if (r.alreadyMerged && !r.deployExplicit) { transition(r, 'merged', { reason: null }); return; }
+    if (r.alreadyMerged && !r.deployExplicit) { transition(r, 'merged', { reason: r.deployScope ? `deploy pending: ${r.deployScope}` : null }); return; }
     if (c.deploy?.kind === 'self') { await selfDeploy(r, c); return; }
     if (r.deployScope) {
       // Coalesce (owner 2026-11-01): a later request of this repo, still queued or merging, deploys a main that carries this merge.
@@ -1145,7 +1167,7 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
     // Stop taking work. Does not wait for a step in flight (a hung test must not hang shutdown): await idle() for that.
     stop() { stopped = true; for (const t of settleTimers.values()) clearTimeout(t); settleTimers.clear(); },
     // Resolves when every worker has gone idle (tests, graceful shutdown).
-    async idle() { while (workers.size || tailJobs.size) await Promise.allSettled([...workers.values(), ...tailJobs]); },
+    async idle() { while (workers.size || tailJobs.size || cleanups.size) await Promise.allSettled([...workers.values(), ...tailJobs, ...cleanups]); },
     config: () => cfgAll(),
     repoKeys: () => Object.keys(cfgAll().repos),
 

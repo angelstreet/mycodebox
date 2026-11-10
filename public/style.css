@@ -407,12 +407,15 @@ body{ display:flex; flex-direction:column; }
      and squeezed the text to a sliver on a wide window */
   .view-card .card-pane .cell > .b,
   .view-card .card-pane .cell > .docview{ max-width:var(--measure); margin-inline:auto; width:100%; }
-  /* .jump is absolutely positioned against the card, so pin it to the column's edge
-     instead of letting it drift to the far right of a wide window. */
-  .view-card .card-pane .cell > .jump{ right:max(10px, calc((100% - var(--measure)) / 2)); }
+  /* .jump is absolutely positioned against the card: keep it in the gutter right of the text column (it covered the text when pinned to
+     the column's edge), and at the card edge when the window is too narrow for a gutter (owner 2026-11-07) */
+  .view-card .card-pane .cell > .jump{ right:max(8px, calc((100% - var(--measure)) / 2 - 48px)); }
 }
 .cell .xterm{ height:100% !important; padding:0; }
 .cell .xterm-viewport{ background:transparent !important; }
+/* the classic always-visible scrollbar (macOS "show always", Windows) painted over the last ~15 px of every line; wheel and touch scrolling still work */
+.cell .xterm-viewport{ scrollbar-width:none; }
+.cell .xterm-viewport::-webkit-scrollbar{ display:none; }
 
 /* Zen / true-fullscreen: double-tap the card body in card mode to hide the header so
    the terminal or reader gets the full vertical space. Tapping the header (now collapsed)
@@ -1979,6 +1982,13 @@ body.side-docked .session-list .meta{ flex-direction:row; flex-wrap:wrap; align-
 body.side-docked .session-list .name{ flex:1 1 0; min-width:0; }   /* basis 0: a long name shrinks to an ellipsis instead of pushing the chips to a second line */
 body.side-docked .session-list .sub{ flex:0 1 auto; max-width:62%; }
 body.side-docked .session-list .sub.rb{ flex:1 0 100%; max-width:none; }   /* repo · branch, when shown, keeps a second line */
+/* docked list: priority, agent and time sit in fixed columns so every row lines up (owner 2026-11-07); the pin slot is always reserved */
+body.side-docked .session-list .sub:not(.rb){ max-width:none; flex:0 0 auto; gap:6px; }
+body.side-docked .session-list .sub .pr{ width:26px; justify-content:center; }
+body.side-docked .session-list .sub .ag{ width:92px; display:inline-flex; align-items:center; gap:4px; overflow:visible; }
+body.side-docked .session-list .sub .sst{ width:46px; text-align:right; overflow:visible; }
+body.side-docked .session-list .pinmark{ display:inline-flex; visibility:hidden; width:13px; flex-shrink:0; }
+body.side-docked .session-list li.pinned .pinmark{ visibility:visible; }
 body.side-docked .side-head .icon-btn{ width:28px; height:30px; }
 body.side-docked .side-head .ttl{ letter-spacing:.12em; }
 

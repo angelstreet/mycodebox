@@ -238,6 +238,14 @@ test('migrationAdditive: a statement is read whole, whatever its markers', () =>
   assert.deepEqual(migrationAdditive(f, ['ALTER TABLE t ADD CONSTRAINT c CHECK (a > 0);']), { additive: true });
   assert.deepEqual(migrationAdditive(f, ['ALTER TABLE t FORCE ROW LEVEL SECURITY;']), { additive: true });
   assert.deepEqual(migrationAdditive(f, ['ALTER TABLE t ADD COLUMN c int, DROP COLUMN d;']), { additive: false, reason: 'DROP COLUMN' });
+  // DROP NOT NULL and COMMENT ON are additive (owner 2026-11-10); SET NOT NULL, DROP DEFAULT and mixes with a drop are not
+  assert.deepEqual(migrationAdditive(f, ['BEGIN;', 'ALTER TABLE public.script_results ALTER COLUMN success DROP NOT NULL;', 'ALTER TABLE t ALTER c DROP NOT NULL;', "COMMENT ON COLUMN public.script_results.success IS 'x';", 'COMMIT;']), { additive: true });
+  assert.deepEqual(migrationAdditive(f, ['ALTER TABLE t ALTER COLUMN a DROP NOT NULL, ALTER COLUMN b DROP NOT NULL;']), { additive: true });
+  assert.deepEqual(migrationAdditive(f, ['ALTER TABLE t ALTER COLUMN a DROP NOT NULL, DROP COLUMN b;']), { additive: false, reason: 'DROP COLUMN' });
+  assert.deepEqual(migrationAdditive(f, ['ALTER TABLE t ALTER COLUMN a DROP NOT NULL;', 'ALTER TABLE t DROP COLUMN b;']), { additive: false, reason: 'DROP COLUMN' });
+  assert.deepEqual(migrationAdditive(f, ['ALTER TABLE t ALTER COLUMN a SET NOT NULL;']), { additive: false, reason: 'ALTER ... SET NOT NULL' });
+  assert.equal(migrationAdditive(f, ['ALTER TABLE t ALTER COLUMN a DROP DEFAULT;']).additive, false);
+  assert.deepEqual(migrationAdditive('setup/db/schema/096_x.sql', ['ALTER TABLE t ALTER COLUMN a DROP NOT NULL;']), { additive: true });
 });
 test('migrationAdditive: a non-SQL migration is additive only with the three ops', () => {
   const f = 'alembic/versions/003_add_col.py';
@@ -268,6 +276,29 @@ test('migrationReasons: additive merges with no approval or attestation (owner 2
   const f = await gitFacts({ cwd: repo, branch: 'feat' });
   assert.deepEqual(f.migrationAdds['db/migrations/002.sql'], [`CREATE TABLE tasks (id serial PRIMARY KEY);`]);
   assert.deepEqual(migrationReasons(f, { approvedBy: true, migrationApplied: true }), []);
+});
+test('migrationReasons: a pure delete of a migration file is neutral; other cases unchanged (owner 2026-11-10)', async () => {
+  const f = 'setup/db/sql/clear_metrics.sql';
+  const del = { sensitive: [{ file: f, why: 'migration' }], migrationAdds: {}, migrationRemoved: { [f]: ['TRUNCATE metrics;'] }, migrationDeleted: [f] };
+  assert.deepEqual(migrationReasons(del), [], 'pure delete: allowed');
+  const both = { ...del, sensitive: [...del.sensitive, { file: 'db/migrations/9.sql', why: 'migration' }], migrationAdds: { 'db/migrations/9.sql': ['DROP TABLE x;'] } };
+  assert.equal(migrationReasons(both).length, 1, 'delete plus destructive add: still returned');
+  assert.match(migrationReasons(both)[0], /9\.sql/);
+  const noDel = { ...del, migrationDeleted: [] };
+  assert.deepEqual(migrationReasons(noDel), [`migration is destructive: unreadable diff in ${f}`], 'not a delete: unreadable stays');
+  // real git: a delete is neutral, a rename (new file with the old content, destructive) is unchanged
+  const mig = 'db/migrations/001.sql';
+  const repo = makeRepo({ files: { 'src.js': 'export const a = 2;\n' }, base: { 'src.js': 'export const a = 0;\n', [mig]: 'TRUNCATE t;\n' } });
+  git(repo, 'rm', '-q', mig); git(repo, 'commit', '-q', '-m', 'rm');
+  const g = await gitFacts({ cwd: repo, branch: 'feat' });
+  assert.deepEqual(g.migrationDeleted, [mig]);
+  assert.deepEqual(migrationReasons(g), [], 'real git delete: allowed');
+  // rename to a new path: not a delete, the new file's lines are read as before
+  const repo2 = makeRepo({ files: { 'src.js': 'export const a = 2;\n' }, base: { 'src.js': 'export const a = 0;\n', [mig]: 'TRUNCATE t;\n' } });
+  git(repo2, 'mv', mig, 'db/migrations/002.sql'); git(repo2, 'commit', '-q', '-m', 'mv');
+  const g2 = await gitFacts({ cwd: repo2, branch: 'feat' });
+  assert.deepEqual(g2.migrationDeleted, []);
+  assert.ok(migrationReasons(g2).length >= 1, 'rename of a destructive file stays returned');
 });
 test('reasoningDecision: confidence by evidence', () => {
   assert.equal(reasoningDecision({ docsOnly: true }, { state: 'unknown' }).confidence, 0.9);

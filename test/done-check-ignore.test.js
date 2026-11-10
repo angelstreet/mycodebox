@@ -24,7 +24,7 @@ function run(sessions, over = {}) {
   const w = createDoneCheck({ stateDir: tmp('ghosty-dci-'), git: git(), listDone: async () => sessions, send: async (n, t) => { sent.push([n, t]); }, log: { error() {} }, pressure: () => ({ loadPerCore: 0.1, ramAvailPct: 80 }), ...over });
   return { w, sent };
 }
-const BUGS = '\nSTATUS: done — merged; bugs: none';
+const BUGS = '\nSTATUS: done — merged · closing review: docs none needed · leftovers none · unverified none · bugs: none';
 
 test('default list names task44-ai-manager', () => assert.deepEqual(DEFAULT_IGNORE_BRANCHES, ['task44-ai-manager']));
 

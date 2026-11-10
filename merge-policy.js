@@ -190,10 +190,11 @@ const SQL_ADDITIVE = [
   /^create\s+(?:constraint\s+)?trigger\b/,                                                // a plain CREATE TRIGGER (an existing one fails, it never rewrites)
   /^create\s+(?:unique\s+|fulltext\s+|spatial\s+|concurrently\s+|temp(?:orary)?\s+|unlogged\s+|global\s+|local\s+)*(?:table|index|sequence|view|type|extension|schema)\b/,
 ];
-// ALTER TABLE is additive action by action (ADD COLUMN / ADD CONSTRAINT / ENABLE|FORCE ROW LEVEL SECURITY), so a mixed
+// ALTER TABLE is additive action by action (ADD COLUMN / ADD CONSTRAINT / ENABLE|FORCE ROW LEVEL SECURITY / ALTER COLUMN DROP NOT NULL), so a mixed
 // ALTER TABLE t ADD COLUMN c int, DROP COLUMN d is refused on the DROP.
 const SQL_ALTER_TABLE = /^alter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?[`"'\w.$]+(?:\s*\.\s*[`"'\w.$]+)?\s+(.*)$/;
-const SQL_ALTER_ADDITIVE = /^(?:add\b|(?:enable|force)\s+row\s+level\s+security\b)/;
+// ALTER COLUMN c DROP NOT NULL only loosens a constraint (no data lost, owner 2026-11-10); SET NOT NULL / DROP DEFAULT stay destructive.
+const SQL_ALTER_ADDITIVE = /^(?:add\b|(?:enable|force)\s+row\s+level\s+security\b|alter\s+(?:column\s+)?(?:"[^"]+"|[\w$]+)\s+drop\s+not\s+null\s*$)/;
 // The destructive shape, most specific first, so the reason names what it found ("DROP COLUMN in db/migrations/x.sql").
 const SQL_DESTRUCTIVE = [
   [/\bdrop\s+(column|table|index|constraint|view|schema|function|type|trigger|sequence|database|extension|policy|role|user)\b/, (m) => `DROP ${m[1].toUpperCase()}`],
@@ -434,7 +435,9 @@ export function migrationReasons(facts, { approvedBy = false, migrationApplied =
   if (!files.length) return [];
   const adds = facts?.migrationAdds || {};
   const removed = facts?.migrationRemoved || {};
-  const bad = files.map((file) => [file, migrationAdditive(file, adds[file], removed[file])]).filter(([, v]) => !v.additive);
+  // a migration file the diff DELETES entirely (status D, no added lines) runs no SQL: neutral, not "unreadable" (owner 2026-11-10, TASK-222)
+  const deleted = new Set(facts?.migrationDeleted || []);
+  const bad = files.filter((file) => !(deleted.has(file) && adds[file] === undefined)).map((file) => [file, migrationAdditive(file, adds[file], removed[file])]).filter(([, v]) => !v.additive);
   if (bad.length) return bad.map(([file, v]) => `migration is destructive: ${v.reason} in ${file}`);
   return [];
 }
@@ -521,13 +524,15 @@ export function schemaReasons(facts, { schemaIgnore = [] } = {}) {
 // read the whole diff sets scanError (fails closed in the floors). Migration files keep their ADDED lines (migrationAdds) so the
 // lane can classify them by effect instead of by path (Q199).
 export async function scanRange(repo, spec, conventionFiles = MERGE_DEFAULTS.mergeConventionFiles) {
-  const out = { files: [], docsOnly: false, sensitive: [], scanError: null, binary: [], migrationAdds: {}, migrationRemoved: {}, tableUses: [] };
+  const out = { files: [], docsOnly: false, sensitive: [], scanError: null, binary: [], migrationAdds: {}, migrationRemoved: {}, migrationDeleted: [], tableUses: [] };
   const names2 = await git(repo, ['diff', '--name-only', '-z', spec]);
   if (names2.code !== 0) return { error: `git diff failed: ${names2.err || 'unknown'}` };
   out.files = names2.out.split('\0').filter(Boolean);
   const real = out.files.filter((f) => !isConvention(f, conventionFiles));
   out.docsOnly = real.length > 0 ? real.every(isDocFile) : out.files.length > 0;
   for (const f of out.files) { const why = sensitivePath(f); if (why) out.sensitive.push({ file: f, why }); }
+  const del = await git(repo, ['diff', '--diff-filter=D', '--name-only', '-z', spec]);
+  if (del.code === 0) out.migrationDeleted = del.out.split('\0').filter((f) => f && sensitivePath(f) === 'migration');
   // added lines only, capped at 2 MB; an unreadable, timed-out or truncated scan fails closed (mergeFloor)
   const diff = await git(repo, ['diff', '--no-color', '--no-ext-diff', '--no-textconv', '-U0', spec], { max: 2 * 1024 * 1024 });
   if (diff.code !== 0 || diff.truncated || diff.timedOut) out.scanError = diff.truncated ? 'larger than 2 MB' : diff.err || 'unreadable';

@@ -59,9 +59,10 @@ export const NOT_WAITING = new Set(['idle_prompt', 'auth_success'])
 // not something the owner typed: they are reported, marked, and ghosty never reads them as the owner's reply.
 export const isSynthetic = (text: string): boolean => /^\s*<(?:task-notification|system-reminder|local-command|command-name|command-message)\b/.test(text)
 
-// The last-line verdict a session ends its turn with: "STATUS: done | needs-owner: ... | blocked: ... | handoff: ... | waiting: ...".
+// The last-line verdict a session ends its turn with: "STATUS: done | needs-owner: ... | needs-manager: ... | blocked: ... | handoff: ... | waiting: ...",
+// or `acknowledged`, the line the rules-watch notice asks an idle session for (bug-19f86c8c: the hook used to send it back).
 // Same shape ghosty's stall.js reads. Looked for in the last 3 non-empty lines.
-export const STATUS_RE = /^\s*[*_`]*STATUS:[*_`]*\s*(?:done|needs-owner|blocked|handoff|waiting)\b/i
+export const STATUS_RE = /^\s*[*_`]*STATUS:[*_`]*\s*(?:done|needs-owner|needs-manager|blocked|handoff|waiting|acknowledged)\b/i
 export const hasStatusLine = (text: unknown): boolean =>
   typeof text === 'string' && text.split('\n').filter(l => l.trim()).slice(-3).some(l => STATUS_RE.test(l))
 

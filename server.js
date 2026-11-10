@@ -1023,7 +1023,7 @@ const doneCheck = createDoneCheck({
       const st = latest?.status?.[name];
       const ex = st?.stall?.excerpt;
       if (!ex || st.state === 'working' || (statusLine(String(ex).split('\n'))?.kind !== 'done' && unconfirmedStatusOf(String(ex)) === null)) continue;
-      out.push({ name, cwd: p.cwd, text: String(ex).slice(-3000), working: !!reporter.activityOf(name)?.working });
+      out.push({ name, cwd: p.cwd, text: String(ex).slice(-3000), working: !!reporter.activityOf(name)?.working, draft: !!st?.stall?.draft, doneAt: st?.doneAt ? Date.parse(st.doneAt) || +st.doneAt || null : null });
     }
     return out;
   },
@@ -2854,6 +2854,12 @@ const leaseRoutes = createLeaseRoutes({ service: leaseService, dir: join(STATE_D
 // final state: merged, deployed, returned, merged_ci_red, merged_ci_superseded, deploy_failed, cancelled); deploys is { request(opts) -> { id }, wait(id) -> { ok, version?, reason? } }.
 const integrationHooks = { notify: (_request, _event) => {}, deploys: null };
 const integrationLane = createIntegrationLane({ stateDir: STATE_DIR, mergeOptOut: () => managerConfig().mergeOptOut,
+  // worktree cleanup after a merge (2026-11-10): switch lane.worktreeCleanup in manager.json (default on); never the live checkout, a live tmux cwd or a session with a lease
+  worktreeCleanup: () => managerConfig().worktreeCleanup !== false,
+  liveCheckouts: [dirname(fileURLToPath(import.meta.url)), join(homedir(), 'ghosty-sessions')],
+  liveCwds: async () => [...(await listPanes()).values()].map((p) => p.cwd),
+  leaseHeld: async (session, wt) => { const names = Object.keys(latest?.status || {}); const v = await leaseSource.view(false);
+    return (v?.leases || []).some((l) => l.session === session || agentSession(l.agent, names, MACHINES) === session || String(l.purpose || '').includes(wt)); },
   // only a manager session may pass --approved-by / --migration-applied; any other session's claim is ignored (2026-10-20)
   managerSessions: loadManagerSessions,
   // a v2/task/<id> branch merges only at a SHA the owner granted an `integration:merge:*:<sha>` key for in the V2 store
