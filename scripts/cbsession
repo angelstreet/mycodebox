@@ -63,6 +63,8 @@ if [ "$NOWT" != 1 ] && [ -n "$TOP" ] \
   [ -d "$WT" ] && git -C "$WT" rev-parse --git-dir >/dev/null 2>&1 || [ "$DRY" = 1 ] \
     || { echo "cbsession: $WT exists but is not a git worktree" >&2; exit 1; }
   DIR=$WT$SUB
+  # Daily sessions (<game>-daily-<YYYYMMDD>): keep the newest 3 worktrees per game; clean, merged, unused ones only (owner 2026-11-10).
+  case $NAME in *-daily-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) [ "$DRY" = 1 ] || node "$(dirname "$(readlink -f "$0")")/prune-daily-worktrees.js" "$TOP" "$NAME" >&2 || true;; esac
 fi
 
 H="$HOME/handovers"; mkdir -p "$H"; P="$H/$NAME.prompt.md"; L="$H/$NAME.launch.sh"
