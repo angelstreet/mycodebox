@@ -43,6 +43,15 @@ test('node_modules (ignored) does not block the removal', async () => {
   assert.equal((await cleanupWorktree(args)).removed, true);
 });
 
+test('python and tool caches (ignored, any depth) do not block the removal', async () => {
+  const { wt, args } = merged();
+  const ex = path.join(path.resolve(wt, git(wt, 'rev-parse', '--git-common-dir').trim()), 'info', 'exclude');
+  fs.appendFileSync(ex, '__pycache__/\n.pytest_cache/\n');
+  fs.mkdirSync(path.join(wt, 'pkg', '__pycache__'), { recursive: true }); fs.writeFileSync(path.join(wt, 'pkg', '__pycache__', 'm.pyc'), '1');
+  fs.mkdirSync(path.join(wt, '.pytest_cache')); fs.writeFileSync(path.join(wt, '.pytest_cache', '.gitignore'), '*');
+  assert.equal((await cleanupWorktree(args)).removed, true);
+});
+
 test('guard: a dirty worktree is left', async () => {
   const { wt, args } = merged(); fs.writeFileSync(path.join(wt, 'wip.txt'), 'x');
   const r = await cleanupWorktree(args);
