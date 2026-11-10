@@ -238,6 +238,14 @@ test('migrationAdditive: a statement is read whole, whatever its markers', () =>
   assert.deepEqual(migrationAdditive(f, ['ALTER TABLE t ADD CONSTRAINT c CHECK (a > 0);']), { additive: true });
   assert.deepEqual(migrationAdditive(f, ['ALTER TABLE t FORCE ROW LEVEL SECURITY;']), { additive: true });
   assert.deepEqual(migrationAdditive(f, ['ALTER TABLE t ADD COLUMN c int, DROP COLUMN d;']), { additive: false, reason: 'DROP COLUMN' });
+  // DROP NOT NULL and COMMENT ON are additive (owner 2026-11-10); SET NOT NULL, DROP DEFAULT and mixes with a drop are not
+  assert.deepEqual(migrationAdditive(f, ['BEGIN;', 'ALTER TABLE public.script_results ALTER COLUMN success DROP NOT NULL;', 'ALTER TABLE t ALTER c DROP NOT NULL;', "COMMENT ON COLUMN public.script_results.success IS 'x';", 'COMMIT;']), { additive: true });
+  assert.deepEqual(migrationAdditive(f, ['ALTER TABLE t ALTER COLUMN a DROP NOT NULL, ALTER COLUMN b DROP NOT NULL;']), { additive: true });
+  assert.deepEqual(migrationAdditive(f, ['ALTER TABLE t ALTER COLUMN a DROP NOT NULL, DROP COLUMN b;']), { additive: false, reason: 'DROP COLUMN' });
+  assert.deepEqual(migrationAdditive(f, ['ALTER TABLE t ALTER COLUMN a DROP NOT NULL;', 'ALTER TABLE t DROP COLUMN b;']), { additive: false, reason: 'DROP COLUMN' });
+  assert.deepEqual(migrationAdditive(f, ['ALTER TABLE t ALTER COLUMN a SET NOT NULL;']), { additive: false, reason: 'ALTER ... SET NOT NULL' });
+  assert.equal(migrationAdditive(f, ['ALTER TABLE t ALTER COLUMN a DROP DEFAULT;']).additive, false);
+  assert.deepEqual(migrationAdditive('setup/db/schema/096_x.sql', ['ALTER TABLE t ALTER COLUMN a DROP NOT NULL;']), { additive: true });
 });
 test('migrationAdditive: a non-SQL migration is additive only with the three ops', () => {
   const f = 'alembic/versions/003_add_col.py';

@@ -140,7 +140,7 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
   contents never read or printed. Each is decided and journaled by the manager with a rollback line. Sudoers, new credentials and production
   customer-facing app hosts stay floor), destructive or unreadable database migrations (additive ones are not a floor, owner 2026-10-21, below), force-push or history rewrites, pushing tags or publishing a
   package (full list, any verb form: [REFERENCE](docs/REFERENCE.md#autonomy-by-default-push-deploy-and-recommended-options-owner-2026-10-14)): the hard floor always wins for
-  those. Additive migrations (owner, 2026-10-21): a migration that only adds (CREATE TABLE / INDEX, ADD COLUMN, RLS and
+  those. Additive migrations (owner, 2026-10-21): a migration that only adds (CREATE TABLE / INDEX, ADD COLUMN, DROP NOT NULL and COMMENT ON, RLS and
   policies) can always be applied and merged without asking: the session applies it itself, then `integrate request`
   merges it with no `--approved-by` / `--migration-applied` (still accepted, ignored) and journals `migrationAdditive: true`;
   only a destructive or unreadable migration is returned to the owner. Merges are an evaluated manager decision (owner, 2026-10-14): the
