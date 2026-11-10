@@ -190,10 +190,11 @@ const SQL_ADDITIVE = [
   /^create\s+(?:constraint\s+)?trigger\b/,                                                // a plain CREATE TRIGGER (an existing one fails, it never rewrites)
   /^create\s+(?:unique\s+|fulltext\s+|spatial\s+|concurrently\s+|temp(?:orary)?\s+|unlogged\s+|global\s+|local\s+)*(?:table|index|sequence|view|type|extension|schema)\b/,
 ];
-// ALTER TABLE is additive action by action (ADD COLUMN / ADD CONSTRAINT / ENABLE|FORCE ROW LEVEL SECURITY), so a mixed
+// ALTER TABLE is additive action by action (ADD COLUMN / ADD CONSTRAINT / ENABLE|FORCE ROW LEVEL SECURITY / ALTER COLUMN DROP NOT NULL), so a mixed
 // ALTER TABLE t ADD COLUMN c int, DROP COLUMN d is refused on the DROP.
 const SQL_ALTER_TABLE = /^alter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?[`"'\w.$]+(?:\s*\.\s*[`"'\w.$]+)?\s+(.*)$/;
-const SQL_ALTER_ADDITIVE = /^(?:add\b|(?:enable|force)\s+row\s+level\s+security\b)/;
+// ALTER COLUMN c DROP NOT NULL only loosens a constraint (no data lost, owner 2026-11-10); SET NOT NULL / DROP DEFAULT stay destructive.
+const SQL_ALTER_ADDITIVE = /^(?:add\b|(?:enable|force)\s+row\s+level\s+security\b|alter\s+(?:column\s+)?(?:"[^"]+"|[\w$]+)\s+drop\s+not\s+null\s*$)/;
 // The destructive shape, most specific first, so the reason names what it found ("DROP COLUMN in db/migrations/x.sql").
 const SQL_DESTRUCTIVE = [
   [/\bdrop\s+(column|table|index|constraint|view|schema|function|type|trigger|sequence|database|extension|policy|role|user)\b/, (m) => `DROP ${m[1].toUpperCase()}`],
