@@ -1748,6 +1748,12 @@ repository, run by the server in its own clone, one request at a time per repo (
   had to be restamped by hand). The build number is the last number of the file's build line (the `current:` / `version:` marker line, else the first
   bare version line); a convention file without one (a lockfile, a changelog) keeps the target's version as it is. The rest of the file (the label, the
   repo's own history line) stays the target's: the repo's own stamp tool owns that.
+  **Release notes** (a `unionFiles` path ending `release_note/README.md` with a `## Unreleased` section, `release-note-merge.js`; owner/manager 2026-11-10):
+  the lane keeps the target's file and re-applies only the entries the branch added under `## Unreleased`, by `###` section and by `BUG-`/`TASK-` id
+  (an entry whose id main already shipped or already has in Unreleased is skipped), so every shipped `## build N` section stays byte for byte main's.
+  A branch that edited a shipped section is returned with `release note conflict with main: ...` naming the line. A red test whose output says a shipped
+  section differs from its tag is returned as `release note conflict with main: merge origin/main and keep main's shipped sections`, not as a branch failure.
+  Other union files keep the plain line union; generated indexes (`docs/bugs/README.md` via `scripts/docs/build_bug_index.py`) belong in `regenerate`.
 - **Telling the session** (`integration-notify.js`, `notify(request, event)`): on a final state a feed notice (`kind: integration`) and a manager event;
   a codebox session that is stopped (done, no draft, no menu) also gets one line through the guarded send (`by: 'integration'`):
   `Integration <id>: merged <branch> into <target> at <sha12>[, deployed <version> to <env>].` or
