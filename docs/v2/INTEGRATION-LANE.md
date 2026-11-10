@@ -151,7 +151,7 @@ integrate request <branch>
 
 No `--approved-by` and no `--migration-applied` is needed. Both are still accepted (the lane ignores them; a manager's claim is
 only recorded). The merge is journaled in `merge-decisions.jsonl` as a `merge` decision (`lane-migration-<id>`,
-`migrationAdditive: true`) so it shows in the owner's "Decided for you" feed. The "a table the code uses that no schema or
+`migrationAdditive: true`, plus `migrationRemoved: true` when the diff deletes a migration file outright, which runs no SQL and is neutral) so it shows in the owner's "Decided for you" feed. The "a table the code uses that no schema or
 migration creates" check still applies.
 
 A destructive or unreadable migration still returns the request, with a reason naming what was found:
