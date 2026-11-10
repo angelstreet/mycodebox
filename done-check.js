@@ -59,9 +59,50 @@ export function bugsMessage() {
   return 'Done check: your STATUS: done line has no bugs field. Add `bugs: none | fixed <what> | reported <id>` to it (for example `STATUS: done — branch x merged; bugs: none`). If you saw anything outside your scope that errored, misbehaved or that you worked around, fix it or run `found-bug --title ... --error ...` first. End with a STATUS line.';
 }
 
+// (C) Closing review (owner, 2026-11-10): agents wrote a clean `STATUS: done` and only the owner's "any leftover, suggestion of
+// improvement or doc to update before we close?" showed it was not done (3 sessions on 2026-11-09). A done line carries
+// `closing review: docs <updated list|none needed> · leftovers <none|filed ids> · unverified <none|list>`.
+// Pure. -> null when the last STATUS is not a literal done; { missing: true } without the segment (or with a part absent:
+// `parts` lists the missing ones); else { docs, leftovers, unverified, openLeftovers } where openLeftovers is the leftovers text
+// when it is neither none nor filed ids (bug-/idea-/int- ids), i.e. work named but neither fixed nor filed.
+const REVIEW_PARTS = ['docs', 'leftovers', 'unverified'];
+export function closingReviewOf(text) {
+  const lines = String(text || '').split('\n');
+  let at = -1;
+  lines.forEach((l, i) => { if (/^\W*STATUS:/i.test(l.trim())) at = i; });
+  if (at < 0) return null;
+  let line = lines[at].trim();
+  for (let j = at + 1; j < lines.length && /^\s{2,}\S/.test(lines[j]) && !/^\W*STATUS:/i.test(lines[j].trim()); j++) line += ' ' + lines[j].trim();
+  if (!/^\W*STATUS:[*_`]*\s*done\b/i.test(line)) return null;
+  const seg = /\bclosing[ -]review\s*[:=]\s*(.*)$/i.exec(line.replace(/[*_`]+/g, ''));
+  if (!seg) return { missing: true, parts: REVIEW_PARTS };
+  const body = seg[1].replace(/[;|]\s*bugs\s*[:=].*$/i, '');
+  const out = {};
+  for (const k of REVIEW_PARTS) {
+    const m = new RegExp(`\\b${k}\\s*:?\\s+(.+?)(?=\\s*[·;|]\\s*(?:${REVIEW_PARTS.join('|')}|bugs)\\b|\\s+(?:${REVIEW_PARTS.filter((x) => x !== k).join('|')})\\s*:|$)`, 'i').exec(body);
+    if (m) out[k] = m[1].trim().replace(/[.,;·\s]+$/, '');
+  }
+  const absent = REVIEW_PARTS.filter((k) => !out[k]);
+  if (absent.length) return { missing: true, parts: absent };
+  const l = out.leftovers;
+  out.openLeftovers = /^(?:none|nothing|n\/a|-)\b/i.test(l) || /^(?:(?:filed|reported)\s*)?(?:[\w]+-[0-9a-f]{6,}[\s,]*)+$/i.test(l) ? null : l;
+  return out;
+}
+export function closingReviewMessage({ bugsMissing = false } = {}) {
+  return 'Done check: your STATUS: done line has no closing review. Before we close this session: any leftover, suggestion of improvement, or doc / skill to update? Do it now, then rewrite the done line. '
+    + '(1) Docs: list every doc your change makes stale (task doc, REFERENCE / MAP / INDEX, user guide, skill, API inventory, release note) and update it now, in the repo, not as a draft in a scratchpad. '
+    + '(2) Leftovers: fix each one now, or file it with `found-bug --title ... --blocking no`. '
+    + '(3) Suggestions for improvement: file each as a `found-bug` record (title starts with "idea:"), not prose. '
+    + '(4) List what you did NOT verify. '
+    + 'Then end with `STATUS: done — <what> · closing review: docs <updated list|none needed> · leftovers <none|filed ids> · unverified <none|list>'
+    + (bugsMissing ? ' · bugs: none | fixed <what> | reported <id>`.' : '` (keep the bugs: field).');
+}
+
 // Owner rule 2026-11-03: a session ends only when everything is finished. `STATUS: done` with leftovers, `STATUS: not fully confirmed`
 // and `STATUS: partial` are not end states: the session is sent back to finish. Real stops are waiting: / blocked: / needs-owner: / needs-manager:.
 export const LEFT_PUSHES_PER_DAY = 3;
+export const REVIEW_PUSHES_PER_DAY = 3;
+const lastStatusLine = (text) => { const l = String(text || '').split('\n').filter((x) => /^\W*STATUS:/i.test(x.trim())); return l[l.length - 1] || ''; };
 export function leftoversMessage(items) {
   return `Done check: your STATUS is not an end state, work is still left: ${items.slice(0, 3).join(' | ').slice(0, 280)}. Finish it now. The only acceptable stops are \`STATUS: waiting: <system wait id>\`, \`STATUS: blocked: <hard-floor/physical/lease reason + what you tried>\` or \`STATUS: needs-owner:\` for a hard-floor item. Never ask the owner for anything you can do yourself. "Not fully confirmed" is not an end state.`;
 }
@@ -80,6 +121,8 @@ export function leftoverItemsOf(text) {
   const items = pushableItems(text) || [];
   const m = /^\W*STATUS:\s*(?:done|ok|complete|completed|finished)\b.*?\bnot fully confirmed\b[:\s-]*(.*)$/im.exec(String(text || ''));
   if (m) items.push(`not fully confirmed${m[1] ? ': ' + m[1].trim() : ''}`);
+  const cr = closingReviewOf(text);
+  if (cr?.openLeftovers) items.push(`closing review leftovers: ${cr.openLeftovers}`);
   const u = unconfirmedStatusOf(text);
   if (u !== null) items.push(`not fully confirmed${u ? ': ' + u : ''}`);
   return items;
@@ -187,13 +230,13 @@ export function createDoneCheck({
       const findings = [];
       for (const s of sessions) {
         const f = finding(await allFactsOf(s.cwd, s.text));
-        if (f) findings.push({ name: s.name, working: s.working, ...f });
+        if (f) findings.push({ name: s.name, working: s.working, draft: s.draft, ...f });
       }
       const pr = pressure();
       const quiet = pr.loadPerCore <= MAX_LOAD_PER_CORE && pr.ramAvailPct >= MIN_RAM_AVAIL_PCT;
       let nudged = 0;
       for (const f of findings) {
-        if (st.told[f.name] === f.sig || f.working) continue;
+        if (st.told[f.name] === f.sig || f.working || f.draft) continue;
         if (m === 'dry') { await note({ dry: true, session: f.name, finding: f.text }); continue; }
         if (!quiet || nudged >= MAX_NUDGES_PER_TICK) continue;   // a later tick tells it
         try {
@@ -203,13 +246,38 @@ export function createDoneCheck({
           await record({ key: `done-check:${f.name}`, title: `${f.name} said done, git disagrees`, body: f.text, url: '/', priority: 'default' });
         } catch (e) { log.error?.('[done-check] send', f.name, e.message); }
       }
+      // (C) a done STATUS without the closing review segment gets one push per session turn (one done line), while idle, no draft,
+      // host not busy; at most REVIEW_PUSHES_PER_DAY per session. It also asks for the bugs field when that is missing too.
+      st.toldBugs ||= {}; st.toldReview ||= {};
+      for (const n of Object.keys(st.toldReview)) if (!live.has(n)) delete st.toldReview[n];
+      const missingReview = [], reviewSent = new Set();
+      const day = new Date(now()).toISOString().slice(0, 10);
+      for (const s of sessions) {
+        const cr = closingReviewOf(s.text);
+        if (!cr?.missing || s.working || s.draft || findings.some((f) => f.name === s.name) || leftoverItemsOf(s.text).length) continue;
+        missingReview.push(s.name);
+        const sig = createHash('sha1').update(lastStatusLine(s.text)).digest('hex').slice(0, 12);
+        const t = st.toldReview[s.name];
+        if (t?.sig === sig) continue;   // once per session turn
+        const used = t?.day === day ? t.n : 0;
+        if (used >= REVIEW_PUSHES_PER_DAY) continue;
+        if (m === 'dry') { await note({ dry: true, session: s.name, closingReview: 'missing' }); continue; }
+        if (!quiet || nudged >= MAX_NUDGES_PER_TICK) continue;
+        const bugsMissing = !!bugsFieldOf(s.text)?.missing;
+        try {
+          await send(s.name, closingReviewMessage({ bugsMissing }));
+          st.toldReview[s.name] = { sig, day, n: used + 1 }; nudged++; reviewSent.add(s.name);
+          if (bugsMissing) st.toldBugs[s.name] = now();   // the same push asked for it
+          await note({ session: s.name, closingReview: 'missing', parts: cr.parts });
+        } catch (e) { log.error?.('[done-check] send closing review', s.name, e.message); }
+      }
       // (A) a done STATUS without the bugs field gets one push (while idle, host not busy)
-      st.toldBugs ||= {};
       for (const n of Object.keys(st.toldBugs)) if (!live.has(n)) delete st.toldBugs[n];
       const missing = [];
       for (const s of sessions) {
+        if (reviewSent.has(s.name) || missingReview.includes(s.name)) continue;   // the closing review push carries the bugs field
         const b = bugsFieldOf(s.text);
-        if (!b?.missing || s.working || findings.some((f) => f.name === s.name)) continue;
+        if (!b?.missing || s.working || s.draft || findings.some((f) => f.name === s.name)) continue;
         if (now() - (st.toldBugs[s.name] || 0) < BUGS_COOLDOWN_MS) continue;
         missing.push(s.name);
         if (m === 'dry') { await note({ dry: true, session: s.name, bugsField: 'missing' }); continue; }
@@ -222,12 +290,12 @@ export function createDoneCheck({
       for (const n of Object.keys(st.leftCount)) if (!live.has(n)) delete st.leftCount[n];
       for (const n of Object.keys(st.toldLeft)) if (!live.has(n)) delete st.toldLeft[n];
       for (const s of sessions) {
-        if (s.working) continue;
+        if (s.working || s.draft) continue;   // never type over an owner's draft
         const items = leftoverItemsOf(s.text);
         if (!items.length) continue;
         const sig = createHash('sha1').update(items.join('\0')).digest('hex').slice(0, 12);
         if (st.toldLeft[s.name] === sig) continue;
-        const day = new Date(now()).toISOString().slice(0, 10), cnt = st.leftCount[s.name];
+        const cnt = st.leftCount[s.name];
         const used = cnt?.day === day ? cnt.n : 0;
         if (used >= LEFT_PUSHES_PER_DAY) {   // cap reached: report to the manager once, then stay quiet
           if (m !== 'dry' && !cnt.reported) { cnt.reported = true; await record({ key: `done-check-left-cap:${s.name}`, title: `${s.name} keeps stopping with leftovers`, body: items.join(' | ').slice(0, 300), url: '/', priority: 'default' }).catch(() => {}); }
@@ -239,7 +307,7 @@ export function createDoneCheck({
         catch (e) { log.error?.('[done-check] send leftovers', s.name, e.message); }
       }
       await save(st);
-      return (last = { at: now(), mode: m, checked: sessions.length, missingBugsField: missing, findings: findings.map(({ name, text }) => ({ name, text })), held: quiet ? null : 'host busy' });
+      return (last = { at: now(), mode: m, checked: sessions.length, missingBugsField: missing, missingClosingReview: missingReview, findings: findings.map(({ name, text }) => ({ name, text })), held: quiet ? null : 'host busy' });
     } catch (e) {
       log.error?.('[done-check]', e.message);
       return (last = { ...last, at: now(), error: e.message });

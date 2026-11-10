@@ -63,6 +63,18 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
   --repro ... --error "<exact text>" --workaround ... --blocking yes|no` (`scripts/found-bug`, on PATH on codebox); the manager then sends a
   worker. Never leave it in a closing line ("could not", "returned an error", "unrelated", "pre-existing"). A `STATUS: done` line ends
   with `bugs: none | fixed <what> | reported <id>`; without it the done-check pushes once.
+- Closing review before any `STATUS: done` (owner, 2026-11-10): the owner should never have to ask "any leftover, suggestion of
+  improvement or doc to update before we close?". Before the done line, do it yourself:
+  1. **Docs**: list every doc or skill your change makes stale (task doc, REFERENCE / MAP / INDEX, user guide, skill, API
+     inventory, release note) and update it now, in the repo; never leave a draft in a scratchpad.
+  2. **Leftovers**: fix each one now, or file it with `found-bug`.
+  3. **Suggestions for improvement**: file each with `found-bug --title "idea: ..." --blocking no`, not as prose.
+  4. **Unverified**: name what you did not verify.
+
+  The done line then carries `closing review: docs <updated list|none needed> · leftovers <none|filed ids> · unverified <none|list>`,
+  e.g. `STATUS: done — X merged · closing review: docs REFERENCE.md · leftovers none · unverified none · bugs: none`. A done line
+  without it gets one automatic push from the done-check with this checklist; leftovers named there that are neither `none` nor
+  filed ids are sent back to finish like any other leftover ([REFERENCE](docs/REFERENCE.md) "Closing review").
 - Owner-reported bug queues are drained, not negotiated (owner, 2026-10-21): work every reported problem through to
   shipped without stopping to ask "which one next?". Keep the queue explicit, rank it yourself, and take the fixes one
   at a time. Ask only on a hard-floor item, a conflict between two of the owner's requests, or a request too ambiguous

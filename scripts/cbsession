@@ -101,7 +101,9 @@ You are picking up work in a fresh session on this host. Working directory: $DIR
 4. Ask the owner only for: deleting data, credentials or secrets, money, customers, sudoers or system units on hosts,
    production database migrations, or a physical action only the owner can do.
 End every turn with one STATUS line: done / needs-owner (only for step 4) / blocked. A done line ends with
-\`bugs: none | fixed <what> | reported <id>\` (without it ghosty pushes once).
+\`closing review: docs <updated list|none needed> · leftovers <none|filed ids> · unverified <none|list> · bugs: none | fixed <what> | reported <id>\`
+(without it ghosty pushes once): before it, update every doc your change makes stale, fix or found-bug each leftover and
+idea, and name what you did not verify (AGENTS.md "Closing review").
 EOF
   [ "$WAIT" = 1 ] && printf '\nReview only (owner asked): after step 2, propose the next step and stop; do not start step 3.\n' >> "$P"
   [ -n "$TEXT" ] && printf '\nExtra instruction from the owner: %s\n' "$TEXT" >> "$P"
@@ -113,6 +115,7 @@ else echo "cbsession: give -H HANDOVER, -f PROMPT_FILE or -t TEXT" >&2; exit 2; 
 # -f / -t prompts get the found-bugs rule too (every provider launches from this one file; owner 2026-10-28)
 [ "${BUGRULE:-}" = 1 ] && printf '\nFirst command: `git worktree list`; create or reuse your worktree and work only there, never in a shared checkout.\n' >> "$P"
 [ "${BUGRULE:-}" = 1 ] && printf '\nBug outside your scope: fix it in a worktree, or run `found-bug --title ... --repro ... --error ... --blocking yes|no`; never leave it in a closing line. A STATUS: done line ends with `bugs: none | fixed <what> | reported <id>`.\n' >> "$P"
+[ "${BUGRULE:-}" = 1 ] && printf '\nClosing review before any STATUS: done: update every doc your change makes stale now (task doc, REFERENCE/MAP/INDEX, user guide, skill, release note); fix each leftover or file it with found-bug; file each improvement idea with found-bug; name what you did not verify. The done line carries `closing review: docs <updated list|none needed> · leftovers <none|filed ids> · unverified <none|list>`.\n' >> "$P"
 
 # -b NAME: settings file with an apiKeyHelper that reads the key file at launch (the key never lands in a file here).
 CS=
