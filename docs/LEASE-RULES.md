@@ -60,6 +60,10 @@ Hours were lost waiting on one web host while the other was free. When the work 
 - Enforcement (owner, 2026-11-10): the watchdog types the exact command into a waiting session's chat after 30 s (not 5 min) when its
   ticket has a healthy free equivalent. A final `STATUS: waiting: lease ...` while one exists is refused by the done-check: one push with
   the command, then the manager is told if the session stops on it again. Use `--any <group>` from the start.
+- Real equivalents only (owner/manager, 2026-11-10): a candidate on the known-broken list, on an unreachable host, with no working control
+  path, or registered on a different backend server than your testcase is never offered ([LEASE-INVENTORY](LEASE-INVENTORY.md) "What makes
+  a candidate a real equivalent"). If you must stay on one device, say which difference makes the others unusable in your STATUS line
+  (model, firmware, server registration, known broken); the done-check accepts that and refuses a bare "needs exactly X".
 - Wide and narrow groups: use the operator-wide group (`stb-<operator>-any`) when the run does not depend on the box model, the narrow
   one (`stb-<model>`) when it does ([LEASE-INVENTORY](LEASE-INVENTORY.md) "Which group a script may use").
 - Only unique hardware (one Mi box, the Apple TV, a specific set-top box or firmware) is worth a queue. The groups are data on

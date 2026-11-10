@@ -125,10 +125,18 @@ export function waitingOnLeaseStatus(text) {
   const line = lastStatusLine(text);
   return /^\W*STATUS:[*_`]*\s*waiting\b/i.test(line) && /\b(?:lease|ticket|t-[0-9a-f]{6,}|vpt-lease|device\d*|host)\b/i.test(line);
 }
+// A waiting line that states why exactly this resource is needed and names an actual difference is accepted (owner 2026-11-10):
+// `STATUS: waiting: lease ... needs exactly vpt-pi1/device4: stb4 variant firmware`. "Needs exactly X" alone, with no difference, is not.
+const DIFFERENCE_RE = /\b(?:model|variant|firmware|version|server|registered|registration|known[- ]broken|account|login|profile|keymap|dongle|lirc|hardware|only (?:one|box|device) (?:with|that)|not (?:present|working|reachable)|unreachable|off the network|q\d{2,4})\b/i;
+export function acceptedWaitReason(text) {
+  const line = lastStatusLine(text);
+  return /\b(?:needs? (?:exactly|only)|because|reason[: ]|must (?:be|run on))\b/i.test(line) && DIFFERENCE_RE.test(line);
+}
 export function equivalentWaitMessage(eq) {
+  const notOffered = (eq.refused || []).slice(0, 4).map((x) => `${x.resource} (${x.reason})`);
   const r = (eq.resources || []).join(',') || '?';
   const cmd = `vpt-lease ticket ${eq.ticketId} --cancel && vpt-lease claim ${eq.env} ${eq.equivalents[0]} --agent ${eq.agent || '<your agent>'} --kind host --wait`;
-  return `Done check: your STATUS: waiting line is not accepted: your ticket ${eq.ticketId} on ${eq.env}/${r} waits while a healthy equivalent is free now (${eq.equivalents.slice(0, 4).join(', ')}). Never wait on a named device while an equivalent is free. Run: ${cmd}  (next time claim ${eq.env} --any ${eq.group || '<group>'} --wait, see vpt-lease inventory ${eq.env}). Then continue with your work. If your work needs exactly ${r} (a model, firmware or account only it has), say why in the STATUS line and use --no-auto-equivalent.`;
+  return `Done check: your STATUS: waiting line is not accepted: your ticket ${eq.ticketId} on ${eq.env}/${r} waits while a healthy equivalent is free now (${eq.equivalents.slice(0, 4).join(', ')}). Never wait on a named device while an equivalent is free. Run: ${cmd}  (next time claim ${eq.env} --any ${eq.group || '<group>'} --wait, see vpt-lease inventory ${eq.env}). Then continue with your work. If your work needs exactly ${r}, say in the STATUS line which difference makes the others unusable (model, firmware, backend server registration, known broken, account): a line that names one is accepted, then use --no-auto-equivalent.${notOffered.length ? ` Not offered, and why: ${notOffered.join('; ')}.` : ''}`;
 }
 export function leftoverItemsOf(text) {
   const items = pushableItems(text) || [];
@@ -325,7 +333,7 @@ export function createDoneCheck({
       for (const n of Object.keys(st.toldEq)) if (!live.has(n)) delete st.toldEq[n];
       const waitEq = [];
       for (const s of sessions) {
-        if (s.working || s.draft || !waitingOnLeaseStatus(s.text)) continue;
+        if (s.working || s.draft || !waitingOnLeaseStatus(s.text) || acceptedWaitReason(s.text)) continue;
         let eq = null; try { eq = await equivalentOf(s.name); } catch { eq = null; }
         if (!eq?.equivalents?.length) continue;
         waitEq.push(s.name);

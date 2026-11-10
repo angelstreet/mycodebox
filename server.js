@@ -106,6 +106,7 @@ import { createLeaseStore, sshRun as leaseRun } from './leases.js';
 import { createLeaseWatch } from './lease-watch.js';
 import { createHolderReaper } from './lease-holder-reaper.js';
 import { createLeaseNudge, systemResolvable } from './lease-nudge.js';
+import { equivalenceReader, applyEquivalence } from './lease-equivalence.js';
 import { createLeaseService } from './lease-service.js';
 import { createLeaseRoutes, PREFIX as LEASE_API } from './lease-routes.js';
 import { createRemoteStops, PREFIX as REMOTE_API } from './remote-stops.js';
@@ -919,9 +920,13 @@ const sessionIdleMin = (session, now = Date.now()) => {
   const at = Math.max(act.turnAt || 0, act.promptAt || 0);
   return at ? Math.floor((now - at) / 60000) : null;
 };
+// Equivalence rules of the dashboard side (lease-equivalence.js): <state>/lease-equivalence.json (known_broken, servers, hosts, devices per env)
+// filter what the watchdog and the done-check offer, whatever the registry's own service already filtered.
+const leaseEquivalence = equivalenceReader(join(STATE_DIR, 'lease-equivalence.json'), console);
+const leaseViewFiltered = async () => applyEquivalence(await leaseSource.view(false), leaseEquivalence);
 const leaseNudge = createLeaseNudge({
   stateDir: STATE_DIR,
-  getInputs: async () => ({ deploys: deployRunner.snapshot().deploys || [], view: await leaseSource.view(false) }),
+  getInputs: async () => ({ deploys: deployRunner.snapshot().deploys || [], view: await leaseViewFiltered() }),
   sessionOf: (agent) => holderSession(agent, Object.keys(latest?.status || {}), MACHINES),
   // the same signal as lease-watch: minutes since the session's last finished turn; a working session is never idle
   idleMinOf: (l, session) => (session ? sessionIdleMin(session) : l.idleMin ?? null),
@@ -1029,11 +1034,11 @@ const doneCheck = createDoneCheck({
   },
   // (D) the session's own waiting ticket and its healthy free equivalents (lease service `equivalents_free`, health-filtered)
   equivalentOf: async (name) => {
-    const v = await leaseSource.view(false);
+    const v = await leaseViewFiltered();
     if (!v?.ok) return null;
     const names = Object.keys(latest?.status || {});
     const t = (v.tickets || []).find((x) => x.equivalents?.length && !x.any && holderSession(x.agent, names, MACHINES) === name);
-    return t ? { ticketId: t.id, env: t.env, resources: t.resources, agent: t.agent, equivalents: t.equivalents, group: t.groups?.[0] || '' } : null;
+    return t ? { ticketId: t.id, env: t.env, resources: t.resources, agent: t.agent, equivalents: t.equivalents, refused: t.equivalentsRefused || [], group: t.groups?.[0] || '' } : null;
   },
   send: (name, text) => sendKeys(name, text),
   pressure: hostPressure,

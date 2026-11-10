@@ -13,7 +13,9 @@ import { createLeaseRoutes } from '../lease-routes.js';
 import { healthReader } from '../scripts/lease-serve.js';
 import { probe } from '../scripts/lease-health-probe.js';
 import { planNudges } from '../lease-nudge.js';
-import { waitingOnLeaseStatus, equivalentWaitMessage, createDoneCheck } from '../done-check.js';
+import { refusal, applyEquivalence, equivalenceReader } from '../lease-equivalence.js';
+import { mergedHealth } from '../scripts/lease-serve.js';
+import { acceptedWaitReason, waitingOnLeaseStatus, equivalentWaitMessage, createDoneCheck } from '../done-check.js';
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 const CLIENT = path.join(ROOT, 'scripts', 'vpt-lease');
@@ -207,4 +209,69 @@ test('single-member group (the only Android TV box with the app): no equivalent 
     equivalentOf: async () => null, send: async () => { sent++; }, record: async () => {} });
   await w.tick();
   assert.equal(sent, 0, 'done-check: the wait is accepted');
+});
+
+// ---- agent-x (2026-11-10): the candidates offered were off the network / had a hung IR dongle / were on no server ----
+const DATA = {
+  known_broken: { 'pi-1/device3': 'Q297 hung IR dongle, no /dev/lirc-x' },
+  servers: { 'srv-a': ['pi-1', 'mf-1'] },
+  hosts: { 'pi-3': { up: false, reason: 'host pi-3 is off the network' } },
+  devices: { 'mf-1/device9': { working: false, reason: 'no control path' } },
+};
+
+test('refusal: known broken, host unreachable, control path missing, not on the claimant\'s backend server; a healthy same-server device passes', () => {
+  assert.match(refusal(DATA, 'pi-1/device3', 'pi-1/device4'), /known broken: Q297/);
+  assert.match(refusal(DATA, 'pi-3/device4', 'pi-1/device4'), /off the network/);
+  assert.match(refusal({ ...DATA, hosts: {} }, 'pi-3/device4', 'pi-1/device4'), /registered on no backend server \(srv-a lists pi-1\)/);
+  assert.match(refusal(DATA, 'mf-1/device9', 'pi-1/device4'), /no control path/);
+  assert.match(refusal({ servers: { 'srv-a': ['pi-1'], other: ['mf-1'] } }, 'mf-1/device2', 'pi-1/device4'), /registered on other, not on srv-a/);
+  assert.equal(refusal(DATA, 'mf-1/device2', 'pi-1/device4'), null, 'a healthy device on the same server is a real equivalent');
+  assert.equal(refusal(DATA, 'pi-1/device5', ''), null, 'no claimant resource: no server rule');
+  assert.equal(refusal(null, 'x/device1', 'y/device1'), null);
+  assert.match(refusal({ known_broken: { 'pi-1': 'host being rebuilt' } }, 'pi-1/device2', ''), /host being rebuilt/, 'a whole host can be listed');
+});
+
+test('service: known-broken list and server registration (equivalence.json) keep devices out of equivalents_free and --any, with the reason shown', async () => {
+  const f = path.join(tmp, 'equivalence.json');
+  fs.writeFileSync(f, JSON.stringify({ 'env-a': DATA }));
+  const inv = { 'env-a': { stb: ['pi-1/device4', 'pi-1/device3', 'pi-3/device4', 'mf-1/device2'] } };
+  const svc = createLeaseService({ dir: fs.mkdtempSync(path.join(tmp, 'eq-')), config: { envs: ['env-a'], inventory: inv, health: mergedHealth(() => ({ hosts: {}, devices: {} }), equivalenceReader(f, { error() {} })) } });
+  await svc.claim({ env: 'env-a', resources: ['pi-1/device4'], agent: 'holder', kind: 'host' });
+  const tk = (await svc.claim({ env: 'env-a', resources: ['pi-1/device4'], agent: 'w', kind: 'host', wait: 'ticket' })).ticket;
+  assert.deepEqual(tk.equivalents_free.map((e) => e.legacy), ['mf-1/device2'], 'only the healthy same-server box');
+  assert.deepEqual(tk.equivalents_unhealthy.map((e) => e.legacy).sort(), ['pi-1/device3', 'pi-3/device4']);
+  assert.match(tk.equivalents_unhealthy.find((e) => e.legacy === 'pi-1/device3').reason, /Q297/);
+  const m = (await svc.inventory({ env: 'env-a' })).groups[0].members;
+  assert.deepEqual(m.map((x) => x.healthy), [true, false, false, true]);
+});
+
+test('dashboard side: the view is filtered with the same rules; the push names what was not offered and why', () => {
+  const t = { id: 't-1', env: 'e', resources: ['pi-1/device4'], agent: 'codebox:agent-x', createdMs: Date.now() - 60000, holderIds: [], holders: [], any: null, hint: '', groups: ['stb'],
+    equivalents: ['pi-3/device4', 'pi-1/device3', 'mf-1/device2'] };
+  const view = applyEquivalence({ ok: true, leases: [], tickets: [t] }, () => ({ ...DATA, hosts: DATA.hosts }));
+  assert.deepEqual(view.tickets[0].equivalents, ['mf-1/device2']);
+  assert.deepEqual(view.tickets[0].equivalentsRefused.map((x) => x.resource), ['pi-3/device4', 'pi-1/device3']);
+  const [n] = planNudges({ now: Date.now(), view, sessionOf: (a) => a.slice(8) });
+  assert.match(n.text, /free now: mf-1\/device2/);
+  assert.doesNotMatch(n.text, /free now:[^.]*pi-[13]/);
+  assert.match(n.text, /Not offered, and why: pi-3\/device4 \(host pi-3 is off the network\); pi-1\/device3 \(known broken: Q297/);
+  const none = applyEquivalence({ ok: true, leases: [], tickets: [{ ...t, equivalents: ['pi-3/device4', 'pi-1/device3'] }] }, () => DATA);
+  assert.equal(planNudges({ now: Date.now(), view: none, sessionOf: (a) => a.slice(8) }).length, 0, 'nothing healthy left: no push at all');
+});
+
+test('done-check: a waiting line that names a real difference is accepted; "needs exactly X" without one is pushed, with the refused list', async () => {
+  assert.ok(acceptedWaitReason('STATUS: waiting: lease on pi-1/device4 (t-1): needs exactly device4, stb4 variant firmware'));
+  assert.ok(acceptedWaitReason('STATUS: waiting: lease t-1 on pi-1/device4 because pi-3 is not registered on the srv-a server'));
+  assert.ok(acceptedWaitReason('STATUS: waiting: lease t-1 needs exactly pi-1/device4: the other box has a hung dongle (known broken Q297)'));
+  assert.ok(!acceptedWaitReason('STATUS: waiting: lease t-1 on pi-1/device4, needs exactly this one'));
+  assert.ok(!acceptedWaitReason('STATUS: waiting: lease t-1 on pi-1/device4'));
+  const eq = { ticketId: 't-1', env: 'e', resources: ['pi-1/device4'], agent: 'codebox:s', equivalents: ['mf-1/device2'], refused: [{ resource: 'pi-3/device4', reason: 'host pi-3 is off the network' }] };
+  assert.match(equivalentWaitMessage(eq), /Not offered, and why: pi-3\/device4 \(host pi-3 is off the network\)/);
+  for (const [text, expectSent] of [['STATUS: waiting: lease t-1 on pi-1/device4: needs exactly it, other box is a different model', 0], ['STATUS: waiting: lease t-1 on pi-1/device4', 1]]) {
+    let sent = 0;
+    const w = createDoneCheck({ stateDir: fs.mkdtempSync(path.join(tmp, 'dcr-')), git: async () => '', log: { error() {} }, pressure: () => ({ loadPerCore: 0, ramAvailPct: 90 }),
+      listDone: async () => [{ name: 's', cwd: '/w/s', text }], equivalentOf: async () => eq, send: async () => { sent++; }, record: async () => {} });
+    await w.tick();
+    assert.equal(sent, expectSent, text);
+  }
 });

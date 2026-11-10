@@ -8,6 +8,7 @@
 // release, renew, heartbeat, narrow, setMode, list, check, events, ownerRelease, sessionGone(session, opts),
 // sessionStatus(session, status), tick(), deploy.{request,approve,cancel,start,finish,record,list,wait,last},
 // shadow.{op,report,list}, importLegacy, status, close. Errors: { ok:false, code, error, ...extra }.
+import { refusal } from './lease-equivalence.js';
 import fs from 'node:fs';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -621,18 +622,11 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
   // (scripts/lease-serve.js reads <LEASE_DIR>/health.json, written by scripts/lease-health-probe.js). A host that is down makes every
   // device on it unhealthy; a device reported absent is unhealthy; no data = unknown = healthy (a dead probe never empties a group).
   // -> null when healthy or unknown, else the reason string.
-  function unhealthyWhy(env, c) {
+  function unhealthyWhy(env, c, from = null) {
     let h; try { h = typeof cfg.health === 'function' ? cfg.health(env) : cfg.health; } catch { h = null; }
     if (!h || typeof h !== 'object') return null;
-    const p = P(c);
-    const host = p.host ? String(p.host).toLowerCase() : null;
-    const hv = host && h.hosts?.[host];
-    if (hv && hv.up === false) return hv.reason || `host ${host} does not answer`;
-    if (p.type === 'device' && host) {
-      const dv = h.devices?.[`${host}/${String(p.device).toLowerCase()}`] ?? h.devices?.[legacyName(p)];
-      if (dv && dv.present === false) return dv.reason || `device ${legacyName(p)} is not present`;
-    }
-    return null;
+    const sp = (x) => (x ? legacyName(P(x)) : '');
+    return refusal(h, sp(c), sp(from));   // known broken, host down, device absent / not working, not on the claimant's backend server
   }
   // Free AND healthy members of the groups a named waiting ticket's resource belongs to: what the watchdog offers the waiter.
   // `unhealthy` (when asked for) lists the free members that were left out and why: shown, never offered, never switched to.
@@ -643,7 +637,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
       if (!ms.includes(c)) continue;
       for (const m of ms) {
         if (m === c || out.some((x) => x.resource === m) || !freeNow({ ...tk, resources: [m] })) continue;
-        const why = unhealthyWhy(tk.env, m);
+        const why = unhealthyWhy(tk.env, m, c);
         if (why) { unhealthy?.push({ group: g, resource: m, legacy: legacyName(P(m)), reason: why }); continue; }
         out.push({ group: g, resource: m, legacy: legacyName(P(m)) });
       }

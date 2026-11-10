@@ -63,6 +63,7 @@ export function normTicket(t, now) {
     holderIds: asList(t.holders).map((h) => (h && typeof h === 'object' ? String(h.id || '') : '')).filter(Boolean), createdMs: tms(t.created),
     // equivalent resources (owner 2026-10-31): free members of the ticket's group, the group of an --any ticket, the device-only hint
     equivalents: asList(t.equivalents_free).map((e) => (e && typeof e === 'object' ? String(e.legacy || e.resource || '') : String(e || ''))).filter(Boolean),
+    equivalentsRefused: asList(t.equivalents_unhealthy).map((e) => ({ resource: e && typeof e === 'object' ? String(e.legacy || e.resource || '') : String(e || ''), reason: e && typeof e === 'object' ? String(e.reason || 'unhealthy') : 'unhealthy' })).filter((e) => e.resource),
     groups: [...new Set(asList(t.equivalents_free).map((e) => (e && typeof e === 'object' ? String(e.group || '') : '')).filter(Boolean))],
     any: t.any || (Array.isArray(t.alternatives) && t.alternatives.length ? 'alternatives' : null), hint: t.hint || '',
   };
