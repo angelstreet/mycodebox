@@ -1778,6 +1778,26 @@ A bug a session finds outside its scope is fixed or filed, never left in a closi
 - **Reach.** `scripts/cbsession` puts the rule and the field into the prompt of every provider (claude, codex, minimax, opencode) and every prompt source (`-H`, `-f`, `-t`); AGENTS.md of this repo and of VirtualPyTest carries the paragraph and the field in the STATUS-line section; V2 developer and reviewer prompts (`orchestration/roles.js` `BUG_NOTE`, shared by all adapters) carry the note. `found-bug` must be on PATH: `ln -s ~/ghosty-sessions/scripts/found-bug ~/.local/bin/found-bug`.
 - **No noise from re-read notices.** The rules-watch message starts with `[rules-watch: no reply needed]` and asks for no answer (`STATUS: acknowledged` when idle, the existing STATUS line unchanged when waiting). `manager-events.js` `isRulesAck` also drops an `asks` / `waiting` event whose short text (no question, not needs-owner / needs-manager / blocked) only acknowledges the AGENTS.md re-read.
 
+### Closing review (owner, 2026-11-10)
+
+The owner kept typing "any leftover, suggestion of improvement or doc to update before we close?" after a clean `STATUS: done`
+(evolai-next, stb-orchtnet-fix, cockpit-identity on 2026-11-09), and each time the answer showed the work was not done. The
+leftovers push only fired on leftovers the closing text already admitted. Now a literal `STATUS: done` line carries
+`closing review: docs <updated list|none needed> · leftovers <none|filed ids> · unverified <none|list>` (AGENTS.md "Closing review").
+
+- `done-check.js` `closingReviewOf` (pure) reads the last STATUS line (pane-wrapped continuation included): null when it is not a
+  literal done, `{ missing, parts }` without the segment or with a part absent, else `{ docs, leftovers, unverified, openLeftovers }`.
+  A segment with all three `none` is accepted.
+- An idle done session without the segment gets one push (`closingReviewMessage`: the owner's checklist question, plus the bugs
+  field when that is missing too, so one push covers both): once per session turn (signature of the done line), at most
+  `REVIEW_PUSHES_PER_DAY` (3) per session per day, not while working, with a draft in the input box, paused or a manager session,
+  not when the host is busy, and not when a git finding or a leftovers push for the same session comes first. Dry mode journals only.
+- `leftovers` that is neither `none` nor filed ids (`bug-...`) is an open leftover: `leftoverItemsOf` adds it, so the session is sent
+  back to finish (same cap as "Done with leftovers").
+- `GET /api/done-check` lists `missingClosingReview`; `done-check.jsonl` journals `closingReview: missing`;
+  `scripts/manager-status-scan.sh` prints `<session>: done-without-closing-review`.
+- Reach: AGENTS.md of this repo and of VirtualPyTest, and `scripts/cbsession` prompts (`-H`, `-f`, `-t`).
+
 ### Done-check ignores long-lived branches (owner, 2026-10-28)
 
 `manager.json` `doneCheckIgnoreBranches` (default `["task44-ai-manager"]`; `[]` judges every branch) lists branches the done-check never counts as "not on main": a session sitting on one of them (or on a detached HEAD that belongs to it) is not judged on it, and a closing text that names one does not pull it in. The session's own branch and worktree are still checked.

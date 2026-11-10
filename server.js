@@ -1023,7 +1023,7 @@ const doneCheck = createDoneCheck({
       const st = latest?.status?.[name];
       const ex = st?.stall?.excerpt;
       if (!ex || st.state === 'working' || (statusLine(String(ex).split('\n'))?.kind !== 'done' && unconfirmedStatusOf(String(ex)) === null)) continue;
-      out.push({ name, cwd: p.cwd, text: String(ex).slice(-3000), working: !!reporter.activityOf(name)?.working });
+      out.push({ name, cwd: p.cwd, text: String(ex).slice(-3000), working: !!reporter.activityOf(name)?.working, draft: !!st?.stall?.draft });
     }
     return out;
   },
