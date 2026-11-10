@@ -102,6 +102,7 @@ export function closingReviewMessage({ bugsMissing = false } = {}) {
 // and `STATUS: partial` are not end states: the session is sent back to finish. Real stops are waiting: / blocked: / needs-owner: / needs-manager:.
 export const LEFT_PUSHES_PER_DAY = 3;
 export const REVIEW_PUSHES_PER_DAY = 3;
+export const REVIEW_MAX_AGE_MS = 6 * 3600 * 1000;   // only recent done turns: old idle sessions are not woken by the rollout
 const lastStatusLine = (text) => { const l = String(text || '').split('\n').filter((x) => /^\W*STATUS:/i.test(x.trim())); return l[l.length - 1] || ''; };
 export function leftoversMessage(items) {
   return `Done check: your STATUS is not an end state, work is still left: ${items.slice(0, 3).join(' | ').slice(0, 280)}. Finish it now. The only acceptable stops are \`STATUS: waiting: <system wait id>\`, \`STATUS: blocked: <hard-floor/physical/lease reason + what you tried>\` or \`STATUS: needs-owner:\` for a hard-floor item. Never ask the owner for anything you can do yourself. "Not fully confirmed" is not an end state.`;
@@ -254,6 +255,7 @@ export function createDoneCheck({
       const day = new Date(now()).toISOString().slice(0, 10);
       for (const s of sessions) {
         const cr = closingReviewOf(s.text);
+        if (s.doneAt && now() - s.doneAt > REVIEW_MAX_AGE_MS) continue;   // a done turn from before the rule: not reopened
         if (!cr?.missing || s.working || s.draft || findings.some((f) => f.name === s.name) || leftoverItemsOf(s.text).length) continue;
         missingReview.push(s.name);
         const sig = createHash('sha1').update(lastStatusLine(s.text)).digest('hex').slice(0, 12);

@@ -71,6 +71,8 @@ test('done-check: a new done line is a new turn (pushed again), capped per day; 
     const x = harness([{ name: 'a', cwd: '/w/a', text: 'STATUS: done', ...extra }]);
     await x.w.tick(); assert.equal(x.sent.length, 0, JSON.stringify(extra));
   }
+  const old = harness([{ name: 'a', cwd: '/w/a', text: 'STATUS: done; bugs: none', doneAt: Date.parse('2026-11-09T08:00:00Z') }]);
+  await old.w.tick(); assert.equal(old.sent.length, 0, 'a done turn older than 6 h is not reopened');
   const d = harness([{ name: 'a', cwd: '/w/a', text: 'STATUS: done' }], { mode: () => 'dry' });
   await d.w.tick(); assert.equal(d.sent.length, 0);
 });
