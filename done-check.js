@@ -126,7 +126,7 @@ export function waitingOnLeaseStatus(text) {
   return /^\W*STATUS:[*_`]*\s*waiting\b/i.test(line) && /\b(?:lease|ticket|t-[0-9a-f]{6,}|vpt-lease|device\d*|host)\b/i.test(line);
 }
 // A waiting line that states why exactly this resource is needed and names an actual difference is accepted (owner 2026-11-10):
-// `STATUS: waiting: lease ... needs exactly vpt-pi1/device4: stb4 variant firmware`. "Needs exactly X" alone, with no difference, is not.
+// `STATUS: waiting: lease ... needs exactly <host>/<device>: other box is another firmware variant`. "Needs exactly X" alone, with no difference, is not.
 const DIFFERENCE_RE = /\b(?:model|variant|firmware|version|server|registered|registration|known[- ]broken|account|login|profile|keymap|dongle|lirc|hardware|only (?:one|box|device) (?:with|that)|not (?:present|working|reachable)|unreachable|off the network|q\d{2,4})\b/i;
 export function acceptedWaitReason(text) {
   const line = lastStatusLine(text);
