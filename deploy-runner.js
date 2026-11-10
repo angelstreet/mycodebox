@@ -7,6 +7,7 @@
 // Test-only entry shape: { "argv": ["bash", "-c", "..."] } runs locally instead of ssh (env vars VPT_DEPLOY_REF/SCOPE set).
 // Registry: ssh proxmox '~/bin/vpt-lease ...' by default; DEPLOY_REGISTRY='["python3","/path/vpt-lease"]' runs it locally.
 import { spawn, execFile } from 'node:child_process';
+import { planCatchUps, gitContains } from './catchup-supersede.js';
 import { mkdir, readFile, writeFile, appendFile, stat, open } from 'node:fs/promises';
 import { createWriteStream, openSync, closeSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -59,10 +60,10 @@ export const coveringCatchUps = (deploys, env, hosts) => {
 // them (`deploy cancel`) instead of piling up behind them.
 // Only a catch-up at the SAME ref covers this one: a running catch-up at an older ref must not stop the newer ref from being
 // queued (the hosts would stay on the older code). Running ones are never cancelled; queued ones at another ref are.
-export const catchUpPlan = (existing, d) => {
-  const held = existing.filter((x) => x.ref === d.ref);
-  return { queue: held.length === 0, held, cancel: existing.filter((x) => x.state === 'queued' && x.ref !== d.ref) };
-};
+// Only a catch-up at the SAME ref (or a ref that contains this one) covers it. A queued one is cancelled only when this ref
+// CONTAINS its ref (it is older); an older or diverged one is left alone, and a cancelled one's hosts are carried (`hosts`).
+// `contains(newer, older)` is git ancestry (true|false|null); unknown never cancels. See catchup-supersede.js.
+export const catchUpPlan = (existing, d, contains = () => null, want = []) => planCatchUps(existing, d, want, contains);
 // A catch-up for the same (env, ref, host) is tried at most CATCHUP_CAP times; each skip again backs that host off
 // (BACKOFF_BASE_MS doubling, capped) so a host held by something the lease registry does not show (a running execution)
 // is not re-dispatched every poll. Counted from the in-memory tries and from the finished catch-ups the registry still lists.
@@ -242,6 +243,7 @@ export function createDeployRunner({
   stateDir, alert = () => {}, managerItem = null, onChange = () => {}, isEnabled = () => false,
   registry = defaultRegistry(), run = defaultRun, timeoutMs = 11 * 60 * 1000, maxMs = DEFAULT_MAX_MS, holdCeilingMs = DEFAULT_HOLD_CEILING_MS, pollMs = 30000,
   orphanIdleMs = DEFAULT_ORPHAN_IDLE_MS, followPollMs = 1000, catchUp = true, follow = followDetached, log = console,
+  isAncestor = gitContains(process.env.DEPLOY_REPO_DIR || ''),   // (newer, older) => true|false|null: does ref `newer` contain `older`
   backoffBaseMs = BACKOFF_BASE_MS,      // the per-host back-off between two catch-up tries (tests shorten it)
   rolling = process.env.GHOSTY_DEPLOY_ROLLING !== 'off',   // release each finished host of a host deploy at once (rollingTracker)
   // 'registry' is the central client every agent's `vpt-lease deploy request` arrives through (codebox -> registry host); the env replaces the list.
@@ -464,19 +466,19 @@ export function createDeployRunner({
       // duplicates (or an older ref that would roll the hosts back). The registry arms the re-arm itself (for a catch-up that
       // skipped again: the strict one, which waits for the lease), so the runner only asks when nothing covers the hosts.
       const covering = want.length ? coveringCatchUps(await listDeploys(deploys), d.env, want) : [];
-      const plan = want.length ? catchUpPlan(covering, d) : { queue: false, held: [], cancel: [] };
+      const plan = want.length ? catchUpPlan(covering, d, isAncestor, want) : { queue: false, held: [], cancel: [], hosts: [] };
       for (const x of plan.cancel) {
         const c = await reg(['deploy', 'cancel', x.id]);
         if (c.code !== 0) log.error?.(`[deploy] catch-up replace: cancel ${x.id} failed: ${c.stderr}`);
-        else await say(`# catch-up ${x.id} (ref ${x.ref}) cancelled: superseded by ${d.id} at ${d.ref}`);
+        else await say(`# catch-up ${x.id} (ref ${x.ref}, hosts ${(x.hosts || []).join(',')}) cancelled: superseded by ${d.id} at ${d.ref} (contains it); its hosts are carried into the survivor`);
       }
       if (!want.length) { /* all capped */ }
       else if (!plan.queue) await say(`# catch-up for ${want.join(',')} already covered by ${plan.held.map((x) => `${x.id} (${x.state}, ${x.ref})`).join(', ')}: no new request${isCatchUp(d) ? ' (the re-arm waits for the lease)' : ''}`);
       else {
         const q = await reg(['deploy', 'request', d.env, '--scope', 'host', '--ref', d.ref, '--agent', RUNNER_AGENT, '--approved',
-          '--hosts', want.join(','), '--purpose', `catch-up: hosts skipped by ${d.id} (leased): ${want.join(',')}`]);
+          '--hosts', plan.hosts.join(','), '--purpose', `catch-up: hosts skipped by ${d.id} (leased): ${plan.hosts.join(',')}`]);
         if (q.code !== 0) log.error?.(`[deploy] catch-up request for ${d.id} failed: ${q.stderr}`);
-        else await say(`# catch-up request ${q.stdout.trim()} for ${want.join(',')}`);
+        else await say(`# catch-up request ${q.stdout.trim()} for ${plan.hosts.join(',')}${plan.cancel.length ? ` (carries ${plan.cancel.map((x) => `${x.id}@${x.ref}`).join(', ')})` : ''}`);
       }
     }
     running.delete(laneKey(d));

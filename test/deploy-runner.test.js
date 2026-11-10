@@ -55,11 +55,11 @@ const catchUp = (id, o = {}) => dep(id, { scope: 'host', ref: 'main', agent: RUN
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function until(pred, ms = 3000) { const end = Date.now() + ms; while (Date.now() < end) { if (pred()) return; await sleep(10); } throw new Error('timeout'); }
 
-function make(reg, { enabled = true, run, envs, managerItem, approveClients, backoffBaseMs } = {}) {
+function make(reg, { enabled = true, run, envs, managerItem, approveClients, backoffBaseMs, isAncestor } = {}) {
   const stateDir = mkTmp('ghosty-dep-');
   const alerts = [], ran = [];
   const runner = createDeployRunner({
-    stateDir, registry: reg.fn, isEnabled: () => enabled, managerItem, ...(approveClients ? { approveClients } : {}), ...(backoffBaseMs ? { backoffBaseMs } : {}), alert: (k, p) => alerts.push([k, p.title]), log: { error() {} },
+    stateDir, registry: reg.fn, isEnabled: () => enabled, managerItem, ...(approveClients ? { approveClients } : {}), ...(backoffBaseMs ? { backoffBaseMs } : {}), ...(isAncestor ? { isAncestor } : {}), alert: (k, p) => alerts.push([k, p.title]), log: { error() {} },
     run: run || (async (env, o) => { ran.push(o); o.onLine('deploying'); o.onLine('VERSION 1.2.3'); return { code: 0 }; }),
   });
   return { runner, alerts, ran, stateDir };
@@ -315,12 +315,16 @@ test('one catch-up per (env, host set): an equal-ref one is kept, an older queue
   assert.deepEqual(coveringCatchUps([c('a', { hosts: ['host-a'] })], 'e', ['host-b']), [], 'a catch-up for {A} does not cover {B}');
   assert.deepEqual(coveringCatchUps([c('b', { hosts: ['host-b'] })], 'e', ['host-b']).map((x) => x.id), ['b']);
   assert.deepEqual(coveringCatchUps([c('ab', { hosts: ['host-a', 'host-b'] })], 'e', ['host-b']).map((x) => x.id), ['ab'], 'a catch-up that holds the host covers it');
-  assert.deepEqual(catchUpPlan([same], d), { queue: false, held: [same], cancel: [] });
-  assert.deepEqual(catchUpPlan([running], d), { queue: true, held: [], cancel: [] });   // running at an older ref: the newer ref still goes
-  assert.deepEqual(catchUpPlan([older], d), { queue: true, held: [], cancel: [older] });
-  assert.deepEqual(catchUpPlan([running, older], d), { queue: true, held: [], cancel: [older] });
+  const yes = (n) => n === 'main';   // `main` contains `old`, not the reverse (git ancestry; the default, no git, never cancels)
+  const P = (ex, ...a) => { const p = catchUpPlan(ex, d, ...a); return { queue: p.queue, held: p.held, cancel: p.cancel }; };
+  assert.deepEqual(P([same], yes), { queue: false, held: [same], cancel: [] });
+  assert.deepEqual(P([running], yes), { queue: true, held: [], cancel: [] });   // running at an older ref: the newer ref still goes
+  assert.deepEqual(P([older], yes), { queue: true, held: [], cancel: [older] });
+  assert.deepEqual(P([older], () => false), { queue: true, held: [], cancel: [] }, 'an older/diverged ref that main does not contain is not cancelled');
+  assert.deepEqual(P([running, older], yes), { queue: true, held: [], cancel: [older] });
+  assert.deepEqual(catchUpPlan([older], d, yes, ['host-a']).hosts.sort(), ['host-a', 'host-b'], 'the cancelled one\'s hosts are carried');
   assert.deepEqual(catchUpPlan([c('rs', { state: 'running' })], d).queue, false);   // running at the same ref covers it
-  assert.deepEqual(catchUpPlan([], d), { queue: true, held: [], cancel: [] });
+  assert.equal(catchUpPlan([], d).queue, true);
 });
 
 test('an equal catch-up already queued for the hosts: no second request, no cancel', async () => {
@@ -349,7 +353,7 @@ test('a catch-up already running for the hosts when the deploy finishes: no new 
 
 test('a queued catch-up at another ref is cancelled and replaced by the newer deploy\'s catch-up', async () => {
   const reg = fakeRegistry({ deploys: [dep('1', { scope: 'full', ref: 'main' }), catchUp('20', { ref: 'old-ref' })] });
-  const { runner, stateDir } = make(reg, { run: async (env, o) => { if (o.id === '1') o.onLine('SKIPPED_HOSTS=host-a'); return { code: 0 }; } });
+  const { runner, stateDir } = make(reg, { isAncestor: (n) => n === 'main', run: async (env, o) => { if (o.id === '1') o.onLine('SKIPPED_HOSTS=host-a'); return { code: 0 }; } });
   await runner.tick();
   await until(() => reg.deploys.find((d) => d.id === '1').state === 'done'); await sleep(60);
   assert.ok(reg.calls.includes('deploy cancel 20'));
@@ -358,7 +362,7 @@ test('a queued catch-up at another ref is cancelled and replaced by the newer de
   assert.equal(live.length, 1);
   assert.deepEqual([live[0].ref, live[0].hosts], ['main', ['host-a']]);
   assert.match(live[0].purpose, /^catch-up: hosts skipped by 1 \(leased\): host-a$/);
-  assert.match(readFileSync(join(stateDir, 'deploys', '1.log'), 'utf8'), /# catch-up 20 \(ref old-ref\) cancelled: superseded by 1 at main/);
+  assert.match(readFileSync(join(stateDir, 'deploys', '1.log'), 'utf8'), /# catch-up 20 \(ref old-ref, hosts host-a\) cancelled: superseded by 1 at main/);
 });
 
 test('a catch-up whose hosts are leased again tells the registry, so it arms the re-arm (no chain of its own)', async () => {
@@ -876,4 +880,46 @@ test('a host deploy calls deploy release-hosts for each finished host; other sco
   await r2.tick();
   await until(() => reg2.deploys.find((d) => d.id === '6').state === 'done');
   assert.equal(reg2.calls.filter((c) => c.startsWith('deploy release-hosts')).length, 0);
+});
+
+// ---- catch-up supersede by containment (bug: an OLDER ref cancelled a newer catch-up and its hosts were dropped) ----
+import { planCatchUps } from '../catchup-supersede.js';
+test('catch-up supersede: only a ref that contains the other cancels it; hosts are carried; unknown never cancels', () => {
+  const anc = { a: ['a'], b: ['a', 'b'], c: ['c'] };               // ref -> refs it contains (itself included)
+  const contains = (n, o) => (anc[n] && anc[o] ? anc[n].includes(o) : null);
+  const cu = (id, ref, hosts) => ({ id, env: 'e', state: 'queued', ref, hosts, purpose: `catch-up: ${id}` });
+  const A = cu('A', 'a', ['X', 'Y']);
+  // b contains a: B survives with X+Y, A cancelled
+  let p = planCatchUps([A], { env: 'e', ref: 'b' }, ['Y'], contains);
+  assert.equal(p.queue, true); assert.deepEqual(p.cancel.map((x) => x.id), ['A']); assert.deepEqual(p.hosts.sort(), ['X', 'Y']);
+  // b is OLDER: the newer queued catch-up A' (ref b) is not cancelled by a late deploy at a; it already covers the hosts
+  const B = cu('B', 'b', ['X', 'Y']);
+  p = planCatchUps([B], { env: 'e', ref: 'a' }, ['Y'], contains);
+  assert.equal(p.queue, false); assert.deepEqual(p.cancel, []); assert.deepEqual(p.held.map((x) => x.id), ['B']);
+  // diverged ref: neither is cancelled, the new one is queued with its own hosts
+  p = planCatchUps([A], { env: 'e', ref: 'c' }, ['Y'], contains);
+  assert.equal(p.queue, true); assert.deepEqual(p.cancel, []); assert.deepEqual(p.kept.map((x) => x.id), ['A']); assert.deepEqual(p.hosts, ['Y']);
+  // unknown containment never cancels
+  p = planCatchUps([A], { env: 'e', ref: 'zzz' }, ['Y'], contains);
+  assert.deepEqual(p.cancel, []);
+  // a held (newer) survivor that lacks the superseded one's hosts: the older is kept, never cancelled with hosts dropped
+  const Bn = cu('Bn', 'b', ['Y']);
+  p = planCatchUps([Bn, cu('A2', 'a', ['X', 'Y'])], { env: 'e', ref: 'b' }, ['Y'], contains);
+  assert.equal(p.queue, false); assert.deepEqual(p.cancel, []);
+  // catchUpPlan default (no git): never cancels
+  assert.deepEqual(catchUpPlan([A], { env: 'e', ref: 'b' }, undefined, ['Y']).cancel, []);
+});
+
+test('runner: a catch-up for an older ref does not cancel the newer queued one; a containing ref carries the hosts', async () => {
+  for (const [ancestor, expectCancel] of [[(n) => n === 'r-new', true], [() => false, false]]) {
+    const old = { id: 'old', env: 'node1-vpt', scope: 'host', ref: 'r-old', agent: 'manager:deploy', state: 'queued', hosts: ['host-a', 'host-b'], purpose: 'catch-up: hosts skipped by 0 (leased): host-a,host-b' };
+    const reg = fakeRegistry({ deploys: [dep('1', { scope: 'full', ref: 'r-new' }), old] });
+    const { runner, alerts } = make(reg, { isAncestor: ancestor, run: async (env, o) => { o.onLine('deploying'); if (o.id === '1') o.onLine('SKIPPED_HOSTS=host-a'); return { code: 0 }; } });
+    await runner.tick();
+    await until(() => alerts.some(([k]) => k === 'deploy:1:done'));
+    assert.equal(reg.deploys.find((d) => d.id === 'old').state === 'canceled', expectCancel);
+    const nw = reg.deploys.find((d) => d.agent === 'manager:deploy' && d.id !== 'old');
+    assert.ok(nw, 'a catch-up for the new ref is queued');
+    assert.deepEqual(nw.hosts, expectCancel ? ['host-a', 'host-b'] : ['host-a']);
+  }
 });

@@ -1079,7 +1079,7 @@ test('a catch-up yields to a device ticket that waited over 10 minutes (not to a
 });
 
 test('finish of a catch-up that skipped again: new catch-up has a cooldown, and replaces an older queued one', async () => {
-  const h = harness();
+  const h = harness({ isAncestor: (n, o) => n === 'abc' && o === 'old' });
   const d = h.svc.deploy;
   const r = await d.request({ env: 'env-a', scope: 'host', ref: 'abc', agent: 'ag', hosts: ['host-1'], approved: true, purpose: 'catch-up for x: skipped host-1' });
   assert.ok((await d.start({ id: r.id, skip_leased: true })).ok);
@@ -1216,4 +1216,20 @@ test('a ready strict catch-up blocks a new claim of its host (bounded), a plain 
   assert.ok((await d.start({ id: f.catchup })).ok, 'and it starts');
   await d.finish({ id: f.catchup, status: 'done' });
   assert.ok((await h.claim('bot', 'host:host-1')).ok, 'after it, the bot runs again');
+});
+
+test('catch-up supersede in the registry: only a containing ref cancels, the survivor carries the hosts, an older ref cancels nothing', async () => {
+  const contains = (n, o) => (n === 'new' && o === 'old') || n === o;
+  for (const [ref, expectCancel] of [['new', true], ['older', false]]) {
+    const h = harness({ isAncestor: contains });
+    const d = h.svc.deploy;
+    const r = await d.request({ env: 'env-a', scope: 'host', ref, agent: 'ag', hosts: ['host-1'], approved: true, purpose: 'catch-up for x: skipped host-1' });
+    assert.ok((await d.start({ id: r.id, skip_leased: true })).ok);
+    const q = await d.request({ env: 'env-a', scope: 'host', ref: 'old', agent: 'ag', hosts: ['host-1', 'host-2'], approved: true, purpose: 'catch-up: hosts skipped by q (leased): host-1,host-2' });
+    const f = await d.finish({ id: r.id, status: 'done', skipped_hosts: 'host-1' });
+    const all = (await d.list({ env: 'env-a', all: true })).deploys;
+    assert.equal(all.find((x) => x.id === q.id).state === 'cancelled', expectCancel);
+    const cu = all.find((x) => x.id === f.catchup);
+    assert.deepEqual([...cu.hosts].sort(), expectCancel ? ['host-1', 'host-2'] : ['host-1'], 'a cancelled request\'s hosts are carried, never dropped');
+  }
 });
