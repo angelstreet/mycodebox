@@ -286,7 +286,7 @@ export async function defaultMergeEval({ cwd, branch, branchSha, target, remote,
   const mig = migrationReasons(facts, { approvedBy: approveInfra, migrationApplied });
   const reasons = base.filter((x) => !MIGRATION_REASON.test(x)).concat(mig);
   return { verdict: reasons.length ? 'escalate' : 'merge', reasons, facts, infra: { files, only: !approveInfra && files.length > 0 && rest.length === 0 },
-    migration: { files: (facts.sensitive || []).filter((s) => s.why === 'migration').map((s) => s.file), allowed: mig.length === 0 && base.length > 0, applied: !!migrationApplied } };
+    migration: { files: (facts.sensitive || []).filter((s) => s.why === 'migration').map((s) => s.file), allowed: mig.length === 0 && base.length > 0, applied: !!migrationApplied, removed: (facts.migrationDeleted || []).filter((f) => !(facts.migrationAdds || {})[f]) } };
 }
 
 // ---- the lane ----------------------------------------------------------------------------------------------------------
@@ -599,7 +599,7 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
       question: `Merge additive migration ${m.files.join(', ')}?`, chosen: 'approve',
       rationale: `Q199 (owner 2026-10-20, narrowed 2026-10-21): the migration floor goes by effect. These files only add objects (CREATE TABLE / CREATE INDEX / ADD COLUMN), which can always be applied and merged; the session applies them itself. A destructive or unreadable migration still returns to the owner`,
       evidence: [`migration files: ${m.files.join(', ')}`, 'effect: additive only (no DROP, ALTER ... TYPE/RENAME, or data writes)', ...(r.migrationApplied ? [`attestation (not required): migrationApplied (${r.migrationAppliedBy || r.approvedBy || 'manager'})`] : [])],
-      confidence: null, reversible: true, migrationAdditive: true, ...(r.migrationApplied ? { migrationApplied: true } : {}), migrationFiles: m.files, rollback: 'git revert -m 1 <merge commit> on the target branch (queued through the lane)',
+      confidence: null, reversible: true, migrationAdditive: true, ...(m.removed?.length ? { migrationRemoved: true } : {}), ...(r.migrationApplied ? { migrationApplied: true } : {}), migrationFiles: m.files, rollback: 'git revert -m 1 <merge commit> on the target branch (queued through the lane)',
       approvedBy: r.approvedBy, session: r.session, repo: r.repo, branch: r.branch, target: c.target, request: r.id });
   }
 
