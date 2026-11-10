@@ -117,7 +117,7 @@ if (cmd === 'pgrep') {
   for (const c of ['tmux', 'curl', 'pgrep', 'ps', 'sleep', 'git', ...(withClaude ? ['claude'] : [])]) writeFileSync(join(bin, c), fake, { mode: 0o755 });
   const r = spawnSync('/bin/bash', [resolve('scripts/manager-fresh.sh')], {
     env: { PATH: `${bin}:${dirname(process.execPath)}:/usr/bin:/bin`, HOME: home, LANG: 'C.UTF-8', FAKE_DIR: dir, FAKE_PANE: pane, GHOSTY_URL: 'http://localhost:1', ...env },
-    encoding: 'utf8', timeout: 20000,
+    encoding: 'utf8', timeout: 60000,   // ~30 fake-tmux node spawns; 11 s idle, over 20 s at load 30
   });
   assert.ifError(r.error);
   let calls = [];
