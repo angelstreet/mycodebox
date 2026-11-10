@@ -12,6 +12,7 @@ import fs from 'node:fs';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import os from 'node:os';
+import { planCatchUps, gitContains } from './catchup-supersede.js';
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Resources and the conflict matrix (design section 3)
@@ -144,6 +145,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     // Hard cap (owner 2026-10-27): no claim or renewal of a non-system lease gets more than `maxClaimMin`, and while anyone waits the continuous hold
     // (since the claim began) may not pass it either. System leases (deploy runner, `exempt`) keep their own limits.
     maxClaimMin: 60, overCapGraceMs: 10 * MIN, keepFinished: 50, deployTtlMin: 360, maxEvents: 5000, readonly: false, io: defaultIo,
+    isAncestor: gitContains(process.env.DEPLOY_REPO_DIR || ''),   // (newer, older) => true|false|null; unknown never cancels a catch-up
     ...config,
     idleMs: { env: 20 * MIN, server: 20 * MIN, frontend: 20 * MIN, host: 20 * MIN, device: 20 * MIN, ...(config.idleMs || {}) },
   };
@@ -1320,11 +1322,13 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
         }
         // hosts left out because they were leased: queue the catch-up deploy (the runner used to do this from SKIPPED_HOSTS)
         let catchup = null;
-        // one pending catch-up per host set: an older queued one for the same hosts is replaced by this one (newer ref), never chained
-        const covers = (x) => x.id !== d.id && x.env === nd.env && x.scope === 'host' && x.state === 'queued' && isCatchUp(x) && skipped.every((h) => x.hosts?.includes(h));
-        if (skipped.length && !S.deploys.some((x) => covers(x) && x.ref === nd.ref)) {
-          for (const x of S.deploys.filter(covers)) emit({ t: 'dep_set', deploy: { ...x, state: 'cancelled', finished: t, reason: `superseded by a catch-up at ${nd.ref}` }, event: 'cancel', at: t });
-          const c = { id: depNew(), env: nd.env, scope: 'host', ref: nd.ref, agent: RUNNER, purpose: `catch-up for ${nd.id}: skipped ${skipped.join(',')}`, state: 'queued', approved: true, created: t, expires: t + cfg.deployTtlMin * MIN, hosts: skipped, ...((nd.strict || String(nd.purpose || '').startsWith('catch-up')) ? { strict: true } : {}), ...(isCatchUp(nd) ? { notBefore: t + cfg.catchUpCooldownMs } : {}) };
+        // one pending catch-up per host set: a queued one whose ref this ref CONTAINS is replaced by this one and its hosts are carried
+        // (union); an older or diverged one is left alone, never cancelled (bug: an older ref cancelled a newer catch-up, dropping hosts)
+        const covers = (x) => x.id !== d.id && x.env === nd.env && x.scope === 'host' && x.state === 'queued' && isCatchUp(x) && (x.hosts || []).length && skipped.every((h) => x.hosts.includes(h));
+        const plan = skipped.length ? planCatchUps(S.deploys.filter(covers), nd, skipped, cfg.isAncestor || (() => null)) : { queue: false, hosts: [], cancel: [] };
+        if (skipped.length && plan.queue) {
+          for (const x of plan.cancel) emit({ t: 'dep_set', deploy: { ...x, state: 'cancelled', finished: t, reason: `superseded by a catch-up at ${nd.ref} (contains ${x.ref}); hosts ${(x.hosts || []).join(',')} carried`, supersededBy: nd.id }, event: 'cancel', at: t });
+          const c = { id: depNew(), env: nd.env, scope: 'host', ref: nd.ref, agent: RUNNER, purpose: `catch-up for ${nd.id}: skipped ${plan.hosts.join(',')}`, state: 'queued', approved: true, created: t, expires: t + cfg.deployTtlMin * MIN, hosts: plan.hosts, ...(plan.cancel.length ? { carries: plan.cancel.map((x) => ({ id: x.id, ref: x.ref, hosts: x.hosts })) } : {}), ...((nd.strict || String(nd.purpose || '').startsWith('catch-up')) ? { strict: true } : {}), ...(isCatchUp(nd) ? { notBefore: t + cfg.catchUpCooldownMs } : {}) };
           emit({ t: 'dep_set', deploy: c, event: 'request', at: t });
           catchup = c.id;
         }
