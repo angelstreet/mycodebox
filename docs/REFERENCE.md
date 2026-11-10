@@ -1790,7 +1790,7 @@ leftovers push only fired on leftovers the closing text already admitted. Now a 
   A segment with all three `none` is accepted.
 - An idle done session without the segment gets one push (`closingReviewMessage`: the owner's checklist question, plus the bugs
   field when that is missing too, so one push covers both): once per session turn (signature of the done line), at most
-  `REVIEW_PUSHES_PER_DAY` (3) per session per day, not while working, with a draft in the input box, paused or a manager session,
+  `REVIEW_PUSHES_PER_DAY` (3) per session per day, only for a done turn younger than 6 h (`REVIEW_MAX_AGE_MS`: the rollout does not wake old idle sessions), not while working, with a draft in the input box, paused or a manager session,
   not when the host is busy, and not when a git finding or a leftovers push for the same session comes first. Dry mode journals only.
 - `leftovers` that is neither `none` nor filed ids (`bug-...`) is an open leftover: `leftoverItemsOf` adds it, so the session is sent
   back to finish (same cap as "Done with leftovers").
