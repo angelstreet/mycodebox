@@ -64,7 +64,7 @@ devices are present; the service uses it everywhere it offers or picks a member:
   member unhealthy: `E_INVALID no healthy member in group ...`).
 - No data, or data older than 15 minutes, means unknown, and unknown counts as healthy: a dead probe never empties a group.
 - `scripts/lease-health-probe.js` writes the file: run it from a 1-minute timer on the registry host. It makes one TCP connect per
-  host named in `<LEASE_DIR>/health-targets.json` (`{ "<env>": { "hosts": { "<host>": "<address>:<port>" }, "devices": { ... } } }`),
+  host named in `<LEASE_DIR>/health-targets.json` (`{ "<env>": { "hosts": { "<host>": "<address>:<port>" or `{ "addr": "<address>:<port>", "expect": "SSH-" }` (a forwarded port can accept a connect with nothing behind it), "devices": { ... } } }`),
   3 s timeout, so no polling storm. Both files name real hosts and stay out of the repository. A device census may write
   `devices` entries too.
 
