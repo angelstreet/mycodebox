@@ -73,6 +73,9 @@ Hours were lost waiting on one web host while the other was free. When the work 
 
 1. Use `vpt-lease run <claim args> -- <command...>`: it queues if busy, heartbeats while the command runs and releases
    when it ends, also on failure or interrupt. Or use `vpt-lease claim ... --wait`.
+   A waiting claim in a background shell ends with the work that started it: the client cancels its ticket when its parent
+   process is gone (`VPT_LEASE_WAIT_ORPHAN=off` opts out), but when you finish or abandon the work, kill your own waiter yourself
+   (`kill <pid>`) or `vpt-lease release --agent <agent>`; a grant nobody uses holds the resource until its TTL.
 2. Add `--expect <minutes>` so the queue can estimate when you are done.
 3. Never poll in a loop, never ask the owner whether a lease is free, never use `--force` and never kill another
    agent's lease. Busy means wait in the queue: the answer to "who holds it and when is it free" is on stderr or in

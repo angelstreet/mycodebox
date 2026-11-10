@@ -533,6 +533,20 @@ def verify_profile(cmd, env, res):
         return False
 
 
+PARENT0 = os.getppid()
+
+
+def orphaned():
+    """True when the process that started this waiting claim is gone (we were re-parented): the work that needed the claim ended, so a
+    grant now would only hold the resource until its TTL (bug 2026-11-10: a waiter left in a background shell re-claimed after the
+    holder released). VPT_LEASE_WAIT_ORPHAN=off opts out for a waiter that is meant to outlive its shell."""
+    return PARENT0 > 1 and os.getppid() != PARENT0 and os.environ.get("VPT_LEASE_WAIT_ORPHAN") != "off"
+
+
+class Orphaned(Exception):
+    pass
+
+
 def poll_ticket(tid, can_requeue=False, switch=None):
     """Long-poll a ticket until granted. Returns ('lease', lease) | ('requeue', priority_since)
     | ('exit', code). Keeps retrying while unavailable. A ticket that was granted but not collected (missed), expired
@@ -540,6 +554,8 @@ def poll_ticket(tid, can_requeue=False, switch=None):
     state, last = {}, None
     t0 = time.monotonic()
     while True:
+        if orphaned():
+            raise Orphaned()
         try:
             r = api("GET", "/tickets/" + urllib.parse.quote(tid), query={"wait": 1 if FAST else 30},
                     timeout=(5 if FAST else 45))
@@ -587,6 +603,8 @@ def claim_wait(a):
     state = {}
     try:
         while True:
+            if orphaned():
+                raise Orphaned()
             if tid is None:
                 try:
                     kind, val, info = claim_once(a, True)
@@ -619,6 +637,10 @@ def claim_wait(a):
                 continue
             if res == "exit":
                 return "exit", val
+            if orphaned():     # granted in the last poll after the owner died: hand it straight back
+                with contextlib.suppress(Exception):
+                    api("POST", "/release", {"id": val["id"], "agent": a.agent, "by": a.agent, "reason": "waiting claim orphaned: its process is gone"}, timeout=5)
+                raise Orphaned()
             wanted, kind = claim_body(a)[1:]
             return "lease", val, (wanted, kind)
     except KeyboardInterrupt:
@@ -626,6 +648,12 @@ def claim_wait(a):
             with contextlib.suppress(Exception):
                 api("DELETE", "/tickets/" + urllib.parse.quote(tid), timeout=5)
             eprint("interrupted; ticket %s cancelled" % tid)
+        return "exit", 130
+    except Orphaned:
+        if tid:
+            with contextlib.suppress(Exception):
+                api("DELETE", "/tickets/" + urllib.parse.quote(tid), timeout=5)
+        eprint("waiting claim cancelled: the process that started it is gone (ticket %s); a waiting claim ends with its work" % (tid or "-"))
         return "exit", 130
 
 
