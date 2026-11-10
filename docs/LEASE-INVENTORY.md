@@ -84,3 +84,30 @@ uses the narrow group and says why. A member of both groups is fine (a resource 
 that reads model-specific text (version strings, About page) must not use the wide group. The member list of the wide group
 is the union of the operator's STB groups; the real host and device ids live in the registry host's `inventory.json`, proposed in the
 manager's state dir (`inventory-proposal.json`, journaled by the manager when applied).
+
+## What makes a candidate a real equivalent (owner/manager, 2026-11-10)
+
+"Free" and "same group" are not enough. A candidate is refused, with the reason shown in `vpt-lease inventory` / `list` and in the push, when
+1. it, or its host, is on the **known-broken** list (a device until its bug is fixed: for example a hung IR dongle),
+2. its host does not answer, or the device is absent or not working (no control path),
+3. it is not registered on the **same backend server** as the claimant's resource (a testcase lives on one server and can only run on the
+   hosts that server lists).
+
+The data is one file per consumer, same format, per env or `"*"` (`lease-equivalence.js`); no freshness limit, the owner or manager edits it:
+
+```json
+{ "<env>": { "known_broken": { "<host>/<deviceN>": "<why, bug id>", "<host>": "<why>" },
+             "servers": { "<server>": ["<host>", "..."] },
+             "hosts": { "<host>": { "up": false, "reason": "..." } },
+             "devices": { "<host>/<deviceN>": { "working": false, "reason": "..." } } } }
+```
+
+- `<LEASE_DIR>/equivalence.json` on the registry host, read by the lease service (merged with `health.json`). The service now imports
+  `lease-equivalence.js`: install it with `lease-service.js` and `scripts/lease-serve.js`.
+- `<state>/lease-equivalence.json` (`~/.local/state/ghosty`) on the dashboard, which filters what the watchdog and the done-check offer
+  even when the registry's own service is older. Edit it when a device breaks and remove the entry when it is fixed.
+- The server rule applies only when `servers` is given and the claimant's host is listed in it; a host listed on no server is refused
+  as "registered on no backend server". Keep `servers` complete for the hosts it names.
+- A session that must stay on its device answers with a STATUS line that names the difference: `STATUS: waiting: lease <t-id> ...:
+  needs exactly <device>, the other box is another model / firmware / not registered on the testcase's server / known broken`. The
+  done-check accepts such a line; "needs exactly X" with no difference is pushed again. The push lists what was not offered and why.

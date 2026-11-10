@@ -8,12 +8,14 @@
 //   <LEASE_DIR>/inventory.json  groups of equivalent resources for `claim --any <group>` (docs/LEASE-INVENTORY.md); re-read when it changes
 //   <LEASE_DIR>/health.json     which hosts answer / devices are present, per env (scripts/lease-health-probe.js writes it); an unhealthy member is
 //                               never offered as a free equivalent nor switched to. Missing or older than 15 min = unknown = healthy.
+//   <LEASE_DIR>/equivalence.json known_broken / servers / manual host+device state per env (lease-equivalence.js); no freshness limit
 // Tokens: node scripts/lease-token.js add <name> --dir "$LEASE_DIR" [--exempt ...] [--owner]
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createLeaseService } from '../lease-service.js';
+import { equivalenceReader } from '../lease-equivalence.js';
 import { createLeaseRoutes, PREFIX } from '../lease-routes.js';
 import fs from 'node:fs';
 
@@ -48,10 +50,16 @@ export function healthReader(file, log = console, now = Date.now) {
   };
 }
 
+// health.json (probe output, 15 min freshness) + equivalence.json (manager data: known_broken, servers, manual host/device state)
+export const mergedHealth = (health, equiv) => (env) => {
+  const h = health(env) || {}, e = equiv(env) || {};
+  return { known_broken: e.known_broken || {}, servers: e.servers || {}, hosts: { ...(h.hosts || {}), ...(e.hosts || {}) }, devices: { ...(h.devices || {}), ...(e.devices || {}) } };
+};
+
 export function startLeaseServer({ dir, port = 17777, host = '127.0.0.1', envs = [], ownServers = {}, log = console } = {}) {
   // No tmux here: liveness is unknown (never releases anything); holders are reclaimed by TTL and declared heartbeats only.
   const service = createLeaseService({ dir, sessions: { isAlive: () => undefined, trackable: () => false },
-    onEvent: (ev) => log.log(`[lease] ${ev.kind || 'event'} ${ev.id || ''} ${ev.agent || ''}`.trim()), config: { envs, ownServers, inventory: inventoryReader(path.join(dir, 'inventory.json'), log), health: healthReader(path.join(dir, 'health.json'), log) } });
+    onEvent: (ev) => log.log(`[lease] ${ev.kind || 'event'} ${ev.id || ''} ${ev.agent || ''}`.trim()), config: { envs, ownServers, inventory: inventoryReader(path.join(dir, 'inventory.json'), log), health: mergedHealth(healthReader(path.join(dir, 'health.json'), log), equivalenceReader(path.join(dir, 'equivalence.json'), log)) } });
   const routes = createLeaseRoutes({ service, dir });
   const server = http.createServer(async (req, res) => {
     try {

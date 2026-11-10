@@ -1091,7 +1091,8 @@ Health and enforcement (owner 2026-11-10): `config.health(env)` (lease-serve rea
 `scripts/lease-health-probe.js`) makes a member unhealthy when its host is `up: false` or its device `present: false`; `equivalents_free`
 and `--any` leave it out, ticket views add `equivalents_unhealthy`, `GET /inventory` members carry `healthy` / `health_reason`.
 `GET /tickets/:id?wait=..&eq=1` returns as soon as a healthy equivalent is free; the `vpt-lease` client switches at once
-(`VPT_LEASE_SWITCH_AFTER`, default 0). done-check (D): a final `STATUS: waiting: lease ...` while the session's own ticket has a healthy free
+(`VPT_LEASE_SWITCH_AFTER`, default 0). Real-equivalent rules (`lease-equivalence.js`, owner/manager 2026-11-10): known-broken list, host down / device absent or not working, same backend server; the service reads `<LEASE_DIR>/equivalence.json`, the dashboard `<state>/lease-equivalence.json` (`applyEquivalence` filters the view for the nudge and the done-check, refused candidates travel as `equivalentsRefused`). `acceptedWaitReason` (done-check) accepts a waiting line that names a real difference.
+done-check (D): a final `STATUS: waiting: lease ...` while the session's own ticket has a healthy free
 equivalent is pushed once with the command (`waitingOnLeaseStatus`, `equivalentWaitMessage`, dep `equivalentOf`), the manager is told on the second stop.
 
 Deploy duration follows progress (owner 2026-11-01): `POST /deploy/progress` (runner client; `vpt-lease deploy progress <id>`) renews the
