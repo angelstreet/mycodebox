@@ -166,5 +166,12 @@ export function createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk
     }
     return true;
   }
-  return { handle, clients, callerOf };
+  // found-bug from another machine (server.js /api/bugs): a bearer token of an `integrate` client from the tailnet/loopback range. -> client name | null
+  function bugClient(req) {
+    const auth = /^Bearer\s+(\S{8,512})$/i.exec(req.headers.authorization || '');
+    if (!auth || !addrAllowed(req.socket?.remoteAddress, allow)) return null;
+    const c = clientOf(clients(), auth[1]);
+    return c && c.integrate ? c.name : null;
+  }
+  return { handle, clients, callerOf, bugClient };
 }

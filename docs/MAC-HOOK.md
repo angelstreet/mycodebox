@@ -95,6 +95,30 @@ echo '{"session_id":"abc123456","transcript_path":"/path/to/a/session.jsonl","cw
 `--dry-run` prints the payload that would be sent (and says where it would go) and sends nothing. Real transcripts live
 under `~/.claude/projects/`. Then finish a turn in a Claude Code session: a row `mac:<session>` appears on the dashboard.
 
+## Mac / cloud sessions: `integrate` and `found-bug`
+
+Both are POSIX `sh` + `curl` scripts that read the same `~/.config/mycodebox/config` (`url = ...`) and `token` (mode 600) as the
+hook; the token is a client added on the dashboard host with `node scripts/lease-token.js add mac-<name> --remote --integrate`.
+Install or update (a plain copy; `scripts/installed-copies-check.js` reports drift on the dashboard host, a Mac copy is re-copied
+from the checkout by hand):
+
+```sh
+cp scripts/integrate scripts/found-bug ~/.local/bin/ && chmod +x ~/.local/bin/integrate ~/.local/bin/found-bug
+found-bug --help          # the one-line check; integrate request ... needs no other setup
+```
+
+`found-bug --title T [--error "exact text"] [--repro R] [--blocking yes|no]` posts to `POST /api/bugs` over the tailnet with the
+bearer token (a remote client may only file and list: `--resolve`, `fixed` and `remove` are codebox-only). `GHOSTY_URL` overrides the
+URL (default: `url` in the config, else loopback `http://127.0.0.1:7777`). Without a `--session` / tmux session the report is named
+`mac-<client name>`. If the manager is unreachable the record is appended to `<state>/found-bug-queue.jsonl`
+(`GHOSTY_STATE_DIR`, default `~/.local/state/ghosty`), the exit code is 5, and the next `found-bug` call or `found-bug --flush` posts
+it: a report is never lost. When the script is not installed, file the same JSON by hand and say so in the report:
+
+```sh
+curl -sS -X POST -H "Authorization: Bearer $(cat ~/.config/mycodebox/token)" -H 'content-type: application/json' \
+  -d '{"title":"...","error":"exact text","repro":"...","blocking":"no","session":"mac-<label>"}' "$GHOSTY_URL/api/bugs"
+```
+
 ## Disable
 
 Any one of: `touch ~/.config/mycodebox/disabled`, `export MYCODEBOX_HOOK=off`, delete the `hooks.Stop` entry, revoke

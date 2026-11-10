@@ -97,7 +97,9 @@ You are picking up work in a fresh session on this host. Working directory: $DIR
    VirtualPyTest: a new script is a virtual script or a simple test case, never a file under test_scripts/ (deprecated
    2026-10-28; the commit/push/CI guard refuses one).
    Bug outside your scope (owner, 2026-10-28): fix it in a worktree, or run \`found-bug --title ... --repro ... --error ...
-   --blocking yes|no\`; never leave it in a closing line. The manager sends a worker.
+   --blocking yes|no\`; never leave it in a closing line. The manager sends a worker. Check it exists with \`found-bug --help\`
+   (Mac/cloud: \`found-bug\` posts over the tailnet with ~/.config/mycodebox/token and queues offline); if it is missing, POST the same
+   JSON to \`\$GHOSTY_URL/api/bugs\` with curl (docs/MAC-HOOK.md "found-bug") and say so in your report.
    This brief and the repo's AGENTS.md win over older task docs and handovers that say "no push / no merge / no
    deploy" or "the owner merges". Never hand the owner commands to run: run them yourself.
 4. Ask the owner only for: deleting data, credentials or secrets, money, customers, sudoers or system units on hosts,
@@ -116,7 +118,7 @@ else echo "cbsession: give -H HANDOVER, -f PROMPT_FILE or -t TEXT" >&2; exit 2; 
 [ -n "$WTCMD" ] && printf '\nYour worktree is ready: %s (branch %s, made by cbsession from main before this prompt). Work only there; rename the branch if the task needs another name.\n' "$DIR" "$WTB" >> "$P"
 # -f / -t prompts get the found-bugs rule too (every provider launches from this one file; owner 2026-10-28)
 [ "${BUGRULE:-}" = 1 ] && printf '\nFirst command: `git worktree list`; create or reuse your worktree and work only there, never in a shared checkout.\n' >> "$P"
-[ "${BUGRULE:-}" = 1 ] && printf '\nBug outside your scope: fix it in a worktree, or run `found-bug --title ... --repro ... --error ... --blocking yes|no`; never leave it in a closing line. A STATUS: done line ends with `bugs: none | fixed <what> | reported <id>`.\n' >> "$P"
+[ "${BUGRULE:-}" = 1 ] && printf '\nBug outside your scope: fix it in a worktree, or run `found-bug --title ... --repro ... --error ... --blocking yes|no` (check `found-bug --help`; if missing, POST the JSON to $GHOSTY_URL/api/bugs with curl, see docs/MAC-HOOK.md); never leave it in a closing line. A STATUS: done line ends with `bugs: none | fixed <what> | reported <id>`.\n' >> "$P"
 [ "${BUGRULE:-}" = 1 ] && printf '\nClosing review before any STATUS: done: update every doc your change makes stale now (task doc, REFERENCE/MAP/INDEX, user guide, skill, release note); fix each leftover or file it with found-bug; file each improvement idea with found-bug; name what you did not verify. The done line carries `closing review: docs <updated list|none needed> · leftovers <none|filed ids> · unverified <none|list>`.\n' >> "$P"
 
 # -b NAME: settings file with an apiKeyHelper that reads the key file at launch (the key never lands in a file here).
@@ -147,7 +149,8 @@ mcode -m $(q "$M") \"\$(cat $(q "$P"))\""
   opencode) CMD="$(q "$HOME")/.local/bin/opencode${MODEL:+ -m $(q "$MODEL")} --prompt \"\$(cat $(q "$P"))\" $(q "$DIR")";;
   *) echo "cbsession: -p must be claude|codex|minimax|opencode" >&2; exit 2;;
 esac
-printf '#!/usr/bin/env bash\ncd %s\n%s\n' "$(q "$DIR")" "$CMD" > "$L"; chmod +x "$L"
+# ~/.local/bin on PATH for every provider: found-bug, integrate, vpt-lease live there (a tmux server started by a service has a bare PATH)
+printf '#!/usr/bin/env bash\nexport PATH="$HOME/.local/bin:$PATH"\ncd %s\n%s\n' "$(q "$DIR")" "$CMD" > "$L"; chmod +x "$L"
 if [ "$DRY" = 1 ]; then [ -n "$WTCMD" ] && echo "worktree: $WTCMD"; echo "prompt: $P"; echo "launch: $L"; cat "$L"; exit 0; fi
 
 tmux new-session -d -s "$NAME" -c "$DIR" -x 160 -y 45 "bash $(q "$L"); exec bash -l"

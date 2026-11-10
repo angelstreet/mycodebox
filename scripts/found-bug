@@ -1,45 +1,138 @@
-#!/usr/bin/env node
-// found-bug: file a bug you found outside your scope (owner, 2026-10-28) instead of leaving it in a closing line.
-//   found-bug --title "REST list of virtual scripts errors" [--endpoint GET /api/x] [--repro "..."] [--error "exact text"]
-//             [--workaround "..."] [--blocking yes|no] [--session NAME] [--test]
-//   found-bug --resolve <id> --commit <sha|integration id> [--state fixed|wontfix|doc-only] [--note text] [--session NAME]
-//   found-bug list | found-bug fixed <id> [note] | found-bug remove <id>   (remove: test reports only)
-// Session defaults to the tmux session you run in. Posts to loopback POST /api/bugs (PORT or 7777); secrets are redacted server-side.
-import { execFileSync } from 'node:child_process';
-const [cmd, ...rest] = process.argv.slice(2);
-const base = `http://127.0.0.1:${process.env.PORT || 7777}`;
-const die = (m, c = 1) => { console.error('found-bug: ' + m); process.exit(c); };
-async function api(method, path, body) {
-  try {
-    const r = await fetch(base + path, { method, headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
-    return { status: r.status, body: await r.json().catch(() => ({})) };
-  } catch (e) { die(`service unreachable (${e.message})`, 5); }
+#!/bin/sh
+# found-bug: file a bug you found outside your scope (owner, 2026-10-28) instead of leaving it in a closing line. POSIX sh + curl: codebox, Mac, cloud.
+#   found-bug --title "REST list of virtual scripts errors" [--endpoint GET /api/x] [--repro "..."] [--error "exact text"]
+#             [--workaround "..."] [--blocking yes|no] [--session NAME] [--test]
+#   found-bug --flush                                    post the reports queued while the manager was unreachable
+#   found-bug --resolve <id> --commit <sha|integration id> [--state fixed|wontfix|doc-only] [--note text] [--session NAME]   (codebox only)
+#   found-bug list | found-bug fixed <id> [note] | found-bug remove <id>   (fixed/remove/--resolve: codebox loopback only; remove: test reports)
+#   found-bug --help
+# Where: GHOSTY_URL (or MYCODEBOX_URL, or `url = ...` in ~/.config/mycodebox/config, as for `integrate`); default loopback http://127.0.0.1:${PORT:-7777}.
+# Auth: ~/.config/mycodebox/token (an `integrate` client token, mode 600) as a bearer token; on the codebox none is needed (loopback).
+# Never loses a report: when the manager is unreachable the record is appended to <state>/found-bug-queue.jsonl
+# (GHOSTY_STATE_DIR, default ~/.local/state/ghosty), the exact fallback is printed, and the next call (or --flush) posts it.
+# Session defaults to the tmux session, else FOUND_BUG_SESSION, else `mac` on a Mac, else `unknown`. Secrets are redacted server-side.
+# Exit: 0 filed; 5 manager unreachable (report queued, not lost); 1 error.
+
+CFG_DIR="${MYCODEBOX_CONFIG_DIR:-$HOME/.config/mycodebox}"
+STATE_DIR="${GHOSTY_STATE_DIR:-$HOME/.local/state/ghosty}"
+QUEUE="$STATE_DIR/found-bug-queue.jsonl"
+cfg() { [ -r "$CFG_DIR/config" ] && sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$CFG_DIR/config" | tail -n 1 | sed 's/[[:space:]]*$//; s/^"\(.*\)"$/\1/'; }
+die() { printf 'found-bug: %s\n' "$*" >&2; exit "${2:-1}"; }
+mode_of() { if [ "$(uname -s)" = Darwin ]; then stat -f %Lp "$1" 2>/dev/null; else stat -c %a "$1" 2>/dev/null; fi; }
+
+URL=${GHOSTY_URL:-${MYCODEBOX_URL:-$(cfg url)}}
+[ -n "$URL" ] || URL="http://127.0.0.1:${PORT:-7777}"
+URL=${URL%/}
+case "$URL" in http://*|https://*) ;; *) die "bad url: $URL" ;; esac
+TOKEN=
+if [ -f "$CFG_DIR/token" ]; then
+  M=$(mode_of "$CFG_DIR/token"); case "$M" in ""|*[!0-7]*) M=777 ;; esac
+  [ "$(( 0$M & 077 ))" -eq 0 ] || die "$CFG_DIR/token must be mode 600 (it is $M)"
+  TOKEN=$(tr -d '\r\n ' < "$CFG_DIR/token")
+fi
+
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/found-bug.XXXXXX") || die "mktemp failed"
+trap 'rm -rf "$TMP"' EXIT INT TERM HUP
+OUT="$TMP/out"
+
+# JSON string escape (backslash, quote, control chars); stdin text -> one JSON string without the quotes
+jesc() { printf '%s' "$1" | tr -d '\000-\010\013-\037' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e "s/$(printf '\t')/\\\\t/g" | awk 'BEGIN{ORS=""} NR>1{printf "\\n"} {print}'; }
+# api METHOD PATH [JSON] -> body in $OUT, code in $CODE; CODE=000 when unreachable. The token goes through curl's stdin config.
+api() {
+  _cfg=; [ -n "$TOKEN" ] && _cfg=$(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN")
+  _cfg="$_cfg
+header = \"content-type: application/json\""
+  if [ -n "$3" ]; then CODE=$(printf '%s\n' "$_cfg" | curl -sS -K - -X "$1" --data-binary "$3" -o "$OUT" -w '%{http_code}' --max-time 20 "$URL$2" 2>"$TMP/err")
+  else CODE=$(printf '%s\n' "$_cfg" | curl -sS -K - -X "$1" -o "$OUT" -w '%{http_code}' --max-time 20 "$URL$2" 2>"$TMP/err"); fi
+  [ $? -eq 0 ] || CODE=000
+  [ -n "$CODE" ] || CODE=000
 }
-if (cmd === 'list') { const r = await api('GET', '/api/bugs'); for (const b of r.body.bugs || []) console.log(`${b.id}  ${b.resolved ? `[${b.state}] ` : ''}${b.blocking ? 'BLOCKING ' : ''}${b.session}: ${b.title}`); process.exit(0); }
-if (cmd === 'fixed') { if (!rest[0]) die('usage: found-bug fixed <id> [note]'); const r = await api('POST', `/api/bugs/${encodeURIComponent(rest[0])}/fixed`, { note: rest.slice(1).join(' ') }); console.log(r.body.ok ? 'marked fixed' : r.body.error); process.exit(r.body.ok ? 0 : 1); }
-if (cmd === 'remove') { if (!rest[0]) die('usage: found-bug remove <id>'); const r = await api('DELETE', '/api/bugs/' + encodeURIComponent(rest[0])); console.log(r.body.ok ? 'removed' : r.body.error); process.exit(r.body.ok ? 0 : 1); }
-const args = process.argv.slice(2), o = {};
-if (args.includes('--resolve')) {
-  const v = {}; let id;
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (a === '--resolve') id = args[++i];
-    else if (/^--(commit|state|note|session)$/.test(a)) { if (i + 1 >= args.length) die(`${a} needs a value`); v[a.slice(2)] = args[++i]; }
-    else die(`unknown argument ${a} (found-bug --resolve <id> --commit <sha|integration id> [--state fixed|wontfix|doc-only] [--note text])`);
-  }
-  if (!id) die('--resolve needs a bug id');
-  if (!v.session) { try { v.session = execFileSync('tmux', ['display-message', '-p', '#S'], { encoding: 'utf8', timeout: 5000 }).trim(); } catch { v.session = 'unknown'; } }
-  const r = await api('POST', `/api/bugs/${encodeURIComponent(id)}/resolve`, { state: v.state || 'fixed', commit: v.commit, note: v.note, by: v.session });
-  console.log(r.body.ok ? `resolved ${id} (${v.state || 'fixed'})` : r.body.error || `HTTP ${r.status}`); process.exit(r.body.ok ? 0 : 1);
+jval() { sed -n "s/.*\"$1\":\"\([^\"]*\)\".*/\1/p" "$OUT" | head -n 1; }
+session_default() {
+  if [ -n "$FOUND_BUG_SESSION" ]; then printf '%s' "$FOUND_BUG_SESSION"; return; fi
+  _s=$(tmux display-message -p '#S' 2>/dev/null); if [ -n "$_s" ]; then printf '%s' "$_s"; return; fi
+  [ "$(uname -s)" = Darwin ] && printf mac || printf unknown
 }
-for (let i = 0; i < args.length; i++) {
-  const a = args[i];
-  if (a === '--test') o.test = true;
-  else if (/^--(title|endpoint|repro|error|workaround|blocking|session)$/.test(a)) { if (i + 1 >= args.length) die(`${a} needs a value`); o[a.slice(2)] = args[++i]; }
-  else die(`unknown argument ${a} (found-bug --title ... [--endpoint --repro --error --workaround --blocking yes|no --session])`);
+curl_recipe() { printf '  curl -sS -X POST -H "Authorization: Bearer $(cat %s/token)" -H "content-type: application/json" -d '"'"'{"title":"...","error":"...","session":"..."}'"'"' %s/api/bugs\n' "$CFG_DIR" "$URL"; }
+
+# post one JSON record. -> 0 filed (prints the line), 1 rejected (prints the error), 5 unreachable
+post_record() {
+  api POST /api/bugs "$1"
+  [ "$CODE" = 000 ] && return 5
+  if grep -q '"ok":true' "$OUT"; then
+    _id=$(sed -n 's/.*"id":"\(bug-[0-9a-f]*\)".*/\1/p' "$OUT" | head -n 1)
+    if grep -q '"duplicate":true' "$OUT"; then echo "already filed ($_id); not filed again"
+    else if grep -q '"blocking":true' "$OUT"; then echo "filed $_id (blocking); the manager will send a worker"; else echo "filed $_id; the manager will send a worker"; fi; fi
+    return 0
+  fi
+  _e=$(jval error); printf 'found-bug: %s\n' "${_e:-HTTP $CODE}" >&2; return 1
 }
-if (!o.title) die('--title is required');
-if (!o.session) { try { o.session = execFileSync('tmux', ['display-message', '-p', '#S'], { encoding: 'utf8', timeout: 5000 }).trim(); } catch { o.session = 'unknown'; } }
-const r = await api('POST', '/api/bugs', o);
-if (!r.body.ok) die(r.body.error || `HTTP ${r.status}`);
-console.log(r.body.duplicate ? `already filed (${r.body.bug.id}); not filed again` : `filed ${r.body.bug.id}${r.body.bug.blocking ? ' (blocking)' : ''}; the manager will send a worker`);
+flush_queue() {
+  [ -s "$QUEUE" ] || return 0
+  : > "$TMP/keep"; _n=0; _f=0
+  while IFS= read -r _line; do
+    [ -n "$_line" ] || continue
+    post_record "$_line" >/dev/null 2>&1; _rc=$?
+    # unreachable keeps the record; a rejected one (bad data) is dropped with a note so the queue cannot jam
+    if [ "$_rc" -eq 5 ]; then printf '%s\n' "$_line" >> "$TMP/keep"; _f=$((_f+1)); elif [ "$_rc" -eq 0 ]; then _n=$((_n+1)); else printf 'found-bug: dropped a rejected queued report: %s\n' "$_line" >&2; fi
+  done < "$QUEUE"
+  if [ -s "$TMP/keep" ]; then cp "$TMP/keep" "$QUEUE"; else rm -f "$QUEUE"; fi
+  [ "$_n" -gt 0 ] && echo "flushed $_n queued report(s)"
+  [ "$_f" -gt 0 ] && echo "$_f queued report(s) still waiting ($QUEUE)"
+  return 0
+}
+
+cmd=$1
+case "$cmd" in
+  --help|-h|help)
+    sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  list) api GET '/api/bugs?format=text'; [ "$CODE" = 000 ] && die "manager unreachable at $URL ($(head -n 1 "$TMP/err"))" 5; [ "$CODE" = 200 ] || die "HTTP $CODE: $(cat "$OUT")"; cat "$OUT"; exit 0 ;;
+  fixed) [ -n "$2" ] || die "usage: found-bug fixed <id> [note]"; id=$2; shift 2
+    api POST "/api/bugs/$id/fixed" "{\"note\":\"$(jesc "$*")\"}"; [ "$CODE" = 000 ] && die "manager unreachable at $URL" 5
+    if grep -q '"ok":true' "$OUT"; then echo "marked fixed"; exit 0; fi; die "$(jval error)" ;;
+  remove) [ -n "$2" ] || die "usage: found-bug remove <id>"
+    api DELETE "/api/bugs/$2"; [ "$CODE" = 000 ] && die "manager unreachable at $URL" 5
+    if grep -q '"ok":true' "$OUT"; then echo removed; exit 0; fi; die "$(jval error)" ;;
+  --flush) flush_queue; [ -s "$QUEUE" ] && exit 5; exit 0 ;;
+esac
+
+if [ "$cmd" = --resolve ]; then
+  shift; id=$1; [ -n "$id" ] || die "--resolve needs a bug id"; shift
+  state=fixed; commit=; note=; sess=
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --commit|--state|--note|--session) [ $# -ge 2 ] || die "$1 needs a value"; case "$1" in --commit) commit=$2;; --state) state=$2;; --note) note=$2;; --session) sess=$2;; esac; shift 2 ;;
+      *) die "unknown argument $1 (found-bug --resolve <id> --commit <sha|integration id> [--state fixed|wontfix|doc-only] [--note text])" ;;
+    esac
+  done
+  [ -n "$sess" ] || sess=$(session_default)
+  api POST "/api/bugs/$id/resolve" "{\"state\":\"$(jesc "$state")\",\"commit\":\"$(jesc "$commit")\",\"note\":\"$(jesc "$note")\",\"by\":\"$(jesc "$sess")\"}"
+  [ "$CODE" = 000 ] && die "manager unreachable at $URL" 5
+  if grep -q '"ok":true' "$OUT"; then echo "resolved $id ($state)"; exit 0; fi; die "$(jval error)"
+fi
+
+title=; endpoint=; repro=; err=; workaround=; blocking=; sess=; test=
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --test) test=1; shift ;;
+    --title|--endpoint|--repro|--error|--workaround|--blocking|--session)
+      [ $# -ge 2 ] || die "$1 needs a value"
+      case "$1" in --title) title=$2;; --endpoint) endpoint=$2;; --repro) repro=$2;; --error) err=$2;; --workaround) workaround=$2;; --blocking) blocking=$2;; --session) sess=$2;; esac; shift 2 ;;
+    *) die "unknown argument $1 (found-bug --title ... [--endpoint --repro --error --workaround --blocking yes|no --session]; found-bug --help)" ;;
+  esac
+done
+[ -n "$title" ] || die "--title is required"
+[ -n "$sess" ] || sess=$(session_default)
+REC="{\"title\":\"$(jesc "$title")\",\"endpoint\":\"$(jesc "$endpoint")\",\"repro\":\"$(jesc "$repro")\",\"error\":\"$(jesc "$err")\",\"workaround\":\"$(jesc "$workaround")\",\"blocking\":\"$(jesc "$blocking")\",\"session\":\"$(jesc "$sess")\"${test:+,\"test\":true}}"
+
+# older queued reports go first (best effort), then this one
+flush_queue
+post_record "$REC"; rc=$?
+if [ "$rc" -eq 5 ]; then
+  mkdir -p "$STATE_DIR" 2>/dev/null && printf '%s\n' "$REC" >> "$QUEUE" && chmod 600 "$QUEUE" 2>/dev/null
+  printf 'found-bug: manager unreachable at %s (%s)\n' "$URL" "$(head -n 1 "$TMP/err")" >&2
+  printf 'found-bug: the report is SAVED in %s and is posted by the next found-bug call or `found-bug --flush`.\n' "$QUEUE" >&2
+  printf 'found-bug: fallback when found-bug itself is missing, once the manager is reachable:\n' >&2; curl_recipe >&2
+  exit 5
+fi
+exit "$rc"

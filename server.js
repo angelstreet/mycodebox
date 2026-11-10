@@ -2699,10 +2699,18 @@ async function handleHttp(req, res) {
   }
   if (req.method === 'GET' && p === '/api/done-check') return json(res, 200, doneCheck.snapshot());   // sessions whose STATUS done disagrees with git
   if (p === '/api/bugs' || p.startsWith('/api/bugs/')) {   // found-bug channel: loopback only (scripts/found-bug)
-    if (!isLoopback(req.socket.remoteAddress)) return json(res, 403, { ok: false, error: 'loopback only' });
+    // loopback (codebox), or a Mac/cloud client with an `integrate` bearer token (same tokens as scripts/integrate): file + list only
+    const loop = isLoopback(req.socket.remoteAddress), remoteClient = loop ? null : integrationRoutes.bugClient(req);
+    if (!loop && !remoteClient) return json(res, 403, { ok: false, error: 'loopback only, or a bearer token of an integrate client (lease-token.js add <name> --integrate)' });
+    if (remoteClient && !((req.method === 'GET' && p === '/api/bugs') || (req.method === 'POST' && p === '/api/bugs'))) return json(res, 403, { ok: false, error: 'a remote client may only file and list bugs' });
     try {
-      if (req.method === 'GET' && p === '/api/bugs') return json(res, 200, { ok: true, bugs: await foundBugs.list(), counts: await foundBugs.counts() });
-      if (req.method === 'POST' && p === '/api/bugs') { const r = await foundBugs.add(await readJsonBody(req)); return json(res, r.ok ? 200 : 400, r); }
+      if (req.method === 'GET' && p === '/api/bugs') {
+        const bugs = await foundBugs.list();
+        if (url.searchParams.get('format') === 'text') { res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' }); return res.end(bugs.map((b) => `${b.id}  ${b.resolved ? `[${b.state}] ` : ''}${b.blocking ? 'BLOCKING ' : ''}${b.session}: ${b.title}`).join('\n') + (bugs.length ? '\n' : '')); }
+        return json(res, 200, { ok: true, bugs, counts: await foundBugs.counts() });
+      }
+      if (req.method === 'POST' && p === '/api/bugs') { const b = await readJsonBody(req); if (remoteClient && b && typeof b === 'object' && !String(b.session || '').replace(/^unknown$/, '')) b.session = `mac-${remoteClient}`;   // a remote report with no session is named after its client
+      const r = await foundBugs.add(b); return json(res, r.ok ? 200 : 400, r); }
       const fm = p.match(/^\/api\/bugs\/([^/]+)\/fixed$/);
       if (fm && req.method === 'POST') { const r = await foundBugs.fixed(decodeURIComponent(fm[1]), (await readJsonBody(req)).note); return json(res, r.ok ? 200 : 404, r); }
       const rm = p.match(/^\/api\/bugs\/([^/]+)\/resolve$/);
