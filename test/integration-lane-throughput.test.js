@@ -113,3 +113,20 @@ test('a later full request still carries an earlier frontend request', async () 
   assert.deepEqual(asked, ['full']);
   await lane.idle(); lane.stop();
 });
+
+test('host after server, host only, full after host: each scope deploys what it names (bug-51061123)', async () => {
+  const w = makeWorld(); w.branch('a', { 'a.js': '1\n' }); w.branch('b', { 'b.js': '2\n' }); w.branch('c', { 'c.js': '3\n' });
+  const asked = [];
+  const deploys = { request: async (o) => { asked.push(o.scope); return { id: `d${asked.length}` }; }, wait: async () => ({ ok: true, version: 'v' }) };
+  const lane = mk(w, deploys);
+  const a = lane.enqueue({ repo: 'env-a', branch: 'a', deploy: 'server' });
+  const b = lane.enqueue({ repo: 'env-a', branch: 'b', deploy: 'host' });
+  await until(() => lane.get(a.id).state === 'deployed' && lane.get(b.id).state === 'deployed');
+  assert.deepEqual(asked.slice().sort(), ['host', 'server'], 'host after server: server still deploys');
+  assert.equal(lane.get(a.id).coveredBy, undefined);
+  assert.equal(lane.get(b.id).deployed.scope, 'host', 'host only: scope host');
+  const c = lane.enqueue({ repo: 'env-a', branch: 'c', deploy: 'full' });
+  await until(() => lane.get(c.id).state === 'deployed');
+  assert.equal(lane.get(c.id).deployed.scope, 'full');
+  await lane.idle(); lane.stop();
+});

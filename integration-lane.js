@@ -1002,7 +1002,7 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
       if (!x) return null;
       await waitFinal(x.id, Math.min(limit - now(), 30_000));
       const y = reqs.get(x.id);
-      if (y && y.state === 'deployed' && y.deployed && y.pushed) return { id: y.id, deployed: y.deployed };
+      if (y && y.state === 'deployed' && y.deployed && y.pushed && scopeCovers(y.deployed.scope, r.deployScope)) return { id: y.id, deployed: y.deployed };
       // ended without deploying (returned, red, failed): look for another cover, else deploy ourselves
     }
     return null;
@@ -1034,7 +1034,7 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
       }
     }
     // a re-request of a branch that was already on the target changes nothing: it does not restart the service unless --deploy was explicit
-    if (r.alreadyMerged && !r.deployExplicit) { transition(r, 'merged', { reason: null }); return; }
+    if (r.alreadyMerged && !r.deployExplicit) { transition(r, 'merged', { reason: r.deployScope ? `deploy pending: ${r.deployScope}` : null }); return; }
     if (c.deploy?.kind === 'self') { await selfDeploy(r, c); return; }
     if (r.deployScope) {
       // Coalesce (owner 2026-11-01): a later request of this repo, still queued or merging, deploys a main that carries this merge.
