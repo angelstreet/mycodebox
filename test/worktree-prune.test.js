@@ -35,6 +35,7 @@ test('clean merged idle worktree is REMOVE; shared checkout, dirty, ahead, used,
   for (const n of ['merged', 'dirty', 'ahead', 'used', 'young', 'demo-x', 'queued']) w[n] = f.wt(n, `b/${n}`);
   fs.writeFileSync(path.join(w.dirty, 'x.txt'), 'u');
   fs.writeFileSync(path.join(w.ahead, 'y.txt'), 'y'); sh(w.ahead, 'add', '.'); sh(w.ahead, ...G, 'commit', '-qm', 'y');
+  fs.appendFileSync(path.join(f.repo, '.git', 'info', 'exclude'), 'node_modules\n');   // ignored caches never block removal
   fs.mkdirSync(path.join(w.merged, 'node_modules')); fs.writeFileSync(path.join(w.merged, 'node_modules', 'z'), 'z');
   for (const n of Object.keys(w)) if (n !== 'young') age(w[n]);
   fs.writeFileSync(path.join(w.young, 'now.txt'), 'n');
@@ -90,4 +91,15 @@ test('inUse matches the dir and its subdirs only; untracked caches do not make a
   assert.deepEqual(dirtyFiles(w), []);
   fs.writeFileSync(path.join(w, 'real.txt'), 'r');
   assert.deepEqual(dirtyFiles(w), ['real.txt']);
+});
+
+test('untracked node_modules that is not gitignored is KEEP (git would refuse removal)', async () => {
+  const f = fixture(), w = f.wt('nm', 'b/nm');
+  fs.mkdirSync(path.join(w, 'node_modules')); fs.writeFileSync(path.join(w, 'node_modules', 'q'), 'q');
+  age(w);
+  assert.match(by(await run(f), 'nm').why, /untracked cache not gitignored/);
+  fs.writeFileSync(path.join(w, '.gitignore'), 'node_modules\n'); sh(w, 'add', '.gitignore'); sh(w, ...G, 'commit', '-qm', 'ignore');
+  sh(f.repo, 'cherry-pick', '--no-edit', 'b/nm'); sh(f.repo, 'push', '-q', 'origin', 'HEAD:main'); sh(f.repo, 'fetch', '-q');
+  age(w);
+  assert.equal(by(await run(f), 'nm').verdict, 'remove');
 });

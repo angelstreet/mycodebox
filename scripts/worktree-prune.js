@@ -100,6 +100,9 @@ export function inspect(repo, wt, { cwds, refs, now = Date.now(), minAgeH = 12, 
   const dirty = dirtyFiles(wt.path);
   r.dirty = dirty.length;
   if (dirty.length) reasons.push(`uncommitted: ${dirty.length} file(s), e.g. ${dirty[0]}`);
+  // git worktree remove refuses untracked files that are not gitignored, caches included: those are KEEP, not REMOVE.
+  const cacheUntracked = (tryGit(wt.path, 'ls-files', '-o', '--exclude-standard') || '').split('\n').find((x) => x && CACHE.test(x));
+  if (cacheUntracked) reasons.push(`untracked cache not gitignored (git would refuse removal): ${cacheUntracked}`);
   const base = tryGit(repo, 'rev-parse', '--verify', '-q', 'origin/main');
   if (!base) reasons.push('no origin/main to compare');
   r.ahead = base ? Number(tryGit(wt.path, 'rev-list', '--count', `origin/main..${wt.head}`) ?? NaN) : null;
