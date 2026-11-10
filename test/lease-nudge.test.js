@@ -123,9 +123,7 @@ test('watchdog: a ticket waiting 5+ min while an equivalent is free gets one lin
   assert.equal(planNudges({ now, view: view([tk()]), sessionOf, last: new Map([['codebox:devinfo|t-1|waiter', now - 60000]]) }).length, 0, 'cooldown');
   const [h] = planNudges({ now, view: view([tk({ equivalents: [], hint: 'blocked only by device lease(s) on vpt-x/device5: ...' })]), sessionOf });
   assert.match(h.text, /only device runs block it/);
-  const [p] = planNudges({ now, view: view([tk({ equivalents: [], createdMs: now - 16 * 60000 })]), sessionOf });
-  assert.match(p.text, /no listed equivalent is free/);
-  assert.match(p.text, /vpt-lease ticket t-1 --cancel/);
+  assert.equal(planNudges({ now, view: view([tk({ equivalents: [], createdMs: now - 60 * 60000 })]), sessionOf }).length, 0, 'unique hardware / single-member group: no "pick another device" push, however long it waits');
   assert.equal(planNudges({ now, view: view([tk({ equivalents: [], any: 'web', createdMs: now - 16 * 60000 })]), sessionOf }).length, 0, 'an --any ticket: no probe advice');
 
   const v = view([tk()]);
