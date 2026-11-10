@@ -7,8 +7,8 @@ import path from 'node:path';
 
 const real = (p) => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
 const inside = (child, parent) => child === parent || child.startsWith(parent.endsWith('/') ? parent : `${parent}/`);
-// Ignored entries that are always regenerable; anything else ignored (keystores, notes) may be real content: leave the tree.
-const SAFE_IGNORED = /^(node_modules\/|\.cache\/|coverage\/)/;
+// Ignored entries that are always regenerable (dependency and tool caches, any depth); anything else ignored (keystores, notes) may be real content: leave the tree.
+const SAFE_IGNORED = /(^|\/)(node_modules|\.cache|coverage|__pycache__|\.pytest_cache|\.ruff_cache|\.mypy_cache)(\/|$)/;
 
 // -> { removed: boolean, reason: string, branchDeleted?: boolean }
 export async function cleanupWorktree({ worktree, branch, session = null, target, remote, laneClone, git,
