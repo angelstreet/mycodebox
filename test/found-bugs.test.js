@@ -140,11 +140,11 @@ test('CLI: every flag set files cleanly against a store with marker lines', asyn
   try {
     const { promisify } = await import('node:util');
     const { execFile } = await import('node:child_process');
-    const env = { ...process.env, PORT: String(srv.address().port) };
+    const env = { ...process.env, PORT: String(srv.address().port), MYCODEBOX_CONFIG_DIR: '/nonexistent', GHOSTY_URL: '', MYCODEBOX_URL: '' };
     const flags = ['--title', 'host unreachable (No route to host)', '--endpoint', 'ssh host:227', '--repro', 'ssh from codebox', '--error', 'ssh: No route to host', '--workaround', 'none', '--blocking', 'no', '--session', 'cli-test'];
-    const out = await promisify(execFile)(process.execPath, ['scripts/found-bug', ...flags], { env });
+    const out = await promisify(execFile)('sh', ['scripts/found-bug', ...flags], { env });
     assert.match(out.stdout, /^filed bug-[0-9a-f]{8}/);
-    const again = await promisify(execFile)(process.execPath, ['scripts/found-bug', ...flags], { env });
+    const again = await promisify(execFile)('sh', ['scripts/found-bug', ...flags], { env });
     assert.match(again.stdout, /already filed/);
     const rows = (await fb.list()).filter((b) => b.session === 'cli-test');
     assert.equal(rows.length, 1); assert.equal(rows[0].blocking, false); assert.equal(rows[0].workaround, 'none');

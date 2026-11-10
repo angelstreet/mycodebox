@@ -14,6 +14,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 // repo: path inside the checkout; installed: path under $HOME
 export const ENTRIES = [
   { name: 'integrate', repo: 'scripts/integrate', installed: '.local/bin/integrate' },
+  { name: 'found-bug', repo: 'scripts/found-bug', installed: '.local/bin/found-bug' },
   { name: 'cbsession', repo: 'scripts/cbsession', installed: '.local/bin/cbsession' },
 ];
 const sha = (p) => createHash('sha256').update(readFileSync(p)).digest('hex');
