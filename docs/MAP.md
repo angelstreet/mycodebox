@@ -44,7 +44,7 @@ Origin checks protect browser requests but are not user authentication. Any allo
 | Remote stops (Mac Stop hook intake, `/api/remote/v1`; install in `docs/MAC-HOOK.md`) | `remote-stops.js`, `scripts/mac-stop-hook.sh`, `manager.js` (marked remote hook block) | `test/remote-stops.test.js`, `test/mac-hook.test.js` |
 | Manager owner questions (command, server safety net, alert scan) | `scripts/manager-ask.js`, `ask-guard.js`, `scripts/manager-ask-scan.sh`, `owner-asks.js`, `ask-fold.js` (one open ask per session folds alerts) | `test/manager-ask-enforce.test.js`, `test/owner-asks.test.js`, `test/ask-fold.test.js`, `test/system-wait.test.js` |
 | Worktree cleanup after a lane merge (guards, journal, `worktreeCleanup` switch) | `worktree-cleanup.js`, hook in `integration-lane.js`, wiring in `server.js` | `test/worktree-cleanup.test.js` |
-| Pokemon run retention (proposal, dry run only) | `scripts/pokemon-retention-dryrun.js`, [POKEMON-RETENTION](POKEMON-RETENTION.md) | none (prints, deletes nothing) |
+| Pokemon run retention (keep in-progress + last completed per save) | `scripts/pokemon-retention.js`, [POKEMON-RETENTION](POKEMON-RETENTION.md) | dry run by default; `--apply` moves to `.trash-<date>` |
 | Integration lane notices (owner feed, manager event, session line) | `integration-notify.js` | `test/integration-feed-noise.test.js`, `test/integration-sessions.test.js` |
 | Owner round-trip ledger (`owner-roundtrips.jsonl`, `GET /api/manager/roundtrips`) | `roundtrips.js`, `manager.js` (`settleRoundtrip`) | `test/roundtrips.test.js` |
 | V2 task contract, store, policy, intake | `orchestration/task-contract.js`, `store.js`, `policy.js`, `intake.js`, `events.js` | `test/v2-task-core*.test.js`, `test/v2-store*.test.js`, `test/v2-policy.test.js` |

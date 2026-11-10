@@ -1,7 +1,7 @@
-# Pokemon run retention (proposal, not applied)
+# Pokemon run retention (owner rule, 2026-11-10)
 
-Status: **proposal only**. `scripts/pokemon-retention-dryrun.js` prints what the rule would delete and contains no delete code.
-Nothing under `~/vpt-private/pokemon` has been changed. Applying it is a separate, reviewed change.
+Status: **owner decided 2026-11-10** ("for pokemon if it is the disk issue, keep the in-progress and the last completed only").
+`scripts/pokemon-retention.js` is a dry run by default; `--apply` moves the deletions to a trash folder. No timer.
 
 ## Why
 The disk returns to 85% after every cleanup (2026-11-03, 11-07, 11-09, 11-10). Worktrees are now removed by the lane after a merge
@@ -18,13 +18,13 @@ The disk returns to 85% after every cleanup (2026-11-03, 11-07, 11-09, 11-10). W
 
 Run videos by age (`find canonical/runs -name '*.webm' -mtime +N`): >3 d 580 files, 10.8G; >7 d 353 files, 7.4G; >14 d 69 files, 0.9G.
 
-## Proposed rule
-1. Keep every run `.json` forever.
-2. Keep run `.webm` for 7 days; delete older ones, except a run whose id appears in a `canonical/finished/` snapshot.
-3. Age out `stall*`/`repro*`/`work*`/`replay*` directories after 14 days without a modified file, skipping any that hold a save, state or ROM.
-4. Never touch saves/states, ROMs, `canonical/` (other than rule 2) or the named test dirs.
+## Rule (applied)
+Scope: files `<id>.json` / `<id>.webm` in `<root>/*/runs/` (canonical, hostruns, ...). Per runs folder and per save (the json `save` field) keep
+1. every in-progress run: json missing/unreadable, json without `video_end`, a file open by a process (`/proc/*/fd`), or a file modified in the last 15 min (`--live-min`);
+2. the newest completed run.
+Everything else in `runs/` is removed (video and json). Never touched: saves/states, ROMs, `canonical/finished`, `memory_*` snapshots, any folder that is not a `runs/`.
 
-Effect now: frees about 7.4G at once and caps `runs/` near 4-5G at 0.6G/day. Pokemon Gold adds runs at the same rate, so the cap holds.
+`node scripts/pokemon-retention.js` lists KEEP/REMOVE and the bytes (dry run). `--apply` renames the removals into `<root>/.trash-<date>/<same relative path>`
+(same filesystem, so no copy) and purges `.trash-*` folders older than yesterday (bug-ffd2e84e). Test: `test/pokemon-retention.test.js` (temp dir).
 
-## Next step
-Review the dry run, then a small follow-up adds a `--apply` mode (or a daily timer) behind a switch, moving files to a trash dir for a day first.
+Suggestion only, not in scope: run it daily from a timer so `runs/` stays at one completed run per save plus the live one.
