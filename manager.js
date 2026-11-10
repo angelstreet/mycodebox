@@ -81,7 +81,7 @@ setForbiddenExtra(process.env.GHOSTY_FORBIDDEN_EXTRA || '');
 setRoutineRestartUnits(process.env.GHOSTY_RESTART_UNITS || null);   // allowlist of routine device-side restarts (owner 2026-10-27)
 
 export const AUTO_CASES = ['continue', 'menu_recommended', 'stopped_short', 'ask_status'];   // the only cases that may ever auto-send
-let config = { enabled: true, autoSend: true, routerShadow: true, wakeShadow: true, autoCases: ['continue', 'menu_recommended'], autonomyVersion: 1, decidedDigestHour: 18, minConfidence: 0.8, delayMs: 30000, maxPerSessionPerHour: 4, disabledSessions: [], deployRunner: false, leaseAnswers: true, selfChecks: true, mockupFirst: true, mockupWindowMin: WINDOW_DEFAULT_MIN,
+let config = { enabled: true, autoSend: true, routerShadow: true, wakeShadow: true, autoCases: ['continue', 'menu_recommended'], autonomyVersion: 1, worktreeCleanup: true, decidedDigestHour: 18, minConfidence: 0.8, delayMs: 30000, maxPerSessionPerHour: 4, disabledSessions: [], deployRunner: false, leaseAnswers: true, selfChecks: true, mockupFirst: true, mockupWindowMin: WINDOW_DEFAULT_MIN,
   jevUsage: 'auto', aiFallback: 'minimax', aiFallbackDailyCalls: 300, aiTriage: 'simulate', aiMinConfidence: 0.85, aiDailyUsd: 1.0, aiDailyCalls: 300, aiAutoCases: [],   // the owner picks; owner_decision is never a default
   ...MERGE_DEFAULTS, ...DECIDE_DEFAULTS, ...POLICY_DEFAULTS };
 let budget = { day: '', calls: 0, cost: 0 };
@@ -272,6 +272,7 @@ export async function setManagerConfig(b = {}) {
   if (typeof policyEnabled === 'boolean') config.policyEnabled = policyEnabled;
   if (typeof deployRunner === 'boolean') config.deployRunner = deployRunner;
   if (typeof opsToManager === 'boolean') config.opsToManager = opsToManager;
+  if (typeof b.worktreeCleanup === 'boolean') config.worktreeCleanup = b.worktreeCleanup;   // lane.worktreeCleanup (2026-11-10)
   if (typeof routerShadow === 'boolean') config.routerShadow = routerShadow;
   if (typeof wakeShadow === 'boolean') config.wakeShadow = wakeShadow;
   if (p1MaxPct !== undefined) config.p1MaxPct = num(p1MaxPct, 1, 100, 'p1MaxPct');
