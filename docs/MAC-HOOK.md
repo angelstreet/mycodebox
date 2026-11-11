@@ -99,13 +99,22 @@ under `~/.claude/projects/`. Then finish a turn in a Claude Code session: a row 
 
 Both are POSIX `sh` + `curl` scripts that read the same `~/.config/mycodebox/config` (`url = ...`) and `token` (mode 600) as the
 hook; the token is a client added on the dashboard host with `node scripts/lease-token.js add mac-<name> --remote --integrate`.
-Install or update (a plain copy; `scripts/installed-copies-check.js` reports drift on the dashboard host, a Mac copy is re-copied
-from the checkout by hand):
+**Update (owner, 2026-11-11): `integrate self-update`.** It fetches the current `scripts/integrate` and `scripts/found-bug` from the
+dashboard host (`GET /api/integration/client-scripts[/<name>]`, same bearer token, integrate clients only), checks their sha256,
+installs them atomically into `~/.local/bin` (`$MYCODEBOX_BIN_DIR` overrides) and keeps the old copy as `<name>.bak`; run again it
+says "current". `found-bug --self-update` does the same. `integrate request` and `found-bug` print one line ("client scripts are
+old: run integrate self-update") when the server's `CLIENT_SCRIPTS_VERSION` is newer, and `integrate request` prints a hint when
+`found-bug` is not installed. Never blocking. Any session on the Mac can run it; nobody has to copy files by hand again.
+
+**First install** (once, from a checkout that has this change, e.g. a fresh `git pull` of main; later updates need no checkout):
 
 ```sh
-cp scripts/integrate scripts/found-bug ~/.local/bin/ && chmod +x ~/.local/bin/integrate ~/.local/bin/found-bug
-found-bug --help          # the one-line check; integrate request ... needs no other setup
+mkdir -p ~/.local/bin && cp scripts/integrate ~/.local/bin/ && chmod +x ~/.local/bin/integrate && integrate self-update
+found-bug --help          # the one-line check
 ```
+
+A bump rule for authors: change `scripts/integrate` or `scripts/found-bug` => raise `CLIENT_SCRIPTS_VERSION` in **both** (the test
+keeps them equal), so every client warns until it has updated.
 
 `found-bug --title T [--error "exact text"] [--repro R] [--blocking yes|no]` posts to `POST /api/bugs` over the tailnet with the
 bearer token (a remote client may only file and list: `--resolve`, `fixed` and `remove` are codebox-only). `GHOSTY_URL` overrides the

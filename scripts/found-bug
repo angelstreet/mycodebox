@@ -5,6 +5,8 @@
 #   found-bug --flush                                    post the reports queued while the manager was unreachable
 #   found-bug --resolve <id> --commit <sha|integration id> [--state fixed|wontfix|doc-only|duplicate] [--note text] [--session NAME]   (codebox only)
 #   found-bug list | found-bug fixed <id> [note] | found-bug remove <id>   (fixed/remove/--resolve: codebox loopback only; remove: test reports)
+#   found-bug --self-update                              fetch the current found-bug + integrate from the dashboard host (needs the token), verify sha256, install into
+#                                                        ${MYCODEBOX_BIN_DIR:-~/.local/bin} atomically (old copy kept as <name>.bak); idempotent
 #   found-bug --help
 # Where: GHOSTY_URL (or MYCODEBOX_URL, or `url = ...` in ~/.config/mycodebox/config, as for `integrate`); default loopback http://127.0.0.1:${PORT:-7777}.
 # Auth: ~/.config/mycodebox/token (an `integrate` client token, mode 600) as a bearer token; on the codebox none is needed (loopback).
@@ -12,6 +14,8 @@
 # (GHOSTY_STATE_DIR, default ~/.local/state/ghosty), the exact fallback is printed, and the next call (or --flush) posts it.
 # Session defaults to the tmux session, else FOUND_BUG_SESSION, else `mac` on a Mac, else `unknown`. Secrets are redacted server-side.
 # Exit: 0 filed; 5 manager unreachable (report queued, not lost); 1 error.
+
+CLIENT_SCRIPTS_VERSION=1   # bump with every change to scripts/integrate or scripts/found-bug (same number in both); the server compares it
 
 CFG_DIR="${MYCODEBOX_CONFIG_DIR:-$HOME/.config/mycodebox}"
 STATE_DIR="${GHOSTY_STATE_DIR:-$HOME/.local/state/ghosty}"
@@ -82,10 +86,44 @@ flush_queue() {
   return 0
 }
 
+# sha256 of a file (Linux sha256sum, macOS shasum, else openssl)
+sha_of() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1; elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | cut -d' ' -f1; else openssl dgst -sha256 "$1" | sed 's/^.*= *//'; fi; }
+
+self_update() {
+  _bin=${MYCODEBOX_BIN_DIR:-$HOME/.local/bin}
+  [ -n "$TOKEN" ] || die "no token in $CFG_DIR/token (see docs/MAC-HOOK.md); on the codebox the scripts are in the checkout"
+  api GET "/api/integration/client-scripts?format=kv"
+  [ "$CODE" = 000 ] && die "manager unreachable at $URL ($(head -n 1 "$TMP/err"))" 5
+  [ "$CODE" = 200 ] || die "HTTP $CODE from $URL/api/integration/client-scripts"
+  _ver=$(sed -n 's/^version=//p' "$OUT" | head -n 1); : > "$TMP/want"; cp "$OUT" "$TMP/want"; _chg=0
+  mkdir -p "$_bin" || die "cannot create $_bin"
+  for _n in found-bug integrate; do
+    _want=$(sed -n "s/^$_n\.sha256=//p" "$TMP/want" | head -n 1); [ -n "$_want" ] || die "the server did not list $_n"
+    if [ -f "$_bin/$_n" ] && [ "$(sha_of "$_bin/$_n")" = "$_want" ]; then echo "$_n is current"; continue; fi
+    api GET "/api/integration/client-scripts/$_n"; [ "$CODE" = 200 ] || die "HTTP $CODE fetching $_n"
+    cp "$OUT" "$TMP/$_n.new" || die "cannot stage $_n"
+    [ "$(sha_of "$TMP/$_n.new")" = "$_want" ] || die "checksum mismatch for $_n: nothing installed"
+    [ -f "$_bin/$_n" ] && cp -p "$_bin/$_n" "$_bin/$_n.bak"
+    cp "$TMP/$_n.new" "$_bin/.$_n.new.$$" && chmod 755 "$_bin/.$_n.new.$$" && mv -f "$_bin/.$_n.new.$$" "$_bin/$_n" || { rm -f "$_bin/.$_n.new.$$"; die "cannot install $_n into $_bin"; }
+    echo "updated $_n in $_bin (previous copy: $_n.bak)"; _chg=1
+  done
+  [ "$_chg" = 1 ] || echo "client scripts are current (version $_ver)"
+}
+# one line when the server's scripts are newer; silent on any failure (never blocks a report)
+drift_check() {
+  [ -n "$TOKEN" ] || return 0
+  api GET "/api/integration/client-scripts?format=kv"; [ "$CODE" = 200 ] || return 0
+  _sv=$(sed -n 's/^version=//p' "$OUT" | head -n 1)
+  case "$_sv" in ""|*[!0-9]*) return 0 ;; esac
+  [ "$_sv" -gt "$CLIENT_SCRIPTS_VERSION" ] && echo "client scripts are old (v$CLIENT_SCRIPTS_VERSION, server v$_sv): run found-bug --self-update (or integrate self-update)"
+  return 0
+}
+
 cmd=$1
 case "$cmd" in
+  --self-update) self_update; exit 0 ;;
   --help|-h|help)
-    sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   list) api GET '/api/bugs?format=text'; [ "$CODE" = 000 ] && die "manager unreachable at $URL ($(head -n 1 "$TMP/err"))" 5; [ "$CODE" = 200 ] || die "HTTP $CODE: $(cat "$OUT")"; cat "$OUT"; exit 0 ;;
   fixed) [ -n "$2" ] || die "usage: found-bug fixed <id> [note]"; id=$2; shift 2
     api POST "/api/bugs/$id/fixed" "{\"note\":\"$(jesc "$*")\"}"; [ "$CODE" = 000 ] && die "manager unreachable at $URL" 5
@@ -128,6 +166,7 @@ REC="{\"title\":\"$(jesc "$title")\",\"endpoint\":\"$(jesc "$endpoint")\",\"repr
 # older queued reports go first (best effort), then this one
 flush_queue
 post_record "$REC"; rc=$?
+[ "$rc" -eq 0 ] && drift_check
 if [ "$rc" -eq 5 ]; then
   mkdir -p "$STATE_DIR" 2>/dev/null && printf '%s\n' "$REC" >> "$QUEUE" && chmod 600 "$QUEUE" 2>/dev/null
   printf 'found-bug: manager unreachable at %s (%s)\n' "$URL" "$(head -n 1 "$TMP/err")" >&2
