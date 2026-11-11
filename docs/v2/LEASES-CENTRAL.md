@@ -389,3 +389,7 @@ Where the build is more specific than the design above:
   tickets for the same env, agent and resources, and queues again; it never exits 5. A plain claim without `--wait` still answers 5.
 - **Install:** `scripts/vpt-lease` is a client: install it on codebox (forwarding client) and on the registry host (`~/bin/vpt-lease`), plus every
   other machine that runs `vpt-lease run`.
+  Since 2026-11-11 (bug-fb46a741) the dashboard installs it on codebox (`~/bin/vpt-lease`) and on the registry host (`VPT_LEASE_SSH_TARGET`,
+  `VPT_LEASE_REMOTE_CMD`) when it starts from the live checkout on `main` with an unmodified client, i.e. after every self-deploy
+  (`lease-client-sync.js`: sha256 compare, backup `.bak-<stamp>`, syntax check, atomic rename, `lease-client-sync.jsonl`; `GHOSTY_LEASE_CLIENT_SYNC=off`).
+  The service files on the registry host (`~/mycodebox-lease`) are still installed by hand; Macs install the client themselves (MAC-HOOK).

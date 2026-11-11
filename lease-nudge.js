@@ -144,7 +144,19 @@ export function createLeaseNudge({ stateDir, getInputs, sessionOf = () => null, 
         const rec = { at: new Date(t).toISOString(), by: n.waiter ? 'lease-watchdog' : 'lease-nudge', leaseId: n.leaseId, ...(n.ticketId ? { ticketId: n.ticketId } : {}), agent: n.agent, session: n.session, env: n.env, reasons: n.reasons, waitedMin: n.waitedMin, via: n.session ? 'session' : 'event', dryRun: m !== 'live' };
         if (m === 'live') {
           if (n.session) {
-            if (!canSend(n.session)) continue;   // working, a draft, a menu: try again on the next tick
+            if (!canSend(n.session)) {   // working, a draft, a menu: try again on the next tick
+              // owner 2026-11-11: an idle holder the chat guard cannot reach was skipped silently while others queued for hours (the Mi, ~11 h):
+              // the manager is told, once per cooldown; the chat line is still retried every tick
+              const fk = `${n.key}|flag`;
+              if (!n.waiter && n.reasons.some((r) => /^idle /.test(r)) && t - (last.get(fk) || 0) >= COOLDOWN_MS) {
+                try {
+                  await record({ key: 'lease:idle-blocking', title: `${n.session} holds ${n.leaseId} idle while ${n.what} waits`, body: `${n.text} (${n.reasons.join('; ')}); the session's chat cannot take the note now`, url: '/?leases=1', priority: 'default', leaseId: n.leaseId, agent: n.agent, env: n.env, resources: n.resources });
+                  last.set(fk, t); events++;
+                  try { await appendFile(actionsFile, JSON.stringify({ ...rec, via: 'event', flag: 'idle-blocking' }) + '\n'); } catch { /* audit only */ }
+                } catch (e) { log.error?.('[lease-nudge] record', e.message); }
+              }
+              continue;
+            }
             try { await send(n.session, n.text); sent++; } catch (e) { log.error?.('[lease-nudge] send', n.session, e.message); continue; }
           } else {
             try { await record({ key: 'lease:nudge', title: `ask ${n.agent} to release or narrow ${n.leaseId}`, body: `${n.text} (${n.reasons.join('; ')})`, url: '/?leases=1', priority: 'default', leaseId: n.leaseId, agent: n.agent, env: n.env, resources: n.resources }); events++; } catch (e) { log.error?.('[lease-nudge] record', e.message); continue; }

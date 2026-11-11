@@ -71,3 +71,43 @@ test('procStartSec reads start time from /proc/<pid>/stat and /proc/stat', () =>
   assert.equal(procStartSec(9, { readFile: rf }), 1050);
   assert.equal(procStartSec(8, { readFile: () => { throw new Error('ENOENT'); } }), null);
 });
+
+// owner 2026-11-11: a grant to an idle codebox session that nobody used while others queue is released (the Mi held ~11 h)
+import { unusedGrants } from '../lease-holder-reaper.js';
+const NOW = (SINCE + 15 * 60) * 1000;      // 15 min after the grant
+const grant = (o = {}) => ({ id: 'g1', mode: 'exclusive', agent: 'codebox:wall', since: SINCE, lastHeartbeatAt: new Date(SINCE * 1000).toISOString(), ...o });
+const waiting = [{ id: 't-1', agent: 'kpi-androidtv', holders: [{ id: 'g1', agent: 'codebox:wall' }] }];
+const idleBefore = () => ({ working: false, turnAt: SINCE * 1000 - 3600e3, promptAt: SINCE * 1000 - 3600e3 });
+
+test('unusedGrants: idle session, no turn and no heartbeat since the grant, someone waits, past the grace -> listed', () => {
+  const u = unusedGrants([grant()], waiting, { sessionNames: ['wall'], activityOf: idleBefore, now: NOW });
+  assert.deepEqual(u.map((x) => [x.id, x.session, x.waiters]), [['g1', 'wall', ['kpi-androidtv']]]);
+});
+
+test('unusedGrants: in use, nobody waiting, inside the grace, unknown or working session, pin, bare agent -> never listed', () => {
+  const base = { sessionNames: ['wall'], activityOf: idleBefore, now: NOW };
+  const none = (rows, tickets = waiting, o = {}) => assert.deepEqual(unusedGrants(rows, tickets, { ...base, ...o }), []);
+  none([grant({ lastHeartbeatAt: new Date((SINCE + 300) * 1000).toISOString() })]);                       // heartbeat / renew after the grant
+  none([grant()], [], {});                                                                                 // nobody waits
+  none([grant()], waiting, { now: (SINCE + 5 * 60) * 1000 });                                              // inside the 10 min grace
+  none([grant()], waiting, { activityOf: () => null });                                                    // the reporter never saw it
+  none([grant()], waiting, { activityOf: () => ({ working: true, turnAt: 0, promptAt: 1 }) });            // working
+  none([grant()], waiting, { activityOf: () => ({ working: false, turnAt: (SINCE + 60) * 1000, promptAt: 0 }) });   // a turn after the grant
+  none([grant()], waiting, { sessionNames: [] });                                                          // no such session (holder-gone covers it)
+  none([grant({ mode: 'pin' })]); none([grant({ system: true })]); none([grant({ deploy_id: 'd' })]);
+  none([grant({ agent: 'kpi-stb' })], [{ ...waiting[0], holders: [{ id: 'g1' }] }]);                        // a bare agent name: not a session
+  none([grant()], waiting, { graceMs: 0 });                                                                // switched off
+});
+
+test('the reaper releases an unused grant on the 2nd poll with a reason naming the session and the waiter', async () => {
+  const calls = [];
+  const run = async (args) => { calls.push(args); return args[0] === 'list' ? { code: 0, stdout: JSON.stringify({ leases: [grant()], tickets: waiting }) } : { code: 0, stdout: 'released 1' }; };
+  const r = createHolderReaper({ stateDir: tmp('hr-u-'), run, listSessionNames: async () => ['wall'], activityOf: idleBefore, now: () => NOW, unusedGraceMs: () => 10 * 60000, log: { log() {}, error() {} } });
+  await r.poll();
+  assert.equal(calls.filter((c) => c[0] === 'release').length, 0, 'first sighting');
+  await r.poll();
+  const rel = calls.filter((c) => c[0] === 'release');
+  assert.equal(rel.length, 1);
+  assert.deepEqual(rel[0].slice(0, 4), ['release', 'g1', '--by', 'lease-holder-reaper']);
+  assert.match(rel[0][5], /^unused-grant: released lease g1: .*idle session wall.*kpi-androidtv waits$/);
+});

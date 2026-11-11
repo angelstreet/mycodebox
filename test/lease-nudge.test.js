@@ -133,3 +133,16 @@ test('watchdog: a ticket waiting 5+ min while an equivalent is free gets one lin
   assert.equal(systemResolvable({ session: 'x', kind: 'deploy', case: 'decision', deploys: [{ id: 'd1', state: 'running' }] }), null, 'a decision is not a system wait');
   assert.equal(systemResolvable({ session: 'x', kind: 'manager-item', view: v }), null);
 });
+test('an idle codebox holder whose chat cannot take the note is flagged to the manager once per cooldown (owner 2026-11-11)', async () => {
+  const h = harness({ canSend: () => false });
+  await h.n.tick();
+  const flags = () => h.events.filter((e) => e.key === 'lease:idle-blocking');
+  assert.equal(h.sent.length, 0);
+  assert.equal(flags().length, 1);
+  assert.match(flags()[0].title, /^worker holds L1 idle while deploy/);
+  h.advance(2 * MIN); await h.n.tick();
+  assert.equal(flags().length, 1, 'cooldown');
+  const w = harness({ canSend: () => false, idleMinOf: () => 0 });   // working, not idle: no flag
+  await w.n.tick();
+  assert.equal(w.events.filter((e) => e.key === 'lease:idle-blocking').length, 0);
+});

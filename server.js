@@ -105,6 +105,7 @@ import { homedir, hostname, loadavg, cpus } from 'node:os';
 import { createLeaseStore, sshRun as leaseRun } from './leases.js';
 import { createLeaseWatch } from './lease-watch.js';
 import { createHolderReaper } from './lease-holder-reaper.js';
+import { createLeaseClientSync } from './lease-client-sync.js';
 import { createLeaseNudge, systemResolvable } from './lease-nudge.js';
 import { equivalenceReader, applyEquivalence } from './lease-equivalence.js';
 import { createLeaseService } from './lease-service.js';
@@ -908,7 +909,8 @@ const leaseWatch = createLeaseWatch({
   mode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).leaseBind; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
 });
 // A lease whose holder process on this host is gone is released (lease-holder-reaper.js; the registry on proxmox cannot probe codebox pids).
-const holderReaper = createHolderReaper({ stateDir: STATE_DIR, run: leaseRun, listSessionNames: async () => (await listSessions()).map((x) => x.name) });
+// It also releases a grant made to an idle codebox session that never used it while others wait (GHOSTY_UNUSED_GRANT_MIN, default 10; 0 = off).
+const holderReaper = createHolderReaper({ stateDir: STATE_DIR, run: leaseRun, listSessionNames: async () => (await listSessions()).map((x) => x.name), activityOf: (name) => reporter.activityOf(name) });
 // The orchestrator asks a holder to release or narrow (lease-nudge.js): every 2 min, for a queued deploy or ticket that waits > 10 min.
 // manager.json key `leaseNudge`: "live" (default) | "dry" | "off". Never releases or narrows by itself.
 // minutes since the holder's last activity, as the dashboard sees it (a working session is never idle); null when the
@@ -3191,6 +3193,8 @@ server.listen(PORT, HOST, async () => {
   await handoffs.load();
   leaseWatch.start();
   holderReaper.start();
+  // the installed vpt-lease clients (codebox, registry host) follow scripts/vpt-lease of the deployed main (lease-client-sync.js; GHOSTY_LEASE_CLIENT_SYNC=off)
+  setTimeout(() => { createLeaseClientSync({ root: dirname(fileURLToPath(import.meta.url)), stateDir: STATE_DIR, record: (e) => managerEvents.record(e) }).sync().catch((e) => console.error('[lease-client-sync]', e.message)); }, 30000).unref?.();
   leaseNudge.start();
   ciWatch.start();
   rulesWatch.start();

@@ -5,12 +5,18 @@
 // Pid sources: the claim's holder_pid with holder_host == this host (dispatchers pass both), else the -<pid> of a codebox:<name>-<pid> agent; a name pid
 // counts only after it was seen alive once (a number inside a free-form name is not a pid) and never while a dashboard session of that name exists.
 // Untouched: mac:* and other hosts, pin/observe, system / deploy leases, leases without a pid (TTL as before). GHOSTY_HOLDER_REAPER=off disables.
+// Unused grant (owner 2026-11-11, the Mi held ~11 h by grants nobody used): an exclusive lease of a codebox:<session> agent that someone else
+// waits for, granted while that session sat idle, with no heartbeat or renewal and no turn of the session since the grant, is released after
+// GHOSTY_UNUSED_GRANT_MIN (default 10; 0 = off) on 2 consecutive polls. A waiter that exits on its grant wakes its session at once, so a
+// lease in real use always shows a turn or a heartbeat; a claim made inside a turn ends that turn after the grant and never qualifies.
 import fs from 'node:fs';
 import os from 'node:os';
 import { appendFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export const CHECKS = 2;
+export const UNUSED_GRACE_MS = 10 * 60 * 1000;
+const unusedGraceFromEnv = () => { const v = process.env.GHOSTY_UNUSED_GRANT_MIN; const n = v == null || v === '' ? 10 : Number(v); return Number.isFinite(n) && n > 0 ? n * 60000 : 0; };
 const SKEW_S = 10;                    // the holder exists before it claims; a process that started later than the grant is a reused pid
 const MAX_PER_POLL = 3;               // circuit breaker
 const SYSTEM_RE = /^(manager:deploy|update_core:)/;
@@ -38,8 +44,31 @@ export function watchable(rows, { host = os.hostname(), sessionNames = [] } = {}
   return out;
 }
 
-export function createHolderReaper({ stateDir, run, listSessionNames = async () => [], startOf = procStartSec, now = Date.now, pollMs = 30000, log = console, enabled = () => process.env.GHOSTY_HOLDER_REAPER !== 'off' } = {}) {
+// Pure. rows/tickets: vpt-lease list --json. activityOf(session) -> { working, turnAt, promptAt } | null (reporter.activityOf).
+// -> [{ id, agent, session, waiters }] granted to an idle codebox session that never used them while others wait, older than graceMs.
+export function unusedGrants(rows, tickets, { sessionNames = [], activityOf = () => null, now = Date.now(), graceMs = UNUSED_GRACE_MS } = {}) {
+  const out = [];
+  if (!(graceMs > 0)) return out;
+  for (const l of rows || []) {
+    if (l.mode !== 'exclusive' || l.system || l.deploy_id || SYSTEM_RE.test(l.agent || '')) continue;
+    const m = /^codebox:(.+)$/.exec(l.agent || '');
+    if (!m || !sessionNames.includes(m[1])) continue;                   // only a live dashboard session can be idle; closed ones are holder-gone
+    const sinceMs = (Number(l.since) || 0) * 1000;
+    if (!sinceMs || now - sinceMs < graceMs) continue;
+    const hb = Date.parse(l.lastHeartbeatAt || l.last_heartbeat_at || '') || 0;
+    if (hb > sinceMs + 60000) continue;                                 // heartbeat or renewal after the grant: in use
+    const waiters = (tickets || []).filter((t) => t.agent !== l.agent && (t.holders || []).some((h) => (h && typeof h === 'object' ? h.id : h) === l.id)).map((t) => t.agent);
+    if (!waiters.length) continue;                                      // nobody waits: TTL as before
+    let act; try { act = activityOf(m[1]); } catch { act = null; }
+    if (!act || act.working || Math.max(act.turnAt || 0, act.promptAt || 0) >= sinceMs) continue;   // unknown, working, or a turn since the grant
+    out.push({ id: l.id, agent: l.agent, session: m[1], waiters, sinceMs });
+  }
+  return out;
+}
+
+export function createHolderReaper({ stateDir, run, listSessionNames = async () => [], activityOf = () => null, startOf = procStartSec, now = Date.now, pollMs = 30000, log = console, enabled = () => process.env.GHOSTY_HOLDER_REAPER !== 'off', unusedGraceMs = () => unusedGraceFromEnv() } = {}) {
   const dead = new Map();      // lease id -> consecutive dead polls
+  const unused = new Map();    // lease id -> consecutive polls seen as an unused grant
   const armed = new Set();     // name-derived pids seen alive
   let timer = null, busy = false, snap = { at: 0, watched: 0, released: [] };
 
@@ -50,7 +79,9 @@ export function createHolderReaper({ stateDir, run, listSessionNames = async () 
       const r = await run(['list', '--json']);
       if (r.code !== 0) return snap;
       let rows; try { rows = JSON.parse(r.stdout).leases; } catch { return snap; }
-      const list = watchable(rows, { sessionNames: await listSessionNames().catch(() => []) });
+      let tickets = []; try { tickets = JSON.parse(r.stdout).tickets || []; } catch { /* rows parsed above */ }
+      const names = await listSessionNames().catch(() => []);
+      const list = watchable(rows, { sessionNames: names });
       const seen = new Set(list.map((w) => w.id));
       for (const id of [...dead.keys()]) if (!seen.has(id)) dead.delete(id);
       let acted = 0;
@@ -70,6 +101,20 @@ export function createHolderReaper({ stateDir, run, listSessionNames = async () 
         const line = { at: new Date(now()).toISOString(), id: w.id, agent: w.agent, pid: w.pid, src: w.src, ok: rr.code === 0, out: (rr.stdout || rr.stderr || '').trim().slice(0, 120) };
         await mkdir(stateDir, { recursive: true }).then(() => appendFile(join(stateDir, 'lease-actions.jsonl'), JSON.stringify({ ...line, by: 'lease-holder-reaper', type: 'holder-gone' }) + '\n')).catch(() => {});
         if (rr.code === 0) { dead.delete(w.id); armed.delete(w.id); released.push(line); log.log?.(`[lease-holder-reaper] ${reason}`); }
+      }
+      const idle = unusedGrants(rows, tickets, { sessionNames: names, activityOf, now: now(), graceMs: unusedGraceMs() });
+      const idleIds = new Set(idle.map((u) => u.id));
+      for (const id of [...unused.keys()]) if (!idleIds.has(id)) unused.delete(id);
+      for (const u of idle) {
+        const n = (unused.get(u.id) || 0) + 1;
+        unused.set(u.id, n);
+        if (n < CHECKS || acted >= MAX_PER_POLL) continue;
+        acted++;
+        const reason = `unused-grant: released lease ${u.id}: granted at ${new Date(u.sinceMs).toISOString().slice(11, 16)} UTC to idle session ${u.session}, never used since (no turn, no heartbeat) while ${u.waiters.slice(0, 3).join(', ')} wait${u.waiters.length > 1 ? '' : 's'}`;
+        const rr = await run(['release', u.id, '--by', 'lease-holder-reaper', '--reason', reason]);
+        const line = { at: new Date(now()).toISOString(), id: u.id, agent: u.agent, session: u.session, waiters: u.waiters, ok: rr.code === 0, out: (rr.stdout || rr.stderr || '').trim().slice(0, 120) };
+        await mkdir(stateDir, { recursive: true }).then(() => appendFile(join(stateDir, 'lease-actions.jsonl'), JSON.stringify({ ...line, by: 'lease-holder-reaper', type: 'unused-grant' }) + '\n')).catch(() => {});
+        if (rr.code === 0) { unused.delete(u.id); released.push(line); log.log?.(`[lease-holder-reaper] ${reason}`); }
       }
       snap = { at: now(), watched: list.length, released };
     } catch (e) { log.error?.('[lease-holder-reaper]', e.message); }
