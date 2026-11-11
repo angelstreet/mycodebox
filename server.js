@@ -182,7 +182,7 @@ import { createTranscriber, extFor, MAX_AUDIO } from './transcribe.js';
 import { readOpenAsks, readOpenAsksReport, recordOwnerAnswer } from './owner-asks.js';
 import { createAskFold } from './ask-fold.js';
 import { createAskGuard } from './ask-guard.js';
-import { createOwnJobs, jobPids } from './own-jobs.js';
+import { createOwnJobs, jobPids, parkedDeps } from './own-jobs.js';
 import { createScriptRunSource } from './wait-ids.js';
 import { createPendingWakes, MAX_ATTEMPTS as MAX_PENDING_ATTEMPTS } from './pending-wakes.js';
 import { createExternalResult } from './external-result.js';
@@ -3250,6 +3250,18 @@ server.listen(PORT, HOST, async () => {
   await initManager({
     onJudgeDown: (a) => push.record({ title: a.title, body: a.body, url: '/', tag: `judge-down-${a.kind}`, priority: 'high' }),
     ownJobs, integration: integrationLane,
+    // stop-state.js: the facts behind a stop, from what the harness already knows (own-jobs live child, lane, lease view, session history, the line's time)
+    stopFacts: async (name, { text = '', backgroundWork = 0 } = {}) => {
+      const now = Date.now(), names = Object.keys(latest?.status || {});
+      let bgJobs = Number(backgroundWork) || 0;
+      if (!bgJobs) { try { if (await ownJobs.hasLiveChild(name, { text })) bgJobs = 1; } catch {} }
+      if (!bgJobs && (reporter.activityOf(name)?.backgroundWork ?? 0)) bgJobs = Number(reporter.activityOf(name).backgroundWork) || 1;
+      let integrations = []; try { integrations = integrationLane.list({ limit: 300 }).filter((r) => r.session === name && (r.state === 'queued' || r.state === 'running')).map((r) => r.id); } catch {}
+      let tickets = []; try { const v = await leaseSource.view(false); tickets = (v?.tickets || []).filter((x) => x.state !== 'cancelled' && holderSession(x.agent, names, MACHINES) === name).map((x) => String(x.id)); } catch {}
+      const workers = names.filter((n) => n !== name && sessionMeta.startedBy(n) === name && (latest.status[n]?.state === 'working' || reporter.activityOf(n)?.working));
+      const t = parkedDeps(text, null, { now }).find((d) => d.kind === 'time');
+      return { bgJobs, integrations, tickets, workers, timeMs: t ? Number(t.id) : null };
+    },
     managerSessions: loadManagerSessions,
     credits: () => credits.peek(),
     onOwnerNeeded: (session, stall, reason, state) => notifySession(session, 'asks', [reason, stall.question || stall.case, stall.aiLine ? `AI ${stall.aiLine}` : null].filter(Boolean).join('\n'), { case: stall.case, question: stall.question || reason, answer: stall.aiLine, status: stall.status, info: stall.status ? stall.question : undefined }, state),

@@ -2006,6 +2006,15 @@ bug-2f32e7a7, bug-8fc8fc0d, bug-03ccc6a7, bug-80bdcdc1 · unverified: none · bu
   done-check (I) (codebox) and `remote-stops.js` (Mac) send it back ONCE per line. A line that passes is a manager item as before. It types into
   sessions, so `manager.json` `blockedCheck` is `dry` by default (journal: `done-check.jsonl` `blockedHonesty`, Mac `blocked-check.jsonl`); `live` sends.
   Replay: `node scripts/done-honest-replay.js --blocked`.
+- **Stop state from facts (owner, 2026-11-11 evening: "how do we fix it")**: `stop-state.js` `computeStopState`, called by `manager.js` at every codebox stop
+  with the facts `server.js` `stopFacts` gathers: a live background job (turn count, own-jobs live child, reporter), an open lane request of the session
+  (queued / running), a lease ticket of the session, a worker session it started that is still working, a named `until HH:MM UTC` not yet passed. Any one
+  makes a blocked / failed / done / no-status stop WAITING; needs-owner / needs-manager / waiting stay as written. The stall row carries `said`,
+  `computed`, `stateReasons` (and `stateWould: "waiting"` in dry), so the mismatch is a number. `manager.json` `stopState`: `dry` (default: journal only),
+  `live` (a computed wait becomes `background_wait`: not escalated as a block, parked through the parked wake when it names an integration / ticket /
+  time), `off`. Mac stops are not covered yet (no facts on this side of the hook). A done line while a fact holds is journalled as `said done / computed
+  waiting`; the goal check still asks its question (not yet suppressed). Replay: `node scripts/stop-state-replay.js [since] [--list]` (a floor: worker
+  sessions and live child processes are not journalled).
 - Switch `manager.json` `goalCheck`: `live` (default) | `dry` (journal only) | `off`. Journal `goal-check.jsonl`, state `goal-check.json`.
   `GET /api/goal-check` -> bounced dones per session today; `scripts/manager-status-scan.sh` prints `<session>: done-bounced: N today by the goal
   check` (codebox and Mac). Tests: `test/goal-check.test.js` (replays the example line: it bounces), `test/goal-check-remote.test.js`.

@@ -32,6 +32,8 @@ import { TIER_DEFAULTS, localMinutes } from './push.js';
 import { splitAsk, lookupInfo, isAsk } from './info-lookup.js';
 import { leaseAsk, answerLeaseAsk } from './lease-ask.js';
 import { routineRestart, answerRoutineRestart, setRoutineRestartUnits } from './routine-restart.js';
+import { computeStopState, waitingText } from './stop-state.js';
+import { lastStatus } from './status-honesty.js';
 import { opsAsk, systemWaitKind } from './ops-ask.js';
 import { selfAsk, answerSelf } from './self-check.js';
 import { mockupRule, WINDOW_DEFAULT_MIN } from './mockups.js';
@@ -116,6 +118,7 @@ let onDigest = () => {};                                            // injected:
 let readyWindows = null;                                            // injected: ready-window.js store (round 9 item 8). Unset = no ready windows
 let leaseViewOf = null;                                             // injected: async (session) => lease source view (lease-source.js) | null. Unset = lease questions are not answered here
 let integration = null;                                            // injected: the integration lane { repoForCwd, enqueue } (merge_wait routing)
+let stopFacts = null;                                              // injected: async (session, { text, backgroundWork }) -> facts for stop-state.js (stopState dry | live)
 let ownJobs = null;                                                 // injected: own-jobs.js watcher { watch, forget, progressOf } (round 9, item 11). Unset = jobs are not watched
 let hasOpenAskHook = () => false;                                   // injected: (session) -> the owner-asks ledger has an open ask for it
 let managerItemHook = () => {};                                      // injected: ({ session, id, kind: 'lease'|'deploy', case, question, reason }) -> manager event (no owner push)
@@ -128,7 +131,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 export const stopKey = (text) => String(text || '').replace(/\s+/g, '').slice(-400);
 const hash = (s) => createHash('sha1').update(s).digest('hex').slice(0, 10);
 
-export async function initManager({ onJudgeDown, managerSessions, credits, onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context, onHandoff = () => {}, onMergeDecision: mergeHook, onMergeCancelled: cancelHook, mergeJev: mergeJevFn, decideContext: decideCtx, onDigest: digestHook, onNotice, leaseView, onStatus, onManagerItem, hasOpenAsk, ownJobs: ownJobsDep, integration: integrationDep, readyStore } = {}) {
+export async function initManager({ onJudgeDown, managerSessions, credits, onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context, onHandoff = () => {}, onMergeDecision: mergeHook, onMergeCancelled: cancelHook, mergeJev: mergeJevFn, decideContext: decideCtx, onDigest: digestHook, onNotice, leaseView, onStatus, onManagerItem, hasOpenAsk, ownJobs: ownJobsDep, integration: integrationDep, readyStore, stopFacts: stopFactsDep } = {}) {
   await mkdir(STATE_DIR, { recursive: true });
   try {
     const saved = JSON.parse(await readFile(CONFIG_FILE, 'utf8'));
@@ -181,6 +184,7 @@ export async function initManager({ onJudgeDown, managerSessions, credits, onOwn
   if (hasOpenAsk) hasOpenAskHook = hasOpenAsk;
   if (ownJobsDep) ownJobs = ownJobsDep;
   if (integrationDep) integration = integrationDep;
+  if (stopFactsDep) stopFacts = stopFactsDep;
   console.log(`[manager] ${config.enabled ? 'on' : 'off'}, auto-send ${config.autoSend ? `ON (${config.autoCases.join(',') || 'no cases'})` : 'off'}, jev ${JEV_URL ? 'on' : 'off'}, ai triage ${config.aiTriage}${AI_URL ? '' : ' (no server)'}, log ${LOG_FILE}`);
 }
 
@@ -208,6 +212,7 @@ const num = (v, lo, hi, name) => {
 
 export async function setManagerConfig(b = {}) {
   const { aiFallback, aiFallbackDailyCalls, jevUsage, enabled, autoSend, autoCases, minConfidence, delayMs, maxPerSessionPerHour, session, sessionEnabled, policyEnabled, p1MaxPct, p2MaxPct, deployRunner, aiTriage, aiMinConfidence, aiDailyUsd, aiDailyCalls, aiAutoCases, routerShadow, wakeShadow, mergeDecisions, mergeMinConfidence, mergeOptOut, mergeConventionFiles, schemaPaths, schemaIgnore, infoAnswers, infoRoots, pushDecisions, deployDecisions, pushMinConfidence, deployMinConfidence, pushOptOut, deployOptOut, decidedDigestHour, labEnvs, migrationProcedure, opsToManager } = b;
+  if (b.stopState !== undefined) { if (!['off', 'dry', 'live'].includes(b.stopState)) throw bad('stopState must be off, dry or live'); config.stopState = b.stopState; }   // stop-state.js: dry is the default
   if (typeof enabled === 'boolean') config.enabled = enabled;
   if (typeof autoSend === 'boolean') config.autoSend = autoSend;
   if (autoCases !== undefined) {
@@ -1477,6 +1482,19 @@ export function observe(s) {
     // mockup-first (round 9, item 7): "may I show you the mockup before I build?" is answered "post it to the feed and build"; the hard floor still applies to the ask
     const mock = !isManagerSession(s.name) && !isRemoteSession(s.name) && !stall.draft ?   /* /api/mockups is loopback-only: a remote (Mac) session cannot post */ mockupRule(final, { windowMin: config.mockupWindowMin, enabled: config.mockupFirst !== false }) : null;
     if (mock) final = { ...final, case: 'continue', source: 'mockup-first', answer: { text: mock }, autoCase: undefined, no_status: false };
+    // Stop state from facts (stop-state.js, owner 2026-11-11 evening): journal what the session said and what the harness computes; manager.json
+    // stopState off | dry (default: journal + `stateWould`) | live (a computed wait is parked / not escalated as a block, whatever the line said).
+    let sstate = null;
+    if (stopFacts && config.stopState !== 'off' && !isManagerSession(s.name) && !isRemoteSession(s.name)) {
+      try {
+        const stx = lastStatus(stall.excerpt)?.text || String(final.question || '');
+        const facts = await stopFacts(s.name, { text: stx, backgroundWork: Number(final.backgroundWork || stall.backgroundWork || 0) });
+        sstate = computeStopState({ said: final.status || (final.case === 'done' ? 'done' : ''), facts });
+        if (sstate.mismatch && config.stopState === 'live') {
+          final = { ...final, case: 'background_wait', answer: null, autoCase: undefined, forbidden: null, no_status: false, source: 'state', stateWait: sstate.reasons, question: waitingText(sstate.reasons) };
+        }
+      } catch (e) { console.error('[manager] stop state', e.message); }
+    }
     let ws = wouldSend(final);
     const confidence = final.source === 'jev' ? Number(jevOut?.probabilities?.[jevOut.choice] ?? jevOut?.confidence ?? 0) : 1;
     if (w.pending?.id === id) w.pending.cls = final.case;
@@ -1485,6 +1503,7 @@ export function observe(s) {
       type: 'stall', id, session: s.name, project: s.project || null, agent: s.agent, state: s.state,
       at: new Date(s.now).toISOString(), case: final.case, source: final.source, textSource: stall.textSource || 'pane', question: final.question,
       ...(final.case === 'background_wait' ? { backgroundWork: final.backgroundWork } : {}),
+      ...(sstate ? { said: sstate.said, computed: sstate.computed, ...(sstate.reasons.length ? { stateReasons: sstate.reasons } : {}), ...(sstate.mismatch && config.stopState !== 'live' ? { stateWould: 'waiting' } : {}) } : {}),
       forbidden: final.forbidden, ...(final.floorOwner || final.topics?.hard ? { floor: final.floorOwner || final.topics.hard } : {}), draft: final.draft, suggestion: final.suggestion,
       no_status: !!final.no_status, ...(final.status ? { status: final.status } : {}), ...(final.deployHint ? { deployHint: final.deployHint } : {}), ...(final.action ? { action: final.action } : {}),
       jev: jevOut, wouldSend: ws.send, why: ws.why, confidence, excerpt: stall.excerpt,
