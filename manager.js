@@ -23,7 +23,8 @@ import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { POLICY_DEFAULTS } from './public/policy.js';
-import { classifyStall, applyJev, wouldSend, outcomeKind, setForbiddenExtra, forbiddenMatch, hardMatch, mergeMatch, pushMatch, deployMatch, topicSplit, deployHint, approvedAction, askHardOf } from './stall.js';
+import { classifyStall, applyJev, wouldSend, outcomeKind, setForbiddenExtra, forbiddenMatch, hardMatch, mergeMatch, pushMatch, deployMatch, topicSplit, deployHint, approvedAction, askHardOf, ownerFloorMatch } from './stall.js';
+import { parkGate } from './own-jobs.js';
 import { MERGE_DEFAULTS, evaluateMerge, journalRecord, composeReply, repoToplevel } from './merge-policy.js';
 import { DECIDE_DEFAULTS, evaluatePush, evaluateDeploy, decisionRecord, menuRecord, parsePushAsk } from './decide-policy.js';
 import { decidedItems, decidedSummary, failedCount } from './decided.js';
@@ -1499,6 +1500,13 @@ export function observe(s) {
       try { const r = await ownJobs.watch(s.name, { text: final.case === 'waiting_deploy' ? `deploy ${final.deployHint.id}` : String(final.question || ''), cwd: s.cwd || null, stopAt: id, paneText: stall.excerpt || '' }); logLater({ type: 'own_job', id, session: s.name, job: r.kind || 'unknown', label: r.label || null, detached: !!r.detached });
         // a pid that is not running on this host cannot be watched: the owner hears about it instead of the session waiting for ever
         if (r.unseen && final.case === 'own_job_wait') { final = { ...final, case: 'owner_decision' }; escalate(s.name, s.state, final, id, `pid ${r.pid} is not running on this host`); return; } } catch (e) { console.error('[manager] own job', e.message); }
+    }
+    // Parked-session wake (harness review 2026-11-11 Q5 item 5): any other STATUS blocked / waiting is parked and woken once when what it names changes
+    // or at its maximum age (own-jobs.js park(); manager.json parkedWake off|dry|live). The floor / ask / forbidden gates are decided here, at park time.
+    else if (ownJobs?.park && !isManagerSession(s.name) && !isRemoteSession(s.name) && /^(?:waiting|blocked)$/i.test(final.status || '')) {
+      const gate = parkGate(String(final.question || ''), { openAsk: !!hasOpenAskHook(s.name), floor: ownerFloorMatch, forbidden: forbiddenMatch });
+      if (gate.ok) ownJobs.park(s.name, { text: String(final.question || ''), stopAt: id, status: final.status }).catch((e) => console.error('[manager] park', e.message));
+      else logLater({ type: 'parked_skip', id, session: s.name, why: gate.why });
     }
     if (final.handoff) { try { await onHandoff(s.name, final.handoff, s.now); } catch (e) { console.error('[manager] onHandoff', e.message); } }
     const mh = await mergeHandoff({ s, w, id, h, final, stall }).catch((e) => { console.error('[manager] merge handoff', e.message); return { handled: false }; });

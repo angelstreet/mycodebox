@@ -3111,6 +3111,12 @@ server.listen(PORT, HOST, async () => {
     idleMs: (name) => { const st = latest?.status?.[name]; const at = st?.changeAt || st?.doneAt; return at ? Date.now() - at : null; },
     stillWaiting: stillStopped, canSend: canType,
     send: async (name, text) => { await guardSendKeys(name, text, true); countSent(name); },   // a wake counts in the session's hourly cap
+    // parked-session wake (docs/REFERENCE.md "Parked-session wake"): manager.json parkedWake off (default) | dry | live
+    parkMode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).parkedWake; return m === 'dry' || m === 'live' ? m : 'off'; } catch { return 'off'; } },
+    leaseView: () => leaseSource.view(false),   // read-only, like leaseState above
+    bugState: async (id) => (await foundBugs.list({ limit: 5000 })).find((b) => b.id === id)?.state || null,
+    busy: (name) => !!((reporter.activityOf(name)?.backgroundWork ?? 0) || paneBackgroundOf(latest?.status?.[name]?.plain || [])),   // its own background task wakes it
+    sendParked: async (name, text) => { await guardSendKeys(name, text, true, null); logSend(name, 'harness', { keys: text }); countSent(name); },
     record: (e) => managerEvents.record(e),
     log: (r) => logEvent(r),
   });
