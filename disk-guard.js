@@ -99,6 +99,15 @@ function duRun(args, timeoutMs = 8000) {
   });
 }
 
+// The 5 biggest children of the home directory (the disk pushes name them; the state dir and worktrees alone hid .minimax,
+// vpt-private and docker-sized things). One `du -x --max-depth=1`: slow on a big home, so callers cache the answer.
+export function topHomeConsumers({ home, limit = 5, timeoutMs = 170_000, run = duRun } = {}) {
+  return run(['-k', '-x', '--max-depth=1', '--', home], timeoutMs)
+    .then((rows) => rows.filter((r) => r.path !== home).sort((a, b) => b.bytes - a.bytes).slice(0, limit)
+      .map((r) => ({ ...r, name: r.path.startsWith(`${home}/`) ? `~/${r.path.slice(home.length + 1)}` : r.path })));
+}
+export const topLine = (rows) => (rows?.length ? `\ntop ${rows.length}: ${rows.map((r) => `${r.name} ${(r.bytes / 2 ** 30).toFixed(1)}G`).join(', ')}` : '');
+
 function gitWorktrees(repoRoot) {
   if (!repoRoot) return Promise.resolve([]);
   return new Promise((resolve) => {

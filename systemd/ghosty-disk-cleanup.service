@@ -1,0 +1,11 @@
+# EXAMPLE (user unit, ~/.config/systemd/user/): replace /home/<user>/ghosty-sessions with your checkout path. Not installable as is.
+# Daily disk cleanup (scripts/disk-cleanup.js, docs/DISK-CLEANUP.md). A DRY RUN until $GHOSTY_STATE_DIR/disk-cleanup.json says {"live": true}.
+[Unit]
+Description=Ghosty: daily disk cleanup (merged worktrees, idle caches, log caps; dry run until the owner switches live)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env node /home/<user>/ghosty-sessions/scripts/disk-cleanup.js
+TimeoutStartSec=30min
+Nice=15
+IOSchedulingClass=idle

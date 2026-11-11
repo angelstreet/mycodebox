@@ -1,0 +1,18 @@
+{
+  "_doc": "Policy of scripts/disk-cleanup.js (docs/DISK-CLEANUP.md). Data only; the owner's live switch is NOT here but in $GHOSTY_STATE_DIR/disk-cleanup.json {\"live\": true}.",
+  "repos": ["~/virtualpytest", "~/ghosty-sessions", "~/evolai", "~/mycodebox-v2"],
+  "worktrees": { "minAgeH": 24 },
+  "caches": { "idleDays": 3, "names": ["node_modules", ".vite", ".playwright"], "maxDepth": 3 },
+  "laneWorktrees": { "minAgeH": 24 },
+  "logs": [
+    { "file": "stalls.jsonl", "maxMB": 64, "keepMB": 16 },
+    { "file": "mm-manager.log", "maxMB": 20, "keepMB": 5 },
+    { "file": "checkout-sync.log", "maxMB": 20, "keepMB": 5 },
+    { "file": "progress-watch.jsonl", "maxMB": 20, "keepMB": 5 },
+    { "file": "rules-watch.jsonl", "maxMB": 20, "keepMB": 5 },
+    { "file": "overlap-guard.jsonl", "maxMB": 20, "keepMB": 5 },
+    { "file": "shared-checkout-guard.jsonl", "maxMB": 20, "keepMB": 5 }
+  ],
+  "never": ["~/ghosty-sessions", "~/virtualpytest", "~/evolai", "~/mycodebox-v2", "~/vpt-private", "~/vpt-backups", "~/vpt-deliverables"],
+  "parkedFiles": ["parked-worktrees-review.md", "parked-sessions.json", "parked.json"]
+}

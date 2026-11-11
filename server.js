@@ -134,7 +134,7 @@ import { basename, dirname, extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { sampleHealth } from './health.js';
-import { createDiskGuard } from './disk-guard.js';
+import { createDiskGuard, topHomeConsumers, topLine } from './disk-guard.js';
 import { createPush, createAlerts, tierConfig, isQuietHours } from './push.js';
 import { launchConfig, launchWarnings } from './launch-config.js';
 import { trustFolder, trustClaude } from './trust.js';
@@ -1290,7 +1290,16 @@ function notifySession(session, kind, body, meta, stateHint = null) {
 const HEALTH_MS = Number(process.env.HEALTH_MS || 5000);
 const HEALTH_DISKS = (process.env.HEALTH_DISKS || '/').split(',').map((d) => d.trim()).filter(Boolean);
 const DISK_ALERT_REPEAT_MS = 6 * 3600 * 1000;   // remind every 6 h while a disk stays critical
+const DISK_PUSH_PCT = Number(process.env.GHOSTY_DISK_PUSH_PCT || 90);
 let health = null;
+// The disk push names the 5 biggest consumers of $HOME (disk-guard.js topHomeConsumers, one slow du: cached 30 min, one in flight).
+let topCache = { at: 0, line: '' }, topBusy = null;
+function refreshTop() {
+  if (Date.now() - topCache.at < 30 * 60_000) return Promise.resolve(topCache.line);
+  topBusy ||= topHomeConsumers({ home: homedir() }).then((rows) => { topCache = { at: Date.now(), line: topLine(rows) }; return topCache.line; })
+    .catch(() => topCache.line).finally(() => { topBusy = null; });
+  return topBusy;
+}
 const diskCrit = new Set();   // paths currently critical
 
 async function healthTick() {
@@ -1298,14 +1307,15 @@ async function healthTick() {
   catch (err) { console.error('[health]', err.message); return; }
   const gb = (b) => `${(b / 2 ** 30).toFixed(1)}G`;
   for (const d of health.disks) {
-    if (d.level === 'crit') {
+    // Push from DISK_PUSH_PCT (90 %, the disk-guard hold line) as well as at 'crit': the disk froze the host four times below 95 %.
+    if (d.level === 'crit' || d.pct >= DISK_PUSH_PCT) {
       // First crossing pushes at once; while it stays critical, alert()'s debounce paces reminders.
-      if (!diskCrit.has(d.path)) resetDebounce(`disk:${d.path}`);
+      if (!diskCrit.has(d.path)) { resetDebounce(`disk:${d.path}`); await refreshTop(); }
       diskCrit.add(d.path);
       alert(`disk:${d.path}`, {
         title: `codebox disk ${d.path} ${Math.round(d.pct)}% full`,
         priority: 'urgent', ntfyTags: 'rotating_light', tag: `ghosty-disk-${d.path}`, url: '/',
-        body: `${gb(d.free)} free of ${gb(d.total)} on ${d.path}`,
+        body: `${gb(d.free)} free of ${gb(d.total)} on ${d.path}${topCache.line}`,
       }, DISK_ALERT_REPEAT_MS);
     } else diskCrit.delete(d.path);
   }
