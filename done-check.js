@@ -56,7 +56,7 @@ export function bugsFieldOf(text) {
 }
 export const BUGS_COOLDOWN_MS = 12 * 3600 * 1000;   // one automatic push per session per 12 h, whatever the next STATUS line looks like
 export function bugsMessage() {
-  return 'Done check: your STATUS: done line has no bugs field. Add `bugs: none | fixed <what> | reported <id>` to it (for example `STATUS: done — branch x merged; bugs: none`). If you saw anything outside your scope that errored, misbehaved or that you worked around, fix it or run `found-bug --title ... --error ...` first. End with a STATUS line.';
+  return 'Done check: your STATUS: done line has no bugs field. Add `bugs: none | fixed <what> | reported <id>` to it (for example `STATUS: done — branch x merged; bugs: none`). If you saw anything outside your scope that errored, misbehaved or that you worked around, fix it yourself in your worktree if the fix is small and clear, otherwise run `found-bug --title ... --error ...` first. End with a STATUS line.';
 }
 
 // (C) Closing review (owner, 2026-11-10): agents wrote a clean `STATUS: done` and only the owner's "any leftover, suggestion of

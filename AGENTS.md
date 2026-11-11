@@ -58,10 +58,13 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
   Never ask the owner, or end a turn waiting on anyone, for a merge or PR decision: run `integrate request`, then continue, or `STATUS: waiting: integration <id>` if nothing else is left.
   See [docs/REFERENCE.md](docs/REFERENCE.md) "Integration lane".
   A branch from a Mac or cloud session (no live session to wake) is queued with `integrate request <branch> --mac <label>`: the result is written to `<state>/integration/external-results/<id>.txt`, the manager relays it (`external-result` event) and the owner is pushed if it does not within 10 min.
-- Bugs outside your scope (owner, 2026-10-28): when you hit a bug that is not yours (an endpoint that errors, a pre-existing
-  failure, a tool that misbehaves), either fix it in a worktree or file it with `found-bug --title ... --endpoint ...
+- Bugs outside your scope (owner, 2026-10-28; fix-first rule owner, 2026-11-11): when you hit a bug that is not yours (an endpoint that errors, a pre-existing
+  failure, a tool that misbehaves), fix it yourself, in your own worktree, when the fix is small and clear and you already have the
+  context (cheapest in tokens and most accurate: the finder knows the repro); ship it with `integrate request` and say so in the
+  `bugs:` field. File it with `found-bug` only when the fix is large, needs another area, host, device or credentials, or belongs to a
+  live session's task. Filing syntax: `found-bug --title ... --endpoint ...
   --repro ... --error "<exact text>" --workaround ... --blocking yes|no` (`scripts/found-bug`: POSIX sh, on PATH on codebox, installed on a Mac like `integrate` ([docs/MAC-HOOK.md](docs/MAC-HOOK.md)); check with `found-bug --help`; if it is missing, POST the same JSON to `$GHOSTY_URL/api/bugs` with curl as shown there and say so; an unreachable manager queues the report locally and `found-bug --flush` posts it); the manager then sends a
-  worker. Never leave it in a closing line ("could not", "returned an error", "unrelated", "pre-existing"). A `STATUS: done` line ends
+  worker (the bug-drain worker). Never leave it in a closing line ("could not", "returned an error", "unrelated", "pre-existing"). A `STATUS: done` line ends
   with `bugs: none | fixed <what> | reported <id>`; without it the done-check pushes once.
 - Closing review before any `STATUS: done` (owner, 2026-11-10): the owner should never have to ask "any leftover, suggestion of
   improvement or doc to update before we close?". Before the done line, do it yourself:
