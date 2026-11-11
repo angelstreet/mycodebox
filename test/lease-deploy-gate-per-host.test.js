@@ -143,3 +143,16 @@ test('starvation guard: a deploy that waited 30 min behind overlapping P1 claims
   assert.ok(firstRefusal >= 30, `new claims are refused from +${firstRefusal} min (starvation guard)`);
   assert.ok(started && started <= 45, `the deploy started in the gap at +${started} min`);
 });
+
+test('a catch-up yields per host to an old ticket: it runs on the other hosts instead of never starting (live case d9affa4b, 2026-11-11)', async () => {
+  const h = harness();
+  const mi = (await h.claim('bot:mi', 'vpt-mf1/device5', { kind: 'host', priority: 'P1', ttl_min: 300 })).lease;
+  const tk = (await h.claim('bot:kpi', 'vpt-mf1/device5', { kind: 'host', priority: 'P3', wait: 'ticket' })).ticket;
+  const r0 = await h.d.request({ env: 'lab', scope: 'host', ref: 'r', agent: 'a', hosts: ['labbox-web', 'vpt-mf1'], approved: true, purpose: 'catch-up for x' });
+  for (let i = 0; i < 12; i++) { await h.advance(MIN); await h.svc.ticket(tk.id); }   // the ticket waits over 10 min (its client polls)
+  const st = await h.d.start({ id: r0.id, skip_leased: true });
+  assert.equal(st.ok, true, JSON.stringify(st));
+  assert.deepEqual(st.deploy.hosts, ['labbox-web']);
+  assert.deepEqual((await h.d.list({ env: 'lab' })).deploys.filter((x) => x.state === 'queued').map((x) => x.hosts), [['vpt-mf1']]);
+  assert.ok(mi);
+});

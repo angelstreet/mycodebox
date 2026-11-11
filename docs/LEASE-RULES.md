@@ -164,7 +164,7 @@ Hours were lost waiting on one web host while the other was free. When the work 
   NEW claims of lower priority than the deploy (it counts as P0, so P1..P3), for at most 10 min after it became ready; then they go ahead. Starvation guard: a deploy that has waited 30 min on a host (P1 claims keeping it busy one after another) closes the gate again on every new P1..P3 claim of that host until it starts, so it wins the next gap.
   On a host nothing blocks, the claim waits for the deploy, which is the next to run there (bounded by the same 10 min, and never behind
   another running or older overlapping deploy). A request limited to `--hosts` that is blocked on only some of them starts on the free ones;
-  the busy hosts go back to the queue as their own strict request (same ref and age, `split-to=` in `deploy list`). A request whose host
+  the busy hosts go back to the queue as their own strict request (same ref and age, `split-to=` in `deploy list`); a catch-up also yields per host to a ticket that waited over 10 min, so only the hosts that ticket touches stay queued. A request whose host
   another queued deploy lists at a ref that contains its own loses that host (`superseded-by=`): an older ref never deploys over a newer one.
 - `vpt-lease list` / `claim --wait` say what gates a ticket that looks grantable (`note: gated by deploy <id> (<state>, <why>)`).
 - A host deploy releases each host as soon as it is done with it (rolling, owner 2026-10-31): update_core.sh reports each host's health,
