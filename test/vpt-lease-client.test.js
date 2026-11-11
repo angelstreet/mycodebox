@@ -153,6 +153,20 @@ test('list: text lines, and --json keeps the legacy shape with ttlLeftMin and pe
   assert.equal((await run(['list'])).out, '(no active leases)\n');
 });
 
+test('list: a host with a queued catch-up is shown as running old code (text and --json)', async () => {
+  const cu = (id, hosts, state = 'queued') => ({ id, env: 'env-a', state, scope: 'host', ref: 'abcdef1234567', agent: 'manager:deploy', purpose: `catch-up for x: skipped ${hosts}`, hosts });
+  setup(() => ({ ok: true, leases: [lease()], tickets: [], deploys: [
+    cu('c1', ['host-2']), cu('c2', ['host-2', 'host-3']), cu('c3', ['host-9'], 'cancelled'),
+    { id: 'd1', env: 'env-a', state: 'queued', scope: 'host', ref: 'main', agent: 'a', purpose: '', hosts: ['host-4'] }] }));
+  const r = await run(['list', 'env-a']);
+  const old = r.out.split('\n').filter((l) => l.startsWith('OLD CODE'));
+  assert.deepEqual(old, [
+    'OLD CODE  env-a/host-2  restart deferred until its leases are released: catch-up c1 queued at ref abcdef1234',
+    'OLD CODE  env-a/host-3  restart deferred until its leases are released: catch-up c2 queued at ref abcdef1234']);
+  const j = JSON.parse((await run(['list', '--json'])).out);
+  assert.deepEqual(j.old_code, [{ env: 'env-a', host: 'host-2', catch_up: 'c1' }, { env: 'env-a', host: 'host-3', catch_up: 'c2' }]);
+});
+
 test('check: FREE (0) and BUSY (3) lines, hint for a bare check, --ignore-agent and resources are passed on', async () => {
   setup(() => ({ ok: true, free: true, holders: [] }));
   let r = await run(['check', 'env-A', 'Host-1', 'frontend', '--ignore-agent', 'me']);

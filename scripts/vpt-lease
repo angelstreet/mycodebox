@@ -280,6 +280,29 @@ def show_deploys(ds, prefix="DEPLOY"):
             prefix, d["id"], d["env"], d["state"], d["scope"], d["ref"], d["agent"], d.get("purpose") or "-", extra))
 
 
+CATCH_UP_RE = re.compile(r"^catch-up[ :]")
+
+
+def old_code_hosts(ds):
+    """Hosts that run the code from before a deploy: a queued or running catch-up exists only for hosts a deploy
+    synced without restarting vpt-host (leased, or a running execution) or dropped because they were leased.
+    One row per host, the oldest catch-up first (the deploy that left it behind). 2026-11-11: vpt-nipogi ran
+    21:57 UTC code through five deploys recorded done, and nothing in `list` said so."""
+    seen = {}
+    for d in ds:
+        if d.get("state") not in ("queued", "running") or not CATCH_UP_RE.match(str(d.get("purpose") or "")):
+            continue
+        for h in d.get("hosts") or []:
+            seen.setdefault((d.get("env"), h), d)
+    return [(env, h, d) for (env, h), d in seen.items()]
+
+
+def show_old_code(ds):
+    for env, h, d in old_code_hosts(ds):
+        print("OLD CODE  %s/%s  restart deferred until its leases are released: catch-up %s %s at ref %s" % (
+            env, h, d.get("id"), d.get("state"), str(d.get("ref") or "?")[:10]))
+
+
 def holders_text(holders):
     names = []
     for h in holders or []:
@@ -856,10 +879,12 @@ def cmd_list(a):
     if a.json:
         rows = [row for l in leases for row in lease_rows(l)]
         print(json.dumps(dict(now=now(), leases=rows, deploys=deploys, waiters=r.get("waiters") or [],
-                              tickets=r.get("tickets") or [])))
+                              tickets=r.get("tickets") or [],
+                              old_code=[dict(env=e, host=h, catch_up=d.get("id")) for e, h, d in old_code_hosts(deploys)])))
         return 0
     show(leases)
     show_deploys(deploys)
+    show_old_code(deploys)
     for t in r.get("tickets") or []:
         print("TICKET %s  %s/%s  agent=%s  position=%s  eta=%s%s%s%s%s" % (
             t.get("id"), t.get("env", "?"), ",".join(legacy_res(x, t.get("env", "")) for x in t.get("resources") or []),
