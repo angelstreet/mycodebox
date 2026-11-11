@@ -233,9 +233,13 @@ mcode -m $(q "$M") \"\$(cat $(q "$P"))\""
   *) echo "cbsession: -p must be claude|codex|minimax|opencode" >&2; exit 2;;
 esac
 # ~/.local/bin on PATH for every provider: found-bug, integrate, vpt-lease live there (a tmux server started by a service has a bare PATH)
-printf '#!/usr/bin/env bash\nexport PATH="$HOME/.local/bin:$PATH"\ncd %s\n%s\n' "$(q "$DIR")" "$CMD" > "$L"; chmod +x "$L"
+# VPT_AGENT_NAME = the lease agent name (<host>:<session>, the vpt-lease agent): the virtualpytest MCP entry sends it as X-Agent-Name, so the host
+# lease guard knows which agent drives a device (bug-c6a65805). Same name as the agent's vpt-lease claims.
+printf '#!/usr/bin/env bash\nexport PATH="$HOME/.local/bin:$PATH"\nexport VPT_AGENT_NAME=%s:%s\ncd %s\n%s\n' "${VPT_AGENT_PREFIX:-$(hostname -s)}" "$NAME" "$(q "$DIR")" "$CMD" > "$L"; chmod +x "$L"
 if [ "$DRY" = 1 ]; then [ -n "$WTCMD" ] && echo "worktree: $WTCMD"; echo "prompt: $P"; echo "launch: $L"; cat "$L"; exit 0; fi
 
+# Claude: make sure the MCP entries carry the X-Agent-Name header (a no-op once set; best effort, never blocks a start).
+[ "$PROV" = claude ] && command -v node >/dev/null && node "$(dirname "$(readlink -f "$0")")/vpt-mcp-agent-header.js" --apply >/dev/null 2>&1 || true
 tmux new-session -d -s "$NAME" -c "$DIR" -x 160 -y 45 "bash $(q "$L"); exec bash -l"
 # Claude: accept the folder-trust dialog if it appears (the selected option differs by version), then wait for Remote Control.
 for i in $(seq 1 30); do

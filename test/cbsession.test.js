@@ -84,3 +84,9 @@ test('minimax: the newest ~/.local/node-v24* wins, MCODE_NODE_DIR overrides, a m
   assert.equal(out.status, 127);
   assert.match(out.stderr, /mcode not found/);
 });
+
+test('every launcher exports the lease agent name for the MCP X-Agent-Name header (bug-c6a65805)', () => {
+  const r = run('-x', '-n', 'cb-agentname', '-d', work, '-t', 'x');
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(launch('cb-agentname'), /\nexport VPT_AGENT_NAME=[A-Za-z0-9_-]+:cb-agentname\n/);
+});
