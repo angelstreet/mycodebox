@@ -39,9 +39,10 @@ the Claude transcripts of the day). Sanitised: no host addresses, roles or coden
    warning. **Built.**
 6. **From the data** (frequency x cost): (a) MiniMax share alert keyed on a sliding window start: **fixed** (`newShareAlerts` keys on the
    session and the time of its last alert); (b) a strict multi-host catch-up deploy blocks claims on every host it spans for 30 min while one
-   host is leased (`readyCatchUp` in `lease-service.js`): **filed**, the fix is to queue one catch-up per skipped host in the deploy runner,
-   in the lease lane other sessions are changing; (c) no-op manager wakes for integration results and lease notices that the rules already
-   handled: **proposed** (Q5 item 12, wake economy).
+   host is leased (`readyCatchUp` in `lease-service.js`): filed as bug-341e7e84, **fixed** the same evening by deploy-claim-gate-fix
+   (int-1a1cbfa071dec326e: a blocked multi-host catch-up starts on the free hosts and re-queues the busy one alone); (c) no-op manager wakes for
+   integration results and lease notices: filed as bug-d7a8b50a, a **duplicate** of TASK-239 wake economy (ace149f ignores routine
+   external-result, share and session notices; the live session manager-wake-filter owns the rest).
 
 ## Numbers (replays of 2026-11-11)
 
