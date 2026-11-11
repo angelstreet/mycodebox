@@ -80,10 +80,12 @@ else
 fi
 [ -n "$TEXT" ] || bail "no assistant text found (transcript: ${TP:-none})"
 
-PROMPT_AT=""; NAME=""
+PROMPT_AT=""; NAME=""; FIRST=""
 if [ -n "$TP" ] && [ -r "$TP" ]; then
   PROMPT_AT=$(grep -E '"type": *"user"' "$TP" | grep -E '"content": *"' | grep -v '"tool_use_id"' | tail -n 1 | sed -n 's/.*"timestamp": *"\([0-9TZ:.+-]*\)".*/\1/p' | head -n 1)
   NAME=$(grep '"customTitle"' "$TP" | tail -n 1 | sed -nE 's/.*"customTitle": *"(([^"\\]|\\.)*)".*/\1/p' | head -n 1)
+  # the first prompt (still JSON-escaped, first 2000 chars): the goal the server's goal check quotes back (goal-check.js)
+  FIRST=$(grep -E '"type": *"user"' "$TP" | grep -E '"content": *"' | grep -v '"tool_use_id"' | head -n 1 | sed -nE 's/.*"content": *"(([^"\\]|\\.)*)".*/\1/p' | cut -c1-2000 | sed 's/\\*$//')
 fi
 
 # --- machine / project ---
@@ -98,6 +100,7 @@ NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 PAYLOAD="{\"machine\":\"$(esc "$MACHINE")\",\"project\":\"$(esc "$PROJECT")\",\"session_id\":\"$(esc "$SESSION_ID")\",\"session_name\":\"$(printf '%s' "$NAME" | sed 's/[^A-Za-z0-9 ._@:+-]/-/g' | cut -c1-80)\",\"cwd\":\"$(esc "$WD")\",\"text\":\"$TEXT\",\"stop_hook_active\":$ACTIVE,\"at\":\"$NOW\""
 [ -n "$PROMPT_AT" ] && PAYLOAD="$PAYLOAD,\"prompt_at\":\"$PROMPT_AT\""
+[ -n "${FIRST:-}" ] && PAYLOAD="$PAYLOAD,\"first_prompt\":\"$FIRST\""
 [ -n "${MYCODEBOX_RC_URL:-}" ] && PAYLOAD="$PAYLOAD,\"remote_control_url\":\"$(esc "$MYCODEBOX_RC_URL")\""
 PAYLOAD="$PAYLOAD}"
 

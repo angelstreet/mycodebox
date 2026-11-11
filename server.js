@@ -59,6 +59,7 @@
 //   GET  /api/shared-checkouts  → shared checkouts that are dirty, off main or ahead of origin/main (shared-checkout-guard.js)
 //   GET  /api/rules-watch       → rules-watch snapshot: sessions on outdated AGENTS.md, who was told (rules-watch.js)
 //   GET  /api/done-check        → done-check snapshot: sessions whose STATUS done disagrees with git (done-check.js)
+//   GET  /api/goal-check        → goal check: bounced dones per session today, sessions waiting for their goal reply (goal-check.js)
 //   GET|POST|DELETE /api/bugs    → found-bug channel: list + counts / file a bug / remove a test report (loopback; found-bugs.js, scripts/found-bug)
 //   GET  /api/unfinished        → task docs with open rows joined with sessions: orphaned (no live session), covered, other (unfinished.js; scripts/resume-task)
 //   GET  /api/leftovers         → leftovers / owner-push watcher snapshot: last scan, sessions found with kind and items (done-leftovers.js, owner-push.js)
@@ -122,9 +123,10 @@ import { createProgressWatch } from './progress-watch.js';
 import { createSharedCheckoutGuard, expandHome } from './shared-checkout-guard.js';
 import { createFoundBugs, unreportedBugOf, sendBackOf, sendBackText, sweepGroups } from './found-bugs.js';
 import { goalOf as goalOfPrompt } from './status-honesty.js';
+import { createGoalGate, createGoalStore } from './goal-check.js';
 import { createDoneCheck, DEFAULT_IGNORE_BRANCHES, shipOfferOf, unconfirmedStatusOf, waitingOnLeaseStatus } from './done-check.js';
 import { createLeftovers, pushableItems } from './done-leftovers.js';
-import { scanTaskDocs, withHomeDirs, computeUnfinished, docLeftoversFor, createUnfinished } from './unfinished.js';
+import { scanTaskDocs, withHomeDirs, computeUnfinished, docLeftoversFor, createUnfinished, taskRe } from './unfinished.js';
 import { pushOf, replyFor } from './owner-push.js';
 import { createWorkerAutoClose, shouldClose as shouldCloseWorker, politeClose, LEFTOVERS_WINDOW_MS } from './worker-auto-close.js';
 import { statusLine, inputBox } from './stall.js';
@@ -1032,6 +1034,48 @@ function hostPressure() {
   return { loadPerCore: loadavg()[0] / cpus().length, ramAvailPct: m ? (Number(m[2]) / Number(m[1])) * 100 : 100 };
 }
 
+// Goal check (goal-check.js, owner 2026-11-11): the goal is captured at session start (cbsession / dashboard prompt, Mac first prompt) in
+// <state>/goals.json; the gate asks the owner's "did you reach the goal?" once per done and bounces a reply without the goal or evidence.
+const goals = createGoalStore({ stateDir: STATE_DIR });
+// a prompt reference (a file path cbsession wrote, or the prompt text itself) -> its text
+function promptTextOf(ref) {
+  const r = String(ref || '');
+  if (!r) return '';
+  if (/^(?:\/|~\/)\S*$/.test(r)) { try { return readFileSync(r.startsWith('~/') ? join(homedir(), r.slice(2)) : r, 'utf8').slice(0, 20000); } catch { return ''; } }
+  return r;
+}
+function captureGoal(name, ref, source) { try { const t = promptTextOf(ref); if (name && t) goals.capture(name, t, source); } catch (e) { console.error('[goals] capture', e.message); } }
+// The goal of a session: captured at start, else the cbsession prompt file, else the history's prompt / handover, else the task doc title.
+async function goalForSession(name) {
+  const g = goals.get(name);
+  if (g?.goal) return g.goal;
+  if (String(name).startsWith('mac:')) return '';
+  const safe = String(name).replace(/[^\w.-]/g, '');
+  const file = join(homedir(), 'handovers', `${safe}.prompt.md`);
+  if (existsSync(file)) { captureGoal(name, file, 'handover'); const c = goals.get(name); if (c?.goal) return c.goal; }
+  const inst = history.instances().filter((i) => i.name === name).sort((a, b) => (b.start || 0) - (a.start || 0))[0];
+  for (const ref of [inst?.prompt_ref, inst?.handover_ref]) { if (!ref) continue; captureGoal(name, ref, 'history'); const c = goals.get(name); if (c?.goal) return c.goal; }
+  try {
+    if (Date.now() - taskDocsCache.at > 60000) taskDocsCache = { at: Date.now(), docs: await scanTaskDocs(await withHomeDirs(await collectDirs(), HOME)) };
+    const doc = taskDocsCache.docs.find((d) => taskRe(d.num).test(name) || taskRe(d.num).test(String(inst?.prompt_ref || '')) || taskRe(d.num).test(String(inst?.handover_ref || '')));
+    if (doc?.title) return `${doc.task}: ${doc.title}`.slice(0, 300);
+  } catch { /* no task doc */ }
+  return '';
+}
+const goalGate = createGoalGate({
+  stateDir: STATE_DIR,
+  goalOf: goalForSession,
+  bugsOf: () => foundBugs.list({ limit: 5000 }),
+  // files the session changed: its branch vs origin/main plus uncommitted ones (a Mac session has no local checkout: none)
+  touchedOf: async (s) => {
+    if (!s.cwd || s.remote) return [];
+    const run = async (args) => { try { return (await exec('git', ['-C', s.cwd, ...args], { timeout: 30000, maxBuffer: 4 * 1024 * 1024 })).stdout; } catch { return ''; } };
+    return [...new Set(`${await run(['diff', '--name-only', 'origin/main...HEAD'])}\n${await run(['diff', '--name-only', 'HEAD'])}`.split('\n').filter(Boolean))].slice(0, 500);
+  },
+  record: (e) => managerEvents.record(e),
+  mode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).goalCheck; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
+});
+
 // Done check (done-check.js): an idle session whose last STATUS is done is checked against git (commits not on main,
 // uncommitted files); a mismatch is told once to the session and the feed. manager.json `doneCheck`: live | dry | off.
 const doneCheck = createDoneCheck({
@@ -1059,6 +1103,7 @@ const doneCheck = createDoneCheck({
   },
   // (F) the task goal: `Goal:` line or first task line of the prompt cbsession wrote (~/handovers/<name>.prompt.md); '' when there is none
   goalOf: async (name) => { try { return goalOfPrompt(readFileSync(join(homedir(), 'handovers', `${String(name).replace(/[^\w.-]/g, '')}.prompt.md`), 'utf8')); } catch { return ''; } },
+  goalGate,   // (H) goal check
   send: (name, text) => sendKeys(name, text),
   pressure: hostPressure,
   record: (e) => managerEvents.record(e),
@@ -1775,6 +1820,7 @@ async function createSession({ name, agent, cwd, priority, model, prompt, handov
     await exec(TMUX, ['send-keys', '-t', `=${real}:`, 'Enter']);
   }
   await historyLog({ kind: 'session.started', name: real, provider: agent, model: model ?? null, cwd: dir, started_by: 'dashboard', prompt_ref: prompt ?? null, handover_ref: handover ?? null, tmux_created: await tmuxCreated(real) });
+  goals.forget(real); if (prompt || handover) captureGoal(real, prompt || handover, 'dashboard');   // goal check: the goal as given at start
   sessionMeta.reset(real);
   sessionMeta.sync([real]);   // a new session starts at P2 (or the chosen priority), not paused
   if (priority) sessionMeta.set(real, { priority });
@@ -2306,6 +2352,7 @@ async function handleHttp(req, res) {
       // records 'owner' itself; cbsession is the default when the caller forgot both (legacy cbsession, manual run).
       const sb = typeof b.started_by === 'string' && b.started_by ? b.started_by : 'cbsession';
       const r = await history.append({ ...b, kind: 'session.started', started_by: sb, tmux_created: typeof b.name === 'string' ? await tmuxCreated(b.name) : null });
+      if (typeof b.name === 'string' && b.name) { goals.forget(b.name); captureGoal(b.name, b.prompt_ref || b.handover_ref, 'cbsession'); }   // goal check: the goal as given at start
       if (typeof b.name === 'string' && b.name) {
         try { sessionMeta.setStartedBy(b.name, sb); } catch (e) { console.error('[history] setStartedBy', e.message); }
       }
@@ -2751,6 +2798,7 @@ async function handleHttp(req, res) {
     const limit = Math.min(2000, Math.max(1, Number(q.get('limit')) || 50));
     return json(res, 200, { events: await managerEvents.tail({ since, limit }) });
   }
+  if (req.method === 'GET' && p === '/api/goal-check') return json(res, 200, await goalGate.snapshot());   // bounced dones per session today (goal-check.js)
   if (req.method === 'GET' && p === '/api/done-check') return json(res, 200, doneCheck.snapshot());   // sessions whose STATUS done disagrees with git
   if (p === '/api/bugs' || p.startsWith('/api/bugs/')) {   // found-bug channel: loopback only (scripts/found-bug)
     // loopback (codebox), or a Mac/cloud client with an `integrate` bearer token (same tokens as scripts/integrate): file + list only
@@ -2948,7 +2996,7 @@ const integrationRoutes = createIntegrationRoutes({ lane: integrationLane, state
 // start() is called below, once the hooks are assigned: a resumed request notifies / deploys at once
 // ===== END INTEGRATION BLOCK =====
 
-const remote = createRemoteStops({ manager: managerApi, dir: join(STATE_DIR, 'leases'), stateDir: STATE_DIR,
+const remote = createRemoteStops({ manager: managerApi, dir: join(STATE_DIR, 'leases'), stateDir: STATE_DIR, goalGate, goals,
   viaServe: (req) => ['x-forwarded-for', 'forwarded'].some((h) => req.headers[h] !== undefined) });   // POST /api/remote/v1/stops from the Mac Stop hook (token of a `remote` client)
 
 // ===== integration lane, sessions side (round 13, brief B): notify + deploys adapter for createIntegrationLane({ notify, deploys }) =====

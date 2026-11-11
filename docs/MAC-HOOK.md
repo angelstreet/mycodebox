@@ -143,8 +143,13 @@ A bug you find: fix it now yourself, in its own worktree, when it is small and y
 STATUS vocabulary (owner 2026-11-11): `done` only when the task's goal was achieved, with `goal: achieved · evidence: <links / run ids / frames>`; `failed — goal not achieved: <why> · tried: <list>` when it was not (the manager is told and helps); `blocked: <system id or reason + what you tried>`; `waiting: <system id>`; `needs-owner:` only for a hard-floor item. A green / pass / proven claim carries its evidence. Before you fix a filed bug, run `found-bug --claim <id>` (exit 3: someone else is fixing it).
 ```
 
-The done-check does not see Mac sessions (it reads tmux panes), so this block is the only guard there; the Stop hook cannot
-answer such a stop because merge and push questions always escalate for a Mac session.
+The done-check's git checks do not see Mac sessions (they read tmux panes and checkouts), so this block is the main guard there; the Stop
+hook cannot answer such a stop because merge and push questions always escalate for a Mac session. The **goal check** does run on Mac stops
+(owner 2026-11-11, [REFERENCE](REFERENCE.md#goal-check-owner-2026-11-11)): the hook sends the session's first prompt as `first_prompt` (the
+goal), and a done stop is answered at once with "Goal as given: ... Did you reach it? Quote the evidence for each part", or sent back when it
+lists 2+ filed leftovers. The reply comes back under the loop guard (`stop_hook_active`): it is judged but never answered, and a rejected one is
+a manager event. Copy the hook again (`cp scripts/mac-stop-hook.sh ~/bin/mycodebox-stop-hook.sh`) to send `first_prompt`; an older hook works,
+the question then asks the session to state its goal itself.
 
 ## Guard hook (proposed for the Mac, not installed)
 
@@ -165,13 +170,14 @@ The transcript is JSONL. The final message is the last line with `"type":"assist
 `{"type":"text","text":"..."}` blocks (`message.content[].text`); newer Claude Code versions also pass
 `last_assistant_message` in the hook JSON, which wins because the transcript can lag the hook. The time of your last
 real prompt is the `timestamp` of the last `"type":"user"` line whose `content` is a string (not a `tool_result` list);
-the manager uses it as the moment you answered the previous stop (the round-trip ledger). The session name is the last
+the manager uses it as the moment you answered the previous stop (the round-trip ledger). The first prompt (`first_prompt`) is the `content` string of the
+first such line, cut to 2000 characters. The session name is the last
 `customTitle` (set by `/rename`), else `<project>-<first 6 of session_id>`. The text stays JSON-escaped end to end, and
 only its last 12000 characters are sent. `test/fixtures/mac-transcript.jsonl` and `test/mac-hook.test.js` pin all of this.
 
 ## Privacy
 
-Only the final message text and these metadata leave the Mac: machine name, project, session id and name, working
+Only the final message text, the first prompt of the session (2000 characters, the goal for the goal check) and these metadata leave the Mac: machine name, project, session id and name, working
 directory, timestamps and the loop-guard flag. No transcript upload, no tool output, no file contents. The dashboard keeps
 the excerpt in its stall journal like for local sessions (state dir, never committed). The token is read from a 0600 file
 and passed to curl through a 0600 header file, never on a command line.

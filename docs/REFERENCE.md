@@ -1957,6 +1957,35 @@ pass / proven claim carries its evidence. Before you fix a filed bug, run `found
 - Both run in `doneCheck` mode (`dry` journals `doneButFailed` / `proofWithoutEvidence` rows in `done-check.jsonl`), at most one push per
   session per tick, idle and no draft only, done turns younger than 6 h.
 
+### Goal check (owner, 2026-11-11)
+
+Owner: agents say `STATUS: done` and only when the owner asks "did you reach the goal?" do they remember and keep working. This line passed every
+check above: `STATUS: done — resolved bug-3fbdd970, bug-430a348e, bug-b6a0056d · closing review: docs none needed · leftovers bug-827764ef,
+bug-2f32e7a7, bug-8fc8fc0d, bug-03ccc6a7, bug-80bdcdc1 · unverified: none · bugs: none` (five leftovers filed instead of fixed, no goal stated).
+`goal-check.js` (`createGoalGate`) is the last step of the done-check ((H), codebox panes) and runs on every Mac stop (`remote-stops.js`):
+
+- **Goal captured at start** (`createGoalStore`, `<state>/goals.json`): `POST /api/history/started` (cbsession) and the dashboard create path
+  read the prompt / handover (`status-honesty.js` `goalOf`: `Goal:` line, else the first task line); the Mac Stop hook sends `first_prompt`
+  (the first owner prompt of the transcript, 2000 chars). The first capture wins, a later explicit `Goal:` line replaces it. Without a record:
+  `~/handovers/<name>.prompt.md`, then the history's prompt / handover, then the task doc title (`TASK-NN: <title>`, matched on the session name).
+- **Fix-first** (before the question): a done line whose `leftovers` list 2+ filed bug / idea ids in the touched area (filed by the session, or
+  naming a file the branch changed vs origin/main; an id the store does not know counts; resolved bugs and `host-or-device` / `credentials` /
+  `owner-floor` reasons do not) is sent back with each bug's `--why-not-fixed` text: small ones are fixed now (`found-bug --claim`, fix,
+  `integrate request`, `found-bug --resolve`). Leftovers that are neither none nor ids stay with (B).
+- **The owner's question**, once per done: "Goal check: Goal as given: "<goal>". Did you reach it? Quote the evidence for each part ... If not,
+  continue the work now." The next done turn is the reply (`goalReplyOf`): accepted only when it restates the goal (half of its words, 2..6, or
+  a `Goal:` line when none was recorded), cites evidence (file path, run / integration id, commit, URL, screenshot, KPI number with unit, n/N
+  tests) and does not say a part is not reached. Otherwise it is bounced with what is missing.
+- **Caps**: a bounce is a fix-first push or a rejected reply (the question itself is not one); at most 2 per session per day (`BOUNCES_PER_DAY`),
+  then one manager event `goal-check-cap:<session>` and silence until the next day. Never closes a session.
+- **Mac**: the gate answers the stop itself at once (no countdown; the manager journals the stop but schedules no answer). The reply arrives with
+  `stop_hook_active` (loop guard): it is judged, never answered; a rejected one becomes a manager event `goal-check:<session>`.
+- **Order**: git findings, (B) leftovers, (C) closing review and (F)/(G) honesty go first; (H) only questions a line they let through. Same gates:
+  idle, no draft, host not busy, done turn younger than 6 h, one push per session per tick.
+- Switch `manager.json` `goalCheck`: `live` (default) | `dry` (journal only) | `off`. Journal `goal-check.jsonl`, state `goal-check.json`.
+  `GET /api/goal-check` -> bounced dones per session today; `scripts/manager-status-scan.sh` prints `<session>: done-bounced: N today by the goal
+  check` (codebox and Mac). Tests: `test/goal-check.test.js` (replays the example line: it bounces), `test/goal-check-remote.test.js`.
+
 ## Session guard hook (owner, 2026-11-11)
 
 `scripts/session-guard-hook.js`, a Claude PreToolUse(Bash) hook on codebox next to `~/.claude/hooks/kill-guard.py`, refuses three commands of
