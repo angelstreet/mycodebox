@@ -1,6 +1,6 @@
 # Nightly RTSP check and replacement (owner, 2026-11-11)
 
-**Scope (2026-11-11, after the app showed 92 `rtsp_video` devices):** every device of model `rtsp_video` is checked, not only literal `rtsp://` sources. The model is the generic stream model: today about 66 looping local files, 25 HLS internet-TV channels, 8 with no source, 0 rtsp://. Kinds: `loopback`, `public`, `ip_camera` (rtsp), `hls`, `file`, `no_source`. Only `loopback`/`public` rtsp sources are ever replaced; HLS, file, empty source and cameras are reported by name (no channel or file pool exists, so the job never swaps a TV channel). `unverified` (a file or loopback source on a host with no `RTSP_CHECK_SSH` alias) is listed, not counted as down.
+**Scope (2026-11-11, after the app showed 92 `rtsp_video` devices):** every device of model `rtsp_video` is checked, not only literal `rtsp://` sources. The model is the generic stream model: today about 66 looping local files, 25 HLS internet-TV channels, 8 with no source, 0 rtsp://. Kinds: `loopback`, `public`, `ip_camera` (rtsp), `hls`, `file`, `no_source`. **Decision (owner, 2026-11-11: "we want to identify those streams every night and fix them"):** a dead `hls`, `public` or `loopback` source is replaced from the vetted pool (an HLS device gets an HLS test stream, an rtsp device an rtsp source), but only if it fails again on a re-probe 20 s later (a TV channel can blink). Files, empty sources and IP cameras are reported by name, never replaced. A replaced channel keeps its device name: the journal and report say which source it now plays, and the manager line lists it so the name can be fixed by hand. `unverified` (a file or loopback source on a host with no `RTSP_CHECK_SSH` alias) is listed, not counted as down.
 
 Owner: "send a worker every night, MiniMax, to check the RTSP video and replace the stream that is not working."
 
@@ -34,6 +34,7 @@ The journal keeps the per-stream check events, not the inventory errors, so a ni
 |---|---|
 | `loopback` (127.0.0.1 / localhost: the mediamtx `smoke` loop) | replaced from the pool |
 | `public` (host is in the pool file) | replaced from the pool |
+| `hls` (http/https source) | replaced with a vetted HLS test stream (Mux, Apple bipbop) after a confirming re-probe |
 | `ip_camera` (anything else: owner hardware) | **reported only, never replaced** |
 
 - Only pool entries with a `vetted` date are replacement candidates, and a candidate is probed again right before use. A
@@ -60,7 +61,7 @@ The journal keeps the per-stream check events, not the inventory errors, so a ni
   blocked or the streams gone), so none is vetted: only `smoke` (on the one lab host that runs `vpt-rtsp`) is. Until a public source is vetted, a dead public
   stream is reported as "no vetted pool source plays now" on every host without `vpt-rtsp`.
 
-**Policy decision (manager, 2026-11-11): the pool is loopback-smoke only.** Public RTSP on 554 is blocked from codebox and three lab hosts, so no public source is vetted; a dead public stream is reported, not replaced, and a `smoke` replacement only happens on a host listed in `RTSP_LOOPBACK_HOSTS`. A public source joins the pool only after `rtsp_check.py` plays it from a host that will use it (any port, or RTSP over HTTP/TCP tunnelling, as long as the probe passes).
+**Pool (2026-11-11): rtsp = loopback smoke only; HLS = two vetted public test streams.** Public RTSP on 554 is blocked from codebox and three lab hosts, so no public source is vetted; a dead public stream is reported, not replaced, and a `smoke` replacement only happens on a host listed in `RTSP_LOOPBACK_HOSTS`. A public source joins the pool only after `rtsp_check.py` plays it from a host that will use it (any port, or RTSP over HTTP/TCP tunnelling, as long as the probe passes).
 
 ## Schedule and mode
 
