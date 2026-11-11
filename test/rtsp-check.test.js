@@ -91,8 +91,7 @@ async function world({ devices, pool, leaseBusy = false, leaseMissing = false, b
 }
 const POOL = { maxReplacementsPerNight: 3, sources: [
   { id: 'smoke', kind: 'loopback', url: 'rtsp://127.0.0.1:8554/good-smoke', vetted: '2026-11-11', hostsEnv: 'RTSP_LOOPBACK_HOSTS' },
-  { id: 'pub', kind: 'public', url: 'rtsp://test.example/dead-pub', vetted: null },
-  { id: 'hlsgood', kind: 'public', url: 'https://cdn.example/good/test.m3u8', vetted: '2026-11-11' } ] };
+  { id: 'pub', kind: 'public', url: 'rtsp://test.example/dead-pub', vetted: null } ] };
 const dev = (n, v) => ({ DEVICE_NAME: n, DEVICE_VIDEO: v, DEVICE_VIDEO_CAPTURE_PATH: `/c/${n}` });
 
 test('run live: a dead public stream is replaced with the FULL devices payload; camera and healthy streams untouched', async () => {
@@ -120,7 +119,7 @@ test('run dry (the default): reports what it would do and writes nothing', async
   const w = await world({ pool: POOL, devices: { DEVICE1: dev('a', 'rtsp://test.example/dead-pub') } });
   const r = await py(REPLACE, [], w.E);
   w.close();
-  assert.match(r.stdout, /dry: would replace with pool 'smoke'/);
+  assert.match(r.stdout, /dry: would replace with 'pool smoke'/);
   assert.equal(w.posts.length, 0);
   assert.equal(w.restarts.length, 0);
   assert.equal(w.devices.DEVICE1.DEVICE_VIDEO, 'rtsp://test.example/dead-pub');
@@ -178,22 +177,38 @@ test('run live: a replacement that does not play is rolled back to the backup (f
   assert.match(readFileSync(path.join(w.state, 'rtsp-nightly', 'journal.jsonl'), 'utf8'), /rolled_back/);
 });
 
-test('scope: every rtsp_video device is checked; a dead HLS device gets a vetted HLS source, file / empty source are only reported', async () => {
+test('a dead HLS channel is restored (same channel, new URL) or replaced (same group, unused, renamed); file / empty only reported', async () => {
   const w = await world({ pool: POOL, devices: {
-    DEVICE1: { ...dev('tv', 'https://cdn.example/good/index.m3u8'), DEVICE_MODEL: 'rtsp_video' },
-    DEVICE2: { ...dev('tv-dead', 'https://cdn.example/dead/index.m3u8'), DEVICE_MODEL: 'rtsp_video' },
+    DEVICE1: { ...dev('FR Music 2 — Used FM (720p)', 'https://cdn.example/good/used.m3u8'), DEVICE_MODEL: 'rtsp_video' },
+    DEVICE2: { ...dev('FR News 2 — Dead News', 'https://cdn.example/dead/news-old.m3u8'), DEVICE_MODEL: 'rtsp_video' },
     DEVICE3: { ...dev('loop', '/var/lib/vpt-movies/good.mp4'), DEVICE_MODEL: 'rtsp_video' },
     DEVICE4: { ...dev('empty', ''), DEVICE_MODEL: 'rtsp_video' },
-    DEVICE5: dev('hdmi', '/dev/stb5') } });   // not rtsp_video, not rtsp: ignored
+    DEVICE5: dev('hdmi', '/dev/stb5'),   // not rtsp_video, not rtsp: ignored
+    DEVICE6: { ...dev('FR Music 1 — Gone FM', 'https://cdn.example/dead/gone.m3u8'), DEVICE_MODEL: 'rtsp_video' } } });
+  const dir = path.dirname(w.E.RTSP_POOL_FILE);
+  const inf = (name, group, url, extra = '') => `#EXTINF:-1 tvg-id="${name.replace(/\W/g, '')}.fr" ${extra}group-title="${group}",${name}\n${url}\n`;
+  writeFileSync(path.join(dir, 'up.m3u'), '#EXTM3U\n' + inf('Dead News (720p)', 'News', 'https://cdn.example/good/news-new.m3u8'));
+  writeFileSync(path.join(dir, 'repo.m3u'), '#EXTM3U\n' + inf('Gone FM (720p)', 'Music', 'https://cdn.example/dead/gone.m3u8')
+    + inf('Used FM (720p)', 'Music', 'https://cdn.example/good/used.m3u8')
+    + inf('Needs UA FM (720p)', 'Music', 'https://cdn.example/good/ua.m3u8', 'http-user-agent="X" ')
+    + inf('Other FM (720p)', 'Music', 'https://cdn.example/good/other.m3u8'));
+  w.E.RTSP_CHANNEL_LISTS = `${path.join(dir, 'up.m3u')},${path.join(dir, 'repo.m3u')}`;
+  const dry = await py(REPLACE, [], w.E);
+  assert.match(dry.stdout, /DEVICE2\s+hls\s+no_connect -> dry: would restore with 'Dead News'/, dry.stdout);
+  assert.match(dry.stdout, /DEVICE6\s+hls\s+no_connect -> dry: would replace with 'Other FM' \(device renamed 'FR Music 1 — Other FM \(720p\)'\)/);
+  assert.equal(w.posts.length, 0);
   const r = await py(REPLACE, ['--mode', 'live'], w.E);
   w.close();
-  assert.match(r.stdout, /DEVICE1\s+hls\s+ok -> none/, r.stdout);
-  assert.match(r.stdout, /DEVICE2\s+hls\s+no_connect -> replaced \(pool 'hlsgood'\)/, r.stdout);
-  assert.equal(w.devices.DEVICE2.DEVICE_VIDEO, 'https://cdn.example/good/test.m3u8');
+  assert.match(r.stdout, /DEVICE2\s+hls\s+no_connect -> replaced \(restore: 'Dead News'\)/, r.stdout);
+  assert.equal(w.devices.DEVICE2.DEVICE_VIDEO, 'https://cdn.example/good/news-new.m3u8');
+  assert.equal(w.devices.DEVICE2.DEVICE_NAME, 'FR News 2 — Dead News');            // same channel: name kept
+  assert.equal(w.devices.DEVICE6.DEVICE_VIDEO, 'https://cdn.example/good/other.m3u8', r.stdout); // not the one already used, not the UA one
+  assert.equal(w.devices.DEVICE6.DEVICE_NAME, 'FR Music 1 — Other FM (720p)');
   assert.match(r.stdout, /DEVICE3\s+file\s+ok -> none/);
-  assert.match(r.stdout, /DEVICE4\s+no_source\s+no_source -> report: no_source source not ok/);
+  assert.match(r.stdout, /DEVICE4\s+no_source\s+no_source -> report/);
   assert.ok(!/DEVICE5/.test(r.stdout));
-  assert.equal(w.posts.length, 1); // only the dead HLS device; file / empty never
+  assert.equal(w.posts.length, 2);
+  for (const pst of w.posts) assert.equal(Object.keys(pst.devices).length, 6); // full payload every time
 });
 
 test('the pool file never holds credentials and only vetted entries are replacement candidates', () => {
