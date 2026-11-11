@@ -173,14 +173,25 @@ def run(mode, timeout=10):
                 row['action'] = f"dry: would replace with pool '{s['id']}'"
             else:
                 out = os.path.join(STATE, f"apply-{e['host']}-{e['device']}.json")
-                p = subprocess.run(lease_cmd(e['env'], e['host'], e['device'], s['id'], out), capture_output=True, text=True)
+                p = None
+                try:
+                    p = subprocess.run(lease_cmd(e['env'], e['host'], e['device'], s['id'], out), capture_output=True, text=True)
+                except OSError as exc:
+                    # The lease CLI itself is missing (or not executable): nothing was touched, but the night must
+                    # go on and report it instead of dying on the first down stream. (not `as e`: that unbinds the
+                    # loop variable `e` at the end of the clause.)
+                    detail = rc.redact(f'{type(exc).__name__}: {exc}')
+                else:
+                    detail = rc.redact((p.stderr or '')[-200:])
                 try:
                     res = json.load(open(out)); os.unlink(out)
                 except (OSError, ValueError):
                     res = None
                 if res is None:  # BUSY / lease error: vpt-lease never ran the command, nothing was touched
-                    row['action'] = 'report: host lease not granted, nothing touched'
-                    journal({'event': 'replace', 'host': e['host'], 'device': e['device'], 'outcome': 'lease_not_granted', 'detail': rc.redact((p.stderr or '')[-200:])})
+                    row['action'] = ('report: the lease command could not be run (vpt-lease missing), nothing touched'
+                                     if p is None else 'report: host lease not granted, nothing touched')
+                    journal({'event': 'replace', 'host': e['host'], 'device': e['device'],
+                             'outcome': 'lease_not_available' if p is None else 'lease_not_granted', 'detail': detail})
                 else:
                     row['action'] = f"{res['outcome']} (pool '{s['id']}')"
                     if res['outcome'] in ('replaced', 'rolled_back'):

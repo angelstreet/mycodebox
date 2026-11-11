@@ -44,8 +44,21 @@ test('rtsp_check: a loopback source without an ssh alias is unverified, never ok
   assert.equal(j.streams[0].status, 'unverified');
 });
 
+test('rtsp_check: --host probes a loopback source from that host (alias from RTSP_CHECK_SSH)', async () => {
+  const { dir, env } = fakes();
+  sh(dir, 'ssh', 'shift 5 2>/dev/null; eval "$*"'); // the probe runs locally instead of over ssh
+  const E = { ...env, PATH: `${dir}:${process.env.PATH}`, RTSP_CHECK_SSH: 'h1=local' };
+  const j = JSON.parse((await py(CHECK, ['--json', '--host', 'h1', 'rtsp://127.0.0.1:8554/smoke'], E)).stdout);
+  assert.equal(j.streams[0].status, 'ok');
+  assert.equal(j.streams[0].codec, 'h264');
+  const bare = JSON.parse((await py(CHECK, ['--json', 'rtsp://127.0.0.1:8554/smoke'], E)).stdout);
+  assert.equal(bare.streams[0].status, 'unverified'); // without --host only the host can reach it
+  const alias = JSON.parse((await py(CHECK, ['--json', '--ssh', 'local', 'rtsp://127.0.0.1:8554/smoke'], E)).stdout);
+  assert.equal(alias.streams[0].status, 'ok');
+});
+
 // ---- the replacement run ----
-async function world({ devices, pool, leaseBusy = false, brokenAfterSave = false }) {
+async function world({ devices, pool, leaseBusy = false, leaseMissing = false, brokenAfterSave = false }) {
   const { dir, env } = fakes();
   const posts = []; const restarts = [];
   const server = http.createServer((req, res) => {
@@ -66,9 +79,11 @@ async function world({ devices, pool, leaseBusy = false, brokenAfterSave = false
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const state = mkdtempSync(path.join(tmpdir(), 'rtsp-state-'));
   const poolFile = path.join(dir, 'pool.json'); writeFileSync(poolFile, JSON.stringify(pool));
-  sh(dir, 'vpt-lease', leaseBusy ? 'echo BUSY >&2; exit 1' : 'while [ "$1" != "--" ]; do shift; done; shift; exec "$@"');
+  if (!leaseMissing) sh(dir, 'vpt-lease', leaseBusy ? 'echo BUSY >&2; exit 1' : 'while [ "$1" != "--" ]; do shift; done; shift; exec "$@"');
   sh(dir, 'tok', 'echo tok');
-  const E = { ...env, PATH: `${dir}:${process.env.PATH}`, GHOSTY_STATE_DIR: state, RTSP_POOL_FILE: poolFile, RTSP_CHECK_TOKEN_CMD: path.join(dir, 'tok'),
+  // leaseMissing: a PATH without any vpt-lease, so the run really cannot find the lease CLI
+  const pathV = leaseMissing ? `${dir}:/usr/bin:/bin` : `${dir}:${process.env.PATH}`;
+  const E = { ...env, PATH: pathV, GHOSTY_STATE_DIR: state, RTSP_POOL_FILE: poolFile, RTSP_CHECK_TOKEN_CMD: path.join(dir, 'tok'),
     RTSP_CHECK_SERVERS: `envA=http://127.0.0.1:${server.address().port}`, RTSP_SETTLE_SECONDS: '0', RTSP_CHECK_SSH: 'h1=local', RTSP_LOOPBACK_HOSTS: 'h1' };
   // the ssh alias must not run ssh in tests: the probe goes through a fake ssh that runs the command locally
   sh(dir, 'ssh', 'shift 5 2>/dev/null; eval "$*"');
@@ -116,6 +131,17 @@ test('run live: a BUSY lease never runs the command, nothing is touched', async 
   w.close();
   assert.match(r.stdout, /lease not granted/);
   assert.equal(w.posts.length, 0);
+});
+
+test('run live: a missing lease command is reported, the night does not die on it', async () => {
+  const w = await world({ pool: POOL, leaseMissing: true, devices: { DEVICE1: dev('a', 'rtsp://test.example/dead-pub') } });
+  const r = await py(REPLACE, ['--mode', 'live'], w.E);
+  w.close();
+  assert.equal(r.code, 1, r.stdout + r.stderr); // the stream was not fixed: the night is not ok, but it reported
+  assert.match(r.stdout, /lease command could not be run/);
+  assert.equal(w.posts.length, 0);
+  assert.equal(w.devices.DEVICE1.DEVICE_VIDEO, 'rtsp://test.example/dead-pub');
+  assert.match(readFileSync(path.join(w.state, 'rtsp-nightly', 'journal.jsonl'), 'utf8'), /lease_not_available/);
 });
 
 test('run live: a replacement that does not play is rolled back to the backup (full payload again)', async () => {

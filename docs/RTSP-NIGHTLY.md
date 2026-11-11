@@ -49,7 +49,9 @@ The journal keeps the per-stream check events, not the inventory errors, so a ni
   5. After 15 s `rtsp_check` the new source. Any failure: POST the backup devices back, restart, journal `rolled_back`.
 - Journal `<state>/rtsp-nightly/journal.jsonl` (redacted), daily `report-<date>.json`; `<state>` is `$GHOSTY_STATE_DIR` (default
   `~/.local/state/ghosty`).
-- Adding a pool source: probe it from a host that will use it (`rtsp_check.py` with `RTSP_CHECK_SSH`), then set `vetted` to the date.
+- Adding a pool source: probe it from a host that will use it, then set `vetted` to the date. The probe must run on that host: a
+  loopback source is only reachable there, so `rtsp_check.py --host <host> <url>` (its ssh alias comes from `RTSP_CHECK_SSH`;
+  `--ssh <alias>` names the alias directly) plays it where the host plays it. Without an alias the answer is `unverified`, never `ok`.
   On 2026-11-11 the public candidates (`rtsp.stream`, the Wowza demo) were not reachable from codebox or three lab hosts (port 554
   blocked or the streams gone), so none is vetted: only `smoke` (on the one lab host that runs `vpt-rtsp`) is. Until a public source is vetted, a dead public
   stream is reported as "no vetted pool source plays now" on every host without `vpt-rtsp`.
@@ -72,6 +74,11 @@ rolled back or a camera is down, and files `found-bug` for a camera down or a ro
 `~/.config/rtsp-nightly/env`, sourced by the session: `RTSP_CHECK_SERVERS="<label>=<server url>,..."` (one per backend server), `RTSP_LEASE_ENV` (the `vpt-lease` environment of the hosts, default
 `node1-vpt`: it lists the hosts of every server), `RTSP_CHECK_SSH="<host>=<ssh alias>,..."`, `RTSP_LOOPBACK_HOSTS="<host>,..."` (where the `smoke` source exists), optional `RTSP_CHECK_TOKEN_CMD`
 (default `~/virtualpytest/scripts/agent/auto_sign_token.sh`), `RTSP_POOL_FILE`, `RTSP_SETTLE_SECONDS`.
+
+`RTSP_CHECK_SSH` is what makes the pool usable: a loopback candidate is skipped without an ssh alias to the host that runs it
+(`unverified`, never `ok`), so with it unset every down stream is only reported. The live path also needs `vpt-lease` on the PATH of
+the session: `~/.local/bin` is where `cbsession` puts the agent tools, and the night otherwise reports "the lease command could not
+be run" and touches nothing.
 
 ## Install (user timer, host-unit routine path: reviewed and merged repo change, nothing replaced)
 

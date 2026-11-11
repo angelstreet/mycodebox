@@ -8,6 +8,9 @@ every printed or journaled string goes through redact().
 
   rtsp_check.py URL [URL...]            check URLs (label = redacted URL)
   rtsp_check.py --inventory             check every rtsp DEVICE<n>_VIDEO of the hosts on RTSP_CHECK_SERVERS
+  --host H   probe these URLs from the host H (its ssh alias comes from RTSP_CHECK_SSH): a loopback source is
+             only reachable there
+  --ssh ALIAS   probe these URLs from that ssh alias directly
   --json   JSON only   --timeout N   per-step seconds (default 10)
 Exit: 0 all ok, 1 a stream is not ok, 2 nothing could be checked (no server, no streams, auth failure).
 Env: RTSP_CHECK_SERVERS="<label>=<server url>,..." ; RTSP_CHECK_TOKEN_CMD (prints an X-Auto-Sign token);
@@ -209,9 +212,16 @@ def main(argv=None):
     timeout = 10
     if '--timeout' in a:
         i = a.index('--timeout'); timeout = int(a[i + 1]); del a[i:i + 2]
+    ssh_map = parse_pairs(os.environ.get('RTSP_CHECK_SSH'))
+    ssh = None
+    # A loopback source is only reachable from the host that runs it: without an alias the probe can only say
+    # 'unverified'. --host takes the alias of that host from RTSP_CHECK_SSH, --ssh names it directly.
+    if '--ssh' in a:
+        i = a.index('--ssh'); ssh = a[i + 1]; del a[i:i + 2]
+    if '--host' in a:
+        i = a.index('--host'); ssh = ssh_map.get(a[i + 1]); del a[i:i + 2]
     flags = {x for x in a if x.startswith('--')}
     urls = [x for x in a if not x.startswith('--')]
-    ssh_map = parse_pairs(os.environ.get('RTSP_CHECK_SSH'))
     errors, rows = [], []
     if '--inventory' in flags:
         pool = load_pool()
@@ -219,7 +229,7 @@ def main(argv=None):
         rows = [public_entry(e, r) for e, r in zip(entries, check_entries(entries, ssh_map, timeout))]
     else:
         for u in urls:
-            rows.append({'host': '-', 'device': '-', 'kind': 'adhoc', 'source': redact(u), **check_stream(u, timeout)})
+            rows.append({'host': '-', 'device': '-', 'kind': 'adhoc', 'source': redact(u), **check_stream(u, timeout, ssh)})
     report = {'streams': rows, 'errors': errors, 'ok': sum(r['status'] == 'ok' for r in rows), 'total': len(rows)}
     print(json.dumps(report, indent=2) if as_json else table(rows) + ''.join(f'\nERROR {e}' for e in errors) + f"\n{report['ok']}/{report['total']} ok")
     if not rows:
