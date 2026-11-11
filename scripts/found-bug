@@ -3,7 +3,7 @@
 #   found-bug --title "REST list of virtual scripts errors" [--endpoint GET /api/x] [--repro "..."] [--error "exact text"]
 #             [--workaround "..."] [--blocking yes|no] [--session NAME] [--test]
 #   found-bug --flush                                    post the reports queued while the manager was unreachable
-#   found-bug --resolve <id> --commit <sha|integration id> [--state fixed|wontfix|doc-only] [--note text] [--session NAME]   (codebox only)
+#   found-bug --resolve <id> --commit <sha|integration id> [--state fixed|wontfix|doc-only|duplicate] [--note text] [--session NAME]   (codebox only)
 #   found-bug list | found-bug fixed <id> [note] | found-bug remove <id>   (fixed/remove/--resolve: codebox loopback only; remove: test reports)
 #   found-bug --help
 # Where: GHOSTY_URL (or MYCODEBOX_URL, or `url = ...` in ~/.config/mycodebox/config, as for `integrate`); default loopback http://127.0.0.1:${PORT:-7777}.
@@ -102,7 +102,7 @@ if [ "$cmd" = --resolve ]; then
   while [ $# -gt 0 ]; do
     case "$1" in
       --commit|--state|--note|--session) [ $# -ge 2 ] || die "$1 needs a value"; case "$1" in --commit) commit=$2;; --state) state=$2;; --note) note=$2;; --session) sess=$2;; esac; shift 2 ;;
-      *) die "unknown argument $1 (found-bug --resolve <id> --commit <sha|integration id> [--state fixed|wontfix|doc-only] [--note text])" ;;
+      *) die "unknown argument $1 (found-bug --resolve <id> --commit <sha|integration id> [--state fixed|wontfix|doc-only|duplicate] [--note text])" ;;
     esac
   done
   [ -n "$sess" ] || sess=$(session_default)

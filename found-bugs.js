@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 
 export const FILE_NAME = 'found-bugs.jsonl';
-export const STATES = ['fixed', 'wontfix', 'doc-only'];
+export const STATES = ['fixed', 'wontfix', 'doc-only', 'duplicate'];   // duplicate: the note names the original id (bug-6829b74a)
 export const DEDUPE_MS = 24 * 3600 * 1000;
 export const REPORTED_MS = 3600 * 1000;   // a session that filed a bug in the last hour is not asked again
 
@@ -81,7 +81,7 @@ export function createFoundBugs({ stateDir, onNew = async () => {}, now = Date.n
     await appendFile(file, JSON.stringify({ id, fixed: true, note: redact(note).slice(0, 300), at: new Date(now()).toISOString() }) + '\n');
     return { ok: true };
   }
-  // resolve(id, { state, commit, note, by }): state fixed | wontfix | doc-only. Marker line; the last one wins.
+  // resolve(id, { state, commit, note, by }): state fixed | wontfix | doc-only | duplicate. Marker line; the last one wins.
   async function resolve(id, { state = 'fixed', commit = '', note = '', by = '' } = {}) {
     if (!STATES.includes(state)) return { ok: false, error: `state must be one of ${STATES.join(', ')}` };
     const b = (await all()).find((x) => x.id === id && x.title);
@@ -91,7 +91,7 @@ export function createFoundBugs({ stateDir, onNew = async () => {}, now = Date.n
     await appendFile(file, JSON.stringify({ id, resolved: true, state, commit: clean(commit, 80), note: clean(note, 300), by: clean(by, 80) || 'unknown', at: new Date(now()).toISOString() }) + '\n');
     return { ok: true };
   }
-  async function list({ limit = 100, unresolved = false } = {}) {
+  async function list({ limit = 100, unresolved = false, state = '', offset = 0 } = {}) {
     const rows = await all(), gone = new Set(rows.filter((r) => r.removed).map((r) => r.id));
     const done = new Map(rows.filter((r) => r.fixed).map((r) => [r.id, r])), res = new Map(rows.filter((r) => r.resolved).map((r) => [r.id, r]));
     const out = rows.filter((r) => r.title && !r.removed && !gone.has(r.id)).map((r) => {
@@ -100,15 +100,18 @@ export function createFoundBugs({ stateDir, onNew = async () => {}, now = Date.n
       if (f) return { ...r, state: 'fixed', resolved: true, fixed: true, fixedNote: f.note, fixedAt: f.at };
       return { ...r, state: 'open' };
     });
-    return (unresolved ? out.filter((r) => !r.resolved) : out).slice(-Math.max(1, Math.min(500, limit)));
+    // newest `limit` of the (filtered) rows; offset skips that many of the newest first, so a client pages back through 340+ reports
+    const rows2 = state ? out.filter((r) => r.state === state) : unresolved ? out.filter((r) => !r.resolved) : out;
+    const lim = Math.max(1, Math.min(5000, limit)), off = Math.max(0, offset | 0), end = rows2.length - off;
+    return rows2.slice(Math.max(0, end - lim), Math.max(0, end));
   }
   async function counts() {
-    const rows = await list({ limit: 500 }), day = now() - DEDUPE_MS;
+    const rows = await list({ limit: 5000 }), day = now() - DEDUPE_MS;
     const real = rows.filter((b) => !b.test && !b.resolved);
     return { total: real.length, blocking: real.filter((b) => b.blocking).length, last24h: real.filter((b) => Date.parse(b.at) >= day).length };
   }
   async function recentBy(session, ms = REPORTED_MS) {
-    return (await list({ limit: 500 })).some((b) => b.session === session && now() - Date.parse(b.at) < ms);
+    return (await list({ limit: 5000 })).some((b) => b.session === session && now() - Date.parse(b.at) < ms);
   }
   return { add, remove, fixed, resolve, list, counts, recentBy, file };
 }
