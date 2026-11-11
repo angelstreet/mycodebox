@@ -8,7 +8,7 @@ Policy (data: config/rtsp-pool.json); scope: every rtsp_video device and any rts
   ok                          nothing to do
   hls / file / no_source      REPORTED only (no channel or file pool exists)
   ip_camera not ok            REPORTED only, never replaced (owner hardware)
-  public / loopback not ok    replaced by the first VETTED pool source that plays right now (loopback sources only on
+  hls / public / loopback     replaced (an HLS device gets a vetted HLS test stream, an rtsp one an rtsp source; re-probed 20 s later first) by the first VETTED pool source that plays right now (loopback sources only on
                               the hosts that run vpt-rtsp), at most maxReplacementsPerNight (3) per UTC day, live mode only
 Replacement: a lease on the host (`vpt-lease run`; BUSY => the command never runs, nothing is touched), the FULL current
 host-config GET devices merged with the one changed DEVICE<n>_VIDEO (never devices:{}: that deletes every DEVICE<n> key,
@@ -54,9 +54,17 @@ def candidates(entry, pool):
     for s in pool['sources']:
         if not s.get('vetted') or s['url'] == entry['url']:
             continue
+        if rc.is_http(s['url']) != rc.is_http(entry['url']):  # an HLS device gets an HLS source, an rtsp device an rtsp one
+            continue
         if s['kind'] == 'loopback' and entry['host'] not in [h.strip() for h in os.environ.get(s.get('hostsEnv', ''), '').split(',')]:
             continue
         yield s
+
+
+def confirm_down(entry, ssh_map, timeout):
+    """A live TV channel can blink: change nothing unless it fails again 20 s later."""
+    time.sleep(int(os.environ.get('RTSP_CONFIRM_SECONDS', '20')))
+    return rc.check_stream(entry['url'], timeout, ssh_map.get(entry['host']))['status'] not in rc.OK_STATES
 
 
 def pick(entry, pool, ssh_map, timeout):
@@ -95,8 +103,8 @@ def apply_one(env, host, device, pool_id, out):
     cfg = rc.host_config(server, token, host)
     devices = cfg.get('devices') or {}
     # The guard that matters: a payload without the other devices deletes them on the host.
-    if not devices or device not in devices or not rc.is_rtsp(devices[device].get('DEVICE_VIDEO', '')):
-        return done('refused', reason='device not found or not an rtsp source (nothing sent)')
+    if not devices or device not in devices or not (rc.is_rtsp(devices[device].get('DEVICE_VIDEO', '')) or rc.is_http(devices[device].get('DEVICE_VIDEO', ''))):
+        return done('refused', reason='device not found or not an rtsp/http stream source (nothing sent)')
     old = rc.clean_value(devices[device]['DEVICE_VIDEO'])
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     os.makedirs(os.path.join(STATE, 'backups'), exist_ok=True)
@@ -162,12 +170,14 @@ def run(mode, timeout=10):
             row['action'] = 'none'
         elif r['status'] == 'unverified':
             row['action'] = 'report: cannot verify from codebox (no ssh alias for the host)'
-        elif e['kind'] in ('hls', 'file', 'no_source'):
-            row['action'] = f"report: {e['kind']} source not ok (never replaced automatically: no channel/file pool)"
+        elif e['kind'] in ('file', 'no_source'):
+            row['action'] = f"report: {e['kind']} source not ok (never replaced automatically: no file pool, and an empty source is the owner's call)"
         elif e['kind'] == 'ip_camera':
             row['action'] = 'report: camera down (owner hardware, never replaced)'
         elif budget <= 0:
             row['action'] = 'report: replacement budget used up tonight'
+        elif mode == 'live' and not confirm_down(e, ssh_map, timeout):
+            row['action'] = 'report: failed once, played on the re-probe (flaky), nothing touched'
         else:
             s = pick(e, pool, ssh_map, timeout)
             if not s:

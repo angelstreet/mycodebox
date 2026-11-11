@@ -84,14 +84,15 @@ async function world({ devices, pool, leaseBusy = false, leaseMissing = false, b
   // leaseMissing: a PATH without any vpt-lease, so the run really cannot find the lease CLI
   const pathV = leaseMissing ? `${dir}:/usr/bin:/bin` : `${dir}:${process.env.PATH}`;
   const E = { ...env, PATH: pathV, GHOSTY_STATE_DIR: state, RTSP_POOL_FILE: poolFile, RTSP_CHECK_TOKEN_CMD: path.join(dir, 'tok'),
-    RTSP_CHECK_SERVERS: `envA=http://127.0.0.1:${server.address().port}`, RTSP_SETTLE_SECONDS: '0', RTSP_CHECK_SSH: 'h1=local', RTSP_LOOPBACK_HOSTS: 'h1' };
+    RTSP_CHECK_SERVERS: `envA=http://127.0.0.1:${server.address().port}`, RTSP_SETTLE_SECONDS: '0', RTSP_CONFIRM_SECONDS: '0', RTSP_CHECK_SSH: 'h1=local', RTSP_LOOPBACK_HOSTS: 'h1' };
   // the ssh alias must not run ssh in tests: the probe goes through a fake ssh that runs the command locally
   sh(dir, 'ssh', 'shift 5 2>/dev/null; eval "$*"');
   return { E, state, posts, restarts, devices, close: () => server.close() };
 }
 const POOL = { maxReplacementsPerNight: 3, sources: [
   { id: 'smoke', kind: 'loopback', url: 'rtsp://127.0.0.1:8554/good-smoke', vetted: '2026-11-11', hostsEnv: 'RTSP_LOOPBACK_HOSTS' },
-  { id: 'pub', kind: 'public', url: 'rtsp://test.example/dead-pub', vetted: null } ] };
+  { id: 'pub', kind: 'public', url: 'rtsp://test.example/dead-pub', vetted: null },
+  { id: 'hlsgood', kind: 'public', url: 'https://cdn.example/good/test.m3u8', vetted: '2026-11-11' } ] };
 const dev = (n, v) => ({ DEVICE_NAME: n, DEVICE_VIDEO: v, DEVICE_VIDEO_CAPTURE_PATH: `/c/${n}` });
 
 test('run live: a dead public stream is replaced with the FULL devices payload; camera and healthy streams untouched', async () => {
@@ -177,7 +178,7 @@ test('run live: a replacement that does not play is rolled back to the backup (f
   assert.match(readFileSync(path.join(w.state, 'rtsp-nightly', 'journal.jsonl'), 'utf8'), /rolled_back/);
 });
 
-test('scope: every rtsp_video device (HLS, file, empty source) is checked; only rtsp can be replaced, the rest is reported', async () => {
+test('scope: every rtsp_video device is checked; a dead HLS device gets a vetted HLS source, file / empty source are only reported', async () => {
   const w = await world({ pool: POOL, devices: {
     DEVICE1: { ...dev('tv', 'https://cdn.example/good/index.m3u8'), DEVICE_MODEL: 'rtsp_video' },
     DEVICE2: { ...dev('tv-dead', 'https://cdn.example/dead/index.m3u8'), DEVICE_MODEL: 'rtsp_video' },
@@ -187,11 +188,12 @@ test('scope: every rtsp_video device (HLS, file, empty source) is checked; only 
   const r = await py(REPLACE, ['--mode', 'live'], w.E);
   w.close();
   assert.match(r.stdout, /DEVICE1\s+hls\s+ok -> none/, r.stdout);
-  assert.match(r.stdout, /DEVICE2\s+hls\s+no_connect -> report: hls source not ok/);
+  assert.match(r.stdout, /DEVICE2\s+hls\s+no_connect -> replaced \(pool 'hlsgood'\)/, r.stdout);
+  assert.equal(w.devices.DEVICE2.DEVICE_VIDEO, 'https://cdn.example/good/test.m3u8');
   assert.match(r.stdout, /DEVICE3\s+file\s+ok -> none/);
   assert.match(r.stdout, /DEVICE4\s+no_source\s+no_source -> report: no_source source not ok/);
   assert.ok(!/DEVICE5/.test(r.stdout));
-  assert.equal(w.posts.length, 0); // nothing is ever written for hls / file / empty
+  assert.equal(w.posts.length, 1); // only the dead HLS device; file / empty never
 });
 
 test('the pool file never holds credentials and only vetted entries are replacement candidates', () => {
