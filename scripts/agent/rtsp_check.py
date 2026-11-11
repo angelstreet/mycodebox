@@ -160,8 +160,11 @@ def load_pool(path=None):
 
 
 def inventory(servers, pool):
-    """-> (entries, errors). entries carry the raw url in memory only (key 'url'); use public_entry() to print."""
+    """-> (entries, errors, hosts). entries carry the raw url in memory only (key 'url'); use public_entry() to print.
+    hosts: how much was looked at ('walked' hosts listed, 'read' hosts that answered), so a night with no rtsp
+    device says how much was walked instead of looking like an empty inventory."""
     entries, errors = [], []
+    walked = read = 0
     for env, server in servers.items():
         try:
             token = server_token()
@@ -169,18 +172,20 @@ def inventory(servers, pool):
         except Exception as e:
             errors.append(f'{env}: {type(e).__name__}')
             continue
+        walked += len(names)
         for host in names:
             try:
                 devs = host_config(server, token, host).get('devices') or {}
             except Exception as e:
                 errors.append(f'{env}/{host}: {type(e).__name__}')
                 continue
+            read += 1
             for dev, f in sorted(devs.items()):
                 v = f.get('DEVICE_VIDEO', '')
                 if is_rtsp(v):
                     entries.append({'env': env, 'server': server, 'host': host, 'device': dev, 'name': f.get('DEVICE_NAME', ''),
                                     'url': clean_value(v), 'kind': classify(v, pool)})
-    return entries, errors
+    return entries, errors, {'walked': walked, 'read': read}
 
 
 def public_entry(e, res=None):
@@ -223,15 +228,19 @@ def main(argv=None):
     flags = {x for x in a if x.startswith('--')}
     urls = [x for x in a if not x.startswith('--')]
     errors, rows = [], []
+    hosts = None
     if '--inventory' in flags:
         pool = load_pool()
-        entries, errors = inventory(parse_pairs(os.environ.get('RTSP_CHECK_SERVERS')), pool)
+        entries, errors, hosts = inventory(parse_pairs(os.environ.get('RTSP_CHECK_SERVERS')), pool)
         rows = [public_entry(e, r) for e, r in zip(entries, check_entries(entries, ssh_map, timeout))]
     else:
         for u in urls:
             rows.append({'host': '-', 'device': '-', 'kind': 'adhoc', 'source': redact(u), **check_stream(u, timeout, ssh)})
     report = {'streams': rows, 'errors': errors, 'ok': sum(r['status'] == 'ok' for r in rows), 'total': len(rows)}
-    print(json.dumps(report, indent=2) if as_json else table(rows) + ''.join(f'\nERROR {e}' for e in errors) + f"\n{report['ok']}/{report['total']} ok")
+    if hosts is not None:
+        report['hosts'] = hosts
+    print(json.dumps(report, indent=2) if as_json else table(rows) + ''.join(f'\nERROR {e}' for e in errors) + f"\n{report['ok']}/{report['total']} ok"
+          + (f" ({hosts['walked']} host(s) walked, {hosts['read']} read)" if hosts else ''))
     if not rows:
         return 2
     return 0 if all(r['status'] == 'ok' for r in rows) and not errors else 1

@@ -125,6 +125,23 @@ test('run dry (the default): reports what it would do and writes nothing', async
   assert.equal(w.devices.DEVICE1.DEVICE_VIDEO, 'rtsp://test.example/dead-pub');
 });
 
+test('the report says how many hosts were walked, so an empty night is readable', async () => {
+  const w = await world({ pool: POOL, devices: { DEVICE1: dev('a', '/dev/stb1') } }); // no rtsp source anywhere
+  const r = await py(REPLACE, [], w.E);
+  const inv = JSON.parse((await py(CHECK, ['--json', '--inventory'], w.E)).stdout); // the check reports it too
+  w.close();
+  assert.match(r.stdout, /no rtsp devices found/);
+  assert.match(r.stdout, /1 host\(s\) walked, 1 read/);
+  assert.equal(inv.hosts.walked, 1);
+  assert.equal(inv.hosts.read, 1);
+  assert.equal(inv.streams.length, 0);
+  const day = new Date().toISOString().slice(0, 10);
+  const rep = JSON.parse(readFileSync(path.join(w.state, 'rtsp-nightly', `report-${day}.json`), 'utf8'));
+  assert.equal(rep.hosts.walked, 1);
+  assert.equal(rep.hosts.read, 1);
+  assert.equal(rep.streams.length, 0);
+});
+
 test('run live: a BUSY lease never runs the command, nothing is touched', async () => {
   const w = await world({ pool: POOL, leaseBusy: true, devices: { DEVICE1: dev('a', 'rtsp://test.example/dead-pub') } });
   const r = await py(REPLACE, ['--mode', 'live'], w.E);
