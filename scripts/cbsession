@@ -59,6 +59,12 @@ if [ "$NOWT" != 1 ] && [ -n "$TOP" ] \
   else WTCMD="git -C $(q "$TOP") worktree add $(q "$WT") -b $(q "$WTB") $BASE"; fi
   if [ "$DRY" != 1 ] && [ "${WTCMD%% *}" = git ]; then
     eval "$WTCMD" >/dev/null 2>&1 || { echo "cbsession: could not create the worktree: $WTCMD" >&2; exit 1; }
+    # A fresh worktree has no node_modules, so `npm test` fails until `npm ci` is run by hand (bug-222245ca): link the
+    # checkout's own install (one runtime dependency, read-only use), else install from the lockfile.
+    if [ -f "$WT/package-lock.json" ] && [ ! -e "$WT/node_modules" ]; then
+      if [ -d "$TOP/node_modules" ]; then ln -s "$TOP/node_modules" "$WT/node_modules"
+      else (cd "$WT" && npm ci --ignore-scripts --no-audit --no-fund >/dev/null 2>&1) || true; fi
+    fi
   fi
   [ -d "$WT" ] && git -C "$WT" rev-parse --git-dir >/dev/null 2>&1 || [ "$DRY" = 1 ] \
     || { echo "cbsession: $WT exists but is not a git worktree" >&2; exit 1; }
