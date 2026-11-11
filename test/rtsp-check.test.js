@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { execFile } from 'node:child_process';
-import { mkdtempSync, writeFileSync, chmodSync, readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -19,7 +19,9 @@ function fakes() {
   const dir = mkdtempSync(path.join(tmpdir(), 'rtsp-'));
   // url containing "dead": refuses; "novideo": no streams; "still": identical frames; else 12 moving frames
   const ffprobe = sh(dir, 'ffprobe', `for a; do u=$a; done\ncase "$u" in http*) for a; do [ "$a" = -rtsp_transport ] && { echo 'Option rtsp_transport not found' >&2; exit 1; }; done;; esac\ncase "$u" in *dead*) echo "$u: Connection refused" >&2; exit 1;; *novideo*) echo '{"streams":[]}';; *) echo '{"streams":[{"codec_name":"h264","width":640,"height":360}]}';; esac`);
-  const ffmpeg = sh(dir, 'ffmpeg', `for a; do case "$a" in rtsp*|http*|file*|/*) u=$a;; esac; done\necho '#format: frame checksums'\ncase "$u" in *still*) for i in 1 2 3 4; do echo "0, $i, $i, 1, 10, aaaa"; done;; *) for i in 1 2 3 4; do echo "0, $i, $i, 1, 10, m$i"; done;; esac`);
+  const ffmpeg = sh(dir, 'ffmpeg', `case "$*" in *signalstats*) for a; do last=$a; done; inp=""; prev=""; for a; do [ "$prev" = -i ] && inp=$a; prev=$a; done
+  if [ -f "$inp" ] && grep -q BLACK "$inp"; then echo "lavfi.signalstats.YAVG=4.0" >&2; elif case "$inp" in *blacksrc*) true;; *) false;; esac; then echo "lavfi.signalstats.YAVG=3.0" >&2; else echo "lavfi.signalstats.YAVG=118.0" >&2; fi; exit 0;; esac
+for a; do case "$a" in rtsp*|http*|file*|/*) u=$a;; esac; done\necho '#format: frame checksums'\ncase "$u" in *still*) for i in 1 2 3 4; do echo "0, $i, $i, 1, 10, aaaa"; done;; *) for i in 1 2 3 4; do echo "0, $i, $i, 1, 10, m$i"; done;; esac`);
   return { dir, env: { RTSP_CHECK_FFPROBE: ffprobe, RTSP_CHECK_FFMPEG: ffmpeg } };
 }
 
@@ -75,7 +77,7 @@ test('rtsp_check: --host probes a loopback source from that host (alias from RTS
 });
 
 // ---- the replacement run ----
-async function world({ devices, pool, leaseBusy = false, leaseMissing = false, leaseBusyFirst = false, brokenAfterSave = false, flaky502 = null }) {
+async function world({ devices, pool, leaseBusy = false, leaseMissing = false, leaseBusyFirst = false, brokenAfterSave = false, flaky502 = null, snapshots = {} }) {
   const { dir, env } = fakes();
   const posts = []; const restarts = [];
   const server = http.createServer((req, res) => {
@@ -93,6 +95,13 @@ async function world({ devices, pool, leaseBusy = false, leaseMissing = false, l
         return send({ success: true });
       }
       if (u.pathname === '/server/system/controlHostService') { restarts.push(JSON.parse(b)); return send({ success: true }); }
+      const m = u.pathname.match(/^\/host\/([^/]+)\/stream\/([^/]+)\/thumbnails\/latest\.jpg$/);
+      if (m) { // the tile's snapshot: snapshots[capture] = 'BLACK' | 'STALE' | 'MISSING', default a picture, fresh
+        const kind = snapshots[m[2]] || 'PICTURE';
+        if (kind === 'MISSING') { res.statusCode = 404; return res.end(); }
+        res.setHeader('Last-Modified', new Date(Date.now() - (kind === 'STALE' ? 3600e3 : 1e3)).toUTCString());
+        return res.end(kind === 'STALE' ? 'PICTURE' : kind);
+      }
       res.statusCode = 404; send({});
     });
   });
@@ -115,7 +124,7 @@ async function world({ devices, pool, leaseBusy = false, leaseMissing = false, l
 const POOL = { maxReplacementsPerNight: 3, sources: [
   { id: 'smoke', kind: 'loopback', url: 'rtsp://127.0.0.1:8554/good-smoke', vetted: '2026-11-11', hostsEnv: 'RTSP_LOOPBACK_HOSTS' },
   { id: 'pub', kind: 'public', url: 'rtsp://test.example/dead-pub', vetted: null } ] };
-const dev = (n, v) => ({ DEVICE_NAME: n, DEVICE_VIDEO: v, DEVICE_VIDEO_CAPTURE_PATH: `/c/${n}` });
+const dev = (n, v) => ({ DEVICE_NAME: n, DEVICE_VIDEO: v, DEVICE_VIDEO_CAPTURE_PATH: `/var/www/html/stream/cap-${n.replace(/\W+/g, '')}` });
 
 test('run live: a dead public stream is replaced with the FULL devices payload; camera and healthy streams untouched', async () => {
   const w = await world({ pool: POOL, devices: {
@@ -281,4 +290,39 @@ test('a 502 blip from the server is retried: the night still reads its hosts', a
   w.close();
   assert.doesNotMatch(r.stdout, /ERROR/, r.stdout);
   assert.match(r.stdout, /1 streams/);
+});
+
+test('the tile snapshot is checked too: a black or stale host capture of a playing source is reported, never changed', async () => {
+  const w = await world({ pool: POOL, snapshots: { 'cap-BFM2': 'BLACK', 'cap-Old': 'STALE', 'cap-Gone': 'MISSING' }, devices: {
+    DEVICE1: { ...dev('BFM2', 'https://cdn.example/good/bfm2.m3u8'), DEVICE_MODEL: 'rtsp_video' },
+    DEVICE2: { ...dev('Old', 'https://cdn.example/good/old.m3u8'), DEVICE_MODEL: 'rtsp_video' },
+    DEVICE3: { ...dev('Gone', 'https://cdn.example/good/gone.m3u8'), DEVICE_MODEL: 'rtsp_video' },
+    DEVICE4: { ...dev('Fine', 'https://cdn.example/good/fine.m3u8'), DEVICE_MODEL: 'rtsp_video' } } });
+  const r = await py(REPLACE, ['--mode', 'live'], w.E);
+  w.close();
+  assert.match(r.stdout, /DEVICE1\s+hls\s+ok -> report: the source plays but the tile's snapshot is black: host capture side/, r.stdout);
+  assert.match(r.stdout, /DEVICE2\s+hls\s+ok -> report: the source plays but the tile's snapshot is stale \(\d+ s old\)/);
+  assert.match(r.stdout, /DEVICE3\s+hls\s+ok -> report: the source plays but the tile's snapshot is missing/);
+  assert.match(r.stdout, /DEVICE4\s+hls\s+ok -> none\s+ok/);
+  assert.match(r.stdout, /tile snapshots \(what the app shows\): \{"black": 1, "stale": 1, "missing": 1, "ok": 1\}; capture repairs: dry/);
+  assert.equal(w.posts.length, 0);
+});
+
+test('a channel whose own picture is black: reported while capture checks are dry, repaired from the lists once live', async () => {
+  const devices = () => ({ DEVICE1: { ...dev('FR News 1 — Dark News', 'https://cdn.example/good/blacksrc.m3u8'), DEVICE_MODEL: 'rtsp_video' } });
+  const lists = (w) => { const d = path.dirname(w.E.RTSP_POOL_FILE); writeFileSync(path.join(d, 'l.m3u'),
+    '#EXTM3U\n#EXTINF:-1 group-title="News",Dark News (720p)\nhttps://cdn.example/good/blacksrc.m3u8\n#EXTINF:-1 group-title="News",Bright News (720p)\nhttps://cdn.example/good/bright.m3u8\n');
+    w.E.RTSP_CHANNEL_LISTS = path.join(d, 'l.m3u'); };
+  let w = await world({ pool: POOL, snapshots: { 'cap-FRNews1DarkNews': 'BLACK' }, devices: devices() }); lists(w);
+  let r = await py(REPLACE, ['--mode', 'live'], w.E);
+  w.close();
+  assert.match(r.stdout, /DEVICE1\s+hls\s+ok -> report: the channel's own picture is black .*capture checks are dry, nothing changed/, r.stdout);
+  assert.equal(w.posts.length, 0);
+  w = await world({ pool: POOL, snapshots: { 'cap-FRNews1DarkNews': 'BLACK' }, devices: devices() }); lists(w);
+  mkdirSync(path.join(w.state, 'rtsp-nightly'), { recursive: true });
+  writeFileSync(path.join(w.state, 'rtsp-nightly', 'capture-mode'), 'live\n');
+  r = await py(REPLACE, ['--mode', 'live'], w.E);
+  w.close();
+  assert.match(r.stdout, /DEVICE1\s+hls\s+ok -> replaced \(replace: 'Bright News'\)/, r.stdout);
+  assert.equal(w.devices.DEVICE1.DEVICE_VIDEO, 'https://cdn.example/good/bright.m3u8');
 });
