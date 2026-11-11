@@ -95,3 +95,13 @@ test('status scan prints done-without-closing-review; AGENTS.md and cbsession ca
   assert.match(fs.readFileSync(path.join(ROOT, 'AGENTS.md'), 'utf8'), seg);
   assert.match(fs.readFileSync(path.join(ROOT, 'scripts', 'cbsession'), 'utf8'), seg);
 });
+
+test('filed ids with a note in brackets are filed, not open leftovers (2026-11-11: 3 false pushes)', async () => {
+  const { closingReviewOf } = await import('../done-check.js');
+  const line = (l) => `STATUS: done — x · closing review: docs none needed · leftovers ${l} · unverified none · bugs: none`;
+  assert.equal(closingReviewOf(line("bug-298c8750 (host-or-device: the owner's Mac)")).openLeftovers, null);
+  assert.equal(closingReviewOf(line('bug-db063be2 (monitor misses under load, pi1 load fix pending), bug-1f68929e (ad-break false zap, filed large)')).openLeftovers, null);
+  assert.equal(closingReviewOf(line('filed: bug-12073c5a (filed, radio edge owner)')).openLeftovers, null);
+  assert.equal(closingReviewOf(line('bug-12073c5a and run the stb4 check')).openLeftovers, 'bug-12073c5a and run the stb4 check', 'work named next to an id is still open');
+  assert.equal(closingReviewOf(line('re-run stb4 (not done)')).openLeftovers, 're-run stb4 (not done)');
+});
