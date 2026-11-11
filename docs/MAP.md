@@ -50,6 +50,7 @@ Origin checks protect browser requests but are not user authentication. Any allo
 | Merged-worktree prune (idle, clean, merged worktrees of virtualpytest + ghosty-sessions) | `scripts/worktree-prune.js`, [REFERENCE](REFERENCE.md) "Worktree prune" | dry run writes a plan + sha; `--apply --plan --sha` runs `git worktree remove` (no `--force`) and logs to `worktree-prune.jsonl` |
 | Integration lane notices (owner feed, manager event, session line) | `integration-notify.js` | `test/integration-feed-noise.test.js`, `test/integration-sessions.test.js` |
 | Owner round-trip ledger (`owner-roundtrips.jsonl`, `GET /api/manager/roundtrips`) | `roundtrips.js`, `manager.js` (`settleRoundtrip`) | `test/roundtrips.test.js` |
+| Session delete guard + caller ledger (`session-deletes.jsonl`), JSON-safe ledger append | `session-delete-guard.js`, `jsonl-append.js`, `scripts/manager-action-append.js`, `server.js` (`killSession`) | `test/session-delete-guard.test.js` |
 | V2 task contract, store, policy, intake | `orchestration/task-contract.js`, `store.js`, `policy.js`, `intake.js`, `events.js` | `test/v2-task-core*.test.js`, `test/v2-store*.test.js`, `test/v2-policy.test.js` |
 | V2 goal loop and verifier | `orchestration/goal-loop.js`, `verifier.js`, `roles.js` | `test/v2-goal-loop.test.js` |
 | V2 router, registry, budget (shadow only) | `orchestration/router.js`, `model-registry.js`, `models.json`, `budget.js` | `test/v2-routing*.test.js`, `test/v2-budget.test.js` |

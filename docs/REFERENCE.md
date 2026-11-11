@@ -1702,6 +1702,14 @@ holders: the holders that are neither a session nor a platform agent).
   them) resolves: `{ id, session, machine, at, answered_at, wait_s, class, by, via, resolution }`. `GET /api/manager/roundtrips?hours=24` returns
   `{ summary: { median_s, mean_s, byClass, text }, records }`; the decided digest appends "Owner waits today: median 8 min, ... over 12 stops".
   Nothing in this repository wrote the file before (its writer was out of tree and stopped on 2026-10-09).
+- **Session delete guard** (`session-delete-guard.js`, `killSession` in `server.js`; harness review 2026-11-11 item 1): every `DELETE /api/sessions/<s>?confirm=<s>`
+  is recorded in `<state>/session-deletes.jsonl` (`at, name, by, allowed, reasons, ip, ua`); `by` comes from `?by=` or `X-Ghosty-By` (`unknown` when absent;
+  the dashboard sends `by=owner`). A session with an open owner ask, a held `codebox:<s>` lease or uncommitted / unmerged work is refused (409) unless
+  `by=owner` or `by` equals the session's `startedBy` (the agent that spawned it). Park uses `by=parking` and skips the guard. The nightly manager kick no
+  longer orders "close finished children" (owner withdrew it 2026-11-01).
+- **Honest ledgers** (review item 7): a roundtrip nobody was seen answering is `by: unknown`, never `owner`; manager wake triggers `kick` (nightly kick) and
+  `lane` (integration result) are separate from `owner`; `scripts/manager-action-append.js '<json>'` (`jsonl-append.js`) appends one validated JSON object
+  line to `manager-actions.jsonl` (refuses invalid JSON, repairs a torn tail); the scorecard has `ownerStepIns` per day and `ownerStepInsWeek` (owner-answered stops).
 - **MiniMax credit fallback** (`minimax-fallback.js`): with no OpenRouter credit (402 cool-down or cached balance 0) or the Jev breaker open, AI triage
   and the ambiguous-stop Jev choice (`jev()`) use headless `mcode exec` (MiniMax M3; `--permission smart`, `--mode lightweight` when the installed mcode has it,
   empty temp `--cwd`, `--max-steps 1`, one process at a time (`fallback busy`), detached process group killed after 20 s, a tool call in the output is an error, only

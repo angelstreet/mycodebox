@@ -4703,7 +4703,7 @@ function confirmKill(name) {
       if (a !== 'go' || go.disabled) return;
       go.disabled = true;
       try {
-        const r = await fetch(`/api/sessions/${encodeURIComponent(name)}?confirm=${encodeURIComponent(name)}`, { method: 'DELETE' });
+        const r = await fetch(`/api/sessions/${encodeURIComponent(name)}?confirm=${encodeURIComponent(name)}&by=owner`, { method: 'DELETE' });
         if (r.status === 404 || r.status === 405) {
           const j = await r.json().catch(() => null);
           toast(j && j.error ? j.error : "server doesn't support this yet");
