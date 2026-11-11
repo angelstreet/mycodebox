@@ -46,7 +46,7 @@ export function checkMacHooks({ repoRoot, stateDir, now = Date.now(), maxAgeMs =
   for (const [machine, e] of Object.entries(seen)) {
     const age = now - Date.parse(e.at);
     if (!(age <= maxAgeMs)) continue;
-    const status = e.hook_sha === want ? 'ok' : 'drift';
+    const status = e.hook_sha === want ? 'ok' : 'drift';   // a null hook_sha is a hook older than the sha reporting: drift too
     results.push({ name: `mac-stop-hook@${machine}`, installed: 'Mac: ~/.local/bin or the path in ~/.claude/settings.json hooks.Stop', repo: 'scripts/mac-stop-hook.sh', status, ...(status === 'drift' ? { fix: 'copy scripts/mac-stop-hook.sh to the Mac again (docs/MAC-HOOK.md "Update")' } : {}) });
     if (status === 'drift') findings.push({ key: `installed-copy:drift:mac-stop-hook:${machine}`, title: `Mac ${machine}: the Stop hook differs from the repo script`, body: `DRIFT: the hook on ${machine} (last stop ${e.at}) is not scripts/mac-stop-hook.sh. Fix: copy the repo script to the Mac (docs/MAC-HOOK.md "Update").`, priority: 'high' });
   }

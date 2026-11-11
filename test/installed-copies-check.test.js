@@ -53,8 +53,9 @@ test('Mac hook: a machine whose reported sha differs from the repo script is DRI
   writeFileSync(join(state, 'remote-hooks-seen.json'), JSON.stringify({
     'mac-a': { hook_sha: good, at: '2026-11-11T20:00:00Z' },
     'mac-b': { hook_sha: 'a'.repeat(64), at: '2026-11-11T20:00:00Z' },
+    'mac-nosha': { hook_sha: null, at: '2026-11-11T20:00:00Z' },
     'mac-old': { hook_sha: 'b'.repeat(64), at: '2026-09-01T00:00:00Z' } }));
   const r = checkMacHooks({ repoRoot: repo, stateDir: state, now });
-  assert.deepEqual(r.results.map((x) => [x.name, x.status]), [['mac-stop-hook@mac-a', 'ok'], ['mac-stop-hook@mac-b', 'drift']]);
-  assert.equal(r.findings.length, 1); assert.match(r.findings[0].body, /mac-b/);
+  assert.deepEqual(r.results.map((x) => [x.name, x.status]), [['mac-stop-hook@mac-a', 'ok'], ['mac-stop-hook@mac-b', 'drift'], ['mac-stop-hook@mac-nosha', 'drift']]);
+  assert.equal(r.findings.length, 2); assert.match(r.findings[0].body, /mac-b/);
 });

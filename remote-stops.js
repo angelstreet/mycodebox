@@ -162,7 +162,7 @@ export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goa
 
   async function ingest(v, client) {
     const t = now();
-    if (v.hook_sha) { try { const f = join(stateDir, 'remote-hooks-seen.json'); let o = {}; try { o = JSON.parse(fs.readFileSync(f, 'utf8')); } catch {} o[v.machine] = { hook_sha: v.hook_sha, at: new Date(t).toISOString() }; fs.writeFileSync(f, JSON.stringify(o)); } catch { /* best effort */ } }
+    { try { const f = join(stateDir, 'remote-hooks-seen.json'); let o = {}; try { o = JSON.parse(fs.readFileSync(f, 'utf8')); } catch {} o[v.machine] = { hook_sha: v.hook_sha || null, at: new Date(t).toISOString() }; fs.writeFileSync(f, JSON.stringify(o)); } catch { /* best effort */ } }
     // the title plus a fragment of the session id: two Mac sessions with the same title never share a row
     let name = `${manager.REMOTE_PREFIX}${slug(v.session_name || v.project)}-${slug(v.session_id.slice(0, 6))}`;
     const prev0 = sessions.get(name);
