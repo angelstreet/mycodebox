@@ -300,41 +300,89 @@ def luma(path_or_url, timeout=20, ssh=None):
     return float(m[-1]) if m else None
 
 
-def capture_check(e, timeout=20):
-    """-> {capture: ok|black|stale|missing|unreachable|unknown, age, luma}. The tile's snapshot, via the device's server."""
-    import email.utils, tempfile, time, urllib.error
-    cap = e.get('capture')
-    if not cap or not e.get('server'):
-        return {'capture': 'unknown', 'age': None, 'luma': None}
-    url = f"{e['server'].rstrip('/')}/host/{urllib.parse.quote(e['host'])}/stream/{urllib.parse.quote(cap)}/thumbnails/latest.jpg"
+def _fetch(url, timeout=20):
+    """GET through the device's server with the auto-sign header, 3 tries on 5xx / network errors.
+    -> (status, body, last_modified); status 'ok' | 'missing' | 'unreachable'."""
+    import time, urllib.error
     req = urllib.request.Request(url, headers={'X-Auto-Sign': server_token(), 'User-Agent': 'Mozilla/5.0 rtsp-nightly/1'})
-    body, last = None, None
     for attempt in range(3):
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:
-                body, last = r.read(), r.headers.get('Last-Modified')
-            break
+                return 'ok', r.read(), r.headers.get('Last-Modified')
         except urllib.error.HTTPError as x:
             if x.code == 404:
-                return {'capture': 'missing', 'age': None, 'luma': None}
+                return 'missing', None, None
             if x.code < 500 or attempt == 2:
-                return {'capture': 'unreachable', 'age': None, 'luma': None, 'detail': f'HTTP {x.code}'}
-        except Exception as x:
+                return 'unreachable', None, None
+        except Exception:
             if attempt == 2:
-                return {'capture': 'unreachable', 'age': None, 'luma': None, 'detail': type(x).__name__}
+                return 'unreachable', None, None
         time.sleep(float(os.environ.get('RTSP_API_RETRY_SECONDS', '10')) * (attempt + 1))
+
+
+def _bytes_luma(body, timeout=20):
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix='.jpg') as f:
+        f.write(body or b''); f.flush()
+        return luma(f.name, timeout)
+
+
+def stream_audio_tracks(base, timeout=20):
+    """Audio tracks in the host's newest HLS segment (what the browser player gets), or None.
+    hls.js does not play a TS with several audio tracks (bug-ea31641c): the live tile stays black."""
+    import tempfile
+    st, pl, _ = _fetch(f'{base}/segments/output.m3u8', timeout)
+    if st != 'ok':
+        return None
+    segs = [x.strip() for x in pl.decode('utf-8', 'replace').splitlines() if x.strip() and not x.startswith('#')]
+    if not segs:
+        return None
+    st, body, _ = _fetch(f'{base}/segments/{segs[-1]}', timeout)
+    if st != 'ok':
+        return None
+    with tempfile.NamedTemporaryFile(suffix='.ts') as f:
+        f.write(body); f.flush()
+        try:
+            p = subprocess.run([FFPROBE, '-v', 'error', '-show_entries', 'stream=codec_type', '-of', 'csv=p=0', f.name],
+                               capture_output=True, text=True, timeout=timeout)
+        except (subprocess.TimeoutExpired, OSError):
+            return None
+    return sum(1 for x in p.stdout.split() if x.strip() == 'audio')
+
+
+def capture_check(e, timeout=20):
+    """-> {capture: ok|black|stale|multi_audio|missing|unreachable|unknown, age, luma, audio}. What the app shows of the
+    device: the tile's snapshot and the stream its live player loads, read through the device's server."""
+    import email.utils, time
+    cap = e.get('capture')
+    if not cap or not e.get('server'):
+        return {'capture': 'unknown', 'age': None, 'luma': None, 'audio': None}
+    base = f"{e['server'].rstrip('/')}/host/{urllib.parse.quote(e['host'])}/stream/{urllib.parse.quote(cap)}"
+    st, body, last = _fetch(f'{base}/thumbnails/latest.jpg', timeout)
+    if st != 'ok':
+        return {'capture': st, 'age': None, 'luma': None, 'audio': None}
     age = None
     if last:
         try:
             age = int(time.time() - email.utils.parsedate_to_datetime(last).timestamp())
         except (TypeError, ValueError):
             age = None
-    with tempfile.NamedTemporaryFile(suffix='.jpg') as f:
-        f.write(body or b''); f.flush()
-        y = luma(f.name, timeout)
+    y = _bytes_luma(body, timeout)
+    if y is not None and y < BLACK_LUMA:
+        # A dark scene is not a black screen: black only if it stays dark over three snapshots, 10 s apart.
+        for _ in range(2):
+            time.sleep(float(os.environ.get('RTSP_BLACK_RESAMPLE_SECONDS', '10')))
+            st2, body2, _ = _fetch(f'{base}/thumbnails/latest.jpg', timeout)
+            y2 = _bytes_luma(body2, timeout) if st2 == 'ok' else None
+            if y2 is None or y2 >= BLACK_LUMA:
+                y = y2 if y2 is not None else y
+                break
+            y = max(y, y2)
+    audio = stream_audio_tracks(base, timeout)
     status = ('stale' if age is not None and age > STALE_SECONDS else
-              'black' if y is not None and y < BLACK_LUMA else 'ok')
-    return {'capture': status, 'age': age, 'luma': None if y is None else round(y, 1)}
+              'black' if y is not None and y < BLACK_LUMA else
+              'multi_audio' if audio is not None and audio > 1 else 'ok')
+    return {'capture': status, 'age': age, 'luma': None if y is None else round(y, 1), 'audio': audio}
 
 
 def check_captures(entries):
