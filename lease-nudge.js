@@ -46,7 +46,7 @@ export function reasonsOf(l, { now, idleMin = null }) {
 // Pure. Inputs: deploys (runner snapshot `deploys`, created in seconds, `blocking`), view (lease-source view: leases, tickets),
 // sessionOf(agent) -> codebox session name | null, idleMinOf(lease, session) -> minutes | null, last: Map<key, ms>.
 // -> [{ key, leaseId, agent, session, env, resources, what, waitedMin, reasons, text }] (one per holder lease, longest wait first)
-export function planNudges({ now, deploys = [], view = null, sessionOf = () => null, idleMinOf = () => null, last = new Map(), waitMs = WAIT_MS, cooldownMs = COOLDOWN_MS } = {}) {
+export function planNudges({ now, deploys = [], view = null, sessionOf = () => null, idleMinOf = () => null, last = new Map(), waitMs = WAIT_MS, cooldownMs = COOLDOWN_MS, eqWaitMs = EQ_WAIT_MS } = {}) {
   const leases = new Map(((view?.ok ? view.leases : null) || []).filter((l) => l.mode === 'exclusive').map((l) => [l.id, l]));
   const waits = [];   // { what, waitedMs, blockers: [lease-like] }
   for (const d of deploys || []) {
@@ -71,7 +71,7 @@ export function planNudges({ now, deploys = [], view = null, sessionOf = () => n
     // owner 2026-11-10: no healthy free equivalent and no device-only block = nothing to say (the old 15 min "probe other hosts" push assumed
     // equivalents exist and misled a session on unique hardware); the waiter keeps waiting silently
     const eqNow = !!t.equivalents?.length;
-    if (!(waitedMs > (eqNow ? Math.min(waitMs, EQ_WAIT_MS) : waitMs)) || t.any || !known) continue;
+    if (!(waitedMs > (eqNow ? Math.min(waitMs, eqWaitMs) : waitMs)) || t.any || !known) continue;
     const key = `${t.agent}|${t.id}|waiter`;
     if (now - (last.get(key) || 0) < (eqNow ? Math.min(cooldownMs, EQ_COOLDOWN_MS) : cooldownMs)) continue;
     const session = /^mac:/i.test(t.agent || '') ? null : sessionOf(t.agent);
@@ -129,7 +129,9 @@ export function createLeaseNudge({ stateDir, getInputs, sessionOf = () => null, 
     for (const [k, v] of [...last]) if (t - v > 24 * 3600 * 1000) last.delete(k);
     try { await mkdir(stateDir, { recursive: true }); await writeFile(stateFile, JSON.stringify(Object.fromEntries(last))); } catch (e) { log.error?.('[lease-nudge] save', e.message); }
   }
-  async function tick() {
+  // o.only = session name: answer that session's ticket at once (a stop on STATUS waiting/blocked, owner 2026-11-11): the free-equivalent line, no 30 s
+  // age, no holder nudges; the same cooldown key as the periodic tick, so the line is never sent twice.
+  async function tick(o = {}) {
     if (busy) return snap;
     busy = true;
     try {
@@ -138,7 +140,7 @@ export function createLeaseNudge({ stateDir, getInputs, sessionOf = () => null, 
       if (m === 'off') { snap = { at: t, mode: m, planned: 0, sent: 0, events: 0 }; return snap; }
       if (!loaded) await load();
       const inp = await getInputs();
-      const plan = planNudges({ now: t, deploys: inp?.deploys, view: inp?.view, sessionOf, idleMinOf, last });
+      const plan = planNudges({ now: t, deploys: o.only ? [] : inp?.deploys, view: inp?.view, sessionOf, idleMinOf, last, ...(o.only ? { eqWaitMs: 0 } : {}) }).filter((n) => !o.only || (n.waiter && n.session === o.only && /^free equivalent/.test(n.reasons[0] || '')));
       let sent = 0, events = 0;
       for (const n of plan) {
         const rec = { at: new Date(t).toISOString(), by: n.waiter ? 'lease-watchdog' : 'lease-nudge', leaseId: n.leaseId, ...(n.ticketId ? { ticketId: n.ticketId } : {}), agent: n.agent, session: n.session, env: n.env, reasons: n.reasons, waitedMin: n.waitedMin, via: n.session ? 'session' : 'event', dryRun: m !== 'live' };
@@ -171,5 +173,5 @@ export function createLeaseNudge({ stateDir, getInputs, sessionOf = () => null, 
       return snap;
     } catch (e) { log.error?.('[lease-nudge]', e.message); return snap; } finally { busy = false; }
   }
-  return { tick, start() { tick(); timer = setInterval(tick, tickMs); timer.unref?.(); }, stop() { if (timer) clearInterval(timer); }, snapshot: () => snap, last };
+  return { tick, answerStop: (session) => tick({ only: session }), start() { tick(); timer = setInterval(tick, tickMs); timer.unref?.(); }, stop() { if (timer) clearInterval(timer); }, snapshot: () => snap, last };
 }

@@ -146,3 +146,17 @@ test('an idle codebox holder whose chat cannot take the note is flagged to the m
   await w.n.tick();
   assert.equal(w.events.filter((e) => e.key === 'lease:idle-blocking').length, 0);
 });
+
+test('answerStop: a stop is answered at once (no 30 s age) with the free-equivalent line, only for that session, once', async () => {
+  const sent = [];
+  const tk = (agent, id) => ({ id, env: 'env-a', resources: ['host-1/device1'], agent, holders: [], createdMs: NOW - 2000, equivalents: ['host-1/device2'], groups: ['stb'] });
+  const n = createLeaseNudge({ stateDir: tmp('ln-'), getInputs: async () => ({ deploys: [], view: view([], [tk('codebox:worker', 'T1'), tk('codebox:other', 'T2')]) }), sessionOf: (a) => a.replace('codebox:', ''), canSend: () => true, send: async (s, t) => { sent.push([s, t]); }, now: () => NOW, log: { log() {}, error() {} } });
+  await n.tick();                                   // periodic tick: 2 s old, nothing yet
+  assert.equal(sent.length, 0);
+  await n.answerStop('worker');
+  assert.equal(sent.length, 1); assert.equal(sent[0][0], 'worker');
+  assert.match(sent[0][1], /STOP WAITING: your ticket T1 .* host-1\/device2/);
+  assert.match(sent[0][1], /vpt-lease claim env-a host-1\/device2/);
+  await n.answerStop('worker');
+  assert.equal(sent.length, 1, 'cooldown: not twice');
+});

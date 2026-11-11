@@ -9,6 +9,10 @@
 // waits for, granted while that session sat idle, with no heartbeat or renewal and no turn of the session since the grant, is released after
 // GHOSTY_UNUSED_GRANT_MIN (default 10; 0 = off) on 2 consecutive polls. A waiter that exits on its grant wakes its session at once, so a
 // lease in real use always shows a turn or a heartbeat; a claim made inside a turn ends that turn after the grant and never qualifies.
+// Idle release (owner 2026-11-11, TASK-239 item 3): an exclusive lease of a live codebox:<session> whose session sits at its prompt (not working, no
+// turn / prompt / heartbeat / grant) for GHOSTY_IDLE_RELEASE_MIN (default 10; 0 = off) is released on 2 consecutive polls, journaled, and the session is told
+// how to claim again. Never when the session has a live background job (hasLiveJob: reporter backgroundWork / crons, a pane task, a child process of the
+// agent), nor a lease with a holder pid, a pin, a system / deploy lease. Mode: manager.json `leaseIdleRelease` "dry" (default: journal only, dryRun:true) | "live" | "off".
 import fs from 'node:fs';
 import os from 'node:os';
 import { appendFile, mkdir } from 'node:fs/promises';
@@ -17,6 +21,8 @@ import { join } from 'node:path';
 export const CHECKS = 2;
 export const UNUSED_GRACE_MS = 10 * 60 * 1000;
 const unusedGraceFromEnv = () => { const v = process.env.GHOSTY_UNUSED_GRANT_MIN; const n = v == null || v === '' ? 10 : Number(v); return Number.isFinite(n) && n > 0 ? n * 60000 : 0; };
+export const IDLE_RELEASE_MS = 10 * 60 * 1000;
+const idleFromEnv = () => { const v = process.env.GHOSTY_IDLE_RELEASE_MIN; const n = v == null || v === '' ? 10 : Number(v); return Number.isFinite(n) && n > 0 ? n * 60000 : 0; };
 const SKEW_S = 10;                    // the holder exists before it claims; a process that started later than the grant is a reused pid
 const MAX_PER_POLL = 3;               // circuit breaker
 const SYSTEM_RE = /^(manager:deploy|update_core:)/;
@@ -66,9 +72,29 @@ export function unusedGrants(rows, tickets, { sessionNames = [], activityOf = ()
   return out;
 }
 
-export function createHolderReaper({ stateDir, run, listSessionNames = async () => [], activityOf = () => null, startOf = procStartSec, now = Date.now, pollMs = 30000, log = console, enabled = () => process.env.GHOSTY_HOLDER_REAPER !== 'off', unusedGraceMs = () => unusedGraceFromEnv() } = {}) {
+// Pure. -> [{ id, agent, session, idleMin, sinceMs }] exclusive leases of an idle live codebox session; the caller still asks hasLiveJob before acting.
+export function idleHolders(rows, { sessionNames = [], activityOf = () => null, now = Date.now(), idleMs = IDLE_RELEASE_MS } = {}) {
+  const out = [];
+  if (!(idleMs > 0)) return out;
+  for (const l of rows || []) {
+    if (l.mode !== 'exclusive' || l.system || l.deploy_id || l.holder_pid != null || SYSTEM_RE.test(l.agent || '')) continue;
+    const m = /^codebox:(.+)$/.exec(l.agent || '');
+    if (!m || !sessionNames.includes(m[1])) continue;
+    let act; try { act = activityOf(m[1]); } catch { act = null; }
+    if (!act || act.working) continue;                                  // unknown (nobody may act on it) or working
+    const sinceMs = (Number(l.since) || 0) * 1000;
+    const hb = Date.parse(l.lastHeartbeatAt || l.last_heartbeat_at || '') || 0;
+    const ref = Math.max(sinceMs, hb, act.turnAt || 0, act.promptAt || 0);
+    if (!ref || now - ref < idleMs) continue;
+    out.push({ id: l.id, agent: l.agent, session: m[1], idleMin: Math.floor((now - ref) / 60000), sinceMs });
+  }
+  return out;
+}
+
+export function createHolderReaper({ stateDir, run, listSessionNames = async () => [], activityOf = () => null, startOf = procStartSec, now = Date.now, pollMs = 30000, log = console, enabled = () => process.env.GHOSTY_HOLDER_REAPER !== 'off', unusedGraceMs = () => unusedGraceFromEnv(), idleReleaseMs = () => idleFromEnv(), idleMode = () => 'dry', hasLiveJob = async () => false, notify = async () => {} } = {}) {
   const dead = new Map();      // lease id -> consecutive dead polls
   const unused = new Map();    // lease id -> consecutive polls seen as an unused grant
+  const idleSeen = new Map();  // lease id -> consecutive polls seen idle
   const armed = new Set();     // name-derived pids seen alive
   let timer = null, busy = false, snap = { at: 0, watched: 0, released: [] };
 
@@ -115,6 +141,30 @@ export function createHolderReaper({ stateDir, run, listSessionNames = async () 
         const line = { at: new Date(now()).toISOString(), id: u.id, agent: u.agent, session: u.session, waiters: u.waiters, ok: rr.code === 0, out: (rr.stdout || rr.stderr || '').trim().slice(0, 120) };
         await mkdir(stateDir, { recursive: true }).then(() => appendFile(join(stateDir, 'lease-actions.jsonl'), JSON.stringify({ ...line, by: 'lease-holder-reaper', type: 'unused-grant' }) + '\n')).catch(() => {});
         if (rr.code === 0) { unused.delete(u.id); released.push(line); log.log?.(`[lease-holder-reaper] ${reason}`); }
+      }
+      const im = idleMode();
+      const idleAll = im === 'off' ? [] : idleHolders(rows, { sessionNames: names, activityOf, now: now(), idleMs: idleReleaseMs() }).filter((u) => !released.some((r) => r.id === u.id));
+      const idleIds2 = new Set(idleAll.map((u) => u.id));
+      for (const id of [...idleSeen.keys()]) if (!idleIds2.has(id)) idleSeen.delete(id);
+      for (const u of idleAll) {
+        const n = (idleSeen.get(u.id) || 0) + 1;
+        idleSeen.set(u.id, n);
+        if (n < CHECKS || acted >= MAX_PER_POLL) continue;
+        let job = false; try { job = await hasLiveJob(u.session); } catch { job = true; }   // unknown = busy
+        if (job) continue;
+        const reason = `idle-release: released lease ${u.id}: session ${u.session} idle at its prompt ${u.idleMin} min, no background job`;
+        const line = { at: new Date(now()).toISOString(), id: u.id, agent: u.agent, session: u.session, idleMin: u.idleMin, by: 'lease-holder-reaper', type: 'idle-release', dryRun: im !== 'live' };
+        if (im === 'live') {
+          acted++;
+          const rr = await run(['release', u.id, '--by', 'lease-holder-reaper', '--reason', reason]);
+          line.ok = rr.code === 0; line.out = (rr.stdout || rr.stderr || '').trim().slice(0, 120);
+          if (rr.code === 0) {
+            idleSeen.delete(u.id); released.push(line); log.log?.(`[lease-holder-reaper] ${reason}`);
+            await notify(u.session, `Lease watchdog: your lease ${u.id} was released: you sat idle at the prompt ${u.idleMin} min with no background job. Claim again when you need it: vpt-lease claim <env> --any <group> --wait (or vpt-lease run <env> <resource> -- <cmd>).`).catch(() => {});
+          }
+        } else if (n === CHECKS) log.log?.(`[lease-holder-reaper] DRY ${reason}`);   // dry: one line when first confirmed
+        if (im !== 'live' && n !== CHECKS) continue;
+        await mkdir(stateDir, { recursive: true }).then(() => appendFile(join(stateDir, 'lease-actions.jsonl'), JSON.stringify(line) + '\n')).catch(() => {});
       }
       snap = { at: now(), watched: list.length, released };
     } catch (e) { log.error?.('[lease-holder-reaper]', e.message); }

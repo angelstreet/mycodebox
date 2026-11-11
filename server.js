@@ -182,7 +182,7 @@ import { createTranscriber, extFor, MAX_AUDIO } from './transcribe.js';
 import { readOpenAsks, readOpenAsksReport, recordOwnerAnswer } from './owner-asks.js';
 import { createAskFold } from './ask-fold.js';
 import { createAskGuard } from './ask-guard.js';
-import { createOwnJobs } from './own-jobs.js';
+import { createOwnJobs, jobPids } from './own-jobs.js';
 import { createScriptRunSource } from './wait-ids.js';
 import { createPendingWakes, MAX_ATTEMPTS as MAX_PENDING_ATTEMPTS } from './pending-wakes.js';
 import { createExternalResult } from './external-result.js';
@@ -927,7 +927,21 @@ const leaseWatch = createLeaseWatch({
 });
 // A lease whose holder process on this host is gone is released (lease-holder-reaper.js; the registry on proxmox cannot probe codebox pids).
 // It also releases a grant made to an idle codebox session that never used it while others wait (GHOSTY_UNUSED_GRANT_MIN, default 10; 0 = off).
-const holderReaper = createHolderReaper({ stateDir: STATE_DIR, run: leaseRun, listSessionNames: async () => (await listSessions()).map((x) => x.name), activityOf: (name) => reporter.activityOf(name) });
+const holderReaper = createHolderReaper({
+  stateDir: STATE_DIR, run: leaseRun, listSessionNames: async () => (await listSessions()).map((x) => x.name), activityOf: (name) => reporter.activityOf(name),
+  // idle release (lease-holder-reaper.js): manager.json `leaseIdleRelease` "dry" (default) | "live" | "off"
+  idleMode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).leaseIdleRelease; return m === 'live' || m === 'off' ? m : 'dry'; } catch { return 'dry'; } },
+  // never release for a session with a background task, a cron, a pane task or a child process of its agent
+  hasLiveJob: async (name) => {
+    const sm = reporter.summary(name);
+    if (sm && ((sm.backgroundWork ?? 0) > 0 || (sm.crons ?? 0) > 0)) return true;
+    if (paneBackgroundOf(latest?.status?.[name]?.plain || [])) return true;
+    const p = (await listPanes()).get(name);
+    const ap = p?.pid ? agentPidFromTree(p.pid, await processTable()) : null;
+    return !ap || jobPids(ap, await processTable()).length > 0;   // no agent pid = cannot tell
+  },
+  notify: async (session, text) => { if (!noteAllowed(latest?.status?.[session])) return pendingWakes.add ? pendingWakes.add({ session, key: `lease-idle:${session}`, text, by: 'lease-watchdog' }) : null; await assertAgentPane(session, 'lease-nudge'); await sendKeys(session, text, true); logSend(session, 'lease-nudge', { keys: text }); },
+});
 // The orchestrator asks a holder to release or narrow (lease-nudge.js): every 2 min, for a queued deploy or ticket that waits > 10 min.
 // manager.json key `leaseNudge`: "live" (default) | "dry" | "off". Never releases or narrows by itself.
 // minutes since the holder's last activity, as the dashboard sees it (a working session is never idle); null when the
@@ -3267,6 +3281,9 @@ server.listen(PORT, HOST, async () => {
       const resolvable = (it.kind === 'lease' || it.kind === 'deploy')
         ? systemResolvable({ session: it.session, kind: it.kind, case: it.case, view: leaseSource.peekView(), deploys: deployRunner.snapshot().deploys || [], sessionOf: (agent) => holderSession(agent, Object.keys(latest?.status || {}), MACHINES) })
         : null;
+      // a stop on a named-device wait while a healthy equivalent is free is answered at once with the exact claim command (lease-nudge.js answerStop);
+      // retried twice because the pane may not yet accept a note right after the stop
+      if (it.kind === 'lease') for (const ms of [3000, 25000]) setTimeout(() => leaseNudge.answerStop(it.session).catch((e) => console.error('[lease-nudge] answerStop', e.message)), ms).unref?.();
       if (resolvable) {
         managerEvents.record({ key: 'lease:system-wait', title: `${it.session}: ${it.kind} wait the system resolves`, body: `${body} [${resolvable}]`.slice(0, 400), url: `/?s=${encodeURIComponent(it.session)}`, priority: 'low', session: it.session })
           .catch((e) => console.error('[manager-item]', e.message));
