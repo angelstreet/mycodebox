@@ -174,6 +174,7 @@ Hours were lost waiting on one web host while the other was free. When the work 
   the busy hosts go back to the queue as their own strict request (same ref and age, `split-to=` in `deploy list`); a catch-up also yields per host to a ticket that waited over 10 min, so only the hosts that ticket touches stay queued. A request whose host
   another queued deploy lists at a ref that contains its own loses that host (`superseded-by=`): an older ref never deploys over a newer one.
 - `vpt-lease list` / `claim --wait` say what gates a ticket that looks grantable (`note: gated by deploy <id> (<state>, <why>)`).
+- `vpt-lease list` prints `OLD CODE  <env>/<host>  restart deferred ...: catch-up <id> ...` for every host a queued or running catch-up deploy covers: that host had its code synced (or was dropped) while leased, so its vpt-host and vpt-kpi still run the code from before that deploy. `--json` carries it as `old_code`. Freeing the host lets the catch-up restart it (2026-11-11).
 - A host deploy releases each host as soon as it is done with it (rolling, owner 2026-10-31): update_core.sh reports each host's health,
   and once the run has moved on to the next host the deploy runner drops that host from the deploy lease (`vpt-lease deploy release-hosts`).
   A host the deploy has not reached yet, or is on now, stays held until it is done. Hosts held by a run are synced and restarted later by
