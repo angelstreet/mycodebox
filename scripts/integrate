@@ -9,9 +9,13 @@
 #   integrate wait <id> [--timeout MIN]                                                  block until the request is final (default 60);
 #                                                                                        an unreachable service is retried until the timeout
 #   integrate cancel <id>                                                                only while it is still queued
+#   integrate self-update                                                                fetch the current scripts/integrate + scripts/found-bug from the dashboard host (same token), verify the sha256,
+#                                                                                        install into ${MYCODEBOX_BIN_DIR:-~/.local/bin} atomically (old copy kept as <name>.bak); idempotent
 # Where: URL and token from ~/.config/mycodebox/config (url = ...) and ~/.config/mycodebox/token (a client added with
 # `lease-token.js add <name> --integrate`), as for the Mac Stop hook; on the codebox with neither: loopback + the reporter token.
 # Exit: 0 merged / deployed / CI superseded, 1 error, 3 returned (reason printed) or cancelled, 4 merged but CI red / deploy failed, 5 service unreachable.
+
+CLIENT_SCRIPTS_VERSION=1   # bump with every change to scripts/integrate or scripts/found-bug (same number in both); the server compares it
 
 CFG_DIR="${MYCODEBOX_CONFIG_DIR:-$HOME/.config/mycodebox}"
 cfg() { [ -r "$CFG_DIR/config" ] && sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$CFG_DIR/config" | tail -n 1 | sed 's/[[:space:]]*$//; s/^"\(.*\)"$/\1/'; }
@@ -60,6 +64,29 @@ tail_of() { sed -n '/^---$/,$p' "$OUT" | sed 1d; }
 fail_http() { _e=$(val error); [ -n "$_e" ] || _e="HTTP $CODE"; printf 'integrate: %s\n' "$_e" >&2; exit 1; }
 json_esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr -d '\000-\037'; }
 urlenc() { printf '%s' "$1" | sed 's/%/%25/g; s/ /%20/g; s/&/%26/g; s/?/%3F/g; s/#/%23/g'; }
+
+# sha256 of a file (Linux sha256sum, macOS shasum, else openssl)
+sha_of() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1; elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | cut -d' ' -f1; else openssl dgst -sha256 "$1" | sed 's/^.*= *//'; fi; }
+
+# integrate self-update: both client scripts from the dashboard host. Never installs a file whose sha256 differs from the manifest.
+self_update() {
+  _bin=${MYCODEBOX_BIN_DIR:-$HOME/.local/bin}
+  api GET "/api/integration/client-scripts?format=kv"; [ "$CODE" = 200 ] || fail_http
+  cp "$OUT" "$TMP/manifest"; _ver=$(sed -n 's/^version=//p' "$TMP/manifest" | head -n 1); _chg=0
+  mkdir -p "$_bin" || die "cannot create $_bin"
+  for _n in integrate found-bug; do
+    _want=$(sed -n "s/^$_n\\.sha256=//p" "$TMP/manifest" | head -n 1); [ -n "$_want" ] || die "the server did not list $_n"
+    if [ -f "$_bin/$_n" ] && [ "$(sha_of "$_bin/$_n")" = "$_want" ]; then printf '%s is current\n' "$_n"; continue; fi
+    api GET "/api/integration/client-scripts/$_n"; [ "$CODE" = 200 ] || fail_http
+    cp "$OUT" "$TMP/$_n.new" || die "cannot stage $_n"
+    [ "$(sha_of "$TMP/$_n.new")" = "$_want" ] || die "checksum mismatch for $_n: nothing installed"
+    [ -f "$_bin/$_n" ] && cp -p "$_bin/$_n" "$_bin/$_n.bak"
+    cp "$TMP/$_n.new" "$_bin/.$_n.new.$$" && chmod 755 "$_bin/.$_n.new.$$" && mv -f "$_bin/.$_n.new.$$" "$_bin/$_n" || { rm -f "$_bin/.$_n.new.$$"; die "cannot install $_n into $_bin"; }
+    printf 'updated %s in %s (previous copy: %s.bak)\n' "$_n" "$_bin" "$_n"; _chg=1
+  done
+  [ "$_chg" = 1 ] || printf 'client scripts are current (version %s)\n' "$_ver"
+  case ":$PATH:" in *":$_bin:"*) ;; *) printf 'note: %s is not on PATH\n' "$_bin" ;; esac
+}
 
 # Print a request's outcome and exit with its code.
 report() {
@@ -136,6 +163,9 @@ case "$cmd" in
       printf 'approval ignored: only the manager can approve\n'
       printf 'The request is queued without an approval; a floor that needed it will return it.\n'
     fi
+    # drift: the lane tells us the current client-script version; one line, never blocking
+    _sv=$(val clientScripts); case "$_sv" in ""|*[!0-9]*) ;; *) [ "$_sv" -gt "$CLIENT_SCRIPTS_VERSION" ] && printf 'client scripts are old (v%s, server v%s): run integrate self-update\n' "$CLIENT_SCRIPTS_VERSION" "$_sv" ;; esac
+    command -v found-bug >/dev/null 2>&1 || printf 'found-bug is not installed here: run integrate self-update (then found-bug --help)\n'
     if [ "$WAIT" = 1 ]; then do_wait "$ID" 60; fi
     printf 'Integration %s queued. Keep working on anything that does not depend on it; end the turn with STATUS: waiting: integration %s only when nothing else is left.\n' "$ID" "$ID" ;;
   status)
@@ -156,9 +186,10 @@ case "$cmd" in
     [ -n "$1" ] || die "usage: integrate cancel <id>"
     api POST "/api/integration/requests/$(urlenc "$1")/cancel?format=kv" "{}"; [ "$CODE" = 200 ] || fail_http
     printf '%s\n' "$(val text)" ;;
+  self-update) self_update ;;
   ack)
     [ -n "$1" ] || die "usage: integrate ack <id>   (manager: the external result was relayed)"
     api POST "/api/integration/external-results/$(urlenc "$1")/ack?format=kv" "{}"; [ "$CODE" = 200 ] || fail_http
     printf 'Integration %s external result acknowledged.\n' "$1" ;;
-  *) printf 'usage: integrate request [<branch>] [--repo KEY] [--deploy SCOPE] [--note TEXT] [--approved-by WHO] [--migration-applied] [--wait] [--for SESSION] [--mac LABEL] | ack <id> | status [<id>] | wait <id> [--timeout MIN] | cancel <id>\n' >&2; exit 1 ;;
+  *) printf 'usage: integrate request [<branch>] [--repo KEY] [--deploy SCOPE] [--note TEXT] [--approved-by WHO] [--migration-applied] [--wait] [--for SESSION] [--mac LABEL] | ack <id> | status [<id>] | wait <id> [--timeout MIN] | cancel <id> | self-update\n' >&2; exit 1 ;;
 esac

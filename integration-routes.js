@@ -7,6 +7,8 @@
 //   GET  /requests/:id/wait?timeout=30   long-poll (max 30 s) until a final state               -> { ok, request, final, ...summary }
 //   POST /requests/:id/cancel            only while queued                                      -> { ok, request }
 //   POST /external-results/:id/ack    manager only: the result of an external-origin request was relayed (external-result.js)
+//   GET  /client-scripts                 { version, <name>.sha256 .. } of scripts/integrate + scripts/found-bug (any authorised client; `integrate self-update`)
+//   GET  /client-scripts/:name           the script itself (text/plain)
 //   GET  /repos                          configured repositories + queue depth                  -> { ok, repos: [...] }
 // `?format=kv` answers key=value lines (+ `---` and the output tail) for the POSIX-sh CLI, which has no JSON parser.
 import fs from 'node:fs';
@@ -14,6 +16,7 @@ import { join } from 'node:path';
 import { DEFAULT_CIDRS, parseCidrs, addrAllowed, readClients, clientOf, readBody } from './lease-routes.js';
 import { FINAL } from './integration-lane.js';
 import { integrationText, timeline } from './integration-notify.js';
+import * as clientScripts from './client-scripts.js';
 
 export const PREFIX = '/api/integration';
 export const MAX_WAIT_S = 30;
@@ -33,7 +36,7 @@ export const summary = (r) => ({ id: r.id, repo: r.repo, branch: r.branch, targe
 const one = (v) => String(v ?? '').replace(/[\r\n]+/g, ' ');
 export const kv = (o, tail = '') => `${Object.entries(o).map(([k, v]) => `${k}=${one(v)}`).join('\n')}\n${tail ? `---\n${tail}\n` : ''}`;
 
-export function createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk, sessionCwd = async () => null, sessionKnown = async () => true, remoteResolve = () => null, externalResult = null, cidrs = process.env.LEASE_ALLOW_CIDRS } = {}) {
+export function createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk, sessionCwd = async () => null, sessionKnown = async () => true, remoteResolve = () => null, externalResult = null, scriptsDir = undefined, cidrs = process.env.LEASE_ALLOW_CIDRS } = {}) {
   const allow = parseCidrs([...DEFAULT_CIDRS, ...String(cidrs || '').split(',')].join(','));
   const clientsFile = join(stateDir, 'leases', 'clients.json');
   let cache = { key: '', clients: [] };
@@ -103,6 +106,8 @@ export function createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk
     return originOf(req) === 'same' ? { actor: 'owner', mayDecide: true } : null;
   }
 
+  const clientScriptsVersion = () => { try { return clientScripts.manifest(scriptsDir).version; } catch { return 0; } };
+
   // -> true when the request belonged to the integration API (and has been answered)
   async function handle(req, res) {
     const url = new URL(req.url, 'http://integration.local');
@@ -114,7 +119,15 @@ export function createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk
     const fail = (code, error) => send(res, STATUS[code] || 400, { ok: false, code, error }, fmt);
     try {
       let m;
-      if (req.method === 'POST' && sub === '/requests') {
+      if (req.method === 'GET' && (sub === '/client-scripts' || (m = /^\/client-scripts\/([\w-]{1,32})$/.exec(sub)))) {
+        if (m) {
+          const buf = clientScripts.read(m[1], scriptsDir);
+          if (!buf) { fail('E_NOT_FOUND', 'no such client script'); return true; }
+          res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end(buf); return true;
+        }
+        const mf = clientScripts.manifest(scriptsDir);
+        send(res, 200, { ok: true, ...mf, flat: { version: mf.version, ...Object.fromEntries(Object.entries(mf.files).map(([n, f]) => [`${n}.sha256`, f.sha256])) } }, fmt);
+      } else if (req.method === 'POST' && sub === '/requests') {
         let body; try { body = await readBody(req, 64 * 1024); } catch (e) { fail('E_INVALID', e.message); return true; }
         // --approved-by: only the manager (a client flagged `manager`) or the loopback reporter token may approve; an integrate client may not
         if (body.approvedBy != null && !who.manager) { send(res, 403, { ok: false, error: 'approved-by needs the manager (a client added with --manager) or the loopback reporter token' }, fmt); return true; }
@@ -137,7 +150,7 @@ export function createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk
         const clientSession = typeof body.session === 'string' && body.session.trim() ? body.session.trim().slice(0, 60) : null;
         const external = who.by.startsWith('client:') ? (macLabel || clientSession || who.client) : macLabel || (forNote && body.forSession ? String(body.forSession) : null);
         const out = lane.enqueue({ repo, branch: body.branch, session, forSession, external, worktree: who.loopback && typeof body.worktree === 'string' ? body.worktree : null, deploy: body.deploy || null, note: body.note, sha: body.sha, by: who.by, approvedBy: body.approvedBy != null ? (who.by === 'loopback' ? String(body.approvedBy) : `${String(body.approvedBy)} (${who.by})`) : undefined, migrationApplied: body.migrationApplied === true ? true : undefined });
-        send(res, 200, { ok: true, ...out, flat: { id: out.id, position: out.position, repo: out.repo, ...(out.coalesced ? { coalesced: 1 } : {}), ...(forSession ? { forSession } : {}), ...(forNote ? { forNote } : {}), ...(out.approvalIgnored ? { approvalIgnored: 1, approvalRefused: JSON.stringify(out.approvalRefused) } : {}) } }, fmt);
+        send(res, 200, { ok: true, ...out, flat: { id: out.id, position: out.position, repo: out.repo, clientScripts: clientScriptsVersion(), ...(out.coalesced ? { coalesced: 1 } : {}), ...(forSession ? { forSession } : {}), ...(forNote ? { forNote } : {}), ...(out.approvalIgnored ? { approvalIgnored: 1, approvalRefused: JSON.stringify(out.approvalRefused) } : {}) } }, fmt);
       } else if (req.method === 'GET' && sub === '/requests') {
         const q = url.searchParams;
         const requests = lane.list({ repo: q.get('repo') || undefined, state: q.get('state') || undefined, limit: q.get('limit') || 50 });

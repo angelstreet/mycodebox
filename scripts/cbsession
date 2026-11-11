@@ -107,7 +107,7 @@ Ship rule (owner 2026-11-11): after a change run the touched tests/typecheck you
    2026-10-28; the commit/push/CI guard refuses one).
    Bug outside your scope (owner, 2026-11-11): fix it yourself in your own worktree when the fix is small and clear and you have the context; run \`found-bug --title ... --repro ... --error ...
    --blocking yes|no\` only when the fix is large, needs another area/host/device/credentials or belongs to a live session's task; never leave it in a closing line. The manager sends a worker for filed bugs. Check it exists with \`found-bug --help\`
-   (Mac/cloud: \`found-bug\` posts over the tailnet with ~/.config/mycodebox/token and queues offline); if it is missing, POST the same
+   (Mac/cloud: \`found-bug\` posts over the tailnet with ~/.config/mycodebox/token and queues offline; missing or old on the Mac: run \`integrate self-update\`); if it is still missing, POST the same
    JSON to \`\$GHOSTY_URL/api/bugs\` with curl (docs/MAC-HOOK.md "found-bug") and say so in your report.
    This brief and the repo's AGENTS.md win over older task docs and handovers that say "no push / no merge / no
    deploy" or "the owner merges". Never hand the owner commands to run: run them yourself.
