@@ -2756,17 +2756,20 @@ async function handleHttp(req, res) {
     // loopback (codebox), or a Mac/cloud client with an `integrate` bearer token (same tokens as scripts/integrate): file + list only
     const loop = isLoopback(req.socket.remoteAddress), remoteClient = loop ? null : integrationRoutes.bugClient(req);
     if (!loop && !remoteClient) return json(res, 403, { ok: false, error: 'loopback only, or a bearer token of an integrate client (lease-token.js add <name> --integrate)' });
-    if (remoteClient && !((req.method === 'GET' && p === '/api/bugs') || (req.method === 'POST' && p === '/api/bugs'))) return json(res, 403, { ok: false, error: 'a remote client may only file and list bugs' });
+    if (remoteClient && !((req.method === 'GET' && p === '/api/bugs') || (req.method === 'POST' && (p === '/api/bugs' || /^\/api\/bugs\/[^/]+\/claim$/.test(p))))) return json(res, 403, { ok: false, error: 'a remote client may only file, list and claim bugs' });
     try {
       if (req.method === 'GET' && p === '/api/bugs') {
         const q = url.searchParams, bugs = await foundBugs.list({ limit: Number(q.get('limit')) || 100, offset: Number(q.get('offset')) || 0, state: q.get('state') || '' });   // ?state=open|fixed|duplicate..&limit=&offset= page back (bug-6829b74a)
-        if (url.searchParams.get('format') === 'text') { res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' }); return res.end(bugs.map((b) => `${b.id}  ${b.resolved ? `[${b.state}] ` : ''}${b.blocking ? 'BLOCKING ' : ''}${b.session}: ${b.title}`).join('\n') + (bugs.length ? '\n' : '')); }
+        if (url.searchParams.get('format') === 'text') { res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' }); return res.end(bugs.map((b) => `${b.id}  ${b.resolved ? `[${b.state}] ` : ''}${b.claim ? `[claimed by ${b.claim.by} until ${b.claim.until.slice(11, 16)} UTC] ` : ''}${b.blocking ? 'BLOCKING ' : ''}${b.session}: ${b.title}`).join('\n') + (bugs.length ? '\n' : '')); }
         return json(res, 200, { ok: true, bugs, counts: await foundBugs.counts() });
       }
       if (req.method === 'POST' && p === '/api/bugs') { const b = await readJsonBody(req); if (remoteClient && b && typeof b === 'object' && !String(b.session || '').replace(/^unknown$/, '')) b.session = `mac-${remoteClient}`;   // a remote report with no session is named after its client
       const r = await foundBugs.add(b); return json(res, r.ok ? 200 : 400, r); }
       const fm = p.match(/^\/api\/bugs\/([^/]+)\/fixed$/);
       if (fm && req.method === 'POST') { const r = await foundBugs.fixed(decodeURIComponent(fm[1]), (await readJsonBody(req)).note); return json(res, r.ok ? 200 : 404, r); }
+      // fix claim (found-bug --claim <id> [--release]): 409 when another session holds it; a remote client with no session is mac-<client>
+      const cm = p.match(/^\/api\/bugs\/([^/]+)\/claim$/);
+      if (cm && req.method === 'POST') { const b = await readJsonBody(req); const sess = String(b?.session || '').replace(/^unknown$/, '') || (remoteClient ? `mac-${remoteClient}` : ''); const r = await foundBugs.claim(decodeURIComponent(cm[1]), { session: sess, release: !!b?.release }); return json(res, r.ok ? 200 : r.claimedBy ? 409 : r.error === 'no such bug' ? 404 : 400, r); }
       const rm = p.match(/^\/api\/bugs\/([^/]+)\/resolve$/);
       if (rm && req.method === 'POST') { const b = await readJsonBody(req); const r = await foundBugs.resolve(decodeURIComponent(rm[1]), b); return json(res, r.ok ? 200 : r.error === 'no such bug' ? 404 : 400, r); }
       if (req.method === 'DELETE' && p.startsWith('/api/bugs/')) { const r = await foundBugs.remove(decodeURIComponent(p.slice('/api/bugs/'.length))); return json(res, r.ok ? 200 : 404, r); }

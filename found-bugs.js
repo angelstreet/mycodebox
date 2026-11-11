@@ -8,6 +8,9 @@ export const FILE_NAME = 'found-bugs.jsonl';
 export const STATES = ['fixed', 'wontfix', 'doc-only', 'duplicate'];   // duplicate: the note names the original id (bug-6829b74a)
 export const DEDUPE_MS = 24 * 3600 * 1000;
 export const REPORTED_MS = 3600 * 1000;   // a session that filed a bug in the last hour is not asked again
+// Fix claim (owner 2026-11-11, bug-e1c49ec8: a Mac session and a worker fixed the same bug in parallel, lane conflict on the same test file).
+// `found-bug --claim <id>` marks "I am fixing it"; a second claimant is refused until the claim is released, the bug is resolved or 2 h pass.
+export const CLAIM_MS = 2 * 3600 * 1000;
 
 // Obvious secrets only: key=value pairs, bearer tokens, well-known token shapes, PEM blocks, URL credentials.
 const SECRETS = [
@@ -96,14 +99,48 @@ export function createFoundBugs({ stateDir, onNew = async () => {}, now = Date.n
     await appendFile(file, JSON.stringify({ id, resolved: true, state, commit: clean(commit, 80), note: clean(note, 300), by: clean(by, 80) || 'unknown', at: new Date(now()).toISOString() }) + '\n');
     return { ok: true };
   }
+  // claim(id, { session, release }) -> { ok, claim } | { ok: false, error, claimedBy?, until? }. Marker lines; the last claim / release wins.
+  // The same session may renew its own claim (a new 2 h window). A resolved bug cannot be claimed.
+  function claim(id, { session = '', release = false } = {}) {
+    const p = chain.then(async () => {
+      const who = String(session || '').replace(/[^\w.@:-]/g, '').slice(0, 80);
+      if (!who || who === 'unknown') return { ok: false, error: 'session required (found-bug --claim <id> --session NAME, or run it inside the tmux session)' };
+      const b = (await list({ limit: 5000 })).find((x) => x.id === id);
+      if (!b) return { ok: false, error: 'no such bug' };
+      const c = b.claim;
+      if (release) {
+        if (!c || c.by !== who) return { ok: false, error: c ? `claimed by ${c.by}, not by ${who}` : 'not claimed' };
+        await appendFile(file, JSON.stringify({ id, claim: false, by: who, at: new Date(now()).toISOString() }) + '\n');
+        return { ok: true, released: true };
+      }
+      if (b.resolved) return { ok: false, error: `already resolved (${b.state}${b.commit ? ` in ${b.commit}` : ''})` };
+      if (c && c.by !== who) return { ok: false, error: `claimed by ${c.by} until ${c.until}: they are fixing it, do not fix it in parallel`, claimedBy: c.by, until: c.until };
+      const at = new Date(now()).toISOString(), until = new Date(now() + CLAIM_MS).toISOString();
+      await appendFile(file, JSON.stringify({ id, claim: true, by: who, at, until }) + '\n');
+      return { ok: true, claim: { by: who, at, until }, renewed: !!c };
+    });
+    chain = p.catch(() => {});
+    return p;
+  }
+  // The live claim of each bug: the last claim marker, unless released, expired or the bug was resolved.
+  function claimsOf(rows) {
+    const out = new Map();
+    for (const r of rows) {
+      if (r.claim === true) out.set(r.id, { by: r.by, at: r.at, until: r.until });
+      else if (r.claim === false && out.get(r.id)?.by === r.by) out.delete(r.id);
+    }
+    for (const [id, c] of out) if (!(Date.parse(c.until) > now())) out.delete(id);
+    return out;
+  }
   async function list({ limit = 100, unresolved = false, state = '', offset = 0 } = {}) {
     const rows = await all(), gone = new Set(rows.filter((r) => r.removed).map((r) => r.id));
+    const claims = claimsOf(rows);
     const done = new Map(rows.filter((r) => r.fixed).map((r) => [r.id, r])), res = new Map(rows.filter((r) => r.resolved).map((r) => [r.id, r]));
     const out = rows.filter((r) => r.title && !r.removed && !gone.has(r.id)).map((r) => {
       const v = res.get(r.id), f = done.get(r.id);
       if (v) return { ...r, state: v.state, resolved: true, ...(v.state === 'fixed' ? { fixed: true } : {}), commit: v.commit, resolvedNote: v.note, resolvedBy: v.by, resolvedAt: v.at };
       if (f) return { ...r, state: 'fixed', resolved: true, fixed: true, fixedNote: f.note, fixedAt: f.at };
-      return { ...r, state: 'open' };
+      return { ...r, state: 'open', ...(claims.has(r.id) ? { claim: claims.get(r.id) } : {}) };
     });
     // newest `limit` of the (filtered) rows; offset skips that many of the newest first, so a client pages back through 340+ reports
     const rows2 = state ? out.filter((r) => r.state === state) : unresolved ? out.filter((r) => !r.resolved) : out;
@@ -125,7 +162,7 @@ export function createFoundBugs({ stateDir, onNew = async () => {}, now = Date.n
   async function recentBy(session, ms = REPORTED_MS) {
     return (await list({ limit: 5000 })).some((b) => b.session === session && now() - Date.parse(b.at) < ms);
   }
-  return { add, remove, fixed, resolve, list, counts, week, recentBy, file };
+  return { add, remove, fixed, resolve, claim, list, counts, week, recentBy, file };
 }
 
 // Detector: closing text that mentions a failure, an unrelated/pre-existing problem or a workaround but never filed it.
@@ -152,4 +189,4 @@ export function sendBackOf(b) {
   if (!['missing', 'large', 'other-area'].includes(b.why)) return false;
   return !FLOOR.test([b.title, b.repro, b.error, b.reason].join(' '));
 }
-export const sendBackText = (b) => `You filed ${b.id}. If it is small, fix it now in your own worktree and resolve it (found-bug --resolve ${b.id} --commit <sha|integration id>); otherwise reply with the reason (found-bug --why-not-fixed large|other-area|host-or-device|credentials|owner-floor|live-session-task).`;
+export const sendBackText = (b) => `You filed ${b.id}. If it is small, claim it (found-bug --claim ${b.id}), fix it now in your own worktree and resolve it (found-bug --resolve ${b.id} --commit <sha|integration id>); otherwise reply with the reason (found-bug --why-not-fixed large|other-area|host-or-device|credentials|owner-floor|live-session-task).`;

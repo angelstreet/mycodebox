@@ -176,7 +176,7 @@ test('why/reason are stored; a record without why is marked missing; send-back h
   assert.equal(sendBackOf({ ...o, why: 'credentials' }), false);
   assert.equal(sendBackOf({ ...o, title: 'token leaks in log' }), false);
   assert.equal(sendBackOf({ ...o, test: true }), false);
-  assert.match(sendBackText(o), /You filed bug-[0-9a-f]{8}\. If it is small, fix it now in your own worktree and resolve it/);
+  assert.match(sendBackText(o), /You filed bug-[0-9a-f]{8}\. If it is small, claim it \(found-bug --claim bug-[0-9a-f]{8}\), fix it now in your own worktree and resolve it/);
 });
 test('week(): filed vs fixed by finder vs by a worker', async () => {
   const b = createFoundBugs({ stateDir: tmp('fb-wk-') });
@@ -184,4 +184,24 @@ test('week(): filed vs fixed by finder vs by a worker', async () => {
   await b.add({ title: 'z', session: 's2' });
   await b.resolve(x.id, { state: 'fixed', commit: 'abc', by: 's1' }); await b.resolve(y.id, { state: 'fixed', commit: 'def', by: 'worker-1' });
   assert.deepEqual(await b.week(7), { days: 7, filed: 3, fixed: 2, fixedByFinder: 1, fixedByWorker: 1, open: 1, whyMissing: 1 });
+});
+
+test('claim: one holder at a time, renewable by the holder, expires after 2 h, dropped by a resolve; list shows it', async () => {
+  const { createFoundBugs, CLAIM_MS } = await import('../found-bugs.js');
+  const { mkdtempSync } = await import('node:fs'); const { tmpdir } = await import('node:os'); const { join } = await import('node:path');
+  let t = Date.UTC(2026, 10, 11, 12, 0);
+  const b = createFoundBugs({ stateDir: mkdtempSync(join(tmpdir(), 'fb-claim-')), now: () => t });
+  const { bug } = await b.add({ title: 'x', session: 'filer', why: 'large', reason: 'r' });
+  assert.equal((await b.claim(bug.id, {})).ok, false, 'a session is required');
+  assert.equal((await b.claim('bug-00000000', { session: 'a' })).error, 'no such bug');
+  assert.equal((await b.claim(bug.id, { session: 'mac-a' })).ok, true);
+  const r = await b.claim(bug.id, { session: 'worker-b' });
+  assert.equal(r.ok, false); assert.equal(r.claimedBy, 'mac-a');
+  assert.equal((await b.claim(bug.id, { session: 'mac-a' })).renewed, true);
+  assert.equal((await b.list()).find((x) => x.id === bug.id).claim.by, 'mac-a');
+  t += CLAIM_MS + 1;
+  assert.equal((await b.list()).find((x) => x.id === bug.id).claim, undefined, 'expired');
+  assert.equal((await b.claim(bug.id, { session: 'worker-b' })).ok, true);
+  await b.resolve(bug.id, { state: 'fixed', commit: 'abc123', by: 'worker-b' });
+  assert.match((await b.claim(bug.id, { session: 'mac-a' })).error, /already resolved \(fixed in abc123\)/);
 });

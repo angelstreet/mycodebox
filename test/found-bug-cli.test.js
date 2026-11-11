@@ -25,6 +25,8 @@ async function stub(state, { requireToken = false } = {}) {
     const send = (c, o) => { res.writeHead(c, { 'content-type': 'application/json' }); res.end(JSON.stringify(o)); };
     if (requireToken && req.headers.authorization !== `Bearer ${TOKEN}`) return send(403, { ok: false, error: 'no' });
     if (req.method === 'POST' && req.url === '/api/bugs') { const r = await bugs.add(JSON.parse(body)); return send(r.ok ? 200 : 400, r); }
+    const cm = /^\/api\/bugs\/([^/]+)\/claim$/.exec(req.url);   // same status mapping as server.js
+    if (req.method === 'POST' && cm) { const b = JSON.parse(body); const r = await bugs.claim(cm[1], { session: b.session, release: !!b.release }); return send(r.ok ? 200 : r.claimedBy ? 409 : 400, r); }
     if (req.method === 'GET' && req.url.startsWith('/api/bugs')) { res.writeHead(200); return res.end((await bugs.list()).map((b) => `${b.id}  ${b.session}: ${b.title}\n`).join('')); }
     send(404, { ok: false });
   });
@@ -85,4 +87,21 @@ test('found-bug without --why-not-fixed exits 2 with the fix-it-yourself message
   const b = await run(['--title', 'x', '--why-not-fixed', 'bogus', '--reason', 'r'], env); assert.equal(b.code, 2);
   const c = await run(['--title', 'x', '--why-not-fixed', 'large'], env); assert.equal(c.code, 2); assert.match(c.stderr, /--reason/);
   const h = await run(['--help'], env); assert.match(h.stdout, /LAST RESORT/);
+});
+
+test('found-bug --claim: the first session claims, a second is refused with exit 3 (bug-e1c49ec8), release frees it (Mac path: token + GHOSTY_URL)', async () => {
+  const home = tmp('fb-home-'), cfg = join(home, 'cfg');
+  mkdirSync(cfg); writeFileSync(join(cfg, 'token'), TOKEN, { mode: 0o600 });
+  const s = await stub(tmp('fb-srv-'), { requireToken: true });
+  try {
+    const { bug } = await s.bugs.add({ title: 'flaky lane test', session: 'filer', why: 'large', reason: 'r' });
+    const env = (who) => ({ HOME: home, GHOSTY_URL: s.url, GHOSTY_STATE_DIR: tmp('fb-state-'), MYCODEBOX_CONFIG_DIR: cfg, FOUND_BUG_SESSION: who });
+    const a = await run(['--claim', bug.id], env('mac-laptop'));
+    assert.equal(a.code, 0, a.stderr); assert.match(a.stdout, new RegExp(`^claimed ${bug.id} for mac-laptop until 20\\d\\d-`));
+    const b = await run(['--claim', bug.id], env('bug-drain-2'));
+    assert.equal(b.code, 3); assert.match(b.stderr, /claimed by mac-laptop until .*do not fix it in parallel/);
+    assert.equal((await run(['--claim', bug.id, '--release'], env('bug-drain-2'))).code, 1, 'only the holder releases');
+    assert.equal((await run(['--claim', bug.id, '--release'], env('mac-laptop'))).code, 0);
+    assert.equal((await run(['--claim', bug.id], env('bug-drain-2'))).code, 0);
+  } finally { await s.close(); }
 });

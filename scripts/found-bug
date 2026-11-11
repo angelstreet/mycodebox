@@ -7,6 +7,8 @@
 #             [--workaround "..."] [--blocking yes|no] [--session NAME] [--test]
 #   found-bug --flush                                    post the reports queued while the manager was unreachable
 #   found-bug --resolve <id> --commit <sha|integration id> [--state fixed|wontfix|doc-only|duplicate] [--note text] [--session NAME]   (codebox only)
+#   found-bug --claim <id> [--release] [--session NAME]   before you fix a FILED bug: "I am fixing it" for 2 h (renew by claiming again). Exit 3 when
+#                                                        another session holds it: do not fix it in parallel (bug-e1c49ec8). Codebox, Mac and cloud.
 #   found-bug list | found-bug fixed <id> [note] | found-bug remove <id>   (fixed/remove/--resolve: codebox loopback only; remove: test reports)
 #   found-bug --self-update                              fetch the current found-bug + integrate from the dashboard host (needs the token), verify sha256, install into
 #                                                        ${MYCODEBOX_BIN_DIR:-~/.local/bin} atomically (old copy kept as <name>.bak); idempotent
@@ -18,7 +20,7 @@
 # Session defaults to the tmux session, else FOUND_BUG_SESSION, else `mac` on a Mac, else `unknown`. Secrets are redacted server-side.
 # Exit: 0 filed; 5 manager unreachable (report queued, not lost); 1 error.
 
-CLIENT_SCRIPTS_VERSION=2   # bump with every change to scripts/integrate or scripts/found-bug (same number in both); the server compares it
+CLIENT_SCRIPTS_VERSION=3   # bump with every change to scripts/integrate or scripts/found-bug (same number in both); the server compares it
 
 CFG_DIR="${MYCODEBOX_CONFIG_DIR:-$HOME/.config/mycodebox}"
 STATE_DIR="${GHOSTY_STATE_DIR:-$HOME/.local/state/ghosty}"
@@ -126,7 +128,7 @@ cmd=$1
 case "$cmd" in
   --self-update) self_update; exit 0 ;;
   --help|-h|help)
-    sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   list) api GET '/api/bugs?format=text'; [ "$CODE" = 000 ] && die "manager unreachable at $URL ($(head -n 1 "$TMP/err"))" 5; [ "$CODE" = 200 ] || die "HTTP $CODE: $(cat "$OUT")"; cat "$OUT"; exit 0 ;;
   fixed) [ -n "$2" ] || die "usage: found-bug fixed <id> [note]"; id=$2; shift 2
     api POST "/api/bugs/$id/fixed" "{\"note\":\"$(jesc "$*")\"}"; [ "$CODE" = 000 ] && die "manager unreachable at $URL" 5
@@ -136,6 +138,27 @@ case "$cmd" in
     if grep -q '"ok":true' "$OUT"; then echo removed; exit 0; fi; die "$(jval error)" ;;
   --flush) flush_queue; [ -s "$QUEUE" ] && exit 5; exit 0 ;;
 esac
+
+if [ "$cmd" = --claim ]; then
+  shift; id=$1; [ -n "$id" ] || die "--claim needs a bug id"; shift
+  rel=; sess=
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --release) rel=1; shift ;;
+      --session) [ $# -ge 2 ] || die "--session needs a value"; sess=$2; shift 2 ;;
+      *) die "unknown argument $1 (found-bug --claim <id> [--release] [--session NAME])" ;;
+    esac
+  done
+  [ -n "$sess" ] || sess=$(session_default)
+  api POST "/api/bugs/$id/claim" "{\"session\":\"$(jesc "$sess")\"${rel:+,\"release\":true}}"
+  [ "$CODE" = 000 ] && die "manager unreachable at $URL: nothing claimed; check \`found-bug list\` before you start" 5
+  if grep -q '"ok":true' "$OUT"; then
+    if [ -n "$rel" ]; then echo "released the claim on $id"; else echo "claimed $id for $sess until $(jval until) (2 h; claim again to renew). Resolve it with found-bug --resolve $id --commit <sha|integration id>"; fi
+    exit 0
+  fi
+  [ "$CODE" = 409 ] && { printf 'found-bug: %s is %s\n' "$id" "$(jval error)" >&2; exit 3; }
+  die "$(jval error)"
+fi
 
 if [ "$cmd" = --resolve ]; then
   shift; id=$1; [ -n "$id" ] || die "--resolve needs a bug id"; shift
