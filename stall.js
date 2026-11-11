@@ -203,9 +203,18 @@ const PUSH_MAIN = String.raw`\bpush(?:ed|ing)?\b[^.\n]{0,30}\bmain\b`;
 const MERGE_MAIN = String.raw`\bmerge\b[^.\n]{0,30}\bmain\b`;
 const REBASE_MAIN = String.raw`\brebase\b[^.\n]{0,30}(?<![/\w-])(?:main|master)\b(?![-/])`;
 const GIT_PUSH = String.raw`\bgit push\b`;
-const HARD_GIT = String.raw`force[- ]?push|reset --hard|\bhard[- ]?reset\b`;
+const HARD_GIT = String.raw`force[- ]?push|reset --hard|\bhard[- ]?reset\b|\bhistory[- ]rewrit\w*|\bforce\s+(?:\d+\s+)?commits?\b`;
 // Owner 2026-10-21: only a DESTRUCTIVE migration is a floor; an additive one (CREATE TABLE / INDEX, ADD COLUMN) is applied and merged by the session.
 const MIGRATE = String.raw`\b(?:destructive|irreversible|drop(?:s|ping)?|truncat\w*|delet\w*)\b[^.\n]{0,30}\bmigrat(?:e|ion)|\bmigrat(?:e|ion)\w*\b[^.\n]{0,30}\b(?:drop(?:s|ping)?|truncat\w*|delete|destructive|irreversible)\b`;
+// Harness review 2026-11-11 item 3: once the floor reads only the ask, these asks were caught by a narration word alone. A named login,
+// key or token ("your Claude login token", "an Anthropic Admin key", "the Google OAuth client", "a Google account") and a money amount ("$0.25 cap").
+const CRED_NAMED = String.raw`\b(?:google|apple|play store|app store|amazon)\s+(?:sign[- ]?in|login)\b|\b(?:admin|login|anthropic|openai|oauth|github|google|claude)\s+(?:api\s+)?(?:keys?|tokens?)\b|\boauth client\b|\bapple id\b|\bgoogle account\b|\badmin (?:login|password|account)\b|\b(?:supply|provide|give me|send me|share)\b[^.\n?]{0,40}\b(?:account|login|sign-in)s?\b`;
+// "$1" in a shell line is not money: a dollar amount needs cents or a spend word after it
+// a backup retention change deletes the backups it no longer keeps ("approve the retention change (keep-last=1)")
+const RETENTION_CUT = String.raw`\bretention (?:change|policy|cut)\b|\bkeep-last\s*=\s*\d`;
+// owner-only hands (harness review 2026-11-11 item 3): a code from the owner's phone, a device or cable only a person can attach
+const OWNER_HANDS = String.raw`\bsms\b|\blog in now\b|\bpower on\b|\bid code\b|\b(?:security|verification|2fa|one-time|sign-in|login) code\b|\bplugged\b|\bconnect\b[^.\n?]{0,40}\b(?:device|phone|tv|stick|dongle|cable|box)\b[^.\n?]{0,30}\bto\b`;
+const MONEY_AMOUNT = String.raw`(?:[€£]\s?\d|\$\d+\.\d{2}\b|\$\d+(?=\s*(?:cap|budget|limit|top[- ]?up|credits?|per\b|/|a (?:day|month)|monthly|daily|of\b))|\b\d+(?:[.,]\d+)?\s?(?:usd|eur|chf|dollars?|euros?)\b)`;
 const FORBIDDEN_PARTS = [
   // deploys and service control
   String.raw`\bre-?deploy|\bdeploy|update_core|\brollout\b`,
@@ -222,13 +231,13 @@ const FORBIDDEN_PARTS = [
   GIT_PUSH,
   HARD_GIT,
   // destructive data operations
-  String.raw`\bdelet(?:e|es|ed|ing|ion)\b|\bremov(?:e|es|ed|ing|al)\b|\bdrop(?:s|ped|ping)?\b|\brm\b|\bprun(?:e|es|ed|ing)\b|\btruncat(?:e|es|ed|ing|ion)\b|\bwip(?:e|es|ed|ing)\b|\boverwrit(?:e|es|ten|ing)\b|\bpurg(?:e|es|ed|ing)\b|\beras(?:e|es|ed|ing|ure)\b|\bdestr(?:oy(?:s|ed|ing)?|uction)\b|\bnuk(?:e|es|ed|ing)\b`,
+  String.raw`${RETENTION_CUT}|\bdelet(?:e|es|ed|ing|ion)\b|\bremov(?:e|es|ed|ing|al)\b|\bdrop(?:s|ped|ping)?\b|\brm\b|\bprun(?:e|es|ed|ing)\b|\btruncat(?:e|es|ed|ing|ion)\b|\bwip(?:e|es|ed|ing)\b|\boverwrit(?:e|es|ten|ing)\b|\bpurg(?:e|es|ed|ing)\b|\beras(?:e|es|ed|ing|ure)\b|\bdestr(?:oy(?:s|ed|ing)?|uction)\b|\bnuk(?:e|es|ed|ing)\b`,
   String.raw`\bdrop\b[^.\n]{0,20}\b(?:table|database|db|schema)\b`,
   MIGRATE,
   // credentials and secrets
-  String.raw`\.env\b|credential|password|passphrase|\bsecret|access token|auth token|bearer\b|\bapi[_ -]?key|ssh key|private key|\brevo(?:k(?:e|es|ed|ing)|cation)\b|\brotat(?:e|es|ed|ing|ion)\b[^.\n]{0,20}\b(?:keys?|tokens?|certs?|certificates?)\b|\b(?:keys?|tokens?|certs?|certificates?)\b[^.\n]{0,20}\brotat(?:e|es|ed|ing|ion)\b`,
+  String.raw`\.env\b|credential|password|passphrase|\bsecret|access token|${CRED_NAMED}|auth token|bearer\b|\bapi[_ -]?key|ssh key|private key|\brevo(?:k(?:e|es|ed|ing)|cation)\b|\brotat(?:e|es|ed|ing|ion)\b[^.\n]{0,20}\b(?:keys?|tokens?|certs?|certificates?)\b|\b(?:keys?|tokens?|certs?|certificates?)\b[^.\n]{0,20}\brotat(?:e|es|ed|ing|ion)\b`,
   // money and customers
-  String.raw`\bmoney\b|\bpay(?:s|ment|ing)?\b|\bpaid\b|\bpurchase|\bbuy\b|\bbilling\b|\binvoice|credit card|add credit|\bcard on file\b|\bcharg(?:e|ing)\b(?! ahead)[^.\n]{0,30}\b(?:card|account|customer|invoice|fee)s?\b|\bcustomer|\brefund|\btransfer\b[^.\n]{0,20}\bfunds?\b|\b(?:e-?mail|message|contact|call|reply to)\b[^.\n]{0,20}\bclients?\b`,
+  String.raw`${MONEY_AMOUNT}|\bmoney\b|\bpay(?:s|ment|ing)?\b|\bpaid\b|\bpurchase|\bbuy\b|\bbilling\b|\binvoice|credit card|add credit|\bcard on file\b|\bcharg(?:e|ing)\b(?! ahead)[^.\n]{0,30}\b(?:card|account|customer|invoice|fee)s?\b|\bcustomer|\bclient(?:'s)?\s+(?:hosts?|box(?:es)?|install(?:ation)?s?|sites?|machines?|servers?|networks?)\b|\bon the client\b|\brefund|\btransfer\b[^.\n]{0,20}\bfunds?\b|\b(?:e-?mail|message|contact|call|reply to)\b[^.\n]{0,20}\bclients?\b`,
   // host administration and schema tools (round 8: strictly more conservative for every caller)
   String.raw`sudoers|/etc/sudo|visudo`,
   String.raw`\bunit file|/etc/systemd|systemctl (?:enable|disable|daemon-reload|mask)|\.service\b`,
@@ -546,14 +555,89 @@ export function systemWaitOf(kind, text) {
 }
 // The [hard: X] tag of an escalation: read off the QUESTION (its "?" sentences) and the option being asked (the recommended one),
 // never off every word of the status line. A system wait carries none. A line without a "?" (a real blocker) is the ask itself.
+// A report form in it ("nothing deleted", "published no", "fixes deployed") or an edit of a code element is not the floor (readAsk).
 export function askHardOf(final) {
   if (!final || final.systemWait) return null;
   const q = String(final.question || '');
   const asks = q.split(/(?<=[.!?])\s+|\n+/).map((x) => x.trim()).filter((x) => /\?["')\]]*$/.test(x));
   const opts = (final.options || []).filter((o) => o && o.recommended).map((o) => String(o.text || ''));
   const text = [...asks, ...opts].join('\n') || q;   // no "?" sentence: the line itself is the ask (a real blocker, not a system wait)
-  return text ? hardMatch(text, { mergePresent: !!final.topics?.merge, pushPresent: !!final.topics?.push, deployPresent: !!final.topics?.deploy }) : null;
+  return text ? hardMatch(readAsk(text), { mergePresent: !!final.topics?.merge, pushPresent: !!final.topics?.push, deployPresent: !!final.topics?.deploy }) : null;
 }
+
+// ---- the floor reads the action, not the report (harness review 2026-11-11, Q5 item 3) ----------------------------------
+// 386 escalations carried [hard: <word>] read off narration ("dropped Q166 since it is resolved", "nothing deleted", "Validated no, published
+// no"). Two layers, both only ever REMOVE report wording; the hard words of the action stay, and every disguised spelling still counts:
+//   neutralizeReport: a hard verb in a finished / negated form is a report, not a request: the past forms below when no ask word precedes them in
+//     their clause ("should the rows be deleted?" stays), "no / not / nothing / never / without <hard word>", and "<hard word>: no|none".
+//   floorAction: the text an escalation's floor reads -- the "?" sentences of the ask, the options on offer (the recommended one, else all) and
+//     the commands in them. An ask that only points back ("do it?", "go with the plan above?", "Which option?") reads the whole closing text.
+// The auto-answer cases (continue, stopped_short, menu_recommended, permission, ask_status) keep the whole text: their reply approves the plan
+// around the question (round 9). `forbidden` (the auto-answer safety filter) is not changed by any of this.
+const REPORT_PAST = String.raw`(?:re-?)?deployed|published|removed|deleted|dropped|pruned|truncated|wiped|overwritten|overwrote|purged|erased|destroyed|nuked`;
+const REPORT_PAST_RE = new RegExp(String.raw`\b(?:${REPORT_PAST})\b`, 'gi');
+// an ask word earlier in the same clause makes the past form a request ("should X be deleted", "want it removed", "OK if it gets dropped")
+const ASK_BEFORE_RE = /\b(?:should|shall|can|could|may|might|must|would|will|want|wants|need|needs|needed|ok|okay|ready|please|approve|allow|let|go-ahead|to be|gets?|getting|have (?:it|them|this|that)|i'll|we'll|i'd|we'd|plan|propose|recommend|suggest|if|whether|or|unless|until)\b/i;
+const CLAUSE_START_RE = /[.;:!?\n·—–[\]()|]|\s-\s|,\s/g;
+const NEG_WORDS = String.raw`no|not|nothing|never|without|none`;
+const NEG_FILL = String.raw`(?:yet|been|being|any|a|the|further|more|extra|server|host|frontend|service|data|db|schema)`;
+const hardWordAt = (s) => FORBIDDEN_RE.exec(s);
+export function neutralizeReport(text) {
+  let t = String(text ?? '');
+  // "no migration", "nothing deleted", "not yet deployed", "without a restart": a negated hard word is never the action
+  t = t.replace(new RegExp(String.raw`\b(?:${NEG_WORDS})\s+(?:${NEG_FILL}\s+){0,2}(\.?\w[\w-]*(?:\.\w[\w-]*)*)`, 'gi'), (m, w) => {
+    const h = hardWordAt(w);
+    return h && h.index === 0 ? m.slice(0, m.length - w.length) : m;
+  });
+  // "published no", "deploy: none", "migration: not needed"
+  t = t.replace(/(\.?\b\w[\w-]*(?:\.\w[\w-]*)*)\s*:?\s+(?:no|none|not needed|not required|n\/a)(?=\s*(?:[,.;)\]·—–|]|$))/gim, (m, w) => { const h = hardWordAt(w); return h && h.index === 0 ? ' ' : m; });
+  // finished forms with no ask word before them in their clause
+  t = t.replace(REPORT_PAST_RE, (m, at, all) => {
+    const head = all.slice(0, at);
+    let from = 0; for (const c of head.matchAll(CLAUSE_START_RE)) from = c.index + c[0].length;
+    const clause = head.slice(from);
+    if (/force[- ]?$/i.test(clause) || ASK_BEFORE_RE.test(clause)) return m;
+    return ' ';
+  });
+  return t;
+}
+const AUTO_FLOOR_CASES = new Set(['continue', 'stopped_short', 'menu_recommended', 'permission']);
+const REFERS_BACK_RE = /\b(?:it|this|that|these|those|them|above|below|as planned|as proposed|as described|as listed|the plan|the steps|the list|which (?:one|option)|what now|same)\b/i;
+const ASK_FILLER = /\b(?:should|shall|can|could|may|would|will|do|does|did|i|we|you|me|us|is|are|ok(?:ay)?|to|go|proceed|continue|next|now|yes|no|option|options|one|choose|pick|which|what|how|then|or|a|an|the|please|want|wait|later|keep|going)\b/gi;
+const contentWords = (s) => String(s || '').replace(/\(\s*recommended\s*\)/gi, ' ').replace(ASK_FILLER, ' ').split(/[\W_\d]+/).filter((w) => w.length > 2);
+export function floorAction(out, wholeText) {
+  const whole = String(wholeText ?? '');
+  if (AUTO_FLOOR_CASES.has(out.case) || out.autoCase) return whole;   // an automatic answer approves the plan around the question
+  const q = String(out.question || '');
+  const sents = q.split(/(?<=[.!?])\s+|\n+/).map((x) => x.trim()).filter(Boolean);
+  const asks = sents.filter((x) => /\?["')\]]*$/.test(x));
+  const options = out.options || [];
+  const rec = options.filter((o) => o && o.recommended);
+  const opts = (rec.length ? rec : options).map((o) => String(o.text || ''));
+  const base = asks.length ? asks : [q];   // no "?" sentence: the STATUS / blocker line itself is the ask
+  // a question that points back at the text above it, or that names nothing, approves that text: read all of it (as before)
+  const generic = asks.length > 0 && asks.every((a) => contentWords(a).length < 2 || (REFERS_BACK_RE.test(a) && contentWords(a).length < 6)) && opts.every((o) => contentWords(o).length < 2);
+  if (generic) return readAsk(whole);
+  const text = [...base, ...opts, out.blocked && out.blocked !== q ? out.blocked : ''].filter(Boolean).join('\n');
+  // a reported loss of data ("the customer's data was wiped by the migration") is an incident the owner hears about, not narration
+  const incidents = sentencesOf(whole).filter((x) => [x, ...textVariants(x)].some((v) => INCIDENT_RE.test(v) && OBJ_DATA.test(v) && !/\b(?:no|not|nothing|never|without)\b/i.test(v)));   // any spelling: "d e l e t e d" too
+  return [readAsk([text, ...commandsIn(text)].join('\n')), ...incidents].join('\n');
+}
+// remove / delete of a code or tree element of the session's own work ("remove the image checks from apps_netflix", "delete both references",
+// "delete my gw_info script") is an edit, not a data deletion: the verb goes only when its object names such an element, no data object
+// (OBJ_DATA: database, table, rows, backups, prod, customer, account, .env ...), no "all / every", no path or glob, and no pronoun alone.
+const CODE_OBJ = /\b(?:(?:image |text |frame )?checks?|panels?|routes?|buttons?|tabs?|cards?|chips?|fields?|flags?|rules?|options?|steps?|tests?|comments?|imports?|functions?|helpers?|scripts?|edges?|nodes?|references?|aliases|labels?|menu entr(?:y|ies)|pages?|dialogs?|banners?|toasts?|columns? in the (?:ui|page|table view))\b/i;
+const CODE_EDIT_RE = /\b(remov(?:e|es|ing)|delet(?:e|es|ing))\b([^.,;:?!\n]{1,80})/gi;
+// The one reading of an ask for the escalation floor (stall.js finish / askHardOf, ops-ask.js): code edits relaxed, report forms dropped.
+export const readAsk = (text) => neutralizeReport(relaxCodeEdits(text));
+export function relaxCodeEdits(text) {
+  return String(text ?? '').replace(CODE_EDIT_RE, (m, verb, obj) => {
+    const o = obj.split(/\s(?:and|then|or|but|so|before|after)\s/i)[0];
+    if (!CODE_OBJ.test(o) || OBJ_DATA.test(obj) || /\b(?:all|every|everything|them|it|this|that|those|these)\b|[/*~]|\bprod\b/i.test(obj)) return m;   // the whole object: "the panel and the database" keeps its verb
+    return ` ${obj}`;
+  });
+}
+const INCIDENT_RE = /\b(?:wiped|deleted|dropped|truncated|purged|erased|destroyed|nuked|lost|overwritten|overwrote|corrupted)\b/i;
 
 export function topicSplit(text) {
   const merge = mergeMatch(text), push = pushMatch(text), deploy = deployMatch(text);
@@ -1043,8 +1127,13 @@ function finish(out) {
   let text = out.forbiddenText ?? out.question ?? '';
   // A yes / continue answer approves the question and its plan, not finished-work narrative around it (round 9, item 2).
   if (out.case === 'continue' && out.forbiddenText != null) { const a = approvedAction({ case: out.case, approvalText: out.forbiddenText }); text = [a.text, ...a.commands].join('\n'); }
-  out.forbidden = forbiddenMatch(text);
+  out.forbidden = forbiddenMatch(text);   // the auto-answer safety filter: the whole text, unchanged
   out.topics = topicSplit(text);
+  // the escalation floor (owner vs manager, the [hard: X] tag, what the manager may decide) reads the action only (harness review 2026-11-11 item 3)
+  const act = floorAction(out, text);
+  if (act !== text) out.topics.hard = hardMatch(act, { mergePresent: !!out.topics.merge, pushPresent: !!out.topics.push, deployPresent: !!out.topics.deploy });
+  out.floorOwner = ownerFloorMatch(act);
+  Object.defineProperty(out, 'floorText', { value: act, enumerable: false, writable: true });
   if (out.mergeAsk && !out.topics.merge) out.topics.merge = 'merge';   // "your merge decision" reads as a noun: still the merge topic
   Object.defineProperty(out, 'topicsText', { value: text, enumerable: false, writable: true });   // what the topics were read over (the manager re-reads it when a decided deploy covers a topic)
   delete out.forbiddenText;
@@ -1088,18 +1177,18 @@ export function outcomeKind(text) {
 // routing and scripts/jev-ask.js stop floors (a 'touches' entry forces escalation to the owner only if it is on the
 // owner floor; other forbidden topics route to the manager, never auto-answered). The auto-answer safety filter is
 // FORBIDDEN_RE / forbiddenMatch and stays unchanged -- it still catches every topic it caught before.
-const CREDENTIALS_FOR_OWNER = String.raw`\.env\b|credential|password|passphrase|\bsecret|access token|auth token|bearer\b|\bapi[_ -]?key|ssh key|private key|\brevo(?:k(?:e|es|ed|ing)|cation)\b|\brotat(?:e|es|ed|ing|ion)\b[^.\n]{0,20}\b(?:keys?|tokens?|certs?|certificates?)\b|\b(?:keys?|tokens?|certs?|certificates?)\b[^.\n]{0,20}\brotat(?:e|es|ed|ing|ion)\b`;
+const CREDENTIALS_FOR_OWNER = String.raw`\.env\b|credential|password|passphrase|\bsecret|access token|${CRED_NAMED}|auth token|bearer\b|\bapi[_ -]?key|ssh key|private key|\brevo(?:k(?:e|es|ed|ing)|cation)\b|\brotat(?:e|es|ed|ing|ion)\b[^.\n]{0,20}\b(?:keys?|tokens?|certs?|certificates?)\b|\b(?:keys?|tokens?|certs?|certificates?)\b[^.\n]{0,20}\brotat(?:e|es|ed|ing|ion)\b`;
 const GENERATED_SECRET = String.raw`\bgenerat\w*\b[^.\n?]{0,40}\b(?:secret|password|passphrase|token|key|cert)|(?:set|put|add|create)\b[^.\n?]{0,30}\b(?:CRON_|JWT_|SESSION_|APP_|INTERNAL_|DB_|DATABASE_)[A-Z_]+|\bgenerat(?:e|ing)\b[^.\n?]{0,20}\b(?:a |an |new |the )?(?:secret|password|passphrase|key|token|cert)`;
 const OWNER_FLOOR_PARTS = [
   // destructive data operations: shared-data delete
-  String.raw`\bdelet(?:e|es|ed|ing|ion)\b|\bbranch\s+-D\b|\bremov(?:e|es|ed|ing|al)\b|\bdrop(?:s|ped|ping)?\b|\brm\b|\bprun(?:e|es|ed|ing)\b|\btruncat(?:e|es|ed|ing|ion)\b|\bwip(?:e|es|ed|ing)\b|\boverwrit(?:e|es|ten|ing)\b|\bpurg(?:e|es|ed|ing)\b|\beras(?:e|es|ed|ing|ure)\b|\bdestr(?:oy(?:s|ed|ing)?|uction)\b|\bnuk(?:e|es|ed|ing)\b`,
+  String.raw`${RETENTION_CUT}|\bdelet(?:e|es|ed|ing|ion)\b|\bbranch\s+-D\b|\bremov(?:e|es|ed|ing|al)\b|\bdrop(?:s|ped|ping)?\b|\brm\b|\bprun(?:e|es|ed|ing)\b|\btruncat(?:e|es|ed|ing|ion)\b|\bwip(?:e|es|ed|ing)\b|\boverwrit(?:e|es|ten|ing)\b|\bpurg(?:e|es|ed|ing)\b|\beras(?:e|es|ed|ing|ure)\b|\bdestr(?:oy(?:s|ed|ing)?|uction)\b|\bnuk(?:e|es|ed|ing)\b`,
   String.raw`\bdrop\b[^.\n]{0,20}\b(?:table|database|db|schema)\b`,
   // owner-held credentials and secrets (third-party logins, keys to rotate)
   CREDENTIALS_FOR_OWNER,
   // money / payments / customers
-  String.raw`\bmoney\b|\bpay(?:s|ment|ing)?\b|\bpaid\b|\bpurchase|\bbuy\b|\bbilling\b|\binvoice|credit card|add credit|\bcard on file\b|\btop[- ]?up\b|\b(?:ai|api|provider|account|openrouter)\s+credits?\b|\bcredits?\s+(?:balance|block\w*|left|low|exhausted)\b|\b(?:out of|no|low|insufficient)\s+credits?\b|\bcharg(?:e|ing)\b(?! ahead)[^.\n]{0,30}\b(?:card|account|customer|invoice|fee)s?\b|\bcustomer|\brefund|\btransfer\b[^.\n]{0,20}\bfunds?\b|\b(?:e-?mail|message|contact|call|reply to)\b[^.\n]{0,20}\bclients?\b`,
+  String.raw`${MONEY_AMOUNT}|\bmoney\b|\bpay(?:s|ment|ing)?\b|\bpaid\b|\bpurchase|\bbuy\b|\bbilling\b|\binvoice|credit card|add credit|\bcard on file\b|\btop[- ]?up\b|\b(?:ai|api|provider|account|openrouter)\s+credits?\b|\bcredits?\s+(?:balance|block\w*|left|low|exhausted)\b|\b(?:out of|no|low|insufficient)\s+credits?\b|\bcharg(?:e|ing)\b(?! ahead)[^.\n]{0,30}\b(?:card|account|customer|invoice|fee)s?\b|\bcustomer|\bclient(?:'s)?\s+(?:hosts?|box(?:es)?|install(?:ation)?s?|sites?|machines?|servers?|networks?)\b|\bon the client\b|\brefund|\btransfer\b[^.\n]{0,20}\bfunds?\b|\b(?:e-?mail|message|contact|call|reply to)\b[^.\n]{0,20}\bclients?\b`,
   // physical actions on a device (the agent cannot do them; the owner must)
-  String.raw`\bplug(?:\s+in)?\b|\bunplug\b|\breplug\b|\bpower[- ]?cycle\b|\bpress\b[^.\n?]{0,20}\b(?:the\s+)?(?:button|power|switch|remote)\b|\btap\b[^.\n?]{0,20}\b(?:the\s+)?(?:button|screen)\b`,
+  String.raw`${OWNER_HANDS}|\bplug(?:\s+in)?\b|\bunplug\b|\breplug\b|\bpower[- ]?cycle\b|\bpress\b[^.\n?]{0,20}\b(?:the\s+)?(?:button|power|switch|remote)\b|\btap\b[^.\n?]{0,20}\b(?:the\s+)?(?:button|screen)\b`,
 ];
 const GENERATED_SECRET_RE = new RegExp(GENERATED_SECRET, 'i');
 const ownerFloorParts = ({ generatedSecretOk = false } = {}) => {

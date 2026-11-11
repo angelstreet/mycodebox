@@ -1683,6 +1683,54 @@ holders: the holders that are neither a session nor a platform agent).
   3 min is not idle for 30 min, and a lease that was never renewed keeps the registry's number (a stale lease really is idle). The same number is
   shown in the Leases view and in the lease answer.
 
+## The floor reads the action, not the narration (harness review 2026-11-11, item 3)
+
+With the judge down, the keyword floor decided alone: 386 escalations carried `[hard: <word>]` read off report wording ("dropped Q166
+since it is resolved", "nothing deleted", "Validated no, published no", "fixes deployed main-..."). The escalation floor now reads the
+**proposed action** only. `FORBIDDEN_RE` / `forbiddenMatch` (the auto-answer safety filter, `final.forbidden`) is unchanged and still
+reads the whole closing text; so do the auto-answer cases (`continue`, `stopped_short`, `menu_recommended`, `permission`, `ask_status`),
+whose reply approves the plan around the question (round 9 `approvedAction`).
+
+- **The action** (`stall.js` `floorAction`): the "?" sentences of the ask (or the STATUS / blocker line itself when it has none), the
+  options on offer (the recommended one, else all) and the commands in them. An ask that only points back ("do it?", "go with the plan
+  above?", "Which option?") reads the whole closing text, as before. A reported loss of data in the narration ("the customer's data was
+  wiped", any spelling) is added as an incident: the owner still hears about it.
+- **One reading** (`readAsk` = `relaxCodeEdits` + `neutralizeReport`), used by `finish()` (`topics.hard`, the new `floorOwner`),
+  `askHardOf` (the `[hard: X]` tag) and `ops-ask.js` (owner vs manager routing):
+  - `neutralizeReport`: a hard word that is negated ("no deploy", "nothing deleted", "not published", "without a restart"), followed by
+    "no / none / not needed" ("published no", "deploy: none"), or a finished form (deployed, published, removed, deleted, dropped, pruned,
+    wiped, ...) with no ask word before it in its clause ("should the rows be deleted?" stays). Never a force-push.
+  - `relaxCodeEdits`: remove / delete whose object is a code or tree element (checks, panel, route, nodes, edges, references, script, ...)
+    and names no data object (`OBJ_DATA`), no "all / every", no pronoun alone, no path or glob, no prod.
+- **Words the narration used to catch by luck** (added to both `FORBIDDEN_RE` and `OWNER_FLOOR_RE`, so strictly more conservative):
+  named logins / keys / tokens (`CRED_NAMED`: "Claude login token", "Anthropic Admin key", "Google OAuth client", "Google account",
+  "Play Store sign-in", "supply / give me ... account"), money amounts (`MONEY_AMOUNT`: "$0.25 cap", "12 EUR"; a shell "$1" is not
+  money), a backup retention cut (`RETENTION_CUT`), a client's host ("on the client", "client host"), "history rewrite" / "force N
+  commits" (`HARD_GIT`); owner floor only: owner hands (`OWNER_HANDS`: SMS / security code, "log in now", "plugged", "power on",
+  "connect ... device ... to").
+- **Call sites of the floor lists** (the eight of the review): `stall.js` `FORBIDDEN_RE` (auto-answer filter, unchanged reading),
+  `hardMatch` / `HARD_EXTRA` (now fed the action), `OWNER_FLOOR_RE` / `ownerFloorMatch` (now fed the action for routing);
+  `owner-asks.js` `FLOORS`, `router.js` `STOP_FLOOR_TOPICS` (Jev facts, not keywords; unchanged), `owner-push.js` `FLOOR_EXTRA`,
+  `done-leftovers.js` and `merge-policy.js` (unchanged). The dated owner exceptions stay where they were (routine restart 10-27, host
+  units 10-25, generated app secrets 10-18, additive migrations 10-21, presigned URLs); merging the lists is item 10.
+- **Regression set and replay** (`scripts/floor-replay.mjs --base <checkout of main>`): replays every escalated stop of `stalls.jsonl`
+  whose floor fired through both versions and prints floor hits, owner <-> manager routing moves and, with
+  `<state>/floor-regression/labels.json` (hand labels: truly floor = money, credentials, customers, shared data delete, destructive
+  migration, history rewrite / force-push, sudoers / host units, deploy outside the queue, owner-only physical step), precision, recall
+  and every truly-floor stop no longer caught. The set and the labels hold session text and stay in the state dir.
+  Measured 2026-11-11 on 389 `[hard: X]` escalations (335 distinct asks, 101 rows / 82 asks truly floor):
+
+  | | fired | false positives | precision | recall |
+  |---|---|---|---|---|
+  | logged (as escalated) | 389 | 288 | 0.26 | 1.00 |
+  | before (main, replayed) | 380 | 279 | 0.27 | 1.00 |
+  | after | 223 | 123 | 0.45 | 0.99 rows / 1.00 asks |
+
+  156 false escalations removed. The one row no longer caught is a truncated copy of a stop whose full copy still fires; it routed to the
+  manager before and after. Over all 1,816 escalated stops with a floor hit: 450 drop their hit (389 distinct, all reviewed by hand, none
+  truly floor), 62 move owner -> manager (all narration-only), 13 move manager -> owner (`$0.25` live-run caps, an Anthropic key).
+  Still escalated, by design: the 2026-11-11 07:16 example now tags `publish` (its "publish v16" to prod), no longer `remove`.
+
 ## Round 9: other machines, ledgers, credit fallback, ready window
 
 - **The approved action** (`stall.js` `approvedAction`, `isPastNarrative`): for a recommended option or a "continue", the hard floor reads the
