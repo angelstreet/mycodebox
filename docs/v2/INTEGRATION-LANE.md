@@ -76,6 +76,8 @@ When the merged tree has a `package-lock.json` and a test command is set, the la
 first (step `install`). Commands run with an allowlisted environment (PATH, HOME, locale, TMPDIR, `NODE_*`, CI and a
 temp `GHOSTY_STATE_DIR`), never the service's own keys and tokens.
 
+**The website repo** (`website`, 2026-11-11): `target: "master"`, `deploy: null` (Vercel deploys from `master`), `test: "python3 -m pytest tests -q"`, `conventions: []`. The entry is `config/integration-repos/website.json`; see REFERENCE "Integration lane".
+
 **The virtualpytest repo runs the repo's own bug-id check as its lane test** (`bash scripts/docs/check_bug_ids.sh &&
 bash -n .githooks/pre-push`). It used to be a no-op, and that is how a duplicate bug number reached `main` three times
 in one day (2026-10-26): the check reads the working tree, so each session saw its own number as free and the clash
