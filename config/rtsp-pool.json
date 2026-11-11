@@ -1,6 +1,6 @@
 {
   "_doc": "Vetted RTSP sources for the nightly replacement (scripts/agent/rtsp_replace.py, docs/RTSP-NIGHTLY.md). Only entries with a 'vetted' date are ever used as a replacement; the others only classify a failing stream as 'public test stream'. A 'loopback' source is only valid on the hosts listed in the env var named by 'hostsEnv' (private config, comma list: the hosts that run vpt-rtsp/mediamtx). No credentials, ever: an IP camera is never in this file.",
-  "policy": "Loopback smoke for rtsp devices; vetted public HLS test streams for dead HLS devices (owner, 2026-11-11: the nightly must fix what it finds). Public RTSP (554) is blocked from codebox and 3 lab hosts, so no public rtsp source is vetted. A source is vetted only after rtsp_check.py plays it from codebox and from a host that will use it.",
+  "policy": "rtsp devices: loopback smoke only (public RTSP on 554 is blocked from codebox and 3 lab hosts, none vetted). HLS devices do NOT use this pool (owner, 2026-11-11): they are restored or replaced from the free channel lists (scripts/agent/stream_catalog.py, docs/RTSP-NIGHTLY.md).",
   "maxReplacementsPerNight": 3,
   "sources": [
     {
@@ -31,20 +31,6 @@
       "url": "rtsp://rtsp.stream/movie",
       "vetted": null,
       "note": "unvetted: same, 2026-11-11"
-    },
-    {
-      "id": "hls-mux-bbb",
-      "kind": "public",
-      "url": "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
-      "vetted": "2026-11-11",
-      "note": "Mux public test stream (Big Buck Bunny), h264 1280x720; played from codebox and a lab host"
-    },
-    {
-      "id": "hls-apple-bipbop",
-      "kind": "public",
-      "url": "https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_4x3/bipbop_4x3_variant.m3u8",
-      "vetted": "2026-11-11",
-      "note": "Apple bipbop test stream, h264; played from codebox and a lab host"
     }
   ]
 }

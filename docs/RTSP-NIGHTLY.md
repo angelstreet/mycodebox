@@ -1,6 +1,6 @@
 # Nightly RTSP check and replacement (owner, 2026-11-11)
 
-**Scope (2026-11-11, after the app showed 92 `rtsp_video` devices):** every device of model `rtsp_video` is checked, not only literal `rtsp://` sources. The model is the generic stream model: today about 66 looping local files, 25 HLS internet-TV channels, 8 with no source, 0 rtsp://. Kinds: `loopback`, `public`, `ip_camera` (rtsp), `hls`, `file`, `no_source`. **Decision (owner, 2026-11-11: "we want to identify those streams every night and fix them"):** a dead `hls`, `public` or `loopback` source is replaced from the vetted pool (an HLS device gets an HLS test stream, an rtsp device an rtsp source), but only if it fails again on a re-probe 20 s later (a TV channel can blink). Files, empty sources and IP cameras are reported by name, never replaced. A replaced channel keeps its device name: the journal and report say which source it now plays, and the manager line lists it so the name can be fixed by hand. `unverified` (a file or loopback source on a host with no `RTSP_CHECK_SSH` alias) is listed, not counted as down.
+**Scope (2026-11-11, after the app showed 92 `rtsp_video` devices):** every device of model `rtsp_video` is checked, not only literal `rtsp://` sources. The model is the generic stream model: today about 66 looping local files, 25 HLS internet-TV channels, 8 with no source, 0 rtsp://. Kinds: `loopback`, `public`, `ip_camera` (rtsp), `hls`, `file`, `no_source`. **Decision (owner, 2026-11-11: "we want to identify those streams every night and fix them"):** a dead HLS channel is repaired from the free channel lists (below), only after it fails again on a re-probe 20 s later (a TV channel can blink). Files, empty sources and IP cameras are reported by name, never changed.
 
 Owner: "send a worker every night, MiniMax, to check the RTSP video and replace the stream that is not working."
 
@@ -34,19 +34,19 @@ The journal keeps the per-stream check events, not the inventory errors, so a ni
 |---|---|
 | `loopback` (127.0.0.1 / localhost: the mediamtx `smoke` loop) | replaced from the pool |
 | `public` (host is in the pool file) | replaced from the pool |
-| `hls` (http/https source) | replaced with a vetted HLS test stream (Mux, Apple bipbop) after a confirming re-probe |
+| `hls` (http/https source) | **restore** the same channel from a new URL, else **replace** it with another channel of the same group (see "Dead HLS channels"), after a confirming re-probe |
 | `ip_camera` (anything else: owner hardware) | **reported only, never replaced** |
 
 - Only pool entries with a `vetted` date are replacement candidates, and a candidate is probed again right before use. A
   `loopback` entry is valid only on the hosts listed in the env var its `hostsEnv` names (`RTSP_LOOPBACK_HOSTS`, private config: the hosts running `vpt-rtsp`).
-- At most `maxReplacementsPerNight` (3) per UTC day (counted from the journal), and only in `live` mode. `dry` (the default) probes
+- Every change (restore or replace) goes through the same steps below. At most `maxReplacementsPerNight` (3) per UTC day (counted from the journal), and only in `live` mode. `dry` (the default) probes
   and reports what it would do and writes nothing.
-- Replacement, all inside `vpt-lease run <env> <host> --kind host --max-wait 3 -- ...` (BUSY: the command never runs, nothing is
+- Replacement, all inside `vpt-lease run <env> <host> --kind host --max-wait 20 -- ...` (`RTSP_LEASE_MAX_WAIT`; the host's one `vpt-stream` unit serves every device, so it is a host claim) (BUSY: the command never runs, nothing is
   touched, journaled `lease_not_granted`):
   1. GET the full current host-config; refuse unless the device exists and is an rtsp source.
-  2. Payload backup `<state>/rtsp-nightly/backups/<host>-<ts>.json` (mode 0600: it holds camera credentials, never the journal). The
+  2. Payload backup `<state>/rtsp-nightly/backups/<host>-<device>-<ts>.json` (mode 0600: it holds camera credentials, never the journal). The
      host also writes its own `.env.backup.<ts>` on every save.
-  3. POST `/server/settings/host-config` with **all** `devices` of the GET, one `DEVICE<n>_VIDEO` changed. Never `devices:{}` or a
+  3. POST `/server/settings/host-config` with **all** `devices` of the GET, one `DEVICE<n>_VIDEO` (and on a replace its `DEVICE<n>_NAME`) changed. Never `devices:{}` or a
      partial set: the host deletes every `DEVICE<n>` it is not sent (bug-591e8166). Read back and diff: same devices, same other fields.
   4. `POST /server/system/controlHostService {service: vpt-stream, action: restart}` (the allowlisted routine path).
   5. After 15 s `rtsp_check` the new source. Any failure: POST the backup devices back, restart, journal `rolled_back`.
@@ -61,7 +61,28 @@ The journal keeps the per-stream check events, not the inventory errors, so a ni
   blocked or the streams gone), so none is vetted: only `smoke` (on the one lab host that runs `vpt-rtsp`) is. Until a public source is vetted, a dead public
   stream is reported as "no vetted pool source plays now" on every host without `vpt-rtsp`.
 
-**Pool (2026-11-11): rtsp = loopback smoke only; HLS = two vetted public test streams.** Public RTSP on 554 is blocked from codebox and three lab hosts, so no public source is vetted; a dead public stream is reported, not replaced, and a `smoke` replacement only happens on a host listed in `RTSP_LOOPBACK_HOSTS`. A public source joins the pool only after `rtsp_check.py` plays it from a host that will use it (any port, or RTSP over HTTP/TCP tunnelling, as long as the probe passes).
+**Pool (2026-11-11): rtsp = loopback smoke only.** Public RTSP on 554 is blocked from codebox and three lab hosts, so no public rtsp source is vetted; a dead public rtsp stream is reported. HLS devices never use this pool.
+
+## Dead HLS channels: restore, else replace from the free lists (owner, 2026-11-11)
+
+`scripts/agent/stream_catalog.py`. The lists (`RTSP_CHANNEL_LISTS`, comma-separated paths or URLs) default to:
+
+1. the iptv-org upstream playlist `https://iptv-org.github.io/iptv/countries/fr.m3u` (freshest URLs);
+2. our verified copy, virtualpytest `docs/agent/iptv-france-streams/fr.m3u` (137 channels that played on 2026-10-16, see its
+   `STREAMS.md`), read from `~/virtualpytest`.
+
+For a dead channel, in this order, and every candidate is probed from the host before it is used (at most 8 per device):
+
+1. **Restore**: the same channel (same `tvg-id`, else same name) under a different URL. The device keeps its name.
+   Example 2026-11-11: Euronews FR, whose old `/manifest/` URL died, is listed upstream under a new `/master/.../playlist.m3u8`.
+2. **Replace**: a channel of the same `group-title` (News, Music, ...), not already used on that host, not needing a special
+   user agent, same resolution tag first, our verified list first. The device is renamed, its prefix kept:
+   `FR Regional 3 — Littoral FM TV` (404, gone from both lists) becomes `FR Regional 3 — P2M TV (720p)`.
+3. Nothing plays: reported.
+
+The channel a device plays is found by its URL in the lists, else by the part of its name after `—`. A device whose channel
+is in no list cannot be repaired (no group known) and is reported. The verified copy should be re-probed about monthly
+(`STREAMS.md`); the nightly does not edit it.
 
 ## Schedule and mode
 

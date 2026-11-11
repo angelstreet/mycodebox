@@ -5,7 +5,7 @@ Run, in the foreground:
     set -a; . ~/.config/rtsp-nightly/env; set +a
     python3 scripts/agent/rtsp_replace.py --mode __MODE__
 
-It checks every `rtsp_video`-model device (rtsp, HLS, local file, empty source) on the hosts, and applies the policy by itself: a public test stream or the loopback smoke source that does not play is replaced from the vetted pool (live only, host lease, full host-config payload, rollback on failure, at most 3 a night); an IP camera, an HLS channel, a file or an empty source is only reported. Do not replace anything by hand, do not edit the pool in the same run, never send `devices: {}` to host-config, never print or write an RTSP URL with credentials (the tool redacts; you must too).
+It checks every `rtsp_video`-model device (rtsp, HLS, local file, empty source) on the hosts, and applies the policy by itself: a dead HLS channel is restored (same channel, new URL) or replaced (another channel of the same group from the free lists, device renamed), a dead rtsp public/loopback source is replaced from the vetted pool (live only, host lease, full host-config payload, rollback on failure, at most 3 a night); an IP camera, an HLS channel, a file or an empty source is only reported. Do not replace anything by hand, do not edit the pool in the same run, never send `devices: {}` to host-config, never print or write an RTSP URL with credentials (the tool redacts; you must too).
 
 Then:
 1. Read `~/.local/state/ghosty/rtsp-nightly/report-<today UTC>.json` and the tail of `journal.jsonl`; say plainly in your answer: streams checked, ok, down, replaced, rolled back, cameras down.

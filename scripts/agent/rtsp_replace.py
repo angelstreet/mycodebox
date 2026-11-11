@@ -8,7 +8,9 @@ Policy (data: config/rtsp-pool.json); scope: every rtsp_video device and any rts
   ok                          nothing to do
   hls / file / no_source      REPORTED only (no channel or file pool exists)
   ip_camera not ok            REPORTED only, never replaced (owner hardware)
-  hls / public / loopback     replaced (an HLS device gets a vetted HLS test stream, an rtsp one an rtsp source; re-probed 20 s later first) by the first VETTED pool source that plays right now (loopback sources only on
+  hls                         restore (same channel, new URL, upstream iptv-org list) else replace (same group, unused on the host,
+                              our verified list; device renamed), re-probed 20 s later first; stream_catalog.py
+  public / loopback (rtsp)    replaced by the first VETTED pool source that plays right now (loopback sources only on
                               the hosts that run vpt-rtsp), at most maxReplacementsPerNight (3) per UTC day, live mode only
 Replacement: a lease on the host (`vpt-lease run`; BUSY => the command never runs, nothing is touched), the FULL current
 host-config GET devices merged with the one changed DEVICE<n>_VIDEO (never devices:{}: that deletes every DEVICE<n> key,
@@ -20,6 +22,7 @@ import copy, datetime, json, os, subprocess, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import rtsp_check as rc  # noqa: E402
+import stream_catalog as sc  # noqa: E402
 
 STATE = os.path.join(os.environ.get('GHOSTY_STATE_DIR') or os.path.expanduser('~/.local/state/ghosty'), 'rtsp-nightly')
 SETTLE = int(os.environ.get('RTSP_SETTLE_SECONDS', '15'))
@@ -61,6 +64,17 @@ def candidates(entry, pool):
         yield s
 
 
+def pick_hls(entry, catalog, used_urls, ssh_map, timeout, tries=8):
+    """restore (same channel, new URL) else replace (same group, unused on the host); first that plays, probed from the host."""
+    ssh = ssh_map.get(entry['host'])
+    for n, (how, c, new_name) in enumerate(sc.candidates(entry.get('name', ''), entry['url'], used_urls, catalog)):
+        if n >= tries:
+            break
+        if rc.check_stream(c['url'], timeout, ssh)['status'] == 'ok':
+            return {'id': f"{how}:{c['name']}", 'url': c['url'], 'how': how, 'name': new_name, 'label': c['name']}
+    return None
+
+
 def confirm_down(entry, ssh_map, timeout):
     """A live TV channel can blink: change nothing unless it fails again 20 s later."""
     time.sleep(int(os.environ.get('RTSP_CONFIRM_SECONDS', '20')))
@@ -79,15 +93,16 @@ def pick(entry, pool, ssh_map, timeout):
 
 
 # ---------------- the apply step (inside the host lease) ----------------
-def other_fields(devices, device):
-    return {(d, k): v for d, f in devices.items() for k, v in f.items() if not (d == device and k == 'DEVICE_VIDEO')}
+def other_fields(devices, device, changed=('DEVICE_VIDEO',)):
+    return {(d, k): v for d, f in devices.items() for k, v in f.items() if not (d == device and k in changed)}
 
 
-def apply_one(env, host, device, pool_id, out):
+def apply_one(env, host, device, src_file, out):
     servers = rc.parse_pairs(os.environ.get('RTSP_CHECK_SERVERS'))
     server = servers[env]
-    pool = rc.load_pool()
-    src = next(s for s in pool['sources'] if s['id'] == pool_id and s.get('vetted'))
+    with open(src_file, encoding='utf-8') as f:
+        src = json.load(f)  # {id, url, how, name?}: chosen and probed by the nightly run just before the lease
+    pool_id = src['id']
     ssh = rc.parse_pairs(os.environ.get('RTSP_CHECK_SSH')).get(host)
     token = rc.server_token()
     base = {'event': 'replace', 'host': host, 'device': device, 'pool': pool_id}
@@ -106,15 +121,19 @@ def apply_one(env, host, device, pool_id, out):
     if not devices or device not in devices or not (rc.is_rtsp(devices[device].get('DEVICE_VIDEO', '')) or rc.is_http(devices[device].get('DEVICE_VIDEO', ''))):
         return done('refused', reason='device not found or not an rtsp/http stream source (nothing sent)')
     old = rc.clean_value(devices[device]['DEVICE_VIDEO'])
-    stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
     os.makedirs(os.path.join(STATE, 'backups'), exist_ok=True)
-    backup = os.path.join(STATE, 'backups', f'{host}-{stamp}.json')
+    backup = os.path.join(STATE, 'backups', f'{host}-{device}-{stamp}.json')  # two repairs on one host in one second collided
     fd = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)  # holds camera credentials: never in the journal
     with os.fdopen(fd, 'w') as f:
         json.dump({'host': host, 'devices': devices}, f)
     base['backup'] = os.path.basename(backup)
     new = copy.deepcopy(devices)
     new[device]['DEVICE_VIDEO'] = src['url']
+    renamed = bool(src.get('name')) and src['name'] != devices[device].get('DEVICE_NAME')
+    if renamed:
+        new[device]['DEVICE_NAME'] = src['name']
+    changed = {'DEVICE_VIDEO', 'DEVICE_NAME'} if renamed else {'DEVICE_VIDEO'}
 
     def save(payload):
         r = rc.api(server, '/server/settings/host-config', token, {'host_name': host, 'devices': payload}, timeout=60)
@@ -136,7 +155,7 @@ def apply_one(env, host, device, pool_id, out):
         if not save(new):
             return rollback('host-config POST refused')
         after = rc.host_config(server, token, host).get('devices') or {}
-        if set(after) != set(devices) or other_fields(after, device) != other_fields(devices, device) \
+        if set(after) != set(devices) or other_fields(after, device, changed) != other_fields(devices, device, changed) \
                 or rc.clean_value(after.get(device, {}).get('DEVICE_VIDEO', '')) != src['url']:
             return rollback('read-back differs from the merged payload')
         if not restart():
@@ -147,12 +166,15 @@ def apply_one(env, host, device, pool_id, out):
             return rollback(f"new source not playing: {res['status']}")
     except Exception as e:
         return rollback(f'{type(e).__name__}')
-    return done('replaced', old=rc.redact(old), new=src['url'])
+    return done('replaced', how=src.get('how', 'pool'), old=rc.redact(old), new=src['url'],
+                old_name=devices[device].get('DEVICE_NAME', ''), new_name=new[device].get('DEVICE_NAME', ''))
 
 
 # ---------------- the nightly run ----------------
 def lease_cmd(env, host, device, pool_id, out):
-    return ['vpt-lease', 'run', os.environ.get('RTSP_LEASE_ENV', 'node1-vpt'), host, '--agent', AGENT, '--kind', 'host', '--ttl', '20', '--max-wait', '3',
+    # max-wait 20 min: a host carries short device runs all evening; the night window is quiet, but a run may still hold it
+    return ['vpt-lease', 'run', os.environ.get('RTSP_LEASE_ENV', 'node1-vpt'), host, '--agent', AGENT, '--kind', 'host', '--ttl', '20',
+            '--max-wait', os.environ.get('RTSP_LEASE_MAX_WAIT', '20'),
             '--purpose', f'rtsp nightly: replace {device} source', '--',
             sys.executable, os.path.abspath(__file__), '--apply', env, host, device, pool_id, '--out', out]  # env = the server label of RTSP_CHECK_SERVERS
 
@@ -164,6 +186,7 @@ def run(mode, timeout=10):
     results = rc.check_entries(entries, ssh_map, timeout)
     budget = int(pool.get('maxReplacementsPerNight', 3)) - replaced_today()
     rows = []
+    catalog = None
     for e, r in zip(entries, results):
         row = rc.public_entry(e, r)
         if r['status'] == 'ok':
@@ -179,16 +202,29 @@ def run(mode, timeout=10):
         elif mode == 'live' and not confirm_down(e, ssh_map, timeout):
             row['action'] = 'report: failed once, played on the re-probe (flaky), nothing touched'
         else:
-            s = pick(e, pool, ssh_map, timeout)
+            if e['kind'] == 'hls':
+                if catalog is None:
+                    catalog, cat_err = sc.load()
+                    errors += cat_err
+                used = [x['url'] for x in entries if x['host'] == e['host']]
+                s = pick_hls(e, catalog, used, ssh_map, timeout)
+            else:
+                p0 = pick(e, pool, ssh_map, timeout)
+                s = p0 and {'id': p0['id'], 'url': p0['url'], 'how': 'replace', 'label': f"pool {p0['id']}"}
             if not s:
-                row['action'] = 'report: no vetted pool source plays now'
+                row['action'] = ('report: no working same channel or same-group channel in the lists' if e['kind'] == 'hls'
+                                 else 'report: no vetted pool source plays now')
             elif mode != 'live':
-                row['action'] = f"dry: would replace with pool '{s['id']}'"
+                row['action'] = f"dry: would {s['how']} with '{s['label']}'" + (f" (device renamed '{s['name']}')" if s.get('name') and s['name'] != e.get('name') else '')
             else:
                 out = os.path.join(STATE, f"apply-{e['host']}-{e['device']}.json")
+                src_file = os.path.join(STATE, f"apply-src-{e['host']}-{e['device']}.json")
+                os.makedirs(STATE, exist_ok=True)
+                with open(src_file, 'w', encoding='utf-8') as f:
+                    json.dump(s, f)
                 p = None
                 try:
-                    p = subprocess.run(lease_cmd(e['env'], e['host'], e['device'], s['id'], out), capture_output=True, text=True)
+                    p = subprocess.run(lease_cmd(e['env'], e['host'], e['device'], src_file, out), capture_output=True, text=True)
                 except OSError as exc:
                     # The lease CLI itself is missing (or not executable): nothing was touched, but the night must
                     # go on and report it instead of dying on the first down stream. (not `as e`: that unbinds the
@@ -202,11 +238,11 @@ def run(mode, timeout=10):
                     res = None
                 if res is None:  # BUSY / lease error: vpt-lease never ran the command, nothing was touched
                     row['action'] = ('report: the lease command could not be run (vpt-lease missing), nothing touched'
-                                     if p is None else 'report: host lease not granted, nothing touched')
+                                     if p is None else 'report: host lease not granted (or the apply step stopped before any write), nothing touched')
                     journal({'event': 'replace', 'host': e['host'], 'device': e['device'],
                              'outcome': 'lease_not_available' if p is None else 'lease_not_granted', 'detail': detail})
                 else:
-                    row['action'] = f"{res['outcome']} (pool '{s['id']}')"
+                    row['action'] = f"{res['outcome']} ({s['how']}: '{s['label']}')"
                     if res['outcome'] in ('replaced', 'rolled_back'):
                         budget -= 1
         rows.append(row)
@@ -217,7 +253,7 @@ def run(mode, timeout=10):
 def main(argv):
     a = list(argv)
     if '--apply' in a:
-        i = a.index('--apply'); env, host, device, pid = a[i + 1:i + 5]
+        i = a.index('--apply'); env, host, device, pid = a[i + 1:i + 5]  # pid = the chosen-source JSON file
         out = a[a.index('--out') + 1]
         return apply_one(env, host, device, pid, out)
     mode = os.environ.get('RTSP_NIGHTLY_MODE', 'dry')
