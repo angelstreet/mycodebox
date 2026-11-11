@@ -163,7 +163,7 @@ test('CLI: every flag set files cleanly against a store with marker lines', asyn
   } finally { srv.close(); }
 });
 
-import { sendBackOf, sendBackText } from '../found-bugs.js';
+import { sendBackOf, sendBackText, sweepGroups } from '../found-bugs.js';
 test('why/reason are stored; a record without why is marked missing; send-back heuristic', async () => {
   const b = createFoundBugs({ stateDir: tmp('fb-why-') });
   const a = (await b.add({ title: 'a', session: 's1', why: 'large', reason: 'big', repro: 'x' })).bug;
@@ -203,4 +203,26 @@ test('claim: one holder at a time, renewable by the holder, expires after 2 h, d
   assert.equal((await b.claim(bug.id, { session: 'worker-b' })).ok, true);
   await b.resolve(bug.id, { state: 'fixed', commit: 'abc123', by: 'worker-b' });
   assert.match((await b.claim(bug.id, { session: 'mac-a' })).error, /already resolved \(fixed in abc123\)/);
+});
+
+test('sweepGroups: one message per live filer, only small-looking open reports', () => {
+  const mk = (id, session, over = {}) => ({ id, session, title: 't ' + id, repro: 'r', why: 'missing', blocking: false, ...over });
+  const g = sweepGroups([mk('bug-1', 'a'), mk('bug-2', 'a'), mk('bug-3', 'b', { blocking: true }), mk('bug-4', 'c'), mk('bug-5', 'a', { resolved: true })], ['a', 'b']);
+  assert.equal(g.length, 1); assert.equal(g[0].session, 'a'); assert.equal(g[0].count, 2); assert.match(g[0].text, /bug-1.*bug-2/);
+});
+
+test('manager block shows the weekly bugs row only when the scorecard carries bugs', async () => {
+  const { managerBlockHtml } = await import('../public/usage.js');
+  const b = { tokens: { input: 1, output: 1, cache_read: 0, cache_write: 0 }, calls: 1 };
+  const score = { score: 50, components: {}, cost: { session: b, subagents: b, workers: b, jev: b, reviewer: b, judge: b, total: b }, budget: {}, jev: {}, perf: {} };
+  const html = managerBlockHtml(score, [], { bugs: { days: 7, filed: 9, fixed: 4, fixedByFinder: 3, fixedByWorker: 1, open: 5, whyMissing: 2 } });
+  assert.match(html, /Bugs \(7 d\).*9 filed/s); assert.match(html, /3 fixed by the finder.*1 by a worker.*5 open.*2 filed without a reason/s);
+  assert.doesNotMatch(managerBlockHtml(score, [], {}), /Bugs \(/);
+});
+
+test('a report stored before the why field existed counts as missing (send-back, sweep, weekly number)', async () => {
+  assert.equal(sendBackOf({ id: 'bug-1', session: 'a', title: 't', repro: 'r' }), true);
+  const dir = tmp('fb-legacy-'); const fs = await import('node:fs');
+  fs.writeFileSync(join(dir, 'found-bugs.jsonl'), JSON.stringify({ id: 'bug-aaaaaaaa', session: 'a', title: 'old', at: new Date().toISOString(), repro: 'r', blocking: false }) + '\n');
+  assert.equal((await createFoundBugs({ stateDir: dir }).week(7)).whyMissing, 1);
 });

@@ -156,7 +156,7 @@ export function createFoundBugs({ stateDir, onNew = async () => {}, now = Date.n
   async function week(days = 7) {
     const since = now() - days * DEDUPE_MS, rows = (await list({ limit: 5000 })).filter((b) => !b.test && Date.parse(b.at) >= since);
     const fixed = rows.filter((b) => b.resolved && b.state === 'fixed'), mine = fixed.filter((b) => b.resolvedBy === b.session);
-    const missing = rows.filter((b) => b.why === 'missing').length;
+    const missing = rows.filter((b) => !b.why || b.why === 'missing').length;
     return { days, filed: rows.length, fixed: fixed.length, fixedByFinder: mine.length, fixedByWorker: fixed.length - mine.length, open: rows.filter((b) => !b.resolved).length, whyMissing: missing };
   }
   async function recentBy(session, ms = REPORTED_MS) {
@@ -186,7 +186,15 @@ export function unreportedBugOf(text) {
 const FLOOR = /\b(?:credentials?|secrets?|tokens?|passwords?|api[- ]?keys?|sudoers?|delet(?:e|ion)s? of data|data loss|force-?push|money|payment|invoice|billing|customers?|production|prod host|migration)\b/i;
 export function sendBackOf(b) {
   if (!b || b.test || b.blocking || !String(b.repro || '').trim()) return false;
-  if (!['missing', 'large', 'other-area'].includes(b.why)) return false;
+  if (!['missing', 'large', 'other-area'].includes(b.why || 'missing')) return false;   // a report stored before the field existed has no why: missing
   return !FLOOR.test([b.title, b.repro, b.error, b.reason].join(' '));
 }
 export const sendBackText = (b) => `You filed ${b.id}. If it is small, claim it (found-bug --claim ${b.id}), fix it now in your own worktree and resolve it (found-bug --resolve ${b.id} --commit <sha|integration id>); otherwise reply with the reason (found-bug --why-not-fixed large|other-area|host-or-device|credentials|owner-floor|live-session-task).`;
+
+// Sweep (owner, 2026-11-11): open reports from sessions that are still live, grouped per session: one kept wake each listing the ids. Pure.
+export function sweepGroups(bugs, liveSessions, { perSession = 8 } = {}) {
+  const live = liveSessions instanceof Set ? liveSessions : new Set(liveSessions), by = new Map();
+  for (const b of bugs) if (!b.resolved && live.has(b.session) && sendBackOf(b)) by.set(b.session, [...(by.get(b.session) || []), b]);
+  return [...by].map(([session, list]) => ({ session, count: list.length, text:
+    `You have ${list.length} open bug report(s) you filed: ${list.slice(0, perSession).map((b) => `${b.id} (${b.title.slice(0, 70)})`).join('; ')}${list.length > perSession ? '; ...' : ''}. If any is small, fix it now in your own worktree and resolve it (found-bug --resolve <id> --commit <sha|integration id>); otherwise reply with the reason per bug.` }));
+}
