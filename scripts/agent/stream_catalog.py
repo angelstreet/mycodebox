@@ -71,14 +71,31 @@ def load(lists=None):
     return entries, errors
 
 
+def url_tokens(url):
+    """host + long path segments: a channel's stream id survives a URL change ('/manifest/<id>/...' -> '/master/<id>/...')."""
+    try:
+        from urllib.parse import urlsplit
+        u = urlsplit(base_url(url))
+    except ValueError:
+        return set()
+    return {(u.hostname or '', seg) for seg in u.path.split('/') if len(seg) >= 16}
+
+
 def identify(name, url, catalog):
-    """The catalog entry of the channel a device plays: by URL, else by name."""
+    """The catalog entry of the channel a device plays: same URL, else a shared stream id, else same name, else name prefix."""
     b = base_url(url)
     for c in catalog:
         if base_url(c['url']) == b:
             return c
+    t = url_tokens(url)
+    for c in catalog:
+        if t & url_tokens(c['url']):
+            return c
     k = norm(name or '')
-    return next((c for c in catalog if k and c['key'] == k), None)
+    if not k:
+        return None
+    return (next((c for c in catalog if c['key'] == k), None)
+            or next((c for c in catalog if len(k) >= 6 and (c['key'].startswith(k) or k.startswith(c['key']))), None))
 
 
 def candidates(name, url, used_urls, catalog):

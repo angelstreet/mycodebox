@@ -19,7 +19,7 @@ function fakes() {
   const dir = mkdtempSync(path.join(tmpdir(), 'rtsp-'));
   // url containing "dead": refuses; "novideo": no streams; "still": identical frames; else 12 moving frames
   const ffprobe = sh(dir, 'ffprobe', `for a; do u=$a; done\ncase "$u" in http*) for a; do [ "$a" = -rtsp_transport ] && { echo 'Option rtsp_transport not found' >&2; exit 1; }; done;; esac\ncase "$u" in *dead*) echo "$u: Connection refused" >&2; exit 1;; *novideo*) echo '{"streams":[]}';; *) echo '{"streams":[{"codec_name":"h264","width":640,"height":360}]}';; esac`);
-  const ffmpeg = sh(dir, 'ffmpeg', `for a; do case "$a" in rtsp*) u=$a;; esac; done\necho '#format: frame checksums'\ncase "$u" in *still*) for i in 1 2 3 4; do echo "0, $i, $i, 1, 10, aaaa"; done;; *) for i in 1 2 3 4; do echo "0, $i, $i, 1, 10, m$i"; done;; esac`);
+  const ffmpeg = sh(dir, 'ffmpeg', `for a; do case "$a" in rtsp*|http*|file*|/*) u=$a;; esac; done\necho '#format: frame checksums'\ncase "$u" in *still*) for i in 1 2 3 4; do echo "0, $i, $i, 1, 10, aaaa"; done;; *) for i in 1 2 3 4; do echo "0, $i, $i, 1, 10, m$i"; done;; esac`);
   return { dir, env: { RTSP_CHECK_FFPROBE: ffprobe, RTSP_CHECK_FFMPEG: ffmpeg } };
 }
 
@@ -180,35 +180,39 @@ test('run live: a replacement that does not play is rolled back to the backup (f
 test('a dead HLS channel is restored (same channel, new URL) or replaced (same group, unused, renamed); file / empty only reported', async () => {
   const w = await world({ pool: POOL, devices: {
     DEVICE1: { ...dev('FR Music 2 — Used FM (720p)', 'https://cdn.example/good/used.m3u8'), DEVICE_MODEL: 'rtsp_video' },
-    DEVICE2: { ...dev('FR News 2 — Dead News', 'https://cdn.example/dead/news-old.m3u8'), DEVICE_MODEL: 'rtsp_video' },
+    DEVICE2: { ...dev('FR News 2 — Dead News', 'https://cdn.example/manifest/AbCdEfGhIjKlMnOpQrStUv/dead.m3u8'), DEVICE_MODEL: 'rtsp_video' },
+    DEVICE7: { ...dev('FR Music 3 — Gone Too FM', 'https://cdn.example/dead/gone2.m3u8'), DEVICE_MODEL: 'rtsp_video' },
     DEVICE3: { ...dev('loop', '/var/lib/vpt-movies/good.mp4'), DEVICE_MODEL: 'rtsp_video' },
     DEVICE4: { ...dev('empty', ''), DEVICE_MODEL: 'rtsp_video' },
     DEVICE5: dev('hdmi', '/dev/stb5'),   // not rtsp_video, not rtsp: ignored
     DEVICE6: { ...dev('FR Music 1 — Gone FM', 'https://cdn.example/dead/gone.m3u8'), DEVICE_MODEL: 'rtsp_video' } } });
   const dir = path.dirname(w.E.RTSP_POOL_FILE);
   const inf = (name, group, url, extra = '') => `#EXTINF:-1 tvg-id="${name.replace(/\W/g, '')}.fr" ${extra}group-title="${group}",${name}\n${url}\n`;
-  writeFileSync(path.join(dir, 'up.m3u'), '#EXTM3U\n' + inf('Dead News (720p)', 'News', 'https://cdn.example/good/news-new.m3u8'));
-  writeFileSync(path.join(dir, 'repo.m3u'), '#EXTM3U\n' + inf('Gone FM (720p)', 'Music', 'https://cdn.example/dead/gone.m3u8')
+  writeFileSync(path.join(dir, 'up.m3u'), '#EXTM3U\n' + inf('Dead Newsroom French (720p)', 'News', 'https://cdn.example/master/AbCdEfGhIjKlMnOpQrStUv/good.m3u8'));
+  writeFileSync(path.join(dir, 'repo.m3u'), '#EXTM3U\n' + inf('Gone FM (720p)', 'Music', 'https://cdn.example/dead/gone.m3u8') + inf('Gone Too FM (720p)', 'Music', 'https://cdn.example/dead/gone2.m3u8')
     + inf('Used FM (720p)', 'Music', 'https://cdn.example/good/used.m3u8')
     + inf('Needs UA FM (720p)', 'Music', 'https://cdn.example/good/ua.m3u8', 'http-user-agent="X" ')
     + inf('Other FM (720p)', 'Music', 'https://cdn.example/good/other.m3u8'));
   w.E.RTSP_CHANNEL_LISTS = `${path.join(dir, 'up.m3u')},${path.join(dir, 'repo.m3u')}`;
   const dry = await py(REPLACE, [], w.E);
-  assert.match(dry.stdout, /DEVICE2\s+hls\s+no_connect -> dry: would restore with 'Dead News'/, dry.stdout);
+  assert.match(dry.stdout, /DEVICE2\s+hls\s+no_connect -> dry: would restore with 'Dead Newsroom French'/, dry.stdout);
   assert.match(dry.stdout, /DEVICE6\s+hls\s+no_connect -> dry: would replace with 'Other FM' \(device renamed 'FR Music 1 — Other FM \(720p\)'\)/);
   assert.equal(w.posts.length, 0);
   const r = await py(REPLACE, ['--mode', 'live'], w.E);
   w.close();
-  assert.match(r.stdout, /DEVICE2\s+hls\s+no_connect -> replaced \(restore: 'Dead News'\)/, r.stdout);
-  assert.equal(w.devices.DEVICE2.DEVICE_VIDEO, 'https://cdn.example/good/news-new.m3u8');
+  assert.match(r.stdout, /DEVICE2\s+hls\s+no_connect -> replaced \(restore: 'Dead Newsroom French'\)/, r.stdout);
+  assert.equal(w.devices.DEVICE2.DEVICE_VIDEO, 'https://cdn.example/master/AbCdEfGhIjKlMnOpQrStUv/good.m3u8'); // found by the stream id, the name differs
   assert.equal(w.devices.DEVICE2.DEVICE_NAME, 'FR News 2 — Dead News');            // same channel: name kept
   assert.equal(w.devices.DEVICE6.DEVICE_VIDEO, 'https://cdn.example/good/other.m3u8', r.stdout); // not the one already used, not the UA one
   assert.equal(w.devices.DEVICE6.DEVICE_NAME, 'FR Music 1 — Other FM (720p)');
+  // Other FM went to DEVICE6: DEVICE7 (same group) must not get it too; nothing else in the group plays
+  assert.match(r.stdout, /DEVICE7\s+hls\s+no_connect -> report: no working same channel/, r.stdout);
+  assert.equal(w.devices.DEVICE7.DEVICE_VIDEO, 'https://cdn.example/dead/gone2.m3u8');
   assert.match(r.stdout, /DEVICE3\s+file\s+ok -> none/);
   assert.match(r.stdout, /DEVICE4\s+no_source\s+no_source -> report/);
   assert.ok(!/DEVICE5/.test(r.stdout));
   assert.equal(w.posts.length, 2);
-  for (const pst of w.posts) assert.equal(Object.keys(pst.devices).length, 6); // full payload every time
+  for (const pst of w.posts) assert.equal(Object.keys(pst.devices).length, 7); // full payload every time
 });
 
 test('the pool file never holds credentials and only vetted entries are replacement candidates', () => {
@@ -216,4 +220,21 @@ test('the pool file never holds credentials and only vetted entries are replacem
   for (const s of pool.sources) { assert.ok(!/\/\/[^/]*@/.test(s.url), `${s.id} has credentials`); assert.ok(['loopback', 'public'].includes(s.kind)); }
   assert.ok(pool.maxReplacementsPerNight <= 3);
   assert.ok(existsSync(path.resolve('scripts/agent/rtsp_replace.py')));
+});
+
+test('a stream that fails once but plays on the slower re-probe, or shows a frozen picture, is never changed', async () => {
+  const w = await world({ pool: POOL, devices: {
+    DEVICE1: { ...dev('FR Music 1 — Slow FM', 'https://cdn.example/slow/a.m3u8'), DEVICE_MODEL: 'rtsp_video' },
+    DEVICE2: { ...dev('FR Music 2 — Still FM', 'https://cdn.example/still/b.m3u8'), DEVICE_MODEL: 'rtsp_video' } } });
+  // "slow": fails the first probe only (a marker file per url)
+  const probe = w.E.RTSP_CHECK_FFPROBE;
+  writeFileSync(probe, `#!/bin/sh\nfor a; do u=$a; done\ncase "$u" in *slow*) m="${w.state}/slow-seen"; [ -e "$m" ] || { : > "$m"; exit 1; };; esac\necho '{"streams":[{"codec_name":"h264","width":640,"height":360}]}'\n`);
+  const dir = path.dirname(w.E.RTSP_POOL_FILE);
+  writeFileSync(path.join(dir, 'l.m3u'), '#EXTM3U\n#EXTINF:-1 group-title="Music",Other FM (720p)\nhttps://cdn.example/good/o.m3u8\n');
+  w.E.RTSP_CHANNEL_LISTS = path.join(dir, 'l.m3u');
+  const r = await py(REPLACE, ['--mode', 'live'], w.E);
+  w.close();
+  assert.match(r.stdout, /DEVICE1\s+hls\s+no_connect -> report: no_connect once, played on the re-probe/, r.stdout);
+  assert.match(r.stdout, /DEVICE2\s+hls\s+frozen -> report: frozen picture confirmed/);
+  assert.equal(w.posts.length, 0);
 });

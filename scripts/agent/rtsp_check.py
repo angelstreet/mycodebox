@@ -106,12 +106,12 @@ def check_stream(url, timeout=10, ssh=None):
         return out
     s = streams[0]
     out.update(codec=s.get('codec_name'), width=s.get('width'), height=s.get('height'))
-    # Decode 12 frames (~0.5 s at 24 fps, bounded by the timeout on a slow camera). Not `-t 3`: an RTSP stream's first
+    # Decode 12 frames sampled at 4 fps (~3 s of picture: a still scene of 0.5 s is not a frozen stream), bounded by the timeout. Not `-t 3`: an RTSP stream's first
     # pts is the publisher's uptime, so -t cut everything on a live smoke stream. framemd5 prints one line per frame:
     # "0, pts, dts, dur, size, md5".
     try:
         stdout = _run([FFMPEG, '-v', 'error', *opts, '-i', url,
-                       '-frames:v', '12', '-an', '-f', 'framemd5', '-'], timeout, ssh).stdout
+                       '-vf', 'fps=4', '-frames:v', '12', '-an', '-f', 'framemd5', '-'], timeout, ssh).stdout
     except subprocess.TimeoutExpired as e:
         stdout = e.stdout.decode('utf-8', 'replace') if isinstance(e.stdout, bytes) else (e.stdout or '')
     frames = []
