@@ -244,6 +244,8 @@ export function createGithubCi({ exec = (argv, o) => new Promise((resolve) => {
     },
   };
 }
+// Files of the lease registry (it runs on its own host, outside the ghosty deploy); a change to one installs via scripts/registry-install.sh.
+const REGISTRY_FILES = ['lease-service.js', 'lease-routes.js', 'catchup-supersede.js', 'lease-equivalence.js', 'scripts/lease-serve.js'];
 // Self-deploy restart. ONLY scripts/safe-restart.sh restarts anything (it restarts the systemd service and waits for idle);
 // tmux is used solely to launch that script outside our cgroup, never to kill or respawn a session or process.
 // The lane runs inside the service that scripts/safe-restart.sh restarts, and the unit sets
@@ -907,6 +909,23 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
       return { ok: res.code === 0 && !res.timedOut, tail: res.out };
     });
     if (!syn.ok) return selfFail(r, 'check_failed', `node --check server.js FAILED in ${live} at ${short(sd.newSha)}: NOT restarted, the service still runs ${short(sd.prevSha)}`, syn.tail);
+
+    // The lease registry runs outside the ghosty deploy (bug-73b62192): a merged change to its files is installed there by
+    // scripts/registry-install.sh (no deploy running, backup, node --check, restart, round trip, rollback). Best effort: a
+    // failure or a running deploy is recorded and raised, never blocks the ghosty restart; the script is idempotent, so the next
+    // request or a manual run finishes it.
+    if (sd.newSha !== sd.prevSha && (await L(['diff', '--name-only', sd.prevSha, sd.newSha, '--', ...REGISTRY_FILES])).out.trim()) {
+      const reg = await step(r, 'registry-install', async (setLive) => {
+        const res = await run(`sh ${sq(path.join(live, 'scripts/registry-install.sh'))}`, { cwd: live, timeoutMs: 5 * 60_000, onData: setLive });
+        return { ok: res.code === 0 && !res.timedOut, tail: res.out };
+      });
+      sd.registry = reg.ok ? 'installed' : 'not_installed';
+      if (!reg.ok) {
+        sd.note = 'registry files NOT installed (a deploy was running or the install failed): run scripts/registry-install.sh';
+        try { managerItem({ key: `integration:${r.id}:registry-install`, title: `Integration ${r.id}: lease registry files not installed`, priority: 'high', body: redact(String(reg.tail || '')).slice(-300) }); } catch { /* best effort */ }
+      }
+      persist(r);
+    }
 
     // The restart is the LAST step and ends this process: the request is marked done (deployed), persisted and told (feed,
     // manager event, session notice) first, so the restart can neither lose nor re-run it. A launch failure is recorded as
