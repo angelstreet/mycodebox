@@ -50,6 +50,8 @@ the live mediamtx smoke stream (found while building this).
   blocked or the streams gone), so none is vetted: only `smoke` (on the one lab host that runs `vpt-rtsp`) is. Until a public source is vetted, a dead public
   stream is reported as "no vetted pool source plays now" on every host without `vpt-rtsp`.
 
+**Policy decision (manager, 2026-11-11): the pool is loopback-smoke only.** Public RTSP on 554 is blocked from codebox and three lab hosts, so no public source is vetted; a dead public stream is reported, not replaced, and a `smoke` replacement only happens on a host listed in `RTSP_LOOPBACK_HOSTS`. A public source joins the pool only after `rtsp_check.py` plays it from a host that will use it (any port, or RTSP over HTTP/TCP tunnelling, as long as the probe passes).
+
 ## Schedule and mode
 
 `rtsp-nightly.timer`: **05:45 UTC** daily (`Persistent=true`). After the nightly fleet validation (leases 23:58, runs from 00:30, morning
