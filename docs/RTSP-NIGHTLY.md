@@ -1,5 +1,7 @@
 # Nightly RTSP check and replacement (owner, 2026-11-11)
 
+**Scope (2026-11-11, after the app showed 92 `rtsp_video` devices):** every device of model `rtsp_video` is checked, not only literal `rtsp://` sources. The model is the generic stream model: today about 66 looping local files, 25 HLS internet-TV channels, 8 with no source, 0 rtsp://. Kinds: `loopback`, `public`, `ip_camera` (rtsp), `hls`, `file`, `no_source`. Only `loopback`/`public` rtsp sources are ever replaced; HLS, file, empty source and cameras are reported by name (no channel or file pool exists, so the job never swaps a TV channel). `unverified` (a file or loopback source on a host with no `RTSP_CHECK_SSH` alias) is listed, not counted as down.
+
 Owner: "send a worker every night, MiniMax, to check the RTSP video and replace the stream that is not working."
 
 | Piece | Where |

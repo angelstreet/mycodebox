@@ -4,8 +4,9 @@
   rtsp_replace.py [--mode dry|live]        check every rtsp device, apply the policy, journal, print the report
   rtsp_replace.py --apply ENV HOST DEVICE POOL_ID --out FILE   (internal: runs INSIDE the host lease)
 
-Policy (data: config/rtsp-pool.json):
+Policy (data: config/rtsp-pool.json); scope: every rtsp_video device and any rtsp:// source:
   ok                          nothing to do
+  hls / file / no_source      REPORTED only (no channel or file pool exists)
   ip_camera not ok            REPORTED only, never replaced (owner hardware)
   public / loopback not ok    replaced by the first VETTED pool source that plays right now (loopback sources only on
                               the hosts that run vpt-rtsp), at most maxReplacementsPerNight (3) per UTC day, live mode only
@@ -159,10 +160,12 @@ def run(mode, timeout=10):
         row = rc.public_entry(e, r)
         if r['status'] == 'ok':
             row['action'] = 'none'
+        elif r['status'] == 'unverified':
+            row['action'] = 'report: cannot verify from codebox (no ssh alias for the host)'
+        elif e['kind'] in ('hls', 'file', 'no_source'):
+            row['action'] = f"report: {e['kind']} source not ok (never replaced automatically: no channel/file pool)"
         elif e['kind'] == 'ip_camera':
             row['action'] = 'report: camera down (owner hardware, never replaced)'
-        elif r['status'] == 'unverified':
-            row['action'] = 'report: cannot verify (no ssh alias for the host)'
         elif budget <= 0:
             row['action'] = 'report: replacement budget used up tonight'
         else:
@@ -218,11 +221,16 @@ def main(argv):
     with open(os.path.join(STATE, f'report-{day}.json'), 'w') as f:
         f.write(rc.redact(json.dumps(rep, indent=2)))
     print(f"mode={mode}\n" + rc.table([{**r, 'status': f"{r['status']} -> {r['action']}"} for r in rep['streams']]) + ''.join(f'\nERROR {e}' for e in rep['errors']))
-    bad = [r for r in rep['streams'] if r['status'] != 'ok']
-    print(f"{len(rep['streams']) - len(bad)}/{len(rep['streams'])} ok; {len(bad)} to act on or report")
+    bad = [r for r in rep['streams'] if r['status'] not in rc.OK_STATES]
+    unv = sum(r['status'] == 'unverified' for r in rep['streams'])
+    by = {}
+    for r in rep['streams']:
+        by.setdefault(r['kind'], {}).setdefault(r['status'], 0)
+        by[r['kind']][r['status']] += 1
+    print(f"{len(rep['streams'])} streams, {len(bad)} down, {unv} unverified; by kind: {json.dumps(by)}")
     walked = f"{rep['hosts']['walked']} host(s) walked, {rep['hosts']['read']} read"
     if not rep['streams']:
-        print('no rtsp devices found' + (' (inventory errors above)' if rep['errors'] else '') + f' ({walked})')
+        print('no stream devices found' + (' (inventory errors above)' if rep['errors'] else '') + f' ({walked})')
     else:
         print(walked)
     return 1 if (bad or rep['errors']) else 0
