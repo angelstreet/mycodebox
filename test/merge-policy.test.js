@@ -109,6 +109,8 @@ test('migrationAdditive: SQL statements are read by effect, not by path', () => 
   assert.deepEqual(migrationAdditive(f, ['create unique index tasks_name on tasks (name);']), { additive: true });
   assert.deepEqual(migrationAdditive(f, ['ALTER TABLE tasks ADD COLUMN done_at timestamptz;']), { additive: true });
   assert.deepEqual(migrationAdditive(f, ['ALTER TABLE IF EXISTS "public"."tasks" ADD COLUMN IF NOT EXISTS done_at timestamptz;']), { additive: true });
+  assert.deepEqual(migrationAdditive(f, ['CREATE VIEW v AS SELECT 1;', 'ALTER VIEW public.v SET (security_invoker = on);']), { additive: true }, 'a view option is additive (bug-8a9bc5dc)');
+  assert.equal(migrationAdditive(f, ['ALTER VIEW v RENAME TO w;']).additive, false);
   // comments and blank lines are ignored, a CREATE TABLE body may span lines
   assert.deepEqual(migrationAdditive(f, ['', '-- 002 new', '/* add the table */', 'CREATE TABLE tasks (', '  id serial PRIMARY KEY,', '  name text NOT NULL', ');']), { additive: true });
   // destructive shapes name themselves

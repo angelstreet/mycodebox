@@ -187,6 +187,8 @@ const SQL_ADDITIVE = [
   /^grant\b/,                                                                           // GRANT SELECT ON t TO app
   /^create\s+policy\b/,                                                                 // CREATE POLICY "p" ON t
   /^create\s+(?:or\s+replace\s+)?function\b/,                                              // the body is not read ($body$); OR REPLACE is gated in migrationAdditive (trigger functions only)
+  /^alter\s+view\s+(?:if\s+exists\s+)?[`"'\w.$]+(?:\s*\.\s*[`"'\w.$]+)?\s+set\s*\(\s*security_(?:invoker|barrier)\s*=\s*(?:on|off|true|false)\s*\)$/,   // a view option only (bug-8a9bc5dc): no rows or definitions change
+  /^create\s+(?:constraint\s+)?trigger\b/,
   /^create\s+(?:constraint\s+)?trigger\b/,                                                // a plain CREATE TRIGGER (an existing one fails, it never rewrites)
   /^create\s+(?:unique\s+|fulltext\s+|spatial\s+|concurrently\s+|temp(?:orary)?\s+|unlogged\s+|global\s+|local\s+)*(?:table|index|sequence|view|type|extension|schema)\b/,
 ];
