@@ -178,8 +178,9 @@ test('F6: more permission/sandbox bypass spellings are flagged', () => {
 test('F7: systemd units carry placeholders and an example header, nothing machine-specific', () => {
   for (const f of readdirSync(new URL('systemd', ROOT)).filter((n) => n.endsWith('.service'))) {
     const s = src(`systemd/${f}`);
-    assert.match(s, /^# EXAMPLE: copy/, f);
-    assert.match(s, /^User=(?:<user>|root)$/m, f);   // root only where moving processes between units needs it
+    const userUnit = /^# EXAMPLE \(user unit/.test(s);   // a systemd user unit has no User= line
+    assert.match(s, userUnit ? /^# EXAMPLE \(user unit/ : /^# EXAMPLE: copy/, f);
+    if (!userUnit) assert.match(s, /^User=(?:<user>|root)$/m, f);   // root only where moving processes between units needs it
     assert.doesNotMatch(s, /\/home\/(?!<user>)/, f);
   }
 });
