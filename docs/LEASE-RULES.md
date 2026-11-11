@@ -57,6 +57,13 @@ Hours were lost waiting on one web host while the other was free. When the work 
   firmware, a physical setup). `--verify-profile "<cmd>"` is a hook: before switching, `<cmd>` runs with
   `VPT_LEASE_CANDIDATE=<resource>`; a non-zero exit skips that member (use it to check the app, login or firmware).
   `VPT_LEASE_SWITCH_AFTER=<seconds>` adds a delay (default 0). Central mode only. `vpt-lease inventory` shows the holder per member.
+- Exactly the named resource / actual resource (owner request, 2026-11-11, fp194-opus-status): `--no-auto-equivalent` means exactly the
+  named resource: the claim waits for it, never moves, and `run` refuses to start (exit 8) if the lease is on anything else. (Bug: the
+  ssh/forwarded path did not pass the flag to the registry host, so `run ... vpt-mf1/device3 --no-auto-equivalent` got device2.)
+  When a claim does move (auto-equivalent, `--any`, `--alt`), `run` exports the ACTUAL resource as `VPT_LEASE_RESOURCE`,
+  `VPT_LEASE_HOST` and `VPT_LEASE_DEVICE`, prints `granted <res> — SWITCHED from <named>` on stderr, and `claim` prints a second stdout
+  line `resource=<actual>`. A `run` whose command line names the original `host/device` literally (or host and device as separate words)
+  is refused after a switch (exit 8, lease released) unless `--allow-switch`: use `$VPT_LEASE_RESOURCE` / `$VPT_LEASE_DEVICE` in the command.
 - Healthy only: a member whose host does not answer or whose device is absent is `UNHEALTHY` in `vpt-lease inventory` / `list`, never
   `free-equivalent`, never switched to, and skipped by `--any` ([LEASE-INVENTORY](LEASE-INVENTORY.md) "Health").
 - Enforcement (owner, 2026-11-10): the watchdog types the exact command into a waiting session's chat after 30 s (not 5 min) when its
