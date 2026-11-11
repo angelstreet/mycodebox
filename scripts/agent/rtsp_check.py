@@ -343,11 +343,13 @@ def stream_audio_tracks(base, timeout=20):
     with tempfile.NamedTemporaryFile(suffix='.ts') as f:
         f.write(body); f.flush()
         try:
-            p = subprocess.run([FFPROBE, '-v', 'error', '-show_entries', 'stream=codec_type', '-of', 'csv=p=0', f.name],
+            p = subprocess.run([FFPROBE, '-v', 'error', '-show_entries', 'stream=index,codec_type', '-of', 'csv=p=0', f.name],
                                capture_output=True, text=True, timeout=timeout)
         except (subprocess.TimeoutExpired, OSError):
             return None
-    return sum(1 for x in p.stdout.split() if x.strip() == 'audio')
+    # An MPEG-TS lists each stream twice (under its program and on its own): count unique indexes, not lines.
+    audio = {line.split(',')[0] for line in p.stdout.split() if line.strip().endswith(',audio')}
+    return len(audio)
 
 
 def capture_check(e, timeout=20):
