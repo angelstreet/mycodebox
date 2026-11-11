@@ -108,3 +108,10 @@ test('AGENTS.md carries the rule, the field and the command', () => {
   assert.match(a, /found-bug --title/);
   assert.match(a, /bugs: none \| fixed <what> \| reported <id>/);
 });
+
+test('the canonical fix-first sentence is in AGENTS.md, the cbsession preamble and the MAC-HOOK snippet', () => {
+  const RULE = 'A bug you find: fix it now yourself, in its own worktree, when it is small and you have the repro (it does not have to be your task); file it only when it is large, needs another host/device/credentials, is an owner-floor item, or belongs to a live session';
+  const norm = (x) => x.replace(/\\047/g, "'").replace(/\s+/g, ' ');
+  for (const f of ['AGENTS.md', 'scripts/cbsession', 'docs/MAC-HOOK.md', 'docs/REFERENCE.md']) assert.ok(norm(fs.readFileSync(path.join(ROOT, f), 'utf8')).includes(RULE), f);
+  assert.match(fs.readFileSync(path.join(ROOT, 'AGENTS.md'), 'utf8'), /I filed X so someone will fix it/);
+});

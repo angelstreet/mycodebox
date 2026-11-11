@@ -153,7 +153,7 @@ test('CLI: every flag set files cleanly against a store with marker lines', asyn
     const { promisify } = await import('node:util');
     const { execFile } = await import('node:child_process');
     const env = { ...process.env, PORT: String(srv.address().port), MYCODEBOX_CONFIG_DIR: '/nonexistent', GHOSTY_URL: '', MYCODEBOX_URL: '' };
-    const flags = ['--title', 'host unreachable (No route to host)', '--endpoint', 'ssh host:227', '--repro', 'ssh from codebox', '--error', 'ssh: No route to host', '--workaround', 'none', '--blocking', 'no', '--session', 'cli-test'];
+    const flags = ['--why-not-fixed', 'large', '--reason', 'r', '--title', 'host unreachable (No route to host)', '--endpoint', 'ssh host:227', '--repro', 'ssh from codebox', '--error', 'ssh: No route to host', '--workaround', 'none', '--blocking', 'no', '--session', 'cli-test'];
     const out = await promisify(execFile)('sh', ['scripts/found-bug', ...flags], { env });
     assert.match(out.stdout, /^filed bug-[0-9a-f]{8}/);
     const again = await promisify(execFile)('sh', ['scripts/found-bug', ...flags], { env });
@@ -161,4 +161,27 @@ test('CLI: every flag set files cleanly against a store with marker lines', asyn
     const rows = (await fb.list()).filter((b) => b.session === 'cli-test');
     assert.equal(rows.length, 1); assert.equal(rows[0].blocking, false); assert.equal(rows[0].workaround, 'none');
   } finally { srv.close(); }
+});
+
+import { sendBackOf, sendBackText } from '../found-bugs.js';
+test('why/reason are stored; a record without why is marked missing; send-back heuristic', async () => {
+  const b = createFoundBugs({ stateDir: tmp('fb-why-') });
+  const a = (await b.add({ title: 'a', session: 's1', why: 'large', reason: 'big', repro: 'x' })).bug;
+  assert.equal(a.why, 'large'); assert.equal(a.reason, 'big');
+  const o = (await b.add({ title: 'old client', session: 's1', repro: 'x' })).bug;
+  assert.equal(o.why, 'missing');
+  assert.equal(sendBackOf(o), true);
+  assert.equal(sendBackOf({ ...o, blocking: true }), false);
+  assert.equal(sendBackOf({ ...o, repro: '' }), false);
+  assert.equal(sendBackOf({ ...o, why: 'credentials' }), false);
+  assert.equal(sendBackOf({ ...o, title: 'token leaks in log' }), false);
+  assert.equal(sendBackOf({ ...o, test: true }), false);
+  assert.match(sendBackText(o), /You filed bug-[0-9a-f]{8}\. If it is small, fix it now in your own worktree and resolve it/);
+});
+test('week(): filed vs fixed by finder vs by a worker', async () => {
+  const b = createFoundBugs({ stateDir: tmp('fb-wk-') });
+  const x = (await b.add({ title: 'x', session: 's1', why: 'large' })).bug, y = (await b.add({ title: 'y', session: 's1', why: 'large' })).bug;
+  await b.add({ title: 'z', session: 's2' });
+  await b.resolve(x.id, { state: 'fixed', commit: 'abc', by: 's1' }); await b.resolve(y.id, { state: 'fixed', commit: 'def', by: 'worker-1' });
+  assert.deepEqual(await b.week(7), { days: 7, filed: 3, fixed: 2, fixedByFinder: 1, fixedByWorker: 1, open: 1, whyMissing: 1 });
 });

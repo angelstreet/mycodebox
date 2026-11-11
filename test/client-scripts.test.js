@@ -101,10 +101,10 @@ test('found-bug prints ONE drift line after filing when its version is older', a
   const b = await boot(), c = client();
   try {
     const p = join(c.home, 'found-bug-old'); writeFileSync(p, readFileSync(join(SCRIPTS, 'found-bug'), 'utf8').replace(/^CLIENT_SCRIPTS_VERSION=\d+/m, 'CLIENT_SCRIPTS_VERSION=0'));
-    const r = await run(p, ['--title', 't', '--session', 's'], c.env(b.url));
+    const r = await run(p, ['--why-not-fixed', 'large', '--reason', 'r', '--title', 't', '--session', 's'], c.env(b.url));
     assert.equal(r.code, 0, r.stderr); assert.match(r.stdout, /filed bug-1/);
     assert.equal((r.stdout.match(/client scripts are old/g) || []).length, 1);
-    const cur = await run(join(SCRIPTS, 'found-bug'), ['--title', 't', '--session', 's'], c.env(b.url));
+    const cur = await run(join(SCRIPTS, 'found-bug'), ['--why-not-fixed', 'large', '--reason', 'r', '--title', 't', '--session', 's'], c.env(b.url));
     assert.doesNotMatch(cur.stdout, /client scripts are old/);
   } finally { await b.close(); }
 });

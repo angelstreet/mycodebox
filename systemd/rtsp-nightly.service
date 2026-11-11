@@ -1,4 +1,4 @@
-# User unit: install by symlink into ~/.config/systemd/user (docs/RTSP-NIGHTLY.md "Install"). Replace /home/<user> with the user's home.
+# EXAMPLE (user unit): install by symlink into ~/.config/systemd/user (docs/RTSP-NIGHTLY.md "Install"). Replace /home/<user> with the user's home.
 [Unit]
 Description=Nightly RTSP check + replacement session (MiniMax), dry unless the mode file says live
 After=network-online.target

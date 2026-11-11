@@ -24,6 +24,8 @@ export function redact(s) {
   return t;
 }
 
+// Why a bug was filed instead of fixed (owner, 2026-11-11: fix-first). Missing = an old client that does not send it.
+export const WHY = ['large', 'other-area', 'host-or-device', 'credentials', 'owner-floor', 'live-session-task'];
 const FIELDS = { title: 200, endpoint: 300, repro: 1200, error: 1200, workaround: 600 };
 const yes = (v) => v === true || /^(?:y|yes|true|1|blocking)$/i.test(String(v ?? ''));
 
@@ -35,6 +37,9 @@ export function normalize(input, { now = Date.now() } = {}) {
   const r = { at: new Date(now).toISOString(), session: String(o.session || 'unknown').replace(/[^\w.@-]/g, '').slice(0, 80) || 'unknown', title };
   for (const k of ['endpoint', 'repro', 'error', 'workaround']) r[k] = redact(o[k]).trim().slice(0, FIELDS[k]);
   r.blocking = yes(o.blocking);
+  const why = String(o.why ?? o.whyNotFixed ?? '').trim().toLowerCase();
+  r.why = WHY.includes(why) ? why : 'missing';
+  r.reason = redact(o.reason).replace(/\s+/g, ' ').trim().slice(0, 300);
   if (o.test) r.test = true;
   r.id = 'bug-' + createHash('sha1').update(r.session + '\0' + r.title.toLowerCase() + '\0' + r.at).digest('hex').slice(0, 8);
   return r;
@@ -110,10 +115,17 @@ export function createFoundBugs({ stateDir, onNew = async () => {}, now = Date.n
     const real = rows.filter((b) => !b.test && !b.resolved);
     return { total: real.length, blocking: real.filter((b) => b.blocking).length, last24h: real.filter((b) => Date.parse(b.at) >= day).length };
   }
+  // week(days): filed vs fixed by their finder vs fixed by someone else (a worker), real reports filed in the window (scorecard)
+  async function week(days = 7) {
+    const since = now() - days * DEDUPE_MS, rows = (await list({ limit: 5000 })).filter((b) => !b.test && Date.parse(b.at) >= since);
+    const fixed = rows.filter((b) => b.resolved && b.state === 'fixed'), mine = fixed.filter((b) => b.resolvedBy === b.session);
+    const missing = rows.filter((b) => b.why === 'missing').length;
+    return { days, filed: rows.length, fixed: fixed.length, fixedByFinder: mine.length, fixedByWorker: fixed.length - mine.length, open: rows.filter((b) => !b.resolved).length, whyMissing: missing };
+  }
   async function recentBy(session, ms = REPORTED_MS) {
     return (await list({ limit: 5000 })).some((b) => b.session === session && now() - Date.parse(b.at) < ms);
   }
-  return { add, remove, fixed, resolve, list, counts, recentBy, file };
+  return { add, remove, fixed, resolve, list, counts, week, recentBy, file };
 }
 
 // Detector: closing text that mentions a failure, an unrelated/pre-existing problem or a workaround but never filed it.
@@ -131,3 +143,13 @@ export function unreportedBugOf(text) {
   }
   return null;
 }
+
+// Send-back (owner, 2026-11-11): a bug filed with no reason or as large/other-area, with a repro and not blocking, by a live session, goes back to
+// its finder once: it knows the repro. Hard-floor topics never. Pure.
+const FLOOR = /\b(?:credentials?|secrets?|tokens?|passwords?|api[- ]?keys?|sudoers?|delet(?:e|ion)s? of data|data loss|force-?push|money|payment|invoice|billing|customers?|production|prod host|migration)\b/i;
+export function sendBackOf(b) {
+  if (!b || b.test || b.blocking || !String(b.repro || '').trim()) return false;
+  if (!['missing', 'large', 'other-area'].includes(b.why)) return false;
+  return !FLOOR.test([b.title, b.repro, b.error, b.reason].join(' '));
+}
+export const sendBackText = (b) => `You filed ${b.id}. If it is small, fix it now in your own worktree and resolve it (found-bug --resolve ${b.id} --commit <sha|integration id>); otherwise reply with the reason (found-bug --why-not-fixed large|other-area|host-or-device|credentials|owner-floor|live-session-task).`;
