@@ -3,6 +3,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHolderReaper, watchable, procStartSec } from '../lease-holder-reaper.js';
 import { tmp } from './helpers-tmp.js';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 const SINCE = 1793134000;
 const row = (o = {}) => ({ id: 'aaaa1111', mode: 'exclusive', agent: 'codebox:TASK-168-4242', since: SINCE, ...o });
@@ -110,4 +112,59 @@ test('the reaper releases an unused grant on the 2nd poll with a reason naming t
   assert.equal(rel.length, 1);
   assert.deepEqual(rel[0].slice(0, 4), ['release', 'g1', '--by', 'lease-holder-reaper']);
   assert.match(rel[0][5], /^unused-grant: released lease g1: .*idle session wall.*kpi-androidtv waits$/);
+});
+
+// ---- idle release (owner 2026-11-11) ----
+import { idleHolders } from '../lease-holder-reaper.js';
+const NOW_MS = SINCE * 1000 + 60 * 60000;
+const idleRow = (o = {}) => ({ id: 'i1', mode: 'exclusive', agent: 'codebox:sess', since: SINCE, ...o });
+const act = (o = {}) => ({ turnAt: SINCE * 1000 + 5 * 60000, promptAt: SINCE * 1000 + 4 * 60000, working: false, ...o });
+const idleOpts = (o = {}) => ({ sessionNames: ['sess'], activityOf: () => act(), now: NOW_MS, idleMs: 10 * 60000, ...o });
+
+test('idleHolders: an idle live session is listed with its idle minutes; the reference is the newest of grant / turn / heartbeat', () => {
+  const [u] = idleHolders([idleRow()], idleOpts());
+  assert.equal(u.session, 'sess'); assert.equal(u.idleMin, 55);
+  assert.equal(idleHolders([idleRow({ lastHeartbeatAt: new Date(NOW_MS - 3 * 60000).toISOString() })], idleOpts()).length, 0, 'recent heartbeat = in use');
+  assert.equal(idleHolders([idleRow()], idleOpts({ activityOf: () => act({ turnAt: NOW_MS - 2 * 60000 }) })).length, 0, 'recent turn');
+});
+test('idleHolders: never working, unknown, closed, pinned, system, deploy, pid or mac holders', () => {
+  const rows = [idleRow({ id: 'a', agent: 'codebox:gone' }), idleRow({ id: 'b', mode: 'pin' }), idleRow({ id: 'c', system: true }), idleRow({ id: 'd', deploy_id: 'x' }), idleRow({ id: 'e', holder_pid: 5 }), idleRow({ id: 'f', agent: 'mac:laptop' })];
+  assert.equal(idleHolders(rows, idleOpts()).length, 0);
+  assert.equal(idleHolders([idleRow()], idleOpts({ activityOf: () => act({ working: true }) })).length, 0);
+  assert.equal(idleHolders([idleRow()], idleOpts({ activityOf: () => null })).length, 0);
+  assert.equal(idleHolders([idleRow()], idleOpts({ idleMs: 0 })).length, 0);
+});
+function idleHarness(mode, hasLiveJob = async () => false) {
+  const calls = [], told = [];
+  const run = async (a) => { calls.push(a); return a[0] === 'list' ? { code: 0, stdout: JSON.stringify({ leases: [idleRow()] }), stderr: '' } : { code: 0, stdout: 'released 1', stderr: '' }; };
+  const dir = tmp('hr-');
+  const r = createHolderReaper({ stateDir: dir, run, listSessionNames: async () => ['sess'], activityOf: () => act(), now: () => NOW_MS, idleReleaseMs: () => 10 * 60000, idleMode: () => mode, hasLiveJob, notify: async (s, t) => { told.push([s, t]); }, log: { log() {}, error() {} } });
+  return { r, calls, told, dir, rel: () => calls.filter((c) => c[0] === 'release') };
+}
+test('idle release live: 2nd poll releases, journals, tells the session how to claim again', async () => {
+  const h = idleHarness('live');
+  await h.r.poll(); assert.equal(h.rel().length, 0);
+  await h.r.poll(); assert.equal(h.rel().length, 1);
+  assert.match(h.rel()[0][5], /^idle-release: released lease i1: session sess idle at its prompt 55 min/);
+  assert.match(h.told[0][1], /vpt-lease claim <env> --any <group> --wait/);
+  const j = readFileSync(join(h.dir, 'lease-actions.jsonl'), 'utf8');
+  assert.match(j, /"type":"idle-release"/); assert.match(j, /"dryRun":false/);
+});
+test('idle release dry (default): journals dryRun once, never releases or tells', async () => {
+  const h = idleHarness('dry');
+  for (let i = 0; i < 5; i++) await h.r.poll();
+  assert.equal(h.rel().length, 0); assert.equal(h.told.length, 0);
+  const lines = readFileSync(join(h.dir, 'lease-actions.jsonl'), 'utf8').trim().split('\n');
+  assert.equal(lines.length, 1); assert.match(lines[0], /"dryRun":true/);
+});
+test('idle release: a live background job, or an unknown one, blocks it; mode off does nothing', async () => {
+  const busy = idleHarness('live', async () => true);
+  for (let i = 0; i < 4; i++) await busy.r.poll();
+  assert.equal(busy.rel().length, 0);
+  const unk = idleHarness('live', async () => { throw new Error('ps failed'); });
+  for (let i = 0; i < 4; i++) await unk.r.poll();
+  assert.equal(unk.rel().length, 0);
+  const off = idleHarness('off');
+  for (let i = 0; i < 4; i++) await off.r.poll();
+  assert.equal(off.rel().length, 0);
 });
