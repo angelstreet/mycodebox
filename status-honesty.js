@@ -4,7 +4,7 @@
 // "STATUS vocabulary"):
 //   STATUS: done — <what> · goal: achieved · evidence: <links / run ids / frames>   only when the task's goal was achieved
 //   STATUS: failed — goal not achieved: <why> · tried: <list>                         the agent needs help: a manager item, never parked as finished
-//   STATUS: blocked: <system id or reason + what you tried> | waiting: <system id> | needs-owner: <floor item> | needs-manager: <ask>
+//   STATUS: waiting: <integration / deploy id, lease ticket, own job, worker names, a time> | blocked: <what stops you> · tried: <list> · need: <manager action> | needs-owner: <floor item> | needs-manager: <ask>
 // Pure functions only; done-check.js wakes the session, server.js / manager.js route `failed` like needs-manager.
 
 // ---- the task goal ----
@@ -99,7 +99,7 @@ export function doneButFailedMessage(f, goal = '') {
   const said = f.hits.slice(0, 2).map((h) => `"${h.clause}"`).join(' and ');
   return `Status check: your STATUS says done, but your own text says the goal was not achieved: ${said}.${goal ? ` The goal of this session: "${goal.slice(0, 160)}".` : ''} `
     + 'Done is only for an achieved goal. Restate the line: `STATUS: failed — goal not achieved: <why> · tried: <what you tried>` (the manager looks at it and helps), '
-    + 'or `STATUS: blocked: <system id or reason + what you tried>`, or `STATUS: waiting: <system id>`. If the goal WAS achieved, rewrite the done line with '
+    + 'or `STATUS: blocked: <what stops you> · tried: <list> · need: <what the manager must do>`, or `STATUS: waiting: <what is running>`. If the goal WAS achieved, rewrite the done line with '
     + '`goal: achieved · evidence: <report links / run ids / frames>` and the closing review. Do not ask; pick the true one.';
 }
 
@@ -155,4 +155,35 @@ export function doneWithoutGoalMessage(f) {
   return `Status check: your done line lacks ${f.missing.join(' and ')}. Done is only for an achieved goal: rewrite it as `
     + '`STATUS: done — <what> · goal: achieved · evidence: <report links / run ids / commits / frames> · closing review: ...`, '
     + 'or, if the goal was not reached, `STATUS: failed — goal not achieved: <why> · tried: <list>` / `blocked: <reason + what you tried>` / `waiting: <system id>`. Do not ask; pick the true one.';
+}
+
+// ---- (4) blocked is not a wait (owner, 2026-11-11 evening) ----
+// "blocked is for an agent that cannot work and requires attention from the manager": `blocked: <what stops you> · tried: <list> · need: <what the manager
+// must do>`. A wait on something running or queued is `waiting: <integration / deploy id, lease ticket, own background job, worker session, a time>`;
+// a session whose part is done while workers it started still run ends on `waiting: <worker names>`. 2026-11-11: 47 of 118 distinct blocked lines were waits.
+const RUNNING = [
+  ['background job', /\bbackground\s+(?:job\s+|task\s+|run\s+)?`?b[0-9a-z]{7,}\b|\(background\b/i],
+  ['waiting on a run', /\b(?:waiting|waits?) (?:on|for) (?:(?:my|the|a|an|our|own|local) )*(?:[\w./+-]+ ){0,3}?(?:sweeps?|runs?|replay|executions?|integration|deploy(?:ment)?|lease|claim|background|monitor|tests?|jobs?|nightly|ci|workers?)\b/i],
+  ['time', /\b(?:kept free|free|held|reserved|wait(?:ing)?) until \d{1,2}:\d{2}\b|\buntil \d{1,2}:\d{2} (?:utc|cet|cest)\b/i],
+  ['lease held / queued', /\b(?:held|leased) by\b|\bis (?:held|leased)\b|\bqueued (?:claims?|next|behind)\b/i],
+  ['monitor', /\ba monitor will\b|\bmonitor will (?:tell|wake|report)\b/i],
+];
+// Pure. -> null (not a blocked line, or a good one) | { running: [labels], missing: ['tried:', 'need:'] }.
+export function blockedHonestyOf(text) {
+  const st = lastStatus(text);
+  if (!st || st.kind !== 'blocked') return null;
+  const t = unmark(st.text);
+  const head = t.split(/\s[·|;]\s*closing[ -]review\b/i)[0];
+  const running = RUNNING.filter(([, re]) => re.test(head)).map(([k]) => k);
+  const missing = [];
+  if (!/\btried\s*[:=]/i.test(head)) missing.push('tried:');
+  if (!/\bneeds?\s*[:=]/i.test(head)) missing.push('need:');
+  return running.length || missing.length ? { running, missing, text: head.slice(0, 200) } : null;
+}
+export function blockedHonestyMessage(f) {
+  const parts = [];
+  if (f.running.length) parts.push(`it names something running or queued (${f.running.join(', ')}): that is a wait, restate it as \`STATUS: waiting: <integration / deploy id, lease ticket, your own background job, the worker sessions you started, or a time>\``);
+  if (f.missing.length && !f.running.length) parts.push(`it lacks ${f.missing.join(' and ')}`);
+  return `Status check: your STATUS is blocked, but ${parts.join('; ')}. \`blocked\` is only for an agent that cannot work and needs the manager: `
+    + '`STATUS: blocked: <what stops you> · tried: <what you tried> · need: <what the manager must do>`. If your part is done while workers you started still run, end on `STATUS: waiting: <worker names>`. One push only.';
 }

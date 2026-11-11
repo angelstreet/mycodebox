@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import { join, isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createHash } from 'node:crypto';
-import { doneButFailedOf, doneButFailedMessage, doneWithoutGoalOf, doneWithoutGoalMessage, lastStatus } from './status-honesty.js';
+import { blockedHonestyOf, blockedHonestyMessage, doneButFailedOf, doneButFailedMessage, doneWithoutGoalOf, doneWithoutGoalMessage, lastStatus } from './status-honesty.js';
 import { DEFAULT_CIDRS, parseCidrs, addrAllowed, readClients, clientOf, callerIdentity, readBody } from './lease-routes.js';
 
 export const PREFIX = '/api/remote/v1';
@@ -79,7 +79,7 @@ export function stopText(v) {
 // manager: { observe, sessionOn, setRemoteHooks, cancelAuto, forget, stallOf, triageOf, autoOf, REMOTE_PREFIX }
 // goalGate / goals: goal-check.js createGoalGate / createGoalStore (optional). A done stop the gate questions or bounces is answered with the
 // gate's text at once (no countdown); the manager journals the stop but schedules no answer of its own for it.
-export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goals = null, cidrs = process.env.LEASE_ALLOW_CIDRS, viaServe = () => false, now = Date.now, graceMs = GRACE_MS, pollWaitMs = POLL_WAIT_MS } = {}) {
+export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goals = null, blockedMode = () => 'dry', cidrs = process.env.LEASE_ALLOW_CIDRS, viaServe = () => false, now = Date.now, graceMs = GRACE_MS, pollWaitMs = POLL_WAIT_MS } = {}) {
   const allow = parseCidrs([...DEFAULT_CIDRS, ...String(cidrs || '').split(',')].join(','));
   const clientsFile = join(dir, 'clients.json');
   const configFile = join(stateDir, 'remote.json');   // { waitS, checkouts: { "<project>": "/abs/path/of/the/local/checkout" } }
@@ -182,6 +182,16 @@ export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goa
       const f = doneButFailedOf(stx, goal);
       const sig = createHash('sha1').update(line).digest('hex').slice(0, 12);
       if (f && s.honestSig !== sig) { s.honestSig = sig; refusal = { kind: 'done-but-failed', message: doneButFailedMessage(f, goal) }; }
+    }
+    // blocked is not a wait (owner 2026-11-11 evening): once per line; dry (journal only) until manager.json blockedCheck is live
+    if (!refusal && !v.stop_hook_active && manager.sessionOn(name)) {
+      const stx = stopText(v), bf = blockedHonestyOf(stx), sig = createHash('sha1').update(lastStatus(stx)?.line || '').digest('hex').slice(0, 12);
+      if (bf && s.blockedSig !== sig) {
+        s.blockedSig = sig;
+        const bm = blockedMode();
+        if (bm === 'live') refusal = { kind: 'blocked-not-a-wait', message: blockedHonestyMessage(bf) };
+        else if (bm === 'dry') { try { fs.appendFileSync(join(stateDir, 'blocked-check.jsonl'), JSON.stringify({ at: new Date(t).toISOString(), dry: true, session: name, running: bf.running, missing: bf.missing, text: bf.text }) + '\n'); } catch {} }
+      }
     }
     let gate = null;
     if (goalGate && !refusal && manager.sessionOn(name)) { try { gate = await goalGate.evaluate({ name, text: stopText(v), doneAt: t, remote: true, canAnswer: !v.stop_hook_active }); } catch (e) { console.error('[remote] goal gate', e.message); } }

@@ -5,7 +5,7 @@
 // is idle and the host is not busy), once per finding. Switch: manager.json `doneCheck` "live" (default) | "dry" | "off".
 // Journal: done-check.jsonl.
 import { pushableItems } from './done-leftovers.js';
-import { doneButFailedOf, doneButFailedMessage, proofWithoutEvidenceOf, proofWithoutEvidenceMessage } from './status-honesty.js';
+import { doneButFailedOf, doneButFailedMessage, proofWithoutEvidenceOf, proofWithoutEvidenceMessage, blockedHonestyOf, blockedHonestyMessage } from './status-honesty.js';
 import { readFile, writeFile, appendFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -190,6 +190,7 @@ export function createDoneCheck({
   stateDir, git, listDone, send: sendRaw, record = async () => {}, equivalentOf = async () => null, goalOf = async () => '', mode = () => 'live', home = process.env.HOME || '',
   pressure = () => ({ loadPerCore: 0, ramAvailPct: 100 }), now = Date.now, pollMs = POLL_MS, log = console, ignoreBranches = () => DEFAULT_IGNORE_BRANCHES,
   goalGate = null,   // goal-check.js createGoalGate: (H) below
+  listBlocked = async () => [], blockedMode = () => 'dry',   // (I) blocked is not a wait: dry (journal only) until the owner switches manager.json blockedCheck to live
 } = {}) {
   const stFile = join(stateDir, 'done-check.json');
   const journal = join(stateDir, 'done-check.jsonl');
@@ -405,6 +406,23 @@ export function createDoneCheck({
           await note({ session: s.name, [kind]: detail, goal: goal.slice(0, 160) });
           if (fail) await record({ key: `done-but-failed:${s.name}`, title: `${s.name} said done, its text says the goal was not achieved`, body: `${detail}${goal ? ` · goal: ${goal.slice(0, 160)}` : ''}`, url: '/', priority: 'default' }).catch(() => {});
         } catch (e) { log.error?.('[done-check] send honesty', s.name, e.message); }
+      }
+      // (I) blocked is not a wait (owner 2026-11-11 evening): a blocked line that names something running or queued, or lacks tried: / need:, is sent back
+      // ONCE per line (deterministic). A line that passes is a manager item as before. Types into sessions, so `blockedCheck` defaults to dry.
+      st.toldBlocked ||= {};
+      for (const n of Object.keys(st.toldBlocked)) if (!live.has(n) && !(await listBlocked().catch(() => [])).some((b) => b.name === n)) delete st.toldBlocked[n];
+      for (const s of await listBlocked().catch(() => [])) {
+        const bf = blockedHonestyOf(s.text);
+        if (!bf) continue;
+        const sig = createHash('sha1').update(lastStatusLine(s.text)).digest('hex').slice(0, 12);
+        if (st.toldBlocked[s.name]?.sig === sig) continue;
+        const detail = `${bf.running.join('+') || `lacks ${bf.missing.join(' ')}`}: ${bf.text}`.slice(0, 300);
+        const bm = blockedMode();
+        if (bm === 'off') continue;
+        if (bm === 'dry') { await note({ dry: true, session: s.name, blockedHonesty: detail }); st.toldBlocked[s.name] = { sig, dry: true }; continue; }
+        if (s.working || s.draft || touched.has(s.name) || !quiet || nudged >= MAX_NUDGES_PER_TICK) continue;
+        try { await send(s.name, blockedHonestyMessage(bf)); st.toldBlocked[s.name] = { sig }; nudged++; await note({ session: s.name, blockedHonesty: detail }); }
+        catch (e) { log.error?.('[done-check] send blocked honesty', s.name, e.message); }
       }
       // (D) a lease wait while a healthy equivalent is free: one push; the manager is told on the second distinct stop
       st.toldEq ||= {};

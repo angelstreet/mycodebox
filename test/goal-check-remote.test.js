@@ -76,3 +76,10 @@ test('Mac: a done line that says the work is not done is refused through the hoo
   const again = await post(LINE, { stop_hook_active: true });
   assert.equal(again.body.answerable, false, 'the loop guard still holds');
 });
+
+test('Mac: a blocked line that is a wait is journalled only while blockedCheck is dry (default)', async () => {
+  const r = await call('POST', '/stops', { machine: 'mac-test', project: 'demo', session_id: 'sid-blocked-4dddd', session_name: 'blk', text: 'STATUS: blocked: waiting on the radio sweeps (background b4q6r4fh1)' });
+  assert.equal(r.status, 200);
+  const j = fs.readFileSync(path.join(stateDir, 'blocked-check.jsonl'), 'utf8');
+  assert.match(j, /"dry":true/); assert.match(j, /background job/);
+});
