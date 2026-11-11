@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Read-only sweep for the manager: for every tmux session print "<session>: <last STATUS line>" when that line says
-# needs-manager, needs-owner, blocked or ready-for-gate, and "<session>: done-with-leftovers: <first item>" when the last STATUS is done
+# needs-manager, needs-owner, failed (goal not achieved), blocked or ready-for-gate, and "<session>: done-with-leftovers: <first item>" when the last STATUS is done
 # but the closing text lists work the session can do itself (same rules as done-leftovers.js; owner-only items do not count).
 # "<session>: done-without-closing-review" when a done line has no `closing review:` segment (done-check.js closingReviewOf). A session whose last STATUS is one of these is never "idle".
 #   scripts/manager-status-scan.sh [--json]      (exit code 0 always)
@@ -12,7 +12,7 @@ LINES_BACK="${STATUS_SCAN_LINES:-300}"
 python3 - "$JSON" "$LINES_BACK" <<'PY'
 import json, re, subprocess, sys
 as_json, back = sys.argv[1] == '1', sys.argv[2]
-FLAG = re.compile(r'needs-manager|needs-owner|blocked|ready-for-gate', re.I)
+FLAG = re.compile(r'needs-manager|needs-owner|failed|blocked|ready-for-gate', re.I)
 STATUS = re.compile(r'^\W*STATUS:', re.I)
 def tmux(*a):
     try: return subprocess.run(['tmux', *a], capture_output=True, text=True, timeout=10).stdout

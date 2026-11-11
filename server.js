@@ -121,6 +121,7 @@ import { createOverlapGuard, DEFAULT_IGNORE } from './overlap-guard.js';
 import { createProgressWatch } from './progress-watch.js';
 import { createSharedCheckoutGuard, expandHome } from './shared-checkout-guard.js';
 import { createFoundBugs, unreportedBugOf, sendBackOf, sendBackText } from './found-bugs.js';
+import { goalOf as goalOfPrompt } from './status-honesty.js';
 import { createDoneCheck, DEFAULT_IGNORE_BRANCHES, shipOfferOf, unconfirmedStatusOf, waitingOnLeaseStatus } from './done-check.js';
 import { createLeftovers, pushableItems } from './done-leftovers.js';
 import { scanTaskDocs, withHomeDirs, computeUnfinished, docLeftoversFor, createUnfinished } from './unfinished.js';
@@ -1056,6 +1057,8 @@ const doneCheck = createDoneCheck({
     const t = (v.tickets || []).find((x) => x.equivalents?.length && !x.any && holderSession(x.agent, names, MACHINES) === name);
     return t ? { ticketId: t.id, env: t.env, resources: t.resources, agent: t.agent, equivalents: t.equivalents, refused: t.equivalentsRefused || [], group: t.groups?.[0] || '' } : null;
   },
+  // (F) the task goal: `Goal:` line or first task line of the prompt cbsession wrote (~/handovers/<name>.prompt.md); '' when there is none
+  goalOf: async (name) => { try { return goalOfPrompt(readFileSync(join(homedir(), 'handovers', `${String(name).replace(/[^\w.-]/g, '')}.prompt.md`), 'utf8')); } catch { return ''; } },
   send: (name, text) => sendKeys(name, text),
   pressure: hostPressure,
   record: (e) => managerEvents.record(e),
