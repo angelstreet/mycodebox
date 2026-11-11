@@ -500,6 +500,13 @@ Nice=10
 
 Git hygiene (bug-0d0077c5): once a day per configured `worktreeRepos` repo (any non-report fixLevel) it removes `gc.log` files older than a day (a stale one blocks git auto-gc) and runs `git prune --expire=2.weeks.ago`; never `--expire=now`.
 
+**Shared checkout sync (bug-bb3640f1).** `scripts/checkout-sync.sh [checkout]` (default `~/virtualpytest`) fetches and
+`merge --ff-only` to `origin/main`, only when the checkout is on `main`, has no tracked or untracked change and no
+merge/rebase/cherry-pick in progress; otherwise it logs `skipped: <why>` to `$GHOSTY_STATE_DIR/checkout-sync.log` and touches
+nothing (no stash, reset or clean). Exit is always 0. Run every 30 min by the user timer `systemd/ghosty-checkout-sync.timer`
+(`.service` is an example: replace `<user>`; install in `~/.config/systemd/user/`, `daemon-reload`, `enable --now`). A synced
+checkout does not restart anything: a service that loaded the old code keeps it until its next start.
+
 **Health watchdog (zero tokens unless a problem remains).** `scripts/health-watch.js` (no deps, no AI calls) runs every
 5 minutes from `systemd/ghosty-health-watch.timer` (`.service`: oneshot, `User=<service-user>`; install with `sudo cp` to
 `/etc/systemd/system`, `daemon-reload`, `enable --now ghosty-health-watch.timer`). It checks disk % of `/`, load vs
