@@ -39,7 +39,7 @@ KIND_ALIASES = {"run": "server", "maintenance": "host"}
 MODES = ("exclusive", "observe", "pin")
 FAST = os.environ.get("VPT_LEASE_TEST_FAST") == "1"
 LONG_TTL_MIN = 240
-NEW_FLAGS_WITH_VALUE = ("--mode", "--expect", "--deploy-id", "--priority", "--holder-pid", "--holder-host")
+NEW_FLAGS_WITH_VALUE = ("--mode", "--expect", "--deploy-id", "--priority", "--holder-pid", "--holder-host", "--max-wait")
 NEW_FLAGS = ("--wait", "--ticket")
 
 
@@ -447,7 +447,7 @@ def claim_body(a, wait=None):
         body["heartbeat_s"] = a.heartbeat_s      # declares the interval: the service enforces heartbeats only for leases that do
     if getattr(a, "priority_since", None):
         body["priority_since"] = a.priority_since
-    hp = getattr(a, "holder_pid", None) or int(os.environ.get("VPT_HOLDER_PID") or 0)
+    hp = getattr(a, "holder_pid", None) or int(os.environ.get("VPT_HOLDER_PID") or 0) or (session_holder_pid(a.agent) if a.mode == "exclusive" else 0) or 0
     if hp > 1:       # the service releases the lease when this pid (on holder_host) is gone; only sent when the caller names a long-lived pid
         body["holder_pid"] = hp
         body["holder_host"] = getattr(a, "holder_host", None) or socket.gethostname()
@@ -548,17 +548,91 @@ def orphaned():
 
 
 class Orphaned(Exception):
-    pass
+    """A waiting claim must stop: args = (why, exit code)."""
+    def __init__(self, why="the process that started it is gone", code=130):
+        super().__init__(why, code)
+        self.why, self.code = why, code
 
 
-def poll_ticket(tid, can_requeue=False, switch=None):
+# owner 2026-11-11 (the Mi held ~11 h by abandoned waiters): a waiting claim is bounded. 0 = no bound (--max-wait 0).
+MAX_WAIT_MIN = float(os.environ.get("VPT_LEASE_MAX_WAIT_MIN") or 240)
+
+
+def agent_session(agent):
+    """codebox:<name> -> <name>, the dashboard's tmux session of that agent; None for mac:* and bare names."""
+    m = re.match(r"^codebox:(.+)$", agent or "")
+    return m.group(1) if m else None
+
+
+def tmux_q(args):
+    try:
+        return subprocess.run([os.environ.get("VPT_LEASE_TMUX") or "tmux"] + args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL, timeout=5, universal_newlines=True)
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def session_alive(name):
+    """True / False from tmux, None when tmux cannot be asked."""
+    r = tmux_q(["has-session", "-t", "=" + name])
+    return None if r is None else r.returncode == 0
+
+
+def session_holder_pid(agent):
+    """The holder of a codebox:<name> claim made on this machine: the pid of that tmux session's first pane (its long-lived shell).
+    Closing the session ends it, and lease-holder-reaper.js then frees the lease (owner 2026-11-11: a granted lease must have a holder
+    that proves life). None for other agents, a codebox:<name>-<pid> agent (that pid is already the holder), a forwarded call,
+    no such session, or VPT_LEASE_AUTO_HOLDER=off."""
+    name = agent_session(agent)
+    if not name or re.search(r"-\d{2,9}$", name) or os.environ.get("VPT_LEASE_FORWARDED") or os.environ.get("VPT_LEASE_AUTO_HOLDER") == "off":
+        return None
+    r = tmux_q(["list-panes", "-s", "-t", "=" + name, "-F", "#{pane_pid}"])
+    pids = [int(x) for x in (r.stdout.split() if r is not None and r.returncode == 0 else []) if x.isdigit() and int(x) > 1]
+    return pids[0] if pids else None
+
+
+class WaitGuard:
+    """Why a waiting claim must stop now, or None (owner 2026-11-11): its parent shell is gone, its codebox session was closed (seen
+    alive here at the start, then gone on 2 checks), or it waited past --max-wait (default VPT_LEASE_MAX_WAIT_MIN, 240 min). A stopped
+    waiter cancels its ticket and never claims again: a grant nobody is waiting for only blocks the next agent."""
+
+    def __init__(self, a):
+        self.t0 = time.monotonic()
+        mw = getattr(a, "max_wait", None)
+        self.max_s = (MAX_WAIT_MIN if mw is None else mw) * 60
+        self.session = None if os.environ.get("VPT_LEASE_FORWARDED") else agent_session(a.agent)
+        self.seen = bool(self.session) and session_alive(self.session) is True
+        self.gone, self.next_check = 0, 0.0
+
+    def reason(self):
+        if orphaned():
+            return Orphaned()
+        if self.max_s > 0 and time.monotonic() - self.t0 >= self.max_s:
+            return Orphaned("it waited %g min (--max-wait); claim again if you still need it" % (self.max_s / 60), BUSY)
+        if self.seen and time.monotonic() >= self.next_check:
+            self.next_check = time.monotonic() + (0.2 if FAST else 30)
+            alive = session_alive(self.session)
+            self.gone = self.gone + 1 if alive is False else 0
+            if self.gone >= 2:
+                return Orphaned("its session %s is closed" % self.session)
+        return None
+
+    def check(self):
+        r = self.reason()
+        if r:
+            raise r
+
+
+def poll_ticket(tid, can_requeue=False, switch=None, guard=None):
     """Long-poll a ticket until granted. Returns ('lease', lease) | ('requeue', priority_since)
     | ('exit', code). Keeps retrying while unavailable. A ticket that was granted but not collected (missed), expired
     or lost is handed back as 'requeue' so the caller queues again with its original place in line."""
     state, last = {}, None
     t0 = time.monotonic()
     while True:
-        if orphaned():
+        if guard:
+            guard.check()
+        elif orphaned():
             raise Orphaned()
         try:
             r = api("GET", "/tickets/" + urllib.parse.quote(tid), query={"wait": 1 if FAST else 30, **({"eq": 1} if switch is not None else {})},
@@ -617,10 +691,10 @@ def claim_wait(a):
     """Blocking claim: ticket plus long-poll; survives an unreachable service. Returns ('lease', lease, info) | ('exit', code)."""
     tid = None
     state = {}
+    guard = WaitGuard(a)
     try:
         while True:
-            if orphaned():
-                raise Orphaned()
+            guard.check()
             if tid is None:
                 try:
                     kind, val, info = claim_once(a, True)
@@ -646,7 +720,7 @@ def claim_wait(a):
                     eprint("auto-equivalent: %s is busy and %s is free and healthy: took %s at once (--no-auto-equivalent to wait)" % (a.resources[0], eq, eq))
                     a.resources, a.auto_equivalent, tid = [eq], False, None
                     continue
-            res, val = poll_ticket(tid, True, (getattr(a, "verify_profile", None) or "") if auto_equiv_on(a) else None)
+            res, val = poll_ticket(tid, True, (getattr(a, "verify_profile", None) or "") if auto_equiv_on(a) else None, guard)
             if res == "switch":
                 with contextlib.suppress(Exception):
                     api("DELETE", "/tickets/" + urllib.parse.quote(tid), timeout=5)
@@ -660,10 +734,12 @@ def claim_wait(a):
                 continue
             if res == "exit":
                 return "exit", val
-            if orphaned():     # granted in the last poll after the owner died: hand it straight back
+            late = guard.reason()
+            if late:     # granted in the last poll after the waiter had to stop: hand it straight back
                 with contextlib.suppress(Exception):
-                    api("POST", "/release", {"id": val["id"], "agent": a.agent, "by": a.agent, "reason": "waiting claim orphaned: its process is gone"}, timeout=5)
-                raise Orphaned()
+                    api("POST", "/release", {"id": val["id"], "agent": a.agent, "by": a.agent, "reason": "waiting claim stopped: %s" % late.why}, timeout=5)
+                tid = None
+                raise late
             wanted, kind = claim_body(a)[1:]
             return "lease", val, (wanted, kind)
     except KeyboardInterrupt:
@@ -672,12 +748,12 @@ def claim_wait(a):
                 api("DELETE", "/tickets/" + urllib.parse.quote(tid), timeout=5)
             eprint("interrupted; ticket %s cancelled" % tid)
         return "exit", 130
-    except Orphaned:
+    except Orphaned as o:
         if tid:
             with contextlib.suppress(Exception):
                 api("DELETE", "/tickets/" + urllib.parse.quote(tid), timeout=5)
-        eprint("waiting claim cancelled: the process that started it is gone (ticket %s); a waiting claim ends with its work" % (tid or "-"))
-        return "exit", 130
+        eprint("waiting claim cancelled: %s (ticket %s); a waiting claim ends with its work" % (o.why, tid or "-"))
+        return "exit", o.code
 
 
 def cmd_claim(a):
@@ -1246,9 +1322,10 @@ def ssh_argv(args, watch=False):
 
 
 SIGNALLED = []     # set when a signal reached an interruptible ssh call: the ssh exit that follows is ours, not a dropped connection
+WATCH_STOP = []    # set when a WaitGuard stopped a forwarded wait (Orphaned: why, code)
 
 
-def ssh_call(args, capture=False, stdin=None, interruptible=False, watch_stdin=False):
+def ssh_call(args, capture=False, stdin=None, interruptible=False, watch_stdin=False, watch=None):
     """Run one forwarded call. Returns (code, stdout or ''); the remote exit code passes through exactly; an ssh connect
     failure (255) is UNAVAILABLE, never "free". stdin=None inherits ours (stdin passthrough)."""
     try:
@@ -1265,17 +1342,37 @@ def ssh_call(args, capture=False, stdin=None, interruptible=False, watch_stdin=F
             with contextlib.suppress(OSError):
                 p.terminate()
         old = {s: signal.signal(s, _fwd) for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)}
+    done = threading.Event()
+    if watch:      # watch() -> a reason to stop (WaitGuard): drop the connection; the remote waiter ends with its stdin
+        def _watch():
+            while not done.wait(0.1 if FAST else 5):
+                why = watch()
+                if why:
+                    WATCH_STOP.append(why)
+                    with contextlib.suppress(OSError):
+                        p.terminate()
+                    return
+        threading.Thread(target=_watch, daemon=True).start()
     try:
         if watch_stdin:        # communicate() would close our end of the stdin pipe, which is the remote waiter's "client alive" signal
-            out = p.stdout.read() if capture else None
+            buf = []
+            rd = threading.Thread(target=lambda: buf.append(p.stdout.read()), daemon=True) if capture else None
+            if rd:
+                rd.start()
             p.wait()
+            if rd:             # a remote child that outlived ssh may still hold the pipe: do not block on it
+                rd.join(0.3 if got or WATCH_STOP else 2)
+            out = buf[0] if buf else None
         else:
             out, _ = p.communicate()
     finally:
+        done.set()
         for s, h in old.items():
             signal.signal(s, h)
     rc = p.returncode
-    if got:                        # ssh exits 255 on SIGTERM: that is our own kill, never "unreachable"
+    if watch and WATCH_STOP:
+        rc = WATCH_STOP[-1].code
+    elif got:                        # ssh exits 255 on SIGTERM: that is our own kill, never "unreachable"
         rc = 128 + got[-1]
     elif rc == 255:
         eprint("UNAVAILABLE — the lease service cannot be reached over ssh (%s). Treat the platform as busy, not free." % (CFG.ssh_target or "transport"))
@@ -1355,20 +1452,65 @@ def cancel_stale_tickets(a):
                "vpt-lease: could not cancel stale ticket %s (exit %d)" % (tid, code))
 
 
+def our_new_leases(a, since):
+    """Leases of this agent+env on the resources of this claim granted at or after `since` (epoch s), newest first; None when unlisted."""
+    code, out = ssh_call(["list", "--json"], capture=True, stdin=subprocess.DEVNULL)
+    if code != 0:
+        return None
+    try:
+        rows = json.loads(out).get("leases") or []
+    except ValueError:
+        return None
+    want = sorted(legacy_res(x.lower(), a.env.lower()) for x in a.resources)
+    mine = [l for l in rows if l.get("agent") == a.agent and l.get("env", "") == a.env.lower() and (l.get("since") or 0) >= since
+            and (picks_any(a) or sorted(legacy_res(x, l.get("env", "")) for x in (l.get("legacy") or l.get("resources") or [])) == want)]
+    return sorted(mine, key=lambda l: -(l.get("since") or 0))
+
+
+def lease_lines(l):
+    out = "%s\n" % l["id"]
+    return out + ("resource=%s\n" % ",".join(l.get("legacy") or l.get("resources") or [])) if l.get("legacy") or l.get("resources") else out
+
+
 def ssh_claim_wait(a, args, capture):
     """A forwarded `claim --wait`: an ssh drop (255) is not an answer. Back off, cancel the ticket the dropped call left behind and
     queue again, like the central client waits out an unreachable service. Any other code returns. SIGTERM/SIGINT/SIGHUP end the
-    wait at once (the remote waiter also ends when our stdin pipe closes) and leave none of our tickets queued."""
+    wait at once (the remote waiter also ends when our stdin pipe closes) and leave none of our tickets queued.
+    Owner 2026-11-11: a drop right after the grant is not a reason to queue again: a lease of ours granted during the call is adopted
+    (one grant, never a second one). The WaitGuard (parent gone, codebox session closed, --max-wait) stops the wait, cancels the ticket
+    and hands back a grant that raced it."""
     state = {}
+    guard = WaitGuard(a)
+    t0 = time.time() - 30      # clock skew between this machine and the registry host
     while True:
         del SIGNALLED[:]
-        code, out = ssh_call(args, capture=capture, stdin=None, interruptible=True, watch_stdin=True)
-        if SIGNALLED:
+        del WATCH_STOP[:]
+        stop = guard.reason()
+        code, out = (stop.code, "") if stop else ssh_call(args, capture=True, stdin=None, interruptible=True, watch_stdin=True, watch=guard.reason)
+        stop = stop or (WATCH_STOP[-1] if WATCH_STOP else None)
+        if SIGNALLED or stop:
             cancel_stale_tickets(a)
-            eprint("interrupted; ticket cancelled")
-            return code, out
+            if stop:     # a grant that raced the stop: nobody will use it
+                for l in our_new_leases(a, t0) or []:
+                    ssh_call(["release", l["id"], "--agent", a.agent, "--by", a.agent, "--reason", "waiting claim stopped: %s" % stop.why], capture=True, stdin=subprocess.DEVNULL)
+                eprint("waiting claim cancelled: %s; a waiting claim ends with its work" % stop.why)
+            else:
+                eprint("interrupted; ticket cancelled")
+            return code, ""
         if code != UNAVAILABLE:
+            if not capture:
+                sys.stdout.write(out)
+                sys.stdout.flush()
             return code, out
+        got = our_new_leases(a, t0)
+        if got:      # the remote waiter was granted, then the connection (or the remote process) died before we read the answer
+            l = got[0]
+            eprint("vpt-lease: the connection dropped after the grant: lease %s is ours (adopted, not claimed again)" % l["id"])
+            out = lease_lines(l) if picks_any(a) else "%s\n" % l["id"]
+            if not capture:
+                sys.stdout.write(out)
+                sys.stdout.flush()
+            return 0, out
         backoff_sleep(state, "ssh to the registry host is down during claim --wait")
         cancel_stale_tickets(a)
 
@@ -1393,6 +1535,11 @@ def remote_claim_args(a):
     prio = resolve_priority(a)
     if prio:
         args += ["--priority", prio]
+    if getattr(a, "max_wait", None) is not None:
+        args += ["--max-wait", "%g" % a.max_wait]
+    hp = getattr(a, "holder_pid", None) or int(os.environ.get("VPT_HOLDER_PID") or 0) or (session_holder_pid(a.agent) if a.mode == "exclusive" else 0)
+    if hp and hp > 1:
+        args += ["--holder-pid", str(hp), "--holder-host", getattr(a, "holder_host", None) or socket.gethostname()]
     return args
 
 
@@ -1539,6 +1686,7 @@ def build_parser():
         c.add_argument("--holder-pid", type=int, default=None, help="pid of the long-lived process that owns this claim (e.g. a dispatcher; default $VPT_HOLDER_PID): the lease is released if it dies. Never the pid of a shell that exits after the claim")
         c.add_argument("--holder-host", default=None, help=argparse.SUPPRESS)   # added when forwarded: the pid belongs to this host
         c.add_argument("--deploy-id", default="", help="join the lease of this running deploy (default $VPT_DEPLOY_ID)")
+        c.add_argument("--max-wait", type=float, default=None, metavar="MIN", help="stop waiting after MIN minutes (default $VPT_LEASE_MAX_WAIT_MIN, else 240; 0 = no bound): the ticket is cancelled and the claim exits 3")
     c = sub.add_parser("claim"); claim_args(c)
     c.add_argument("--wait", action="store_true", help="queue and block until granted (retries while the service is unreachable)")
     c.add_argument("--ticket", action="store_true", help="queue and print the ticket id and ETA at once")
@@ -1631,7 +1779,7 @@ def strip_new_flags(argv):
             skip = False
         elif x in NEW_FLAGS_WITH_VALUE:
             skip = True
-        elif x in NEW_FLAGS or x.startswith(("--mode=", "--expect=", "--deploy-id=", "--priority=", "--holder-pid=", "--holder-host=")):
+        elif x in NEW_FLAGS or x.startswith(("--mode=", "--expect=", "--deploy-id=", "--priority=", "--holder-pid=", "--holder-host=", "--max-wait=")):
             pass
         else:
             out.append(x)
@@ -1731,6 +1879,11 @@ def with_holder_host(argv):
         return argv
     named = any(x == "--holder-pid" or x.startswith("--holder-pid=") for x in argv) or os.environ.get("VPT_HOLDER_PID")
     agent = argv[argv.index("--agent") + 1] if "--agent" in argv[:-1] else ""
+    pin = any(x in ("pin", "observe") for i, x in enumerate(argv) if i and argv[i - 1] == "--mode") or any(x in ("--mode=pin", "--mode=observe") for x in argv)
+    auto = None if named or pin else session_holder_pid(agent)
+    if auto:       # the claiming codebox session's pane is the holder: closing the session frees the lease (lease-holder-reaper.js)
+        i = argv.index("--") if "--" in argv else len(argv)
+        return argv[:i] + ["--holder-pid", str(auto), "--holder-host", socket.gethostname()] + argv[i:]
     if not named and re.match(r"^codebox:.+-\d{2,9}$", agent):
         i = argv.index("--") if "--" in argv else len(argv)
         return argv[:i] + ["--holder-host", socket.gethostname()] + argv[i:]
@@ -1818,8 +1971,11 @@ def main(argv=None):
         return 1
     if a.cmd == "claim" and a.wait and os.environ.get("VPT_LEASE_STDIN_WATCH") and os.environ.get("VPT_LEASE_FORWARDED"):
         def _watch():        # forwarded waiter: the ssh client holds our stdin open; EOF = it died, so cancel the ticket and exit
+            # os.read, not sys.stdin.buffer: a daemon thread blocked inside the buffered reader holds its lock, and the interpreter then
+            # aborts at exit ("Fatal Python error: _enter_buffered_busy", SIGABRT). ssh reports that as 255, the client read it as an ssh
+            # drop and queued again: every grant was lost and re-claimed until TTL (owner 2026-11-11, the Mi held ~11 h).
             with contextlib.suppress(Exception):
-                while sys.stdin.buffer.read(4096):
+                while os.read(sys.stdin.fileno(), 4096):
                     pass
             os.kill(os.getpid(), signal.SIGTERM)
         threading.Thread(target=_watch, daemon=True).start()

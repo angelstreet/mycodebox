@@ -1640,7 +1640,23 @@ holders: the holders that are neither a session nor a platform agent).
   lease-watch signal) or broader than its purpose (env-wide or server-kind lease whose purpose names one host, device or the frontend). A codebox session stopped
   on a finished turn with no draft and no menu gets one line through the guarded send (`by: 'lease-nudge'`); any other holder (Mac, scripts) gets a
   `lease:nudge` manager event with the same text. It never releases or narrows. Audit: `lease-nudges.jsonl`; cooldowns: `lease-nudge.json`.
+  An idle codebox holder whose chat cannot take the line (the guard refuses it) also gets one `lease:idle-blocking` manager event per 30 min
+  (owner 2026-11-11); the chat line is still retried every tick.
   `manager.json` `leaseNudge`: `"live"` (default) | `"dry"` (log only) | `"off"`.
+- **Abandoned waiters and unused grants (owner 2026-11-11, the Mi held ~11 h).** Root cause: the forwarded `claim --wait` on the registry host
+  watched its stdin from a daemon thread inside Python's buffered reader; at exit the interpreter aborted (`Fatal Python error:
+  _enter_buffered_busy`), ssh reported 255, and the codebox client read that as a dropped connection and queued again after every grant, each
+  grant then held until its TTL. Fixes: the watcher uses `os.read`; a forwarded wait that sees 255 first looks for a lease of its own granted
+  during the call and adopts it; `WaitGuard` (scripts/vpt-lease) stops a waiter whose parent is gone, whose `codebox:<session>` was closed, or
+  that waited past `--max-wait` (default `VPT_LEASE_MAX_WAIT_MIN` 240, exit 3), cancelling its ticket and releasing a grant that raced the stop;
+  an exclusive codebox claim records the session's tmux pane pid as `holder_pid` (`VPT_LEASE_AUTO_HOLDER=off`), so `lease-holder-reaper.js`
+  frees it when the session closes; and the same reaper releases an unused grant (`unusedGrants`: codebox session idle since before the grant,
+  no turn and no heartbeat/renew since, another agent's ticket waits on it, 10 min, 2 polls; `GHOSTY_UNUSED_GRANT_MIN`, 0 = off). Audit:
+  `lease-actions.jsonl` (`type: unused-grant`). Tests: `test/lease-abandoned-waiter.test.js`, `test/lease-holder-reaper.test.js`.
+- **The installed client follows main (bug-fb46a741).** `lease-client-sync.js` runs 30 s after the dashboard starts from the live checkout on `main`
+  with `scripts/vpt-lease` unmodified (so after every self-deploy): a `~/bin/vpt-lease` or registry-host copy whose sha256 differs is replaced (backup
+  `<target>.bak-<UTC stamp>`, `python3` syntax check, `chmod 755`, atomic rename). Journal `lease-client-sync.jsonl`; a failed install is a
+  `lease:client-sync` manager event and leaves the old copy. Rollback: `mv <target>.bak-<stamp> <target>`. `GHOSTY_LEASE_CLIENT_SYNC=off` disables it.
 - **A renewing holder is not idle.** The registry's idle clock resets only on activity it can observe (a session the dashboard reports, an active
   heartbeat); a holder it cannot observe (a script, a bot) renews its lease instead, and the registry then reports the time since the claim as
   "idle". A lease renewed after its claim is judged by the time since its last renewal (`renewalIdleMin`, lease-source.js): a bot that renews every

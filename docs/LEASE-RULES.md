@@ -85,9 +85,12 @@ Hours were lost waiting on one web host while the other was free. When the work 
 
 1. Use `vpt-lease run <claim args> -- <command...>`: it queues if busy, heartbeats while the command runs and releases
    when it ends, also on failure or interrupt. Or use `vpt-lease claim ... --wait`.
-   A waiting claim in a background shell ends with the work that started it: the client cancels its ticket when its parent
-   process is gone (`VPT_LEASE_WAIT_ORPHAN=off` opts out), but when you finish or abandon the work, kill your own waiter yourself
-   (`kill <pid>`) or `vpt-lease release --agent <agent>`; a grant nobody uses holds the resource until its TTL.
+   A waiting claim ends with the work that started it (owner 2026-11-11, after the Mi was held ~11 h by an idle session's waiters):
+   the client cancels its ticket and exits when its parent process is gone (`VPT_LEASE_WAIT_ORPHAN=off` opts out), when its
+   `codebox:<session>` was closed (exit 130), or after `--max-wait <min>` (default `VPT_LEASE_MAX_WAIT_MIN`, 240; `0` = no bound; exit 3:
+   claim again if you still need it). A waiter is granted once and exits: a forwarded waiter whose connection drops right after the
+   grant adopts that lease (`adopted, not claimed again`) instead of queueing a second time. When you finish or abandon the work, still
+   kill your own waiter (`kill <pid>`) or `vpt-lease release --agent <agent>`.
 2. Add `--expect <minutes>` so the queue can estimate when you are done.
 3. Never poll in a loop, never ask the owner whether a lease is free, never use `--force` and never kill another
    agent's lease. Busy means wait in the queue: the answer to "who holds it and when is it free" is on stderr or in
@@ -110,6 +113,13 @@ Hours were lost waiting on one web host while the other was free. When the work 
   **Who checks:** the registry host cannot see the pids of processes on other machines, so on codebox the dashboard's `lease-holder-reaper.js` does the
   check every 30 s (holder_pid + holder_host == this host, else the `-<pid>` of a `codebox:<name>-<pid>` agent, which counts only after it was
   seen alive once and never while a dashboard session of that name exists) and releases with `--by lease-holder-reaper --reason "holder-gone: ..."`.
+  **A codebox claim always has a holder (owner 2026-11-11):** an exclusive `claim` / `run` by `codebox:<session>` made on codebox records that
+  tmux session's pane pid as `holder_pid` (unless `--holder-pid` / `$VPT_HOLDER_PID` names one; `VPT_LEASE_AUTO_HOLDER=off` opts out), so
+  closing the session frees its leases within a minute. **Unused grant:** a lease of a `codebox:<session>` agent that another agent waits for,
+  granted while that session sat idle, with no heartbeat or renewal and no turn of the session since the grant, is released by the same reaper
+  after 10 minutes (`--reason "unused-grant: ..."`; `GHOSTY_UNUSED_GRANT_MIN`, `0` = off). Using a grant means a turn or `vpt-lease heartbeat
+  <id> --active` / `renew`. An idle holder that blocks a waiter and whose chat cannot take the watchdog's note is flagged to the manager
+  (`lease:idle-blocking`).
   Reuse is detected by start time: a process that started after the lease was granted is not its holder. The service itself probes only pids
   on its own host. `GHOSTY_HOLDER_REAPER=off` disables the reaper. A dispatcher that exits between ticks (game_dispatch, pokemon_dispatch) must not
   pass `--holder-pid`. A heartbeating or dashboard-tracked (codebox session) exclusive lease with no activity
