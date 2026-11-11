@@ -153,3 +153,11 @@ export function sendBackOf(b) {
   return !FLOOR.test([b.title, b.repro, b.error, b.reason].join(' '));
 }
 export const sendBackText = (b) => `You filed ${b.id}. If it is small, fix it now in your own worktree and resolve it (found-bug --resolve ${b.id} --commit <sha|integration id>); otherwise reply with the reason (found-bug --why-not-fixed large|other-area|host-or-device|credentials|owner-floor|live-session-task).`;
+
+// Sweep (owner, 2026-11-11): open reports from sessions that are still live, grouped per session: one kept wake each listing the ids. Pure.
+export function sweepGroups(bugs, liveSessions, { perSession = 8 } = {}) {
+  const live = liveSessions instanceof Set ? liveSessions : new Set(liveSessions), by = new Map();
+  for (const b of bugs) if (!b.resolved && live.has(b.session) && sendBackOf(b)) by.set(b.session, [...(by.get(b.session) || []), b]);
+  return [...by].map(([session, list]) => ({ session, count: list.length, text:
+    `You have ${list.length} open bug report(s) you filed: ${list.slice(0, perSession).map((b) => `${b.id} (${b.title.slice(0, 70)})`).join('; ')}${list.length > perSession ? '; ...' : ''}. If any is small, fix it now in your own worktree and resolve it (found-bug --resolve <id> --commit <sha|integration id>); otherwise reply with the reason per bug.` }));
+}

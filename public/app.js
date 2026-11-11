@@ -3557,7 +3557,7 @@ function usageHtml(u, tab, ui) {
     return sec('project', 'Projects', projects.length, undefined, projHtml)
       + sec('session', 'Sessions', `${shown.length}${rows.length > shown.length ? ` of ${rows.length}` : ''}`, undefined, sessHtml);
   }
-  const mgrBlock = (!filtered && tab === 'today' && ui.score) ? managerBlockHtml(ui.score.today, ui.score.days, { fmtTok, fmtUsd, costOrNull: (e) => e }) : '';
+  const mgrBlock = (!filtered && tab === 'today' && ui.score) ? managerBlockHtml(ui.score.today, ui.score.days, { fmtTok, fmtUsd, costOrNull: (e) => e, bugs: ui.score.bugs }) : '';
   return mgrBlock
     + valueHtml(u, tab)
     + sec('quota', 'Quota &amp; pace', '', undefined, quotaPaceHtml(state.quota, fa) + (filtered ? '' : creditRowHtml(ui.jev?.credits)))
