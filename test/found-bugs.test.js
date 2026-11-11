@@ -123,6 +123,18 @@ test('store: resolve records state, commit, who and when; unresolved filter and 
   assert.deepEqual(await fb.counts(), { total: 0, blocking: 0, last24h: 0 });
 });
 
+test('store: duplicate state needs no commit; list pages by state, limit and offset (bug-6829b74a)', async () => {
+  const fb = createFoundBugs({ stateDir: tmp('ghosty-fb-page-') });
+  const ids = [];
+  for (let i = 0; i < 5; i++) ids.push((await fb.add({ title: `bug ${i}`, session: 's' })).bug.id);
+  assert.equal((await fb.resolve(ids[1], { state: 'duplicate', note: `same as ${ids[0]}` })).ok, true);
+  assert.deepEqual((await fb.list({ state: 'duplicate' })).map((b) => b.id), [ids[1]]);
+  assert.deepEqual((await fb.list({ state: 'open' })).map((b) => b.id), [ids[0], ids[2], ids[3], ids[4]]);
+  assert.deepEqual((await fb.list({ limit: 2 })).map((b) => b.id), [ids[3], ids[4]]);
+  assert.deepEqual((await fb.list({ limit: 2, offset: 2 })).map((b) => b.id), [ids[1], ids[2]]);
+  assert.deepEqual((await fb.list({ limit: 2, offset: 9 })), []);
+});
+
 // Regression (task176-tree-naming reported "Cannot read properties of undefined (reading 'toLowerCase')" with every flag set):
 // the real CLI with the full flag set against a store that already holds tombstone, fixed and resolve marker lines (no title).
 test('CLI: every flag set files cleanly against a store with marker lines', async () => {

@@ -2720,7 +2720,7 @@ async function handleHttp(req, res) {
     if (remoteClient && !((req.method === 'GET' && p === '/api/bugs') || (req.method === 'POST' && p === '/api/bugs'))) return json(res, 403, { ok: false, error: 'a remote client may only file and list bugs' });
     try {
       if (req.method === 'GET' && p === '/api/bugs') {
-        const bugs = await foundBugs.list();
+        const q = url.searchParams, bugs = await foundBugs.list({ limit: Number(q.get('limit')) || 100, offset: Number(q.get('offset')) || 0, state: q.get('state') || '' });   // ?state=open|fixed|duplicate..&limit=&offset= page back (bug-6829b74a)
         if (url.searchParams.get('format') === 'text') { res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' }); return res.end(bugs.map((b) => `${b.id}  ${b.resolved ? `[${b.state}] ` : ''}${b.blocking ? 'BLOCKING ' : ''}${b.session}: ${b.title}`).join('\n') + (bugs.length ? '\n' : '')); }
         return json(res, 200, { ok: true, bugs, counts: await foundBugs.counts() });
       }
