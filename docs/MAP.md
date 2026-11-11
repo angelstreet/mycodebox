@@ -30,6 +30,7 @@ Origin checks protect browser requests but are not user authentication. Any allo
 | Browser views, reader, input, icons | `public/app.js`, `public/index.html`, `public/style.css`, `public/icons.js`, `public/disk-banner.js` (the disk banner's text) | `test/buttons.test.js`, `test/ask-popup.test.js`, `test/disk-banner.test.js` |
 | PWA cache and push | `public/sw.js`, `public/sw-update.js`, `push.js` | `test/push.test.js`, `test/push-tiers.test.js`, `test/integration-feed-noise.test.js` |
 | Stop classification and safe automation | `stall.js`, `manager.js`, `triage.js`, `router.js`, `jev-breaker.js` | `test/stall.test.js`, `test/auto.test.js`, `test/manager.test.js` |
+| Wakes for stopped sessions: own job ended, parked `blocked` / `waiting` stop whose dependency changed or aged out (`parkedWake`) | `own-jobs.js`, `job-refs.js`, `wait-ids.js` | `test/own-jobs.test.js`, `test/parked-wake.test.js` |
 | Separate page mockups | `public/page-preview.html`, `public/page-preview.css`, `public/page-preview.js` | Sample data only; linked from the More menu |
 | Reporter intake and local alerts | `reporter.js`, `api-extras.js`, `claude-plugin/ghosty-reporter/` | `test/reporter.test.js`, `test/manager-fixes.test.js`; plugin tests separate |
 | Session priority, layout, parking | `session-meta.js`, `layout.js`, `parking.js`, `public/policy.js` | `test/layout.test.js`, `test/parking.test.js`, `test/policy.test.js` |

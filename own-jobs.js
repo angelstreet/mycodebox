@@ -14,6 +14,7 @@ import { sensitivePath } from './merge-policy.js';
 import { jobRefs, hasRef, waitsOnOwnJob, DETACHED_RE } from './job-refs.js';
 import { integrationText, isFinal, normRequest } from './integration-notify.js';
 import { waitIds, runState } from './wait-ids.js';
+import { forbiddenMatch } from './stall.js';
 export { jobRefs, hasRef, waitsOnOwnJob };
 
 // Descendants of `pid` in a ps table { children: Map<ppid, pid[]>, args: Map<pid, string> }, nearest first, the agent itself excluded.
@@ -35,6 +36,60 @@ const COMPLETION_RE = /\b(?:done|finished|complete[d]?|all (?:tests )?passed|exi
 const GENERIC_WORDS = new Set(['waiting', 'blocked', 'final', 'run', 'runs', 'job', 'jobs', 'process', 'finish', 'finishes', 'finished', 'complete', 'completes', 'completed', 'running', 'progress', 'until', 'tests', 'test', 'build', 'task', 'script', 'with', 'that', 'this', 'from', 'then', 'before', 'after', 'done', 'still', 'status', 'ends', 'end']);
 const hhmm = (ms) => new Date(ms).toISOString().slice(11, 16) + ' UTC';
 
+// ---- Parked-session wake (harness review 2026-11-11, Q5 item 5; docs/REFERENCE.md "Parked-session wake") ----
+// A stop on STATUS blocked / waiting that the own-job watch does not follow is "parked": what its line names is read at park time and re-read
+// every parkPollMs; one wake when a dependency changed (and still holds after the grace) or at the stop's maximum age.
+const INT_IDS = /\bint-[0-9a-z]{6,40}\b/gi;
+const BUG_IDS = /\bbug-[0-9a-f]{8}\b/gi;
+const HOST_DEVICE = /\b([a-z][a-z0-9-]*[a-z0-9])\/(device\d+)\b/gi;
+const AT_TIME = /\b(?:until|after|from)\s+~?(\d{1,2}):(\d{2})\s*UTC\b/i;
+// the done-line tail (`bugs: reported bug-x`, `closing review: ...`) names what was filed, not what the session waits on
+export const dependencyText = (text) => String(text || '').split(/\s[·|]\s|\bbugs?:|\bclosing review:/i)[0];
+const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// Pure. STATUS text (+ the lease view, for the resource names it knows) -> [{ kind, id, label }].
+export function parkedDeps(text, view = null, { now = Date.now() } = {}) {
+  const t = dependencyText(text), deps = [], seen = new Set();
+  const add = (kind, id, label) => { const k = `${kind}:${id}`; if (id && !seen.has(k)) { seen.add(k); deps.push({ kind, id, label }); } };
+  for (const m of t.matchAll(INT_IDS)) add('integration', m[0].toLowerCase(), `integration ${m[0]}`);
+  const w = waitIds(t);
+  if (w.ticket) add('ticket', w.ticket, `lease ticket ${w.ticket}`);
+  if (w.lease) add('lease', w.lease, `lease ${w.lease}`);
+  if (w.script) add('script', w.script, `run ${w.script}`);
+  const r = jobRefs(t);
+  if (r.deploy) add('deploy', r.deploy, `queue entry ${r.deploy}`);
+  for (const m of t.matchAll(BUG_IDS)) add('bug', m[0].toLowerCase(), m[0].toLowerCase());
+  for (const m of t.matchAll(HOST_DEVICE)) add('resource', `${m[1]}/${m[2]}`.toLowerCase(), `${m[1]}/${m[2]}`);
+  const known = new Set([...(view?.leases || []), ...(view?.tickets || [])].flatMap((x) => x.resources || []).filter((x) => x && x.length >= 4 && !['*', 'server', 'frontend'].includes(x)));
+  for (const res of known) if (new RegExp(`(?:^|[^\\w/-])${esc(res)}(?![\\w/-])`, 'i').test(t)) add('resource', res.toLowerCase(), res);
+  const at = AT_TIME.exec(t);
+  if (at && Number(at[1]) < 24) { const d = new Date(now); d.setUTCHours(Number(at[1]), Number(at[2]), 0, 0); let ms = d.getTime(); if (ms < now - 3600e3) ms += 86400e3; add('time', String(ms), `${at[1].padStart(2, '0')}:${at[2]} UTC`); }
+  return deps;
+}
+
+// Pure. May a STATUS blocked / waiting stop be parked? Never with an open owner ask, never on a hard-floor status; a forbidden-topic status only
+// when it names a system id (integration, ticket, lease, run, queue entry, bug): then its words describe a queue, not an ask.
+const SYSTEM_DEPS = new Set(['integration', 'ticket', 'lease', 'script', 'deploy', 'bug']);
+export function parkGate(text, { openAsk = false, floor = () => null, forbidden = () => null } = {}) {
+  const t = dependencyText(text);
+  if (openAsk) return { ok: false, why: 'open owner ask' };
+  const f = floor(t);
+  if (f) return { ok: false, why: `hard floor: ${f}` };
+  const fb = forbidden(t);
+  if (fb && !parkedDeps(t).some((d) => SYSTEM_DEPS.has(d.kind))) return { ok: false, why: `forbidden topic: ${fb}` };
+  return { ok: true };
+}
+
+// Pure. Is `res` held right now by a lease that is not the session's own? A host lease blocks its devices and a device lease blocks its host.
+export function resourceHeld(res, view, session = '') {
+  const mine = (l) => { const who = `${l.session || ''} ${l.agent || ''}`.toLowerCase(); return !!session && who.includes(String(session).toLowerCase()); };
+  const r = String(res).toLowerCase();
+  return (view?.leases || []).some((l) => (l.mode || 'exclusive') === 'exclusive' && !mine(l) && (l.resources || []).some((x) => {
+    const y = String(x).toLowerCase();
+    return y === r || r.startsWith(`${y}/`) || y.startsWith(`${r}/`);
+  }));
+}
+
 // deps: { now, procRoot, table: () => ps table, agentPid: (session) => pid|null, deployState: (id) => { state, finished }|null,
 //         integrationState: async (id) => lane request { state, ... } | null (GET /api/integration/requests/:id),
 //         stillWaiting: (session, stopAt) => bool, send: (session, text) => Promise, record: (event) => Promise, log: (rec) => void }
@@ -42,7 +97,11 @@ const hhmm = (ms) => new Date(ms).toISOString().slice(11, 16) + ' UTC';
 const QUEUE_KINDS = new Set(['integration', 'deploy', 'script', 'lease']);
 
 export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', table = async () => ({ children: new Map(), args: new Map() }), agentPid = async () => null,
-  deployState = () => null, integrationState = async () => null, startedAt = async () => new Map(), stillWaiting = () => true, canSend = () => true, scriptRun = async () => null, leaseState = async () => null, idleMs = () => null, staleMin = 20, nudgeGapMin = 30, maxRunMin = 120, send = async () => {}, record = async () => {}, log = () => {}, stableMin = 5, maxAgeH = 12, roots = () => [] } = {}) {
+  deployState = () => null, integrationState = async () => null, startedAt = async () => new Map(), stillWaiting = () => true, canSend = () => true, scriptRun = async () => null, leaseState = async () => null, idleMs = () => null, staleMin = 20, nudgeGapMin = 30, maxRunMin = 120, send = async () => {}, record = async () => {}, log = () => {}, stableMin = 5, maxAgeH = 12, roots = () => [],
+  // parked-session wake: leaseView: async () => lease view, bugState: async (id) => 'open'|'fixed'|...|null, busy: (session) => live background work,
+  // sendParked: (session, text) => Promise (by: harness), parkMode: () => 'off'|'dry'|'live'
+  leaseView = async () => null, bugState = async () => null, busy = () => false, sendParked = null, parkMode = () => 'off',
+  parkPollMs = 60e3, parkGraceMin = 3, parkMaxAgeMin = 180, parkPerHour = 2 } = {}) {
   const watched = new Map();   // session -> { job, stopAt, since, ... }
   // a zombie is finished: /proc/<pid>/stat is "pid (comm) S ...", the state follows the last ")"
   const alive = (pid) => {
@@ -90,6 +149,7 @@ export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', tabl
     // a pid or a process tree counts as ended only after it was seen running: a pid that is not alive here (another host, already gone) is unseeable
     if (job.kind === 'pid' || job.kind === 'tree') { w.seenRunning = job.pids.some((p) => alive(p)); if (!w.seenRunning) { job.unseen = true; } }
     watched.set(session, w);
+    parked.delete(session);   // the own-job watch follows this stop; a parked entry of an older stop is over
     if (job.kind === 'log') await stateOf(w);   // remembers the mtime now: quiet time counts from the stop, not from the first tick
     // a harness-owned task is not flaggable: the agent's own harness wakes it, and ghosty cannot see it either way
     if ((!job.kind || job.detached || job.unseen) && !job.harnessOwned) {
@@ -100,7 +160,7 @@ export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', tabl
     log({ type: 'own_job_watch', session, job: job.kind || 'unknown', label: job.label, detached: !!job.detached, harnessOwned: !!job.harnessOwned });
     return { kind: job.kind, label: job.label, detached: !!job.detached, unseen: !!job.unseen, harnessOwned: !!job.harnessOwned, pid: job.pids?.[0] ?? null };
   }
-  const forget = (session) => { watched.delete(session); };
+  const forget = (session) => { watched.delete(session); parked.delete(session); };
   const jobOf = (session) => watched.get(session)?.job || null;
 
   // -> { state: 'running'|'ended'|'unknown', at?: ms, summary }
@@ -151,6 +211,96 @@ export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', tabl
     return { state: 'unknown', summary: 'job not identified' };
   }
 
+
+  // ---- parked sessions ----
+  const parked = new Map();   // session -> { stopAt, since, status, text, deps: [{ ...dep, before, changedAt, change }], checkedAt }
+  const parkedSent = new Map();   // session -> [ms] of parked wakes (dry ones too), for the per-hour cap
+  // -> { state: 'open'|'changed'|'unknown', change? } of one dependency now. ctx caches the lease view for one sweep.
+  async function depNow(d, session, ctx) {
+    const t = now();
+    try {
+      if (d.kind === 'integration') { const r0 = await integrationState(d.id); if (!r0) return { state: 'unknown' }; const r = normRequest(r0); return isFinal(r.state) ? { state: 'changed', change: `${d.label} ended (${r.state})` } : { state: 'open', v: r.state }; }
+      if (d.kind === 'deploy') { const x = deployState(d.id); if (!x) return { state: 'unknown' }; return ['done', 'failed', 'cancelled', 'canceled', 'error'].includes(x.state) ? { state: 'changed', change: `${d.label} ended (${x.state})` } : { state: 'open', v: x.state }; }
+      if (d.kind === 'script') { const r = runState(await scriptRun(d.id), { now: t, maxRunMin }); return r.state === 'ended' ? { state: 'changed', change: `${d.label} ended ${r.status}` } : { state: r.state === 'running' ? 'open' : 'unknown' }; }
+      if (d.kind === 'bug') { const st = await bugState(d.id); if (!st) return { state: 'unknown' }; return st !== 'open' ? { state: 'changed', change: `${d.label} was resolved (${st})` } : { state: 'open', v: st }; }
+      if (d.kind === 'time') return Number(d.id) <= t ? { state: 'changed', change: `the time you named (${d.label}) has passed` } : { state: 'open' };
+      ctx.view ??= await leaseView().catch(() => null);
+      const v = ctx.view;
+      if (!v) return { state: 'unknown' };
+      if (d.kind === 'ticket') {
+        const tk = (v.tickets || []).find((x) => String(x.id).toLowerCase() === d.id);
+        if (!tk) return { state: 'changed', change: `${d.label} left the queue (granted or ended)` };
+        if (tk.state && tk.state !== 'waiting') return { state: 'changed', change: `${d.label} was ${tk.state}` };
+        return { state: 'open', v: tk.position ?? null, first: tk.position === 1 };
+      }
+      if (d.kind === 'lease') return (v.leases || []).some((x) => String(x.id) === d.id) ? { state: 'open', v: 'held' } : { state: 'changed', change: `${d.label} was released` };
+      if (d.kind === 'resource') return resourceHeld(d.id, v, session) ? { state: 'open', v: 'held' } : { state: 'open', v: 'free' };
+    } catch { /* a source is unreachable: unknown, try again next sweep */ }
+    return { state: 'unknown' };
+  }
+  // A resource is a change only from held (at park time) to free; a ticket only when it reaches position 1 from further back.
+  function changeOf(d, s) {
+    if (s.state === 'changed') return s.change;
+    if (d.kind === 'resource' && d.before === 'held' && s.v === 'free') return `${d.label} is free (no lease holds it)`;
+    if (d.kind === 'ticket' && s.first && Number(d.before) > 1) return `${d.label} reached position 1`;
+    return null;
+  }
+
+  // park(session, { text, stopAt, status }) -> { deps, parked } . The caller (manager.js) has already applied the floor / ask gates.
+  async function park(session, { text = '', stopAt, status = 'waiting' } = {}) {
+    if (parkMode() === 'off') { parked.delete(session); return { parked: false, deps: [] }; }
+    const ctx = {};
+    ctx.view = await leaseView().catch(() => null);
+    const deps = parkedDeps(text, ctx.view, { now: now() });
+    for (const d of deps) { const s = await depNow(d, session, ctx); d.before = s.state === 'open' ? s.v : s.state; if (s.state === 'changed') d.before = 'changed'; }
+    parked.set(session, { stopAt, since: now(), status: String(status || 'waiting').toLowerCase(), text: String(text).slice(0, 300), deps, checkedAt: 0, device: deps.some((d) => d.kind === 'resource' || d.kind === 'ticket') });
+    log({ type: 'parked_watch', session, stopAt, status, deps: deps.map((d) => ({ kind: d.kind, id: d.id, before: d.before ?? null })) });
+    return { parked: true, deps };
+  }
+
+  async function parkedTick() {
+    const out = [], mode = parkMode();
+    if (mode === 'off') { parked.clear(); return out; }
+    const ctx = {};
+    for (const [session, p] of [...parked]) {
+      if (!stillWaiting(session, p.stopAt)) { parked.delete(session); continue; }
+      const t = now();
+      if (t - p.checkedAt < parkPollMs) continue;
+      p.checkedAt = t;
+      let reason = null;
+      for (const d of p.deps) {
+        if (d.before === 'changed') continue;   // already over at park time: the session knew it when it stopped; the age backstop covers it
+        const c = changeOf(d, await depNow(d, session, ctx));
+        if (!c) { d.changedAt = null; continue; }   // flapped back (a freed device was taken again): the grace starts over
+        d.changedAt ??= t; d.change = c;
+        if (t - d.changedAt >= parkGraceMin * 60e3) { reason = { kind: 'change', dep: d, text: `${c} at ${hhmm(d.changedAt)}` }; break; }
+      }
+      const ageMin = (t - p.since) / 60e3;
+      if (!reason && ageMin >= parkMaxAgeMin) reason = { kind: 'age', text: null };
+      if (!reason) continue;
+      // the gates of a manager reply, re-checked right before typing
+      if (!canSend(session) || busy(session)) continue;
+      const hour = (parkedSent.get(session) || []).filter((x) => t - x < 3600e3);
+      if (hour.length >= parkPerHour) { log({ type: 'parked_wake_capped', session, perHour: hour.length }); continue; }
+      const st = p.status === 'blocked' ? 'blocked' : 'waiting';
+      // a change detail that names a forbidden word (an integration "deployed", a ticket "dropped") falls back to the neutral form
+      if (reason.kind === 'change' && forbiddenMatch(reason.text)) reason.text = `${reason.dep.label} changed at ${hhmm(reason.dep.changedAt)}`;
+      const text = reason.kind === 'change'
+        ? `harness: ${reason.text} while you were parked on STATUS ${st}. Re-check and continue; if it still blocks you, end with a STATUS that names the id you wait on.`
+        : `harness: you have been parked on STATUS ${st} for ${ageMin >= 120 ? `${Math.round(ageMin / 60)} h` : `${Math.round(ageMin)} min`} and nothing you named changed. Re-check it now and continue if it no longer blocks you${p.device ? '; for a device, take a free equivalent with vpt-lease claim <env> --any <group> --wait' : ''}; otherwise end with a STATUS that names the id you wait on.`;
+      if (forbiddenMatch(text)) { parked.delete(session); log({ type: 'parked_skip', session, why: 'forbidden topic in the wake text', text }); continue; }
+      if (!stillWaiting(session, p.stopAt)) { parked.delete(session); continue; }
+      const rec = { session, stopAt: p.stopAt, why: reason.kind, dep: reason.dep ? `${reason.dep.kind}:${reason.dep.id}` : null, parkedMin: Math.round(ageMin), text };
+      if (mode === 'dry') { parked.delete(session); parkedSent.set(session, [...hour, t]); log({ type: 'parked_wake_dry', ...rec }); out.push({ ...rec, dry: true }); continue; }
+      try { await (sendParked || send)(session, text); } catch (e) { log({ type: 'parked_wake_failed', session, error: e.message }); continue; }
+      parked.delete(session); parkedSent.set(session, [...hour, t]);
+      log({ type: 'parked_wake', ...rec });
+      out.push(rec);
+    }
+    return out;
+  }
+  const parkedOf = (session) => parked.get(session) || null;
+
   // Every tick: wake the sessions whose job ended. A session that moved on, or whose pane has a draft, is dropped / left alone (stillWaiting).
   async function tick() {
     const woke = [];
@@ -172,6 +322,7 @@ export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', tabl
       log({ type: 'own_job_wake', session, job: w.job.label, kind: w.job.kind, finishedAt: new Date(s.at || now()).toISOString(), text });
       woke.push({ session, text });
     }
+    try { woke.push(...await parkedTick()); } catch (e) { log({ type: 'parked_tick_failed', error: e.message }); }
     return woke;
   }
 
@@ -217,7 +368,7 @@ export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', tabl
     if (turnStart) { const at = await startedAt(kids); if (kids.some((p) => at.get(p) > turnStart)) return true; }
     return false;
   }
-  return { watch, forget, tick, jobOf, progressOf, hasLiveChild, _watched: watched };
+  return { watch, forget, tick, jobOf, progressOf, hasLiveChild, park, parkedTick, parkedOf, _watched: watched, _parked: parked };
 }
 
 function readSafe(p) { try { return readFileSync(p, 'utf8'); } catch { return ''; } }
