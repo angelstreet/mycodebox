@@ -22,6 +22,10 @@ The probe runs from the host when an ssh alias is configured for it (the host's 
 source is only reachable there). Not `ffmpeg -t 3`: an RTSP stream's first pts is the publisher's uptime, so `-t` cut every frame on
 the live mediamtx smoke stream (found while building this).
 
+An inventory error (a server, or one of its hosts, that does not answer the host-config GET) skips that host for the night and is
+reported, never retried in a loop: it is in the run's stdout (`ERROR <server>/<host>: <Error>`) and in the report's `errors` array.
+The journal keeps the per-stream check events, not the inventory errors, so a night's report file is where the errors are read.
+
 ## Policy (`rtsp_replace.py`, data in `config/rtsp-pool.json`)
 
 | Source kind | Not ok |
