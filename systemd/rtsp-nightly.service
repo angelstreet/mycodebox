@@ -1,0 +1,12 @@
+# User unit: install by symlink into ~/.config/systemd/user (docs/RTSP-NIGHTLY.md "Install"). Replace /home/<user> with the user's home.
+[Unit]
+Description=Nightly RTSP check + replacement session (MiniMax), dry unless the mode file says live
+After=network-online.target
+
+[Service]
+Type=oneshot
+# No User= / Group= in a user unit (216/GROUP on codebox, see the coc-daily-review unit).
+Environment=HOME=/home/<user>
+Environment=PATH=/home/<user>/.local/bin:/usr/local/bin:/bin:/usr/sbin:/sbin
+KillMode=process
+ExecStart=/home/<user>/ghosty-sessions/scripts/rtsp-nightly/run.sh

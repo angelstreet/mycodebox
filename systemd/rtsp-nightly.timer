@@ -1,0 +1,13 @@
+[Unit]
+Description=Nightly RTSP check + replacement session
+
+[Timer]
+# 05:45 UTC: after the nightly fleet validation (leases 23:58, runs from 00:30, morning report 05:15), clear of the host cron
+# windows (00:30, the hourly :25-:50 deploy-sensitive span is past the CoC :38 tail), 45 min before the Pokemon review (06:30)
+# and the CoC review (07:30).
+OnCalendar=*-*-* 05:45:00 UTC
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

@@ -21,6 +21,7 @@ Start here to choose the right guide. Examples use placeholders; replace them lo
 - [Disk cleanup](DISK-CLEANUP.md): the daily dry-run-first cleanup timer, the disk measurement table and the 90 % disk push.
 - [Harness review 2026-11-11](HARNESS-REVIEW-2026-11-11.md): why the owner still steps in (codebox and Mac), ten root causes with evidence, floors too wide or too narrow, ranked plan.
 - [Harness review 2026-10-14](v2/reviews/HARNESS-REVIEW-2026-10-14.md): where the owner was stopped, how long sessions waited, ranked fixes (input to V2 rounds 8 and 9).
+| Nightly RTSP check and replacement | [RTSP nightly](RTSP-NIGHTLY.md) | `rtsp_check.py`, the policy (public/loopback replaced, IP camera only reported), schedule, dry/live switch, install and rollback |
 | Leases (who may deploy or drive a device) | [Lease rules](LEASE-RULES.md), [lease inventory](LEASE-INVENTORY.md), [central lease service](v2/LEASES-CENTRAL.md) | What to claim, waiting instead of asking, the service design and its cut-over |
 | Disk growth: merged worktrees, pokemon run videos | [REFERENCE, Integration lane](REFERENCE.md), [Pokemon retention](POKEMON-RETENTION.md) | Lane removes merged worktrees by itself (switch `worktreeCleanup`); the pokemon retention rule is a proposal with a dry run |
 | Compare with an open-source codebox | [mycodebox vs Cloudroom](comparisons/mycodebox-vs-cloudroom.md) | Side-by-side UI and functionality of the closest open-source peer, plus the ranked list of things to adopt |
