@@ -1,0 +1,12 @@
+[Unit]
+Description=Ghosty: bug drain tick every 3 hours, outside the nightly windows
+
+[Timer]
+# 08:05 11:05 14:05 17:05 20:05 UTC: every 3 h, none between 23:58 and 07:30 (nightly fleet leases 23:58, runs from 00:30, morning report 05:15,
+# RTSP 05:45, Pokemon review 06:30, CoC review 07:30) and :05 is clear of the hourly :25-:50 deploy-sensitive span.
+OnCalendar=*-*-* 08,11,14,17,20:05:00 UTC
+Persistent=false
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
