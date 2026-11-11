@@ -451,8 +451,13 @@ export function forbiddenTopics(text, { spellings = true } = {}) {
 export const mergeMatch = (text) => requested(text, MERGE_RE);
 // The floor without the topics the manager decides. A merge exempts the push that lands it (main / master), a push topic any
 // plain push, a deploy topic the deploy words; options: { mergePresent, pushPresent, deployPresent, migrationsOk } (a bare boolean = mergePresent); migrationsOk: the noun "migration" is covered by a deploy evaluation of additive lab migrations.
+// A presigned URL's query (X-Amz-Credential=..., X-Amz-Signature=...) is data in the output, not a credential topic (bug-631b02d0).
+const PRESIGNED_PARAM_RE = /\bX-Amz-[A-Za-z-]+=[^\s&)\]"'>]*/gi;
+export const stripPresignedParams = (text) => String(text ?? '').replace(PRESIGNED_PARAM_RE, 'X-Amz-param');
+
 export function hardMatch(text, opts = {}) {
   const o = typeof opts === 'object' && opts ? opts : { mergePresent: !!opts };
+  text = stripPresignedParams(text);
   text = neutralizeRoutineRestart(text, textVariants);   // routine device-side restart (owner 2026-10-27)
   text = neutralizeRoutineHostUnit(text, textVariants);   // the narrow host_units exception (owner 2026-10-25): only the unit words go, the rest of the floor still reads the text
   const hit = matchWithRelief(hardRe(o), text, forbiddenExtra) || colonHit(text);
@@ -1111,6 +1116,7 @@ export const OWNER_FLOOR_RE = new RegExp(OWNER_FLOOR_PARTS.join('|'), 'i');
 // safety filter is FORBIDDEN_RE / forbiddenMatch and stays unchanged.
 export function ownerFloorMatch(text, opts = {}) {
   const o = typeof opts === 'object' && opts ? opts : {};
+  text = stripPresignedParams(text);
   if (o.generatedSecretOk === undefined) o.generatedSecretOk = GENERATED_SECRET_RE.test(String(text || ''));
   return matchWithRelief(ownerFloorRe(o), neutralizeRoutineRestart(text, textVariants), forbiddenExtra);
 }

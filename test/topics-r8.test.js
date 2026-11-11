@@ -228,3 +228,12 @@ test('R8 final Fable: present-tense and noun forms of the hard verbs are forbidd
     assert.ok(st.forbidden, body); assert.equal(w.send, null, body);
   }
 });
+
+test('a presigned URL query (X-Amz-Credential) is not a credential ask, a real credential ask still is (bug-631b02d0)', async () => {
+  const { hardMatch, ownerFloorMatch } = await import('../stall.js');
+  const url = 'Open https://bucket.example/x.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=FAKEKEY%2F20261111%2Fs3&X-Amz-Signature=deadbeef to check the picture?';
+  assert.equal(hardMatch(url), null);
+  assert.equal(ownerFloorMatch(url), null);
+  assert.ok(hardMatch('rotate the api key?'));
+  assert.ok(ownerFloorMatch('Please send the password?'));
+});
