@@ -1,7 +1,7 @@
 // The integration lane against real throwaway git repos (a bare remote + clones); CI, deploys and notify are fakes.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createIntegrationLane, validateConfig, normalizeRemoteUrl, buildNumber, restamp, FINAL } from '../integration-lane.js';
@@ -47,6 +47,17 @@ test('clean merge: merged, pushed to the bare remote, every transition notified'
   const kinds = events.map((e) => e.kind);
   assert.equal(kinds[0], 'queued'); assert.ok(kinds.includes('running')); assert.equal(kinds.at(-1), 'final');
   assert.equal(events.at(-1).final, true); assert.equal(events.at(-1).state, 'merged');
+});
+
+test('a final request leaves no merge worktree behind, even one a crash left in wt/<id>', async () => {
+  const w = makeWorld(); w.branch('feat', { 'new.js': 'x\n' });
+  const stateDir = tmp('lane-state-');
+  const { lane } = mk(w, { stateDir, lane: { notify: (r, e) => { if (e.final) { mkdirSync(join(stateDir, 'integration', 'wt', r.id), { recursive: true }); writeFileSync(join(stateDir, 'wt', r.id, 'stale'), 'x'); } } } });
+  const r = await go(lane, { branch: 'feat', session: 's1' });
+  assert.equal(r.state, 'merged', JSON.stringify(r));
+  const p = join(stateDir, 'integration', 'wt', r.id);
+  for (let i = 0; i < 100 && existsSync(p); i++) await new Promise((x) => setTimeout(x, 50));
+  assert.equal(existsSync(p), false, 'merge worktree dir removed after the final transition');
 });
 
 test('red tests: returned with the output tail, target untouched', async () => {
