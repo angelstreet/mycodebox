@@ -58,13 +58,16 @@ test('rtsp_check: --host probes a loopback source from that host (alias from RTS
 });
 
 // ---- the replacement run ----
-async function world({ devices, pool, leaseBusy = false, leaseMissing = false, brokenAfterSave = false }) {
+async function world({ devices, pool, leaseBusy = false, leaseMissing = false, brokenAfterSave = false, flaky502 = null }) {
   const { dir, env } = fakes();
   const posts = []; const restarts = [];
   const server = http.createServer((req, res) => {
     let b = ''; req.on('data', (c) => { b += c; }); req.on('end', () => {
       const u = new URL(req.url, 'http://x'); const send = (o) => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(o)); };
-      if (u.pathname === '/server/system/getAllHosts') return send({ hosts: [{ host_name: 'h1' }] });
+      if (u.pathname === '/server/system/getAllHosts') {
+        if (flaky502 && !flaky502.seen) { flaky502.seen = true; res.statusCode = 502; return send({}); } // one proxy blip
+        return send({ hosts: [{ host_name: 'h1' }] });
+      }
       if (u.pathname === '/server/settings/host-config' && req.method === 'GET') return send({ host: { _stream_profile: 'x' }, devices });
       if (u.pathname === '/server/settings/host-config') {
         const body = JSON.parse(b); posts.push(body);
@@ -84,7 +87,7 @@ async function world({ devices, pool, leaseBusy = false, leaseMissing = false, b
   // leaseMissing: a PATH without any vpt-lease, so the run really cannot find the lease CLI
   const pathV = leaseMissing ? `${dir}:/usr/bin:/bin` : `${dir}:${process.env.PATH}`;
   const E = { ...env, PATH: pathV, GHOSTY_STATE_DIR: state, RTSP_POOL_FILE: poolFile, RTSP_CHECK_TOKEN_CMD: path.join(dir, 'tok'),
-    RTSP_CHECK_SERVERS: `envA=http://127.0.0.1:${server.address().port}`, RTSP_SETTLE_SECONDS: '0', RTSP_CONFIRM_SECONDS: '0', RTSP_CHECK_SSH: 'h1=local', RTSP_LOOPBACK_HOSTS: 'h1' };
+    RTSP_CHECK_SERVERS: `envA=http://127.0.0.1:${server.address().port}`, RTSP_SETTLE_SECONDS: '0', RTSP_CONFIRM_SECONDS: '0', RTSP_API_RETRY_SECONDS: '0', RTSP_CHECK_SSH: 'h1=local', RTSP_LOOPBACK_HOSTS: 'h1' };
   // the ssh alias must not run ssh in tests: the probe goes through a fake ssh that runs the command locally
   sh(dir, 'ssh', 'shift 5 2>/dev/null; eval "$*"');
   return { E, state, posts, restarts, devices, close: () => server.close() };
@@ -237,4 +240,12 @@ test('a stream that fails once but plays on the slower re-probe, or shows a froz
   assert.match(r.stdout, /DEVICE1\s+hls\s+no_connect -> report: no_connect once, played on the re-probe/, r.stdout);
   assert.match(r.stdout, /DEVICE2\s+hls\s+frozen -> report: frozen picture confirmed/);
   assert.equal(w.posts.length, 0);
+});
+
+test('a 502 blip from the server is retried: the night still reads its hosts', async () => {
+  const w = await world({ pool: POOL, flaky502: {}, devices: { DEVICE1: dev('a', 'rtsp://test.example/good-pub') } });
+  const r = await py(REPLACE, [], w.E);
+  w.close();
+  assert.doesNotMatch(r.stdout, /ERROR/, r.stdout);
+  assert.match(r.stdout, /1 streams/);
 });
