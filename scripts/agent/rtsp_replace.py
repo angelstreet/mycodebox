@@ -151,7 +151,7 @@ def lease_cmd(env, host, device, pool_id, out):
 def run(mode, timeout=10):
     pool = rc.load_pool()
     ssh_map = rc.parse_pairs(os.environ.get('RTSP_CHECK_SSH'))
-    entries, errors = rc.inventory(rc.parse_pairs(os.environ.get('RTSP_CHECK_SERVERS')), pool)
+    entries, errors, hosts = rc.inventory(rc.parse_pairs(os.environ.get('RTSP_CHECK_SERVERS')), pool)
     results = rc.check_entries(entries, ssh_map, timeout)
     budget = int(pool.get('maxReplacementsPerNight', 3)) - replaced_today()
     rows = []
@@ -198,7 +198,7 @@ def run(mode, timeout=10):
                         budget -= 1
         rows.append(row)
         journal({'event': 'check', 'host': row['host'], 'device': row['device'], 'kind': row['kind'], 'status': row['status'], 'action': row['action'], 'source': row['source']})
-    return {'mode': mode, 'streams': rows, 'errors': errors}
+    return {'mode': mode, 'streams': rows, 'errors': errors, 'hosts': hosts}
 
 
 def main(argv):
@@ -220,8 +220,11 @@ def main(argv):
     print(f"mode={mode}\n" + rc.table([{**r, 'status': f"{r['status']} -> {r['action']}"} for r in rep['streams']]) + ''.join(f'\nERROR {e}' for e in rep['errors']))
     bad = [r for r in rep['streams'] if r['status'] != 'ok']
     print(f"{len(rep['streams']) - len(bad)}/{len(rep['streams'])} ok; {len(bad)} to act on or report")
+    walked = f"{rep['hosts']['walked']} host(s) walked, {rep['hosts']['read']} read"
     if not rep['streams']:
-        print('no rtsp devices found' + (' (inventory errors above)' if rep['errors'] else ''))
+        print('no rtsp devices found' + (' (inventory errors above)' if rep['errors'] else '') + f' ({walked})')
+    else:
+        print(walked)
     return 1 if (bad or rep['errors']) else 0
 
 

@@ -48,7 +48,9 @@ The journal keeps the per-stream check events, not the inventory errors, so a ni
   4. `POST /server/system/controlHostService {service: vpt-stream, action: restart}` (the allowlisted routine path).
   5. After 15 s `rtsp_check` the new source. Any failure: POST the backup devices back, restart, journal `rolled_back`.
 - Journal `<state>/rtsp-nightly/journal.jsonl` (redacted), daily `report-<date>.json`; `<state>` is `$GHOSTY_STATE_DIR` (default
-  `~/.local/state/ghosty`).
+  `~/.local/state/ghosty`). The report carries `hosts` (`walked`: hosts the servers listed, `read`: hosts whose config
+  answered) next to `streams` and `errors`, so a night with no rtsp device says how much was looked at instead of
+  looking like an empty inventory.
 - Adding a pool source: probe it from a host that will use it, then set `vetted` to the date. The probe must run on that host: a
   loopback source is only reachable there, so `rtsp_check.py --host <host> <url>` (its ssh alias comes from `RTSP_CHECK_SSH`;
   `--ssh <alias>` names the alias directly) plays it where the host plays it. Without an alias the answer is `unverified`, never `ok`.
