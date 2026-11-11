@@ -1,5 +1,5 @@
 {
-  "_doc": "Manager event policy (owner, 2026-11-02): '<kind>' or '<kind>:<state>' -> 'pass' | 'ignore' | 'urgent'. A copy at $GHOSTY_STATE_DIR/manager-event-policy.json wins per key. urgent: the manager-wait batch window closes at once (plus the grace); ignore: never wakes the manager; pass: wakes it even where a built-in filter rule would drop it. Anything else: the built-in rules of scripts/manager-event-filter.sh decide. `node scripts/manager-event-policy.js show|suggest` prints the effective policy and the kinds that never needed a wake.",
+  "_doc": "Manager event policy (owner, 2026-11-02): '<kind>' or '<kind>:<state>' -> 'pass' | 'ignore' | 'urgent'. A copy at $GHOSTY_STATE_DIR/manager-event-policy.json wins per key. urgent: the manager-wait batch window closes at once (plus the grace); ignore: never wakes the manager; pass: wakes it even where a built-in filter rule would drop it. Anything else: the built-in rules of scripts/manager-event-filter.sh decide. `node scripts/manager-event-policy.js show|suggest` prints the effective policy and the kinds that never needed a wake. 2026-11-11 (TASK-239 wake economy): told / daily / overlap are ignore by default (ghosty tells the sessions itself).",
   "asks": "urgent",
   "waiting": "urgent",
   "needs-manager": "urgent",
@@ -11,5 +11,8 @@
   "deploy:failed": "urgent",
   "deploy:orphan": "urgent",
   "deploy:blocked": "urgent",
-  "no-progress": "urgent"
+  "no-progress": "urgent",
+  "told": "ignore",
+  "daily": "ignore",
+  "overlap": "ignore"
 }

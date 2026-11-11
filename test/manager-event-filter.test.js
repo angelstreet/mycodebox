@@ -174,12 +174,27 @@ test('an event the lane already delivered to its session (handled: session) does
   assert.deepEqual(kinds(run(env, handled + undelivered + plain)), ['int-7:returned:s1:undelivered', 'int-8:returned']);
 });
 
-test('external-result always wakes the manager (not dropped, not deduped across runs)', () => {
+test('external-result: a routine one is dropped (TASK-239), a failure (priority high) always wakes', () => {
   const dir = tmp('ghosty-filt-');
   const env = { ...process.env, GHOSTY_STATE_DIR: dir };
-  const line = ev({ key: 'int-1a:external-result', kind: 'external-result', session: 'int-1a', body: 'Integration int-1a: merged x into main (label mac-1).' });
-  assert.deepEqual(kinds(run(env, line)), ['external-result']);
-  assert.deepEqual(kinds(run(env, line)), ['external-result']);
+  const ok = ev({ key: 'int-1a:external-result', kind: 'external-result', session: 'int-1a', body: 'Integration int-1a: merged x into main (label mac-1).' });
+  const bad = ev({ key: 'int-1b:external-result', kind: 'external-result', session: 'int-1b', priority: 'high', body: 'Integration int-1b: failed.' });
+  assert.deepEqual(kinds(run(env, ok)), []);
+  assert.deepEqual(kinds(run(env, bad)), ['external-result']);
+  assert.deepEqual(kinds(run(env, bad)), ['external-result']);
+});
+
+test('TASK-239 wake economy: share notices, idea bugs, session notices and told/daily/overlap are dropped; real bugs and blocking ones pass', () => {
+  const dir = tmp('ghosty-filt-');
+  const env = { ...process.env, GHOSTY_STATE_DIR: dir };
+  const drop = [
+    ev({ key: 'a', kind: 'share:TASK66', body: 'plan is 3% used' }),
+    ev({ key: 'b', kind: 'bug', priority: 'low', title: 's: bug found: idea: dup state', bug: { blocking: false } }),
+    ev({ key: 'c', kind: 'kpi-stb', body: 'parked' }), ev({ key: 'd', kind: 'overlap', body: 'x' }), ev({ key: 'e', kind: 'told', body: 'x' }),
+  ].join('');
+  assert.deepEqual(kinds(run(env, drop)), []);
+  const keep = ev({ key: 'f', kind: 'bug', body: 'f', priority: 'low', title: 's: bug found: Localize fails', bug: { blocking: false } }) + ev({ key: 'g', kind: 'bug', body: 'g', priority: 'high', title: 's: BLOCKING bug found: idea: x', bug: { blocking: true } });
+  assert.deepEqual(kinds(run(env, keep)), ['bug', 'bug']);
 });
 
 test('the deploy runner\'s per-host narrowing is dropped; narrowed by another agent or without the done-on purpose still passes', () => {

@@ -8,8 +8,10 @@
 # a running deploy, owner 2026-10-31) is dropped too: the queue or the runner resolves it, the lease watchdog tells the session.
 # Routine integration success (`int-<id>:merged` / `int-<id>:deployed`, default priority; owner 2026-11-02, wake noise): dropped here, still in
 # manager-events.jsonl; manager-status-scan.sh prints the hourly count. returned / failed / blocked / cancelled / CI-red integrations pass.
-# `external-result` (the result of an integration queued for a Mac/cloud session, external-result.js; owner/manager 2026-11-02) ALWAYS wakes: the manager relays it
-# to the session (no drop rule matches it; test/manager-event-filter.test.js pins it). `told` (rules-watch re-read notice) and `unseen:*` (a session's detached job) are dropped (they stay in manager-events.jsonl; the sessions are told
+# `external-result` (the result of an integration queued for a Mac/cloud session, external-result.js; owner/manager 2026-11-02): a failure (priority high) ALWAYS wakes; a routine one
+# (default priority) is dropped since 2026-11-11 (TASK-239 wake economy: 66 of 80 wakes on it did nothing; the relay tells the session). test/manager-event-filter.test.js pins both.
+# Also dropped at default priority (replay scripts/manager-wake-replay.js, 2026-11-11, zero lost actions): `share:*` notices, `bug found: idea:` low non-blocking bugs, session notices
+# (kpi-*, pokestall-*, pokemon-daily-*, content-*, ...). They stay in manager-events.jsonl and the hourly sweep. `told` (rules-watch re-read notice) and `unseen:*` (a session's detached job) are dropped (they stay in manager-events.jsonl; the sessions are told
 # directly); `orphaned-task` is deduped across runs for 6 h like asks (owner 2026-11-02, wake noise).
 # Residual risk (Codex review 2026-10-22 s4, kept on purpose): the runner's own lease release is dropped even if the runner then crashes,
 # so the release alone is not a wake-up. A safe "failed/blocked event of the same deploy in this batch" rule needs the whole batch
@@ -54,7 +56,11 @@ jq -c --unbuffered --argjson policy "$POLICY" '
     or (((.kind//"")|tostring|test("^int-[0-9a-f]+:(merged|deployed)$")) and ((.priority//"default")=="default"))
     or ((.kind=="told") or ((.kind//"")|tostring|test("^unseen:")))
     or ((.kind=="lease") and (.state=="released" or .state=="expired" or .state=="system-wait"))
-    or ((.handled//"")=="session");
+    or ((.handled//"")=="session")
+    or ((.kind=="external-result") and ((.priority//"default")=="default"))
+    or (((.kind//"")|tostring|test("^share:")) and ((.priority//"default")=="default"))
+    or ((.kind=="bug") and ((.priority//"")=="low") and ((.bug.blocking//false)==false) and ((.title//"")|test("bug found: idea:")))
+    or (((.kind//"")|tostring|test("^(kpi-|pokestall-|pokemon-daily-|mobile-orchtnet-owner$|opus-openexit$|content-|mi-bugs-|pi1-load-|task208-)")) and ((.priority//"default")=="default"));
   select(pol != "ignore") | select(pol == "pass" or (routine|not))
   | {k:((.session//"")+"|"+.kind+"|"+(if .kind=="health" then (.key//"") else ((.body//"") as $b | (if ($b|test("needs-owner:")) then ($b|capture("needs-owner:(?<q>[^\\[]*)").q) else $b end) | gsub("·\\s*[0-9][0-9hms ]*·\\s*[0-9.]+[kM]?\\s*tok\\s*";"")|gsub("\\s";"")|.[0:80]) end)),
      u:(pol=="urgent" or ((.priority//"")=="high") or ((.priority//"")=="urgent") or ((.kind=="bug") and ((.bug.blocking//false)==true))), l:.}' \
