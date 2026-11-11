@@ -139,12 +139,13 @@ test('done-check (G): a proof without evidence is warned once; (F) wins on the s
   assert.deepEqual(d.doneButFailed, ['a']);
 });
 
-test('the canonical STATUS vocabulary sentence is in AGENTS.md, the cbsession preamble, the MAC-HOOK snippet and REFERENCE', async () => {
+test('the STATUS table (docs/STATUS-TABLE.md, the seven words) is verbatim in AGENTS.md, the cbsession preamble, the MAC-HOOK snippet and REFERENCE', async () => {
   const { readFileSync } = await import('node:fs');
   const ROOT = join(import.meta.dirname, '..');
-  const RULE = "STATUS vocabulary (owner 2026-11-11): `done` only when the task's goal was achieved, with `goal: achieved · evidence: <links / run ids / frames>`; `failed — goal not achieved: <why> · tried: <list>` when it was not (the manager is told and helps); `waiting: <what is running: integration / deploy id, lease ticket, own background job, a worker session, a time>`; `blocked: <what stops you> · tried: <list> · need: <what the manager must do>` (blocked is for an agent that cannot work and needs the manager, never for a wait); a session whose part is done while workers it started still run ends on `waiting: <worker names>`; `needs-owner:` only for a hard-floor item. A green / pass / proven claim carries its evidence. Before you fix a filed bug, run `found-bug --claim <id>` (exit 3: someone else is fixing it).";
-  const norm = (x) => x.replace(/'"'"'/g, "'").replace(/\s+/g, ' ');
-  for (const f of ['AGENTS.md', 'scripts/cbsession', 'docs/MAC-HOOK.md', 'docs/REFERENCE.md']) assert.ok(norm(readFileSync(join(ROOT, f), 'utf8')).includes(RULE), f);
+  const norm = (x) => x.replace(/\s+/g, ' ').trim();
+  const table = norm(readFileSync(join(ROOT, 'docs/STATUS-TABLE.md'), 'utf8'));
+  assert.match(table, /`running`/); assert.match(table, /`needs-manager`/);
+  for (const f of ['AGENTS.md', 'scripts/cbsession', 'docs/MAC-HOOK.md', 'docs/REFERENCE.md']) assert.ok(norm(readFileSync(join(ROOT, f), 'utf8')).includes(table), f);
 });
 
 // harness-done-honest (2026-11-11): not-done phrases in a done line are refused with no AI and no goal needed
@@ -177,7 +178,9 @@ test('blocked: a wait is told to restate as waiting; a line without tried:/need:
     'STATUS: blocked: vpt-mf1/device5 is held by kpi-androidtv, so no missed-slot sweep has run; I hold no lease',
     'STATUS: blocked: waiting on the radio sweep on stbv1+ (execution ace72ddf), which gates step 2',
   ];
-  for (const w of waits) { const f = blockedHonestyOf(w); assert.ok(f?.running.length, w); assert.match(blockedHonestyMessage(f), /restate it as `STATUS: waiting:/); }
+  for (const w of waits) { const f = blockedHonestyOf(w); assert.ok(f?.running.length, w); assert.match(blockedHonestyMessage(f), /restate it as `STATUS: (?:running|waiting):/); }
+  assert.match(blockedHonestyMessage(blockedHonestyOf(waits[0])), /restate it as `STATUS: running:/, 'own background job: running');
+  assert.match(blockedHonestyMessage(blockedHonestyOf(waits[2])), /restate it as `STATUS: waiting:/, 'lease held by another session: waiting');
   const noTried = blockedHonestyOf('STATUS: blocked: signed-out S21x, needs a verified-valid login (owner/manager)');
   assert.deepEqual(noTried.running, []); assert.deepEqual(noTried.missing, ['tried:', 'need:']);
   assert.match(blockedHonestyMessage(noTried), /lacks tried: and need:/);
@@ -192,5 +195,25 @@ test('done-check (I): blocked is dry by default (journal only), live sends once 
   const mk = (blockedMode) => { const dir = tmp('blocked-'), sent = []; const w = createDoneCheck({ stateDir: dir, git: async () => { throw new Error('x'); }, listDone: async () => [], listBlocked: async () => [{ name: 'content-stb', text: line }], blockedMode: () => blockedMode, mode: () => 'live', log: { error() {} }, pressure: () => ({ loadPerCore: 0.1, ramAvailPct: 80 }), send: async (n, x) => { sent.push([n, x]); } }); return { w, sent }; };
   const dry = mk('dry'); await dry.w.tick(); assert.equal(dry.sent.length, 0);
   const live = mk('live'); await live.w.tick(); await live.w.tick();
-  assert.equal(live.sent.length, 1); assert.match(live.sent[0][1], /restate it as `STATUS: waiting:/);
+  assert.equal(live.sent.length, 1); assert.match(live.sent[0][1], /restate it as `STATUS: running:/);
+});
+
+// harness-status-table (owner 2026-11-11): `running` is a known, non-finished, non-escalated state; an unknown word is sent back naming the seven
+import { unknownStatusWordOf, unknownStatusWordMessage, SEVEN_WORDS } from '../status-honesty.js';
+import { classifyStall as cs, statusLine as sl } from '../stall.js';
+test('stall.js: `running` is parsed, never a finished turn and never an escalation; with a job ref it is a watched own job', () => {
+  const pane = (line) => ['Working.', line, '✻ Baked for 1m', '─'.repeat(40), '❯ ', '─'.repeat(40), '  ⏵⏵ bypass permissions on'];
+  assert.equal(sl(['x', 'STATUS: running: replay sweep on vpt-mf1/device5 — VOD left']).kind, 'running');
+  const a = cs({ plain: pane('STATUS: running: replay sweep on vpt-mf1/device5 under lease ad7984e6 — VOD and recording left'), raw: [], state: 'done' });
+  assert.equal(a.status, 'running'); assert.equal(a.case, 'background_wait'); assert.equal(a.answer, null);
+  const b = cs({ plain: pane('STATUS: running: pid 4242, log /tmp/run.log — the suite'), raw: [], state: 'done' });
+  assert.equal(b.status, 'running'); assert.equal(b.case, 'own_job_wait');
+});
+test('an unknown STATUS word is sent back naming the seven words; the seven, the tolerated replies and a done alias are not', () => {
+  const f = unknownStatusWordOf('Notes.\nSTATUS: finalizing — x');
+  assert.equal(f.word, 'finalizing');
+  const m = unknownStatusWordMessage(f);
+  for (const w of SEVEN_WORDS) assert.ok(m.includes(w), w);
+  for (const w of [...SEVEN_WORDS, 'acknowledged', 'handoff', 'ok', 'shipped']) assert.equal(unknownStatusWordOf(`STATUS: ${w}: x`), null, w);
+  assert.equal(unknownStatusWordOf('no status here'), null);
 });

@@ -942,7 +942,7 @@ export function unmarkedFirst(opts, lines = []) {
 // "needs-manager" is the agent addressing the AI manager directly ("please verify and request <branch> with --approved-by manager"):
 // its own verdict, never the owner's. It used to be missing here, so such a turn fell through to a plain "done" (blue LED, no manager
 // event) and the manager never saw it (2026-10-20 ~17:30, TASK142 waited ~20 min until the owner noticed).
-const STATUS_LINE_RE = /^\s*(?:[*_`]*)STATUS:(?:[*_`]*)\s*(needs-manager|failed|done|needs-owner|blocked|handoff|waiting|acknowledged|ack|noted|ok|shipped|completed?|finished)\b[*_`]*\s*[:.]?\s*(.*)$/i;
+const STATUS_LINE_RE = /^\s*(?:[*_`]*)STATUS:(?:[*_`]*)\s*(needs-manager|failed|done|needs-owner|blocked|handoff|waiting|running|acknowledged|ack|noted|ok|shipped|completed?|finished)\b[*_`]*\s*[:.]?\s*(.*)$/i;
 // Verdicts agents write instead of "done" ("STATUS: acknowledged.", "STATUS: shipped"): a finished turn, never a question.
 // Read as plain text they fell to the heuristics: "I will ask before any force-push" became stopped_short (2026-10-15).
 const DONE_ALIASES = new Set(['acknowledged', 'ack', 'noted', 'ok', 'shipped', 'complete', 'completed', 'finished']);
@@ -1036,6 +1036,9 @@ export function classifyStall({ plain, raw = null, state, fromReport = false, sc
     // a job of the session's own, named by a concrete pid / log / run id: the manager wakes it when the job ends (own-jobs.js); never a needs-you.
     // Without a concrete reference the old case stands ("waiting for the CI run" may be someone else's); `jobNoun` lets the manager upgrade it when the agent has a live child process.
     else if ((st.kind === 'blocked' || st.kind === 'waiting') && !/^deploy\b/i.test(st.text) && waitsOnOwnJob(st.text, st.kind) && hasRef(jobRefs(st.text, st.kind))) { out.case = 'own_job_wait'; out.ownJob = jobRefs(st.text, st.kind); out.answer = null; out.autoCase = undefined; }
+    // `running` (owner 2026-11-11, status table): work of the session's own (a background job, a worker it started) is still going. Never finished, never
+    // escalated; a pid / log / run id makes it a watched own job, else a plain background wait that the parked wake follows like `waiting`.
+    else if (st.kind === 'running') { if (hasRef(jobRefs(st.text, st.kind))) { out.case = 'own_job_wait'; out.ownJob = jobRefs(st.text, st.kind); } else out.case = 'background_wait'; out.answer = null; out.autoCase = undefined; out.forbidden = null; }
     else if (st.kind === 'blocked') { out.case = 'owner_decision'; out.blocked = st.text; if (waitsOnOwnJob(st.text, st.kind)) out.jobNoun = true; }
     else if (st.kind === 'waiting') { out.case = 'waiting_deploy'; out.deployHint = deployHint(st.text); const id = /\bdeploy\s+(\S+)/i.exec(st.text); if (id) out.deployHint.id = id[1]; if (queuedWait(st.text)) out.queued = true; }
     else if (st.kind === 'handoff') { out.case = 'done'; out.handoff = st.text; }

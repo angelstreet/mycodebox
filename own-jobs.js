@@ -276,7 +276,7 @@ export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', tabl
       if (d.kind === 'ticket') { d.parkedAt = now(); d.res = ((ctx.view?.tickets || []).find((x) => String(x.id).toLowerCase() === d.id)?.resources || []).slice(0, 8); }
     }
     // a needs-manager / done stop is parked for its ticket grants only: the manager owns the rest of it (no age backstop, no other dependency)
-    const grantOnly = !/^(?:waiting|blocked)$/i.test(String(status || 'waiting'));
+    const grantOnly = !/^(?:waiting|running|blocked)$/i.test(String(status || 'waiting'));
     if (grantOnly) { for (let i = deps.length - 1; i >= 0; i--) if (deps[i].kind !== 'ticket' || deps[i].before === 'changed') deps.splice(i, 1); if (!deps.length) { parked.delete(session); return { parked: false, deps }; } }
     parked.set(session, { stopAt, since: now(), status: String(status || 'waiting').toLowerCase(), grantOnly, text: String(text).slice(0, 300), deps, checkedAt: 0, device: deps.some((d) => d.kind === 'resource' || d.kind === 'ticket') });
     log({ type: 'parked_watch', session, stopAt, status, deps: deps.map((d) => ({ kind: d.kind, id: d.id, before: d.before ?? null })) });

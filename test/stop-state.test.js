@@ -38,13 +38,13 @@ test('live: a computed wait is background_wait, never escalated as a block; no f
 });
 
 const NOW = Date.parse('2026-11-11T20:00:00Z');
-test('computeStopState: any wait fact makes blocked / failed / done / no status WAITING; no fact keeps the word; owner and manager asks stay', () => {
+test('computeStopState: a fact makes blocked / failed / done / no status RUNNING (own job / worker) or WAITING (not its own); no fact keeps the word; owner and manager asks stay', () => {
   const none = { bgJobs: 0, integrations: [], tickets: [], workers: [], timeMs: null };
   for (const said of ['blocked', 'failed', 'done', '']) {
     assert.equal(computeStopState({ said, facts: none, now: NOW }).computed, said || 'none', 'no fact: unchanged');
-    for (const facts of [{ bgJobs: 1 }, { integrations: ['int-1a1c'] }, { tickets: ['t-abc123'] }, { workers: ['kpi-zap-fix'] }, { timeMs: NOW + 600e3 }]) {
+    for (const [facts, want] of [[{ bgJobs: 1 }, 'running'], [{ integrations: ['int-1a1c'] }, 'waiting'], [{ tickets: ['t-abc123'] }, 'waiting'], [{ workers: ['kpi-zap-fix'] }, 'running'], [{ timeMs: NOW + 600e3 }, 'waiting']]) {
       const r = computeStopState({ said, facts: { ...none, ...facts }, now: NOW });
-      assert.equal(r.computed, 'waiting', `${said || 'none'} + ${JSON.stringify(facts)}`); assert.equal(r.mismatch, true); assert.equal(r.said, said || 'none');
+      assert.equal(r.computed, want, `${said || 'none'} + ${JSON.stringify(facts)}`); assert.equal(r.mismatch, true); assert.equal(r.said, said || 'none');
     }
   }
   assert.equal(computeStopState({ said: 'blocked', facts: { ...none, timeMs: NOW - 1 }, now: NOW }).computed, 'blocked', 'a time that has passed is not a wait');

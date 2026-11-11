@@ -117,7 +117,7 @@ Ship rule (owner 2026-11-11): after a change run the touched tests/typecheck you
 4. Ask the owner only for the hard floor: deleting data, credentials or secrets, money, customers, sudoers or system units
    on hosts, destructive database migrations (additive ones are yours), force-push or history rewrites, tag pushes or
    publishing a package, or a physical action only the owner can do (mycodebox: docs/CONTRACT.md "Who may do what").
-End every turn with one STATUS line: done (only when the goal was achieved) / failed / needs-owner (only for step 4) / blocked. A done line ends with
+End every turn with one STATUS line, one of the seven words of the table at the end of this brief (needs-owner only for step 4). A done line ends with
 \`closing review: docs <updated list|none needed> · leftovers <none|filed ids> · unverified <none|list> · bugs: none | fixed <what> | reported <id>\`
 (without it ghosty pushes once): before it, update every doc your change makes stale, fix or found-bug each leftover and
 idea, and name what you did not verify (AGENTS.md "Closing review").
@@ -133,30 +133,23 @@ else echo "cbsession: give -H HANDOVER, -f PROMPT_FILE or -t TEXT" >&2; exit 2; 
 [ "${BUGRULE:-}" = 1 ] && printf '\nFirst command: `git worktree list`; create or reuse your worktree and work only there, never in a shared checkout.\n' >> "$P"
 [ "${BUGRULE:-}" = 1 ] && printf '\nA bug you find: fix it now yourself, in its own worktree, when it is small and you have the repro (it does not have to be your task); file it only when it is large, needs another host/device/credentials, is an owner-floor item, or belongs to a live session\047s task; never end a turn with "I filed X so someone will fix it". Bug outside your scope: to file it run `found-bug --title ... --why-not-fixed large|other-area|host-or-device|credentials|owner-floor|live-session-task --reason "..." --repro ... --error ... --blocking yes|no` (check `found-bug --help`; if missing, POST the JSON to $GHOSTY_URL/api/bugs with curl, see docs/MAC-HOOK.md); never leave it in a closing line. A STATUS: done line ends with `bugs: none | fixed <what> | reported <id>`.\n' >> "$P"
 [ "${BUGRULE:-}" = 1 ] && printf '\nClosing review before any STATUS: done: update every doc your change makes stale now (task doc, REFERENCE/MAP/INDEX, user guide, skill, release note); fix each leftover or file it with found-bug; file each improvement idea with found-bug; name what you did not verify. The done line carries `closing review: docs <updated list|none needed> · leftovers <none|filed ids> · unverified <none|list>`.\n' >> "$P"
-# STATUS vocabulary (owner 2026-11-11, status-honesty.js): every prompt, every provider
-printf '\n%s\n' 'STATUS vocabulary (owner 2026-11-11): `done` only when the task'"'"'s goal was achieved, with `goal: achieved · evidence: <links / run ids / frames>`; `failed — goal not achieved: <why> · tried: <list>` when it was not (the manager is told and helps); `waiting: <what is running: integration / deploy id, lease ticket, own background job, a worker session, a time>`; `blocked: <what stops you> · tried: <list> · need: <what the manager must do>` (blocked is for an agent that cannot work and needs the manager, never for a wait); a session whose part is done while workers it started still run ends on `waiting: <worker names>`; `needs-owner:` only for a hard-floor item. A green / pass / proven claim carries its evidence. Before you fix a filed bug, run `found-bug --claim <id>` (exit 3: someone else is fixing it).' >> "$P"
-# Goal + Done when (owner 2026-11-11, harness-done-honest): the goal check judges the session against them, so they are a required part of the brief.
-# A -H handover is only referenced by the prompt: copy its `Goal:` line and its `Done when:` block into the prompt. A brief with neither (and no -g)
-# still starts, with a warning here and an instruction in the prompt to state both first (before this, goals.json held the preamble sentence).
-SRCF=$P; [ -n "$HANDOVER" ] && SRCF=$HANDOVER
-HAVE_GOAL=0; [ -n "$GOAL" ] && HAVE_GOAL=1
-if [ "$HAVE_GOAL" = 0 ]; then
-  GL=$(grep -m1 -iE '^[*_#> ]*goal ?:' "$SRCF" 2>/dev/null | sed -E 's/^[*_#> ]*[Gg][Oo][Aa][Ll] ?:[*_ ]*//' || true)
-  [ -n "$GL" ] && { GOAL=$GL; HAVE_GOAL=1; }
-fi
-HAVE_DW=0
-grep -qiE '^[*_#> -]*done[ -]when' "$P" && HAVE_DW=1
-if [ "$HAVE_DW" = 0 ] && [ "$SRCF" != "$P" ]; then
-  DW=$(awk 'f && /^[[:space:]]*$/ {exit} tolower($0) ~ /^[*_#> -]*done[ -]when/ {f=1} f {print}' "$SRCF" 2>/dev/null || true)
-  [ -n "$DW" ] && { printf '\n%s\n' "$DW" >> "$P"; HAVE_DW=1; }
-fi
-if [ "$HAVE_GOAL" = 0 ] && ! grep -qiE '^[*_#> ]*goal ?:' "$P"; then
-  echo "cbsession: warning: the brief has no 'Goal:' line (or -g); the goal check will use the first task line. Add 'Goal: <one line>' and 'Done when:' with numbered items." >&2
-  printf '\n%s\n' 'No `Goal:` / `Done when:` lines came with this brief: before any work, write them yourself as the first lines of your first reply (`Goal: <one line>`, `Done when:` then numbered, checkable items). The goal check judges your done line against them, one evidence line per item.' >> "$P"
-elif [ "$HAVE_DW" = 0 ]; then
-  echo "cbsession: warning: the brief has no 'Done when:' list; the goal check cannot judge evidence per item. Add 'Done when:' with numbered items." >&2
-  printf '\n%s\n' 'No `Done when:` list came with this brief: write it as numbered, checkable items in your first reply; the goal check wants one evidence line per item before a done is accepted.' >> "$P"
-fi
+# STATUS vocabulary (owner 2026-11-11, status-honesty.js): every prompt, every provider. The table is docs/STATUS-TABLE.md, verbatim.
+{ printf '\n'; cat <<'STATUS_TABLE'
+**The seven STATUS words (owner 2026-11-11). Take the first row that is true.**
+
+| # | Word | Use it when | Never when | Who acts next |
+|---|---|---|---|---|
+| 1 | `done` | The goal is reached, you have the proof, nothing of yours is still running | A part is open, a worker or job of yours still runs, or it is "merged, not checked" | Nobody |
+| 2 | `running` | Work **of yours** is still going: your background job, a worker session you started. You will be woken and continue | Nothing is actually running | Nobody; the harness wakes you |
+| 3 | `waiting` | You depend on something **not yours** that ends by itself: a lane request, a deploy, a lease ticket, another session's work, a named time | You could work on something else meanwhile, or nothing will ever end it | Nobody; the harness wakes you |
+| 4 | `needs-manager` | You need a decision or an answer (technical, merge, deploy, lease, design) | You have a recommendation and the choice is reversible: decide | Manager |
+| 5 | `needs-owner` | Money, customers, deleting shared data, a credential only the owner holds, a physical action | Anything else | Owner |
+| 6 | `blocked` | You **cannot work** and nothing running will fix it: someone must act (a device is dead, an access is missing) | Something is running or queued (that is `running` or `waiting`) | Manager |
+| 7 | `failed` | You stopped and the goal is **not** reached after you tried what you could | You have not tried, or work is still running | Manager |
+
+Forms: `done — <what> · goal: achieved · evidence: <links / run ids / frames>`; `running: <job id / worker names> — <what is left>`; `waiting: <id / ticket / session / time>`; `blocked: <what stops you> · tried: <list> · need: <who must do what>`; `failed — goal not achieved: <why> · tried: <list>`. "blocked: waiting on ..." is never right. A green / pass / proven claim carries its evidence.
+STATUS_TABLE
+printf '\n%s\n' 'Before you fix a filed bug, run `found-bug --claim <id>` (exit 3: someone else is fixing it).'; } >> "$P"
 # -g GOAL: the explicit goal right under the first line (the done-check reads it: status-honesty.js goalOf)
 if [ -n "$GOAL" ]; then { head -n 1 "$P"; printf '\nGoal: %s\n' "$(printf '%s' "$GOAL" | tr '\n' ' ')"; tail -n +2 "$P"; } > "$P.tmp" && mv "$P.tmp" "$P"; fi
 

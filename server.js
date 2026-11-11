@@ -122,7 +122,7 @@ import { createOverlapGuard, DEFAULT_IGNORE } from './overlap-guard.js';
 import { createProgressWatch } from './progress-watch.js';
 import { createSharedCheckoutGuard, expandHome } from './shared-checkout-guard.js';
 import { createFoundBugs, unreportedBugOf, sendBackOf, sendBackText, sweepGroups } from './found-bugs.js';
-import { goalOf as goalOfPrompt } from './status-honesty.js';
+import { goalOf as goalOfPrompt, blockedOrUnknownStatus } from './status-honesty.js';
 import { createGoalGate, createGoalStore } from './goal-check.js';
 import { createDoneCheck, DEFAULT_IGNORE_BRANCHES, shipOfferOf, unconfirmedStatusOf, waitingOnLeaseStatus } from './done-check.js';
 import { createLeftovers, pushableItems } from './done-leftovers.js';
@@ -1114,7 +1114,7 @@ const doneCheck = createDoneCheck({
     for (const [name, p] of panes) {
       if (mgrs.has(name) || sessionMeta.isPaused(name) || p.dead) continue;
       const st = latest?.status?.[name], ex = st?.stall?.excerpt;
-      if (!ex || st.state === 'working' || statusLine(String(ex).split('\n'))?.kind !== 'blocked') continue;
+      if (!ex || st.state === 'working' || !blockedOrUnknownStatus(String(ex))) continue;
       out.push({ name, text: String(ex).slice(-3000), working: !!reporter.activityOf(name)?.working, draft: !!st?.stall?.draft });
     }
     return out;
