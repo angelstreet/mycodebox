@@ -165,6 +165,8 @@ import { createIntegrationRoutes, PREFIX as INTEGRATION_API } from './integratio
 import { createClaudeIndex, claudeOfPane, minimaxOfPane, codexOfPane, busyChildren, lastActivityOf, leasesOfSession, capView, createParking, readManualNotes, autoParkArchived, transcriptFile, SESSION_CAP } from './parking.js';
 import { actorOf, agentFromArgs, createAlertApi, DEFAULT_ACTOR, interactiveAgentOf, paneBackgroundOf, scriptBusyOf, shouldRefuse } from './api-extras.js';
 import { gitCleanOf } from './git-facts.js';
+import { callerOf, deleteVerdict } from './session-delete-guard.js';
+import { appendJsonLine } from './jsonl-append.js';
 import { createSendQueue, planSend, MAX_PER_SESSION as SEND_QUEUE_MAX } from './send-queue.js';
 import { createManagerEvents, classifyKey, readActions } from './manager-events.js';
 import { createHandoffs } from './handoffs.js';
@@ -1758,12 +1760,24 @@ async function createSession({ name, agent, cwd, priority, model, prompt, handov
   return { ok: true, name: real, agent, cwd: dir, priority: sessionMeta.priority(real), ...(acct ? { claudeAccount: acct } : {}) };
 }
 
-async function killSession(name, confirm) {
+// Every delete is attributed (`by`, ip, user agent) in <state>/session-deletes.jsonl, allowed or refused (review 2026-11-11 item 1).
+// `guard: false` is for the dashboard's own park path, which saves the conversation first.
+async function killSession(name, confirm, { by = 'unknown', guard = true, meta = {} } = {}) {
   if (confirm !== name) throw httpError(400, 'confirm must equal the session name');
   if (!(await sessionExists(name))) throw httpError(404, 'no such session');
+  let verdict = { allow: true, reasons: [], by };
+  if (guard) {
+    const facts = { openAsk: false, leases: [], unmerged: false };
+    try { facts.openAsk = (await readOpenAsks(join(STATE_DIR, 'manager-owner-asks.jsonl'))).some((a) => a.session === name); } catch { /* unreadable: not a fact */ }
+    try { facts.leases = ((await leaseSource.view(false)).leases || []).filter((l) => l.agent === `codebox:${name}`).map((l) => l.id); } catch { /* lease view down: not a fact */ }
+    try { const cwd = (await listPanes()).get(name)?.cwd; if (cwd) facts.unmerged = !(await gitCleanOf(cwd, { exec })); } catch { /* unknown: never blocks */ }
+    verdict = deleteVerdict({ name, by, startedBy: sessionMeta.startedBy(name), facts });
+  }
+  try { appendJsonLine(join(STATE_DIR, 'session-deletes.jsonl'), { at: new Date().toISOString(), name, by, allowed: verdict.allow, reasons: verdict.reasons, ...meta }); } catch (e) { console.error('[killSession] ledger', e.message); }
+  if (!verdict.allow) throw httpError(409, `refused: ${verdict.reasons.join('; ')}. Only the owner (by=owner) or the agent that spawned ${name} may delete it now.`);
   await exec(TMUX, ['kill-session', '-t', `=${name}`]);
-  crashResumer.recordClose(name, 'dashboard kill');
-  if (history.openOf(name)) await historyLog({ kind: 'session.ended', name, reason: 'killed' });
+  crashResumer.recordClose(name, `dashboard kill by ${by}`);
+  if (history.openOf(name)) await historyLog({ kind: 'session.ended', name, reason: 'killed', by });
   lastSendAt.delete(name);
   managerForget(name);
   sessionMeta.reset(name);
@@ -1781,7 +1795,7 @@ const parking = createParking({
   file: join(STATE_DIR, 'parked-sessions.json'),
   tmux: {
     exists: sessionExists,
-    kill: async (name) => { await killSession(name, name); },
+    kill: async (name) => { await killSession(name, name, { by: 'parking', guard: false }); },
     sendText: (name, text) => exec(TMUX, ['send-keys', '-t', `=${name}:`, '-l', '--', text]),
     sendEnter: (name) => exec(TMUX, ['send-keys', '-t', `=${name}:`, 'Enter']),
     sendCtrlC: (name) => exec(TMUX, ['send-keys', '-t', `=${name}:`, 'C-c']),
@@ -2545,7 +2559,7 @@ async function handleHttp(req, res) {
     }
   }
   if (req.method === 'DELETE' && p.startsWith('/api/sessions/')) {
-    try { return json(res, 200, await killSession(decodeURIComponent(p.slice('/api/sessions/'.length)), url.searchParams.get('confirm'))); }
+    try { return json(res, 200, await killSession(decodeURIComponent(p.slice('/api/sessions/'.length)), url.searchParams.get('confirm'), { by: callerOf(url.searchParams.get('by'), req.headers['x-ghosty-by']), meta: { ip: req.socket?.remoteAddress || null, ua: String(req.headers['user-agent'] || '').slice(0, 80) } })); }
     catch (err) { return json(res, err.status || 500, { ok: false, error: err.message }); }
   }
   if (p === '/api/layout' && (req.method === 'GET' || req.method === 'PUT')) {
