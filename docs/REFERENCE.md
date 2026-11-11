@@ -1937,7 +1937,7 @@ manager should look at it." opus-openexit ended `STATUS: done — anchor not val
 success flags. Canonical rule text (AGENTS.md of mycodebox and VirtualPyTest, `cbsession` preamble for every prompt, the MAC-HOOK snippet;
 `test/status-honesty.test.js` keeps them equal): "STATUS vocabulary (owner 2026-11-11): `done` only when the task's goal was achieved, with
 `goal: achieved · evidence: <links / run ids / frames>`; `failed — goal not achieved: <why> · tried: <list>` when it was not (the manager is
-told and helps); `blocked: <system id or reason + what you tried>`; `waiting: <system id>`; `needs-owner:` only for a hard-floor item. A green /
+told and helps); `waiting: <what is running: integration / deploy id, lease ticket, own background job, a worker session, a time>`; `blocked: <what stops you> · tried: <list> · need: <what the manager must do>` (blocked is for an agent that cannot work and needs the manager, never for a wait); a session whose part is done while workers it started still run ends on `waiting: <worker names>`; `needs-owner:` only for a hard-floor item. A green /
 pass / proven claim carries its evidence. Before you fix a filed bug, run `found-bug --claim <id>` (exit 3: someone else is fixing it)."
 
 - **`failed`** (`stall.js`): case `needs_manager` with `failed: true` and `managerAsk: goal not achieved: ...`: a manager event and the manager
@@ -1999,6 +1999,13 @@ bug-2f32e7a7, bug-8fc8fc0d, bug-03ccc6a7, bug-80bdcdc1 · unverified: none · bu
   (c) `scripts/cbsession` copies the handover's `Goal:` line and `Done when:` block into the prompt; a brief with neither (and no `-g`) starts with a
   warning and the session is told to write both first. (d) The Mac hook sends the real first prompt (a content-list prompt counts; `<task-notification>`,
   `<system-reminder>` blocks do not) and its own `hook_sha`; `scripts/installed-copies-check.js` reports a Mac whose hook differs from the repo.
+- **Blocked is not a wait (owner, 2026-11-11 evening)**: `blocked: <what stops you> · tried: <list> · need: <what the manager must do>` is for an agent that
+  cannot work; a wait on something running or queued is `waiting: <integration / deploy id, lease ticket, own background job, worker names, a time>`.
+  `status-honesty.js` `blockedHonestyOf` (deterministic, no AI) flags a blocked line that names something running or queued (background job id,
+  "waiting on the ... sweeps / run / execution / lease", "held|leased by", "until HH:MM", "a Monitor will ...") or lacks `tried:` / `need:`;
+  done-check (I) (codebox) and `remote-stops.js` (Mac) send it back ONCE per line. A line that passes is a manager item as before. It types into
+  sessions, so `manager.json` `blockedCheck` is `dry` by default (journal: `done-check.jsonl` `blockedHonesty`, Mac `blocked-check.jsonl`); `live` sends.
+  Replay: `node scripts/done-honest-replay.js --blocked`.
 - Switch `manager.json` `goalCheck`: `live` (default) | `dry` (journal only) | `off`. Journal `goal-check.jsonl`, state `goal-check.json`.
   `GET /api/goal-check` -> bounced dones per session today; `scripts/manager-status-scan.sh` prints `<session>: done-bounced: N today by the goal
   check` (codebox and Mac). Tests: `test/goal-check.test.js` (replays the example line: it bounces), `test/goal-check-remote.test.js`.

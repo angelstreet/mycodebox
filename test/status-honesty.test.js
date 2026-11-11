@@ -142,7 +142,7 @@ test('done-check (G): a proof without evidence is warned once; (F) wins on the s
 test('the canonical STATUS vocabulary sentence is in AGENTS.md, the cbsession preamble, the MAC-HOOK snippet and REFERENCE', async () => {
   const { readFileSync } = await import('node:fs');
   const ROOT = join(import.meta.dirname, '..');
-  const RULE = "STATUS vocabulary (owner 2026-11-11): `done` only when the task's goal was achieved, with `goal: achieved · evidence: <links / run ids / frames>`; `failed — goal not achieved: <why> · tried: <list>` when it was not (the manager is told and helps); `blocked: <system id or reason + what you tried>`; `waiting: <system id>`; `needs-owner:` only for a hard-floor item. A green / pass / proven claim carries its evidence. Before you fix a filed bug, run `found-bug --claim <id>` (exit 3: someone else is fixing it).";
+  const RULE = "STATUS vocabulary (owner 2026-11-11): `done` only when the task's goal was achieved, with `goal: achieved · evidence: <links / run ids / frames>`; `failed — goal not achieved: <why> · tried: <list>` when it was not (the manager is told and helps); `waiting: <what is running: integration / deploy id, lease ticket, own background job, a worker session, a time>`; `blocked: <what stops you> · tried: <list> · need: <what the manager must do>` (blocked is for an agent that cannot work and needs the manager, never for a wait); a session whose part is done while workers it started still run ends on `waiting: <worker names>`; `needs-owner:` only for a hard-floor item. A green / pass / proven claim carries its evidence. Before you fix a filed bug, run `found-bug --claim <id>` (exit 3: someone else is fixing it).";
   const norm = (x) => x.replace(/'"'"'/g, "'").replace(/\s+/g, ' ');
   for (const f of ['AGENTS.md', 'scripts/cbsession', 'docs/MAC-HOOK.md', 'docs/REFERENCE.md']) assert.ok(norm(readFileSync(join(ROOT, f), 'utf8')).includes(RULE), f);
 });
@@ -166,4 +166,31 @@ test('done line that is clean, or names only closing-review leftovers, is not ca
     'no tree change was needed, all checks done and deployed (int-1a1cc5388f884ffdb)',
     'fix merged; bug-db063be2 stays open for another area',
   ]) assert.equal(doneButFailedOf(`STATUS: done — ${t}`, ''), null, t);
+});
+
+// blocked is not a wait (owner 2026-11-11 evening): fixtures are the real blocked lines of 2026-11-11, abridged
+import { blockedHonestyOf, blockedHonestyMessage } from '../status-honesty.js';
+test('blocked: a wait is told to restate as waiting; a line without tried:/need: is told to add them; a good one passes', () => {
+  const waits = [
+    'STATUS: blocked: waiting on the radio sweeps on stbv1+ then stbv1 (background b4q6r4fh1); then the final diff for the manager',
+    'STATUS: blocked: Mi device5 is kept free for content-androidtv until 04:50 UTC; after that I re-claim and run the measurements',
+    'STATUS: blocked: vpt-mf1/device5 is held by kpi-androidtv, so no missed-slot sweep has run; I hold no lease',
+    'STATUS: blocked: waiting on the radio sweep on stbv1+ (execution ace72ddf), which gates step 2',
+  ];
+  for (const w of waits) { const f = blockedHonestyOf(w); assert.ok(f?.running.length, w); assert.match(blockedHonestyMessage(f), /restate it as `STATUS: waiting:/); }
+  const noTried = blockedHonestyOf('STATUS: blocked: signed-out S21x, needs a verified-valid login (owner/manager)');
+  assert.deepEqual(noTried.running, []); assert.deepEqual(noTried.missing, ['tried:', 'need:']);
+  assert.match(blockedHonestyMessage(noTried), /lacks tried: and need:/);
+  assert.equal(blockedHonestyOf('STATUS: blocked: stb3 IR dongle not enumerated on vpt-pi1 (no /dev/lirc-stb3) · tried: host recovery, hub-port reset, power cycle under lease · need: the owner replugs the dongle (bug-96551a80) · closing review: docs none needed'), null);
+  assert.equal(blockedHonestyOf('STATUS: waiting: integration int-1a1cc61deccbb0995'), null, 'only blocked lines');
+  assert.equal(blockedHonestyOf('STATUS: done — x · goal: achieved · evidence: int-1a1cc61deccbb0995'), null);
+  // false-catch guards from the replay: "no bug is queued" and "no integration is pending" are not a queued lease
+  assert.equal(blockedHonestyOf('STATUS: blocked: no integration is pending and no bug is queued for the next pick; lease run needed · tried: triage · need: the manager restarts the loop'), null);
+});
+test('done-check (I): blocked is dry by default (journal only), live sends once per line', async (t) => {
+  const line = 'STATUS: blocked: waiting on the radio sweeps (background b4q6r4fh1)';
+  const mk = (blockedMode) => { const dir = tmp('blocked-'), sent = []; const w = createDoneCheck({ stateDir: dir, git: async () => { throw new Error('x'); }, listDone: async () => [], listBlocked: async () => [{ name: 'content-stb', text: line }], blockedMode: () => blockedMode, mode: () => 'live', log: { error() {} }, pressure: () => ({ loadPerCore: 0.1, ramAvailPct: 80 }), send: async (n, x) => { sent.push([n, x]); } }); return { w, sent }; };
+  const dry = mk('dry'); await dry.w.tick(); assert.equal(dry.sent.length, 0);
+  const live = mk('live'); await live.w.tick(); await live.w.tick();
+  assert.equal(live.sent.length, 1); assert.match(live.sent[0][1], /restate it as `STATUS: waiting:/);
 });

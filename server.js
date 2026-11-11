@@ -1108,6 +1108,18 @@ const doneCheck = createDoneCheck({
     }
     return out;
   },
+  // (I) sessions whose last STATUS is blocked: the blocked-is-not-a-wait check (status-honesty.js blockedHonestyOf)
+  listBlocked: async () => {
+    const panes = await listPanes(), mgrs = new Set(loadManagerSessions()), out = [];
+    for (const [name, p] of panes) {
+      if (mgrs.has(name) || sessionMeta.isPaused(name) || p.dead) continue;
+      const st = latest?.status?.[name], ex = st?.stall?.excerpt;
+      if (!ex || st.state === 'working' || statusLine(String(ex).split('\n'))?.kind !== 'blocked') continue;
+      out.push({ name, text: String(ex).slice(-3000), working: !!reporter.activityOf(name)?.working, draft: !!st?.stall?.draft });
+    }
+    return out;
+  },
+  blockedMode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).blockedCheck; return m === 'live' || m === 'off' ? m : 'dry'; } catch { return 'dry'; } },   // dry first: it types into sessions
   // (D) the session's own waiting ticket and its healthy free equivalents (lease service `equivalents_free`, health-filtered)
   equivalentOf: async (name) => {
     const v = await leaseViewFiltered();
@@ -3012,6 +3024,7 @@ const integrationRoutes = createIntegrationRoutes({ lane: integrationLane, state
 // ===== END INTEGRATION BLOCK =====
 
 const remote = createRemoteStops({ manager: managerApi, dir: join(STATE_DIR, 'leases'), stateDir: STATE_DIR, goalGate, goals,
+  blockedMode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).blockedCheck; return m === 'live' || m === 'off' ? m : 'dry'; } catch { return 'dry'; } },
   viaServe: (req) => ['x-forwarded-for', 'forwarded'].some((h) => req.headers[h] !== undefined) });   // POST /api/remote/v1/stops from the Mac Stop hook (token of a `remote` client)
 
 // ===== integration lane, sessions side (round 13, brief B): notify + deploys adapter for createIntegrationLane({ notify, deploys }) =====
