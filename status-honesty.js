@@ -101,7 +101,7 @@ export function doneButFailedMessage(f, goal = '') {
 // "green / pass / proven / works" in the done claim needs a reference the owner can open: a URL, a report / run / result id, a frame / audio /
 // screenshot file, or an `evidence:` segment that holds one of those.
 const PROOF_RE = /\b(?:green|pass(?:ed|es|ing)?|proven|proved|proof|works|working|validated|verified on)\b/i;
-const EVIDENCE_RE = /https?:\/\/\S+|\b(?:report|run|result|results|execution|script|job|frame|screenshot|capture|recording|video|audio)s?\s*[#:=]?\s*\(?[`"]?[0-9a-f]{6,}\b|\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b|\S+\.(?:png|jpe?g|webp|gif|mp4|webm|mkv|ts|wav|mp3|ogg|m4a|html|json|log)\b|\bevidence\s*[:=]\s*\S*(?:\/|[0-9a-f]{6,})/i;
+const EVIDENCE_RE = /https?:\/\/\S+|\b(?:report|run|result|results|execution|script|job|frame|screenshot|capture|recording|video|audio)s?\s*[#:=]?\s*\(?[`"]?[0-9a-f]{6,}\b|\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b|\S+\.(?:png|jpe?g|webp|gif|mp4|webm|mkv|ts|wav|mp3|ogg|m4a|html|json|log)\b|\bevidence\s*[:=]\s*[^·|;]*?(?:\/|\b[0-9a-f]{7,40}\b|\bint-[0-9a-z]{6,}|\bbug-[0-9a-f]{8}|\bt-[0-9a-f]{6,})/i;   // `evidence: merge 082d43609e7b` (fp-audit-opus, 2026-11-11: warned wrongly)
 // Pure. -> null, or { claim } when the last STATUS is done, its claim says green / pass / proven, and neither the line nor the closing paragraph
 // above it carries a reference.
 export function proofWithoutEvidenceOf(text) {

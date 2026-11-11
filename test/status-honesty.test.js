@@ -77,6 +77,9 @@ test('proof without evidence: "green" with no link / id / frame is flagged; link
   assert.equal(proofWithoutEvidenceOf('STATUS: done — apps_radio stays proven on prod (result b12b39b1) · bugs: none'), null);
   assert.equal(proofWithoutEvidenceOf('STATUS: done — playback proven on stb4, frames in /tmp/x/frame_0003.jpg · bugs: none'), null);
   assert.equal(proofWithoutEvidenceOf('STATUS: done — fix merged, npm test green · bugs: none'), null);
+  assert.equal(proofWithoutEvidenceOf('STATUS: done — docs and skill match the proof bar, proven on stb4 · goal: achieved · evidence: merge 082d43609e7b · bugs: none'), null, 'an evidence segment naming a commit');
+  assert.equal(proofWithoutEvidenceOf('STATUS: done — proven on stb4 · goal: achieved · evidence: integration int-1a1cbbd9c3fbdde01 · bugs: none'), null);
+  assert.ok(proofWithoutEvidenceOf('STATUS: done — proven on stb4 · goal: achieved · evidence: it works · bugs: none'), 'words only are not evidence');
   assert.ok(proofWithoutEvidenceOf('STATUS: done — standby migrated and proven 3/3 on stbv1 only · bugs: none'));
   assert.equal(proofWithoutEvidenceOf('STATUS: waiting: run 12 to pass'), null);
 });
