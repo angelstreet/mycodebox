@@ -75,7 +75,7 @@ test('rtsp_check: --host probes a loopback source from that host (alias from RTS
 });
 
 // ---- the replacement run ----
-async function world({ devices, pool, leaseBusy = false, leaseMissing = false, brokenAfterSave = false, flaky502 = null }) {
+async function world({ devices, pool, leaseBusy = false, leaseMissing = false, leaseBusyFirst = false, brokenAfterSave = false, flaky502 = null }) {
   const { dir, env } = fakes();
   const posts = []; const restarts = [];
   const server = http.createServer((req, res) => {
@@ -99,7 +99,10 @@ async function world({ devices, pool, leaseBusy = false, leaseMissing = false, b
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const state = mkdtempSync(path.join(tmpdir(), 'rtsp-state-'));
   const poolFile = path.join(dir, 'pool.json'); writeFileSync(poolFile, JSON.stringify(pool));
-  if (!leaseMissing) sh(dir, 'vpt-lease', leaseBusy ? 'echo BUSY >&2; exit 1' : 'while [ "$1" != "--" ]; do shift; done; shift; exec "$@"');
+  if (!leaseMissing) sh(dir, 'vpt-lease', leaseBusy ? 'echo BUSY >&2; exit 1'
+    // leaseBusyFirst: the host is busy for the first (short) wait and free for the end-of-night retry
+    : leaseBusyFirst ? `d="${state}/lease-used"; [ -e "$d" ] || { : > "$d"; echo BUSY >&2; exit 1; }; while [ "$1" != "--" ]; do shift; done; shift; exec "$@"`
+    : 'while [ "$1" != "--" ]; do shift; done; shift; exec "$@"');
   sh(dir, 'tok', 'echo tok');
   // leaseMissing: a PATH without any vpt-lease, so the run really cannot find the lease CLI
   const pathV = leaseMissing ? `${dir}:/usr/bin:/bin` : `${dir}:${process.env.PATH}`;
@@ -169,6 +172,18 @@ test('run live: a BUSY lease never runs the command, nothing is touched', async 
   w.close();
   assert.match(r.stdout, /lease not granted/);
   assert.equal(w.posts.length, 0);
+});
+
+test('run live: a lease busy for the short wait is retried at the end of the night, so the stream is repaired', async () => {
+  const w = await world({ pool: POOL, leaseBusyFirst: true, devices: { DEVICE1: dev('a', 'rtsp://test.example/dead-pub') } });
+  const r = await py(REPLACE, ['--mode', 'live'], w.E);
+  w.close();
+  assert.match(r.stdout, /replaced \(replace: 'pool smoke'\)/, r.stdout + r.stderr);
+  assert.equal(w.posts.length, 1, r.stdout + r.stderr);
+  assert.equal(w.devices.DEVICE1.DEVICE_VIDEO, 'rtsp://127.0.0.1:8554/good-smoke');
+  const j = readFileSync(path.join(w.state, 'rtsp-nightly', 'journal.jsonl'), 'utf8');
+  assert.match(j, /"outcome": "lease_not_granted"/);  // the first attempt was refused
+  assert.match(j, /"outcome": "replaced"/);           // the end-of-night retry got the lease
 });
 
 test('run live: a missing lease command is reported, the night does not die on it', async () => {

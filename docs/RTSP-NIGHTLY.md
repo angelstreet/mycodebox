@@ -43,8 +43,11 @@ The journal keeps the per-stream check events, not the inventory errors, so a ni
   `loopback` entry is valid only on the hosts listed in the env var its `hostsEnv` names (`RTSP_LOOPBACK_HOSTS`, private config: the hosts running `vpt-rtsp`).
 - Every change (restore or replace) goes through the same steps below. At most `maxReplacementsPerNight` (3) per UTC day (counted from the journal), and only in `live` mode. `dry` (the default) probes
   and reports what it would do and writes nothing.
-- Replacement, all inside `vpt-lease run <env> <host> --kind host --max-wait 20 -- ...` (`RTSP_LEASE_MAX_WAIT`; the host's one `vpt-stream` unit serves every device, so it is a host claim) (BUSY: the command never runs, nothing is
-  touched, journaled `lease_not_granted`):
+- Replacement, all inside `vpt-lease run <env> <host> --kind host --max-wait 5 -- ...` (`RTSP_LEASE_MAX_WAIT`; the host's one `vpt-stream` unit serves every device, so it is a host claim) (BUSY: the command never runs, nothing is
+  touched, journaled `lease_not_granted`). The wait is short on purpose: a busy host must not hold the whole night. A repair the
+  lease blocked is **retried at the end of the night** with the long wait (`RTSP_LEASE_RETRY_MAX_WAIT`, 20 min), when the other
+  work is done and the host is more likely free. Without that retry a busy lease cost the night a stream (2026-11-11: the dead
+  Euronews FR channel on `vpt-nipogi/DEVICE2` was repaired on the second pass, bug-241e5753).
   1. GET the full current host-config; refuse unless the device exists and is an rtsp source.
   2. Payload backup `<state>/rtsp-nightly/backups/<host>-<device>-<ts>.json` (mode 0600: it holds camera credentials, never the journal). The
      host also writes its own `.env.backup.<ts>` on every save.
@@ -116,9 +119,11 @@ The mode file held `live` on 2026-11-11 (first live night, done by hand from the
    for them in `RTSP_CHECK_SSH`): they are the boxes `vpt-lenovo-2` and `vpt-lenovo-3` (hostname and machine-id checked on
    2026-11-11), and with the aliases added the night covers all 99.
 2. The dead Euronews FR channel (`vpt-nipogi/DEVICE2`) was **not** repaired in the first pass: the host lease was held by another
-   session for the whole 20 min wait, so the run gave up and reported it. **A busy lease costs the night one stream**: the run
+   session for the whole 20 min wait, so the run gave up and reported it. **A busy lease cost the night one stream**: the run
    waits for the lease, then reports without touching anything, and the stream stays down until the next pass. A second pass
    with `RTSP_LEASE_MAX_WAIT=5` took the lease and restored the same channel under its new upstream URL (the device kept its name).
+   The lease wait is now short by default and the blocked repair is retried at the end of the night, so this no longer needs a
+   second pass (bug-241e5753, bug-b7f346c7, fixed the same night).
 3. Last pass (with the fixes): 99 checked, **89 ok, 0 unverified**, 10 down (8 empty sources + 2 live channels that were frozen
    for a moment and played on the re-probe). Nothing left to repair: both replaced streams play.
 
@@ -140,7 +145,8 @@ rolled back or a camera is down, and files `found-bug` for a camera down or a ro
 
 `~/.config/rtsp-nightly/env`, sourced by the session: `RTSP_CHECK_SERVERS="<label>=<server url>,..."` (one per backend server), `RTSP_LEASE_ENV` (the `vpt-lease` environment of the hosts, default
 `node1-vpt`: it lists the hosts of every server), `RTSP_CHECK_SSH="<host>=<ssh alias>,..."`, `RTSP_LOOPBACK_HOSTS="<host>,..."` (where the `smoke` source exists), optional `RTSP_CHECK_TOKEN_CMD`
-(default `~/virtualpytest/scripts/agent/auto_sign_token.sh`), `RTSP_POOL_FILE`, `RTSP_SETTLE_SECONDS`.
+(default `~/virtualpytest/scripts/agent/auto_sign_token.sh`), `RTSP_POOL_FILE`, `RTSP_SETTLE_SECONDS`, `RTSP_LEASE_MAX_WAIT` (5 min: the first wait for a
+host lease), `RTSP_LEASE_RETRY_MAX_WAIT` (20 min: the end-of-night retry of a repair the first wait did not get).
 
 `RTSP_CHECK_SSH` is what makes the pool usable: a loopback candidate is skipped without an ssh alias to the host that runs it
 (`unverified`, never `ok`), so with it unset every down stream is only reported. The live path also needs `vpt-lease` on the PATH of
