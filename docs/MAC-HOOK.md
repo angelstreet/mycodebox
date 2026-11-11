@@ -178,6 +178,19 @@ without `devices`; [REFERENCE](REFERENCE.md#session-guard-hook-owner-2026-11-11)
 a Mac with a mycodebox checkout the owner can add it with `node scripts/install-guard-hooks.js --checkout <path of that checkout>`; nothing
 installs it remotely.
 
+## VirtualPyTest agent name (X-Agent-Name, bug-c6a65805)
+
+The host lease guard refuses an agent that drives a device another agent holds a vpt-lease on. It knows who drives from the header
+`X-Agent-Name` of the `virtualpytest` MCP entry: `${VPT_AGENT_NAME:-}`, expanded by Claude Code from the session's environment.
+- **Codebox:** `cbsession` exports `VPT_AGENT_NAME=<host>:<session>` (`codebox:<session>`, the name the agent claims leases under) in every
+  launch file and runs `node scripts/vpt-mcp-agent-header.js --apply` once before a Claude start (a no-op when every project already has the header).
+- **Mac:** run `node scripts/vpt-mcp-agent-header.js --apply` once on the Mac (it edits the `virtualpytest` entry of each project through
+  `claude mcp`, never by hand in `~/.claude.json`; the Authorization value is kept and never printed). A session started from a shell
+  then needs `export VPT_AGENT_NAME=mac:<session>` first; the desktop app has no per-session environment, so its calls arrive
+  with an empty name (counted and logged by the host, never refused). `node scripts/vpt-mcp-agent-header.js` alone only lists the projects without it.
+- A session started before the header is the norm sends no name: the host counts those calls per hour and never blocks them
+  (`docs/LEASE-RULES.md`, "MCP calls without a name", in the virtualpytest repo).
+
 ## Disable
 
 Any one of: `touch ~/.config/mycodebox/disabled`, `export MYCODEBOX_HOOK=off`, delete the `hooks.Stop` entry, revoke
