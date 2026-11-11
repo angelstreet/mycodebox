@@ -30,8 +30,7 @@ test('a clean checkout on main is fast-forwarded', () => {
 test('a dirty tree, an untracked file, another branch and local commits are skipped and left untouched', () => {
   let s = setup(); writeFileSync(join(s.clone, 'a.txt'), 'mine\n');
   assert.match(run(s.root, s.clone).stdout, /skipped: working tree is not clean/);
-  assert.equal(readFileSync(join(s.clone, 'a.txt'), 'utf8'), 'mine
-');
+  assert.equal(readFileSync(join(s.clone, 'a.txt'), 'utf8'), 'mine\n');
   s = setup(); writeFileSync(join(s.clone, 'new.txt'), 'x\n');
   assert.match(run(s.root, s.clone).stdout, /not clean/);
   s = setup(); git(s.clone, 'checkout', '-qb', 'feature');
