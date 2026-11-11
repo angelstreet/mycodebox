@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the Ghosty disk cleanup daily at 04:30 Europe/Zurich
+
+[Timer]
+OnCalendar=*-*-* 04:30:00 Europe/Zurich
+Persistent=true
+AccuracySec=5min
+RandomizedDelaySec=10min
+
+[Install]
+WantedBy=timers.target

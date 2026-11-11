@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { tmp } from './helpers-tmp.js';
-import { createDiskGuard, guardConfig, diskLevel, sampleDisks, parseDu, holdMessage, REASON } from '../disk-guard.js';
+import { createDiskGuard, guardConfig, diskLevel, sampleDisks, parseDu, holdMessage, topHomeConsumers, topLine, REASON } from '../disk-guard.js';
 
 // A statfs reading: a volume of `usedPct` percent used. `dev` identifies the volume (the same one twice is one volume).
 const vol = (usedPct, { dev = 1, bsize = 4096, sizeGb = 100 } = {}) => {
@@ -169,4 +169,12 @@ test('the message the owner reads says what is wrong, what is refused and what s
   assert.match(msg, /2\.0 GB free/);
   assert.match(msg, /Starting a new session is paused until it drops below 90%/);
   assert.match(msg, /already running are not affected/);
+});
+
+test('the disk push names the 5 biggest consumers of home, biggest first, with ~ names', async () => {
+  const run = async () => parseDu('900\t/h\n' + [['a', 50], ['b', 700], ['c', 10], ['d', 300], ['e', 20], ['f', 5], ['g', 400]].map(([n, k]) => `${k * 1024}\t/h/${n}`).join('\n'));
+  const rows = await topHomeConsumers({ home: '/h', run });
+  assert.deepEqual(rows.map((r) => r.name), ['~/b', '~/g', '~/d', '~/a', '~/e']);
+  assert.match(topLine(rows), /^\ntop 5: ~\/b 0.7G, ~\/g 0.4G/);
+  assert.equal(topLine([]), '');
 });
