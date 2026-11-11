@@ -1262,7 +1262,7 @@ const quota = createQuota({
 // Per-session MiniMax calls in the plan's 5h window and the last 24 h, from the ledger (minimax-meter.js); read-only.
 const minimaxMeterConfig = () => { try { return meterConfig(JSON.parse(readFileSync(managerConfigFile, 'utf8'))); } catch { return meterConfig({}); } };
 const minimaxMeter = createMinimaxMeter({ ledgerFile: join(STATE_DIR, 'usage-ledger.jsonl'), quota: () => quota.get(), config: minimaxMeterConfig, isManager: (n) => loadOwnerHiddenSessions().includes(n) });
-const minimaxToldShare = new Set();
+const minimaxToldShare = new Map();   // session -> ms of its last share alert (minimax-meter.js newShareAlerts)
 
 // The voice item of a session's open stop right now (voice.js), or null. Reads the manager's live view, not `latest` (notifySession runs mid-poll).
 function voiceItemOf(session, kind, stateHint = null) {

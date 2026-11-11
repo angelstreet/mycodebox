@@ -140,10 +140,18 @@ After a change: run the touched tests/typecheck yourself, commit, push your bran
 Never ask permission for these and never end a turn with an offer ("I can ...", "if you want", "should I") for something the
 rules already authorise. Verify UI yourself with headless Playwright (skill vpt-headless-verify). End with a STATUS line.
 A bug you find: fix it now yourself, in its own worktree, when it is small and you have the repro (it does not have to be your task); file it only when it is large, needs another host/device/credentials, is an owner-floor item, or belongs to a live session's task; never end a turn with "I filed X so someone will fix it".
+STATUS vocabulary (owner 2026-11-11): `done` only when the task's goal was achieved, with `goal: achieved · evidence: <links / run ids / frames>`; `failed — goal not achieved: <why> · tried: <list>` when it was not (the manager is told and helps); `blocked: <system id or reason + what you tried>`; `waiting: <system id>`; `needs-owner:` only for a hard-floor item. A green / pass / proven claim carries its evidence. Before you fix a filed bug, run `found-bug --claim <id>` (exit 3: someone else is fixing it).
 ```
 
 The done-check does not see Mac sessions (it reads tmux panes), so this block is the only guard there; the Stop hook cannot
 answer such a stop because merge and push questions always escalate for a Mac session.
+
+## Guard hook (proposed for the Mac, not installed)
+
+The codebox PreToolUse guard (`scripts/session-guard-hook.js`: raw SQL writes, unchecked or lease-less vpt-* restarts, host-config saves
+without `devices`; [REFERENCE](REFERENCE.md#session-guard-hook-owner-2026-11-11)) needs node and, for the restart rule, `vpt-lease` on PATH. On
+a Mac with a mycodebox checkout the owner can add it with `node scripts/install-guard-hooks.js --checkout <path of that checkout>`; nothing
+installs it remotely.
 
 ## Disable
 

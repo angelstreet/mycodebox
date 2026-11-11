@@ -54,11 +54,20 @@ test('windowStart: resetsAt minus 5 h, else now minus 5 h', () => {
 test('share alert fires once per session and window, needs a minimum of calls', () => {
   const cfg = { ...METER_DEFAULTS, shareMinCalls: 10 };
   const mk = (n, m) => aggregate([...Array.from({ length: n }, () => row({ label: 'big' })), ...Array.from({ length: m }, () => row({ label: 'small' }))], { now: NOW, wStart: NOW - WINDOW_MS });
-  const told = new Set();
-  assert.equal(newShareAlerts(mk(5, 1), cfg, told).length, 0);          // too few calls
-  assert.deepEqual(newShareAlerts(mk(8, 4), cfg, told).map((s) => s.name), ['big']);   // 66 %
-  assert.equal(newShareAlerts(mk(9, 4), cfg, told).length, 0);          // already told
-  assert.equal(newShareAlerts(mk(5, 5), cfg, new Set()).length, 2);     // both sit at 50 % > 40 in a fresh window
+  const told = new Map();
+  assert.equal(newShareAlerts(mk(5, 1), cfg, told, NOW).length, 0);          // too few calls
+  assert.deepEqual(newShareAlerts(mk(8, 4), cfg, told, NOW).map((s) => s.name), ['big']);   // 66 %
+  assert.equal(newShareAlerts(mk(9, 4), cfg, told, NOW).length, 0);          // already told
+  assert.equal(newShareAlerts(mk(5, 5), cfg, new Map(), NOW).length, 2);     // both sit at 50 % > 40 in a fresh window
+});
+
+test('share alert: a sliding window (no plan reset time) does not re-announce every minute, only after a full window (2026-11-11: 6 alerts)', () => {
+  const cfg = { ...METER_DEFAULTS, shareMinCalls: 10 };
+  const at = (t) => aggregate(Array.from({ length: 20 }, () => row({ label: 'big', ts: t - 1000 })), { now: t, wStart: t - WINDOW_MS });
+  const told = new Map();
+  assert.equal(newShareAlerts(at(NOW), cfg, told, NOW).length, 1);
+  for (const dt of [60e3, 3600e3, 2 * 3600e3, 4.5 * 3600e3]) assert.equal(newShareAlerts(at(NOW + dt), cfg, told, NOW + dt).length, 0, `${dt / 60e3} min later`);
+  assert.equal(newShareAlerts(at(NOW + WINDOW_MS + 60e3), cfg, told, NOW + WINDOW_MS + 60e3).length, 1, 'a new window');
 });
 
 test('config overrides', () => {

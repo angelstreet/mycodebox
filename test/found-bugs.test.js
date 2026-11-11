@@ -188,9 +188,8 @@ test('week(): filed vs fixed by finder vs by a worker', async () => {
 
 test('claim: one holder at a time, renewable by the holder, expires after 2 h, dropped by a resolve; list shows it', async () => {
   const { createFoundBugs, CLAIM_MS } = await import('../found-bugs.js');
-  const { mkdtempSync } = await import('node:fs'); const { tmpdir } = await import('node:os'); const { join } = await import('node:path');
   let t = Date.UTC(2026, 10, 11, 12, 0);
-  const b = createFoundBugs({ stateDir: mkdtempSync(join(tmpdir(), 'fb-claim-')), now: () => t });
+  const b = createFoundBugs({ stateDir: tmp('fb-claim-'), now: () => t });
   const { bug } = await b.add({ title: 'x', session: 'filer', why: 'large', reason: 'r' });
   assert.equal((await b.claim(bug.id, {})).ok, false, 'a session is required');
   assert.equal((await b.claim('bug-00000000', { session: 'a' })).error, 'no such bug');

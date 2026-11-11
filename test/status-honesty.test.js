@@ -2,9 +2,8 @@
 // Fixtures: closing lines of 2026-11-11, abridged and sanitised (codenames, no hosts, no signed URLs).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { tmp } from './helpers-tmp.js';
 import { goalOf, headlineOf, doneButFailedOf, doneButFailedMessage, proofWithoutEvidenceOf, failedOf } from '../status-honesty.js';
 import { createDoneCheck } from '../done-check.js';
 import { classifyStall } from '../stall.js';
@@ -98,8 +97,7 @@ test('stall: STATUS failed is a manager item (needs_manager + failed), never a f
 });
 
 function doneCheck(t, sessions, { mode = 'live', goal = '' } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'honesty-'));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const dir = tmp('honesty-');
   const sent = [], events = [];
   const w = createDoneCheck({ stateDir: dir, git: async () => { throw new Error('not a repo'); }, listDone: async () => sessions, mode: () => mode, log: { error() {} },
     goalOf: async () => goal, pressure: () => ({ loadPerCore: 0.1, ramAvailPct: 80 }), send: async (n, x) => { sent.push([n, x]); }, record: async (e) => { events.push(e); } });
@@ -136,4 +134,12 @@ test('done-check (G): a proof without evidence is warned once; (F) wins on the s
   const d = await draft.w.tick();
   assert.equal(draft.sent.length, 0);
   assert.deepEqual(d.doneButFailed, ['a']);
+});
+
+test('the canonical STATUS vocabulary sentence is in AGENTS.md, the cbsession preamble, the MAC-HOOK snippet and REFERENCE', async () => {
+  const { readFileSync } = await import('node:fs');
+  const ROOT = join(import.meta.dirname, '..');
+  const RULE = "STATUS vocabulary (owner 2026-11-11): `done` only when the task's goal was achieved, with `goal: achieved · evidence: <links / run ids / frames>`; `failed — goal not achieved: <why> · tried: <list>` when it was not (the manager is told and helps); `blocked: <system id or reason + what you tried>`; `waiting: <system id>`; `needs-owner:` only for a hard-floor item. A green / pass / proven claim carries its evidence. Before you fix a filed bug, run `found-bug --claim <id>` (exit 3: someone else is fixing it).";
+  const norm = (x) => x.replace(/'"'"'/g, "'").replace(/\s+/g, ' ');
+  for (const f of ['AGENTS.md', 'scripts/cbsession', 'docs/MAC-HOOK.md', 'docs/REFERENCE.md']) assert.ok(norm(readFileSync(join(ROOT, f), 'utf8')).includes(RULE), f);
 });

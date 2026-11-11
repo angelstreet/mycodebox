@@ -93,13 +93,13 @@ test('hook: the PreToolUse JSON in, a deny decision out; a harmless command prin
 test('install-guard-hooks: adds one Bash entry next to kill-guard, idempotent; the hook is a no-op while the checkout lacks it', async () => {
   const { withGuard, hookCommand, MARK } = await import('../scripts/install-guard-hooks.js');
   const cur = { model: 'x', hooks: { PreToolUse: [{ matcher: 'Edit|Write', hooks: [{ type: 'command', command: 'python3 w.py' }] }, { matcher: 'Bash', hooks: [{ type: 'command', command: 'python3 ~/.claude/hooks/kill-guard.py' }] }] } };
-  const a = withGuard(cur, '/home/u/ghosty-sessions');
+  const a = withGuard(cur, '/srv/checkout/ghosty-sessions');
   assert.equal(a.changed, true);
   assert.equal(a.settings.model, 'x');
   const bash = a.settings.hooks.PreToolUse.find((e) => e.matcher === 'Bash').hooks;
   assert.equal(bash.length, 2);
   assert.match(bash[1].command, new RegExp(MARK));
-  assert.equal(withGuard(a.settings, '/home/u/ghosty-sessions').changed, false);
+  assert.equal(withGuard(a.settings, '/srv/checkout/ghosty-sessions').changed, false);
   assert.equal(cur.hooks.PreToolUse[1].hooks.length, 1, 'input not mutated');
   assert.equal(withGuard({}, '/c').settings.hooks.PreToolUse[0].matcher, 'Bash');
   const r = spawnSync('sh', ['-c', hookCommand('/nonexistent-checkout')], { input: '{"tool_input":{"command":"psql -c \\"DELETE FROM t\\""}}', encoding: 'utf8' });
