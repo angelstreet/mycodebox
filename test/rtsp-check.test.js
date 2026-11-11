@@ -44,6 +44,23 @@ test('rtsp_check: a loopback source without an ssh alias is unverified, never ok
   assert.equal(j.streams[0].status, 'unverified');
 });
 
+test('rtsp_check: a file that opens on a black leader is ok, not frozen (the probe looks past the leader)', async () => {
+  const { dir, env } = fakes();
+  // "leader": the first window is identical frames (a black leader); after a seek the picture moves.
+  // "still": identical frames whatever happens (a genuinely static file).
+  // "short": a 30 s clip with the same leader: the seek must land inside it (past the leader, before the end).
+  const ffprobe = sh(dir, 'ffprobe-leader', `u=""; dur=""; prev=""; for a; do case "$a" in -show_entries) dur=1;; esac; case "$a" in rtsp*|http*|file*|/*) u=$a;; esac; done\ncase "$u" in *short*) if [ -n "$dur" ]; then echo "30.000000"; else echo '{"streams":[{"codec_name":"h264","width":640,"height":360}]}'; fi;; *) echo '{"streams":[{"codec_name":"h264","width":640,"height":360}]}';; esac`);
+  const ffmpeg = sh(dir, 'ffmpeg-leader', `u=""; seek=""; prev=""; for a; do if [ "$prev" = "-ss" ]; then seek="$a"; fi; case "$a" in rtsp*|http*|file*|/*) u=$a;; esac; prev="$a"; done\necho '#format: frame checksums'\ncase "$u" in *still*) for i in 1 2 3 4; do echo "0, $i, $i, 1, 10, aaaa"; done;; *short*) if [ -n "$seek" ] && [ "$seek" -le 15 ]; then for i in 1 2 3 4; do echo "0, $i, $i, 1, 10, m$i"; done; else for i in 1 2 3 4; do echo "0, $i, $i, 1, 10, lead"; done; fi;; *) if [ -n "$seek" ]; then for i in 1 2 3 4; do echo "0, $i, $i, 1, 10, m$i"; done; else for i in 1 2 3 4; do echo "0, $i, $i, 1, 10, lead"; done; fi;; esac`);
+  sh(dir, 'ssh', 'shift 5 2>/dev/null; eval "$*"'); // the probe runs locally instead of over ssh
+  const E = { ...env, PATH: `${dir}:${process.env.PATH}`, RTSP_CHECK_FFMPEG: ffmpeg, RTSP_CHECK_FFPROBE: ffprobe };
+  const leader = JSON.parse((await py(CHECK, ['--json', '--ssh', 'local', '/var/lib/vpt-movies/leader.mp4'], E)).stdout);
+  assert.equal(leader.streams[0].status, 'ok', 'a film with a black leader must not be called frozen');
+  const still = JSON.parse((await py(CHECK, ['--json', '--ssh', 'local', '/var/lib/vpt-movies/still.mp4'], E)).stdout);
+  assert.equal(still.streams[0].status, 'frozen', 'a file that never moves stays frozen');
+  const short = JSON.parse((await py(CHECK, ['--json', '--ssh', 'local', '/var/lib/vpt-movies/short.mp4'], E)).stdout);
+  assert.equal(short.streams[0].status, 'ok', 'a short clip with a leader: the seek must land inside the clip');
+});
+
 test('rtsp_check: --host probes a loopback source from that host (alias from RTSP_CHECK_SSH)', async () => {
   const { dir, env } = fakes();
   sh(dir, 'ssh', 'shift 5 2>/dev/null; eval "$*"'); // the probe runs locally instead of over ssh
@@ -114,6 +131,7 @@ test('run live: a dead public stream is replaced with the FULL devices payload; 
   assert.match(r.stdout, /camera down/);
   const dir = path.join(w.E.GHOSTY_STATE_DIR, 'rtsp-nightly');
   assert.equal(statSync(path.join(dir, 'backups', readdirSync(path.join(dir, 'backups'))[0])).mode & 0o777, 0o600);
+  assert.deepEqual(readdirSync(dir).filter((x) => x.startsWith('apply-')), [], 'no scratch files left in the state dir');
   for (const f of ['journal.jsonl', ...readdirSync(dir).filter((x) => x.startsWith('report-'))]) assert.ok(!readFileSync(path.join(dir, f), 'utf8').includes(PW), `${f} leaked`);
   assert.match(readFileSync(path.join(dir, 'journal.jsonl'), 'utf8'), /"outcome": "replaced"/);
 });

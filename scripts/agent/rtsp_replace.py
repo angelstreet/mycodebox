@@ -241,6 +241,12 @@ def run(mode, timeout=10):
                     res = json.load(open(out)); os.unlink(out)
                 except (OSError, ValueError):
                     res = None
+                finally:
+                    # the chosen source is scratch: it must not pile up in the state dir night after night
+                    try:
+                        os.unlink(src_file)
+                    except OSError:
+                        pass
                 if res is None:  # BUSY / lease error: vpt-lease never ran the command, nothing was touched
                     row['action'] = ('report: the lease command could not be run (vpt-lease missing), nothing touched'
                                      if p is None else 'report: host lease not granted (or the apply step stopped before any write), nothing touched')

@@ -27,6 +27,7 @@ FFMPEG = os.environ.get('RTSP_CHECK_FFMPEG', 'ffmpeg')
 CRED = re.compile(r'(?i)(rtsps?|https?|rtmp|udp)://[^/\s@]*@')
 OK_STATES = ('ok', 'unverified')  # unverified = could not be probed from here, not a failure
 LOOPBACK = {'127.0.0.1', 'localhost', '::1'}
+FILE_LEADER_SEEK = int(os.environ.get('RTSP_FILE_LEADER_SEEK', '60'))  # seconds to skip past a film's black leader
 
 
 def redact(text):
@@ -73,6 +74,33 @@ def _q(s):
     return "'" + str(s).replace("'", "'\\''") + "'"
 
 
+def _frames(url, timeout, ssh, opts, seek=None):
+    """-> [(pts, md5)] of the decoded frames. framemd5 prints one line per frame: "0, pts, dts, dur, size, md5"."""
+    cmd = [FFMPEG, '-v', 'error', *opts]
+    if seek is not None:
+        cmd += ['-ss', str(seek)]
+    cmd += ['-i', url, '-vf', 'fps=4', '-frames:v', '12', '-an', '-f', 'framemd5', '-']
+    try:
+        stdout = _run(cmd, timeout, ssh).stdout
+    except subprocess.TimeoutExpired as e:
+        stdout = e.stdout.decode('utf-8', 'replace') if isinstance(e.stdout, bytes) else (e.stdout or '')
+    frames = []
+    for line in stdout.splitlines():
+        parts = [x.strip() for x in line.split(',')]
+        if len(parts) >= 6 and parts[0].isdigit():
+            frames.append((parts[1], parts[-1]))
+    return frames
+
+
+def _duration(url, timeout, ssh):
+    """-> duration of a media source in seconds (0 when unknown)."""
+    try:
+        p = _run([FFPROBE, '-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', url], timeout, ssh)
+        return float((p.stdout or '').strip().splitlines()[0])
+    except (subprocess.TimeoutExpired, OSError, ValueError, IndexError):
+        return 0.0
+
+
 def check_stream(url, timeout=10, ssh=None):
     """-> dict(status, detail, codec, width, height, frames, distinct). Never contains the credentials."""
     url = clean_value(url)
@@ -109,22 +137,27 @@ def check_stream(url, timeout=10, ssh=None):
     # Decode 12 frames sampled at 4 fps (~3 s of picture: a still scene of 0.5 s is not a frozen stream), bounded by the timeout. Not `-t 3`: an RTSP stream's first
     # pts is the publisher's uptime, so -t cut everything on a live smoke stream. framemd5 prints one line per frame:
     # "0, pts, dts, dur, size, md5".
-    try:
-        stdout = _run([FFMPEG, '-v', 'error', *opts, '-i', url,
-                       '-vf', 'fps=4', '-frames:v', '12', '-an', '-f', 'framemd5', '-'], timeout, ssh).stdout
-    except subprocess.TimeoutExpired as e:
-        stdout = e.stdout.decode('utf-8', 'replace') if isinstance(e.stdout, bytes) else (e.stdout or '')
-    frames = []
-    for line in stdout.splitlines():
-        parts = [x.strip() for x in line.split(',')]
-        if len(parts) >= 6 and parts[0].isdigit():
-            frames.append((parts[1], parts[-1]))
+    frames = _frames(url, timeout, ssh, opts)
     out['frames'] = len(frames)
     out['distinct'] = len({m for _, m in frames})
     pts = {t for t, _ in frames}
+    frozen = len(frames) < 2 or out['distinct'] < 2 or len(pts) < 2
+    if frozen and is_file(url):
+        # A film can open on a black leader (seconds of identical frames): the first window then says "frozen"
+        # while the file plays fine. Look past the leader before calling it frozen. Files only: seeking a live
+        # stream is meaningless, and a live picture that does not move IS frozen.
+        dur = _duration(url, timeout, ssh)
+        # int(): the seek goes to ffmpeg as a whole number of seconds
+        seek = FILE_LEADER_SEEK if dur <= 0 else int(min(FILE_LEADER_SEEK, max(1.0, dur / 2)))  # a short clip has no 60 s in it
+        deep = _frames(url, timeout, ssh, opts, seek=seek)
+        if len(deep) >= 2 and len({m for _, m in deep}) >= 2 and len({t for t, _ in deep}) >= 2:
+            frames = deep
+            out['frames'] = len(frames)
+            out['distinct'] = len({m for _, m in frames})
+            frozen = False
     if len(frames) < 2:
         out.update(status='frozen', detail=f'{len(frames)} frame(s) decoded')
-    elif out['distinct'] < 2 or len(pts) < 2:
+    elif frozen:
         out.update(status='frozen', detail='frames do not change')
     else:
         out.update(status='ok', detail='')
