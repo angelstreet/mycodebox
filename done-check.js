@@ -189,6 +189,7 @@ export function uncommittedOf(porcelain) {
 export function createDoneCheck({
   stateDir, git, listDone, send: sendRaw, record = async () => {}, equivalentOf = async () => null, goalOf = async () => '', mode = () => 'live', home = process.env.HOME || '',
   pressure = () => ({ loadPerCore: 0, ramAvailPct: 100 }), now = Date.now, pollMs = POLL_MS, log = console, ignoreBranches = () => DEFAULT_IGNORE_BRANCHES,
+  goalGate = null,   // goal-check.js createGoalGate: (H) below
 } = {}) {
   const stFile = join(stateDir, 'done-check.json');
   const journal = join(stateDir, 'done-check.jsonl');
@@ -427,8 +428,30 @@ export function createDoneCheck({
           await note({ session: s.name, waitWhileEquivalentFree: eq.ticketId, equivalents: eq.equivalents });
         } catch (e) { log.error?.('[done-check] send equivalent wait', s.name, e.message); }
       }
+      // (H) goal check (owner 2026-11-11, goal-check.js): a done line that passed every check above is asked the owner's question once
+      // ("Goal as given: ... Did you reach it?"); the next done turn is the reply, accepted only with the goal restated and evidence. 2+ filed
+      // leftovers in the touched area are sent back first (fix-first). Max 2 bounces per session per day, then the manager is told.
+      const goalCheck = { asked: [], bounced: [], accepted: [], capped: [] };
+      if (goalGate) {
+        await goalGate.forget(live).catch(() => {});
+        for (const s of sessions) {
+          if (s.working || s.draft || touched.has(s.name) || findings.some((f) => f.name === s.name)) continue;
+          if (s.doneAt && now() - s.doneAt > REVIEW_MAX_AGE_MS) continue;   // an old done turn is not reopened by the rollout
+          if (leftoverItemsOf(s.text).length || closingReviewOf(s.text)?.missing || doneButFailedOf(s.text) || proofWithoutEvidenceOf(s.text)) continue;   // (B)/(C)/(F)/(G) first
+          if (m === 'dry') continue;
+          if (!quiet || nudged >= MAX_NUDGES_PER_TICK) continue;   // nothing is recorded until it is sent: a later tick asks
+          let d = null;
+          try { d = await goalGate.evaluate(s); } catch (e) { log.error?.('[done-check] goal gate', s.name, e.message); }
+          if (!d) continue;
+          if (d.kind === 'accepted') { goalCheck.accepted.push(s.name); continue; }
+          if (d.kind === 'capped') { goalCheck.capped.push(s.name); continue; }
+          if (!d.message) continue;
+          try { await send(s.name, d.message); await goalGate.sent(s.name, d); nudged++; (d.bounce ? goalCheck.bounced : goalCheck.asked).push(s.name); }
+          catch (e) { log.error?.('[done-check] send goal check', s.name, e.message); }
+        }
+      }
       await save(st);
-      return (last = { at: now(), mode: m, checked: sessions.length, doneButFailed, proofWithoutEvidence: noEvidence, shipOffers, waitingWhileEquivalentFree: waitEq, missingBugsField: missing, missingClosingReview: missingReview, findings: findings.map(({ name, text }) => ({ name, text })), held: quiet ? null : 'host busy' });
+      return (last = { at: now(), mode: m, checked: sessions.length, goalCheck, doneButFailed, proofWithoutEvidence: noEvidence, shipOffers, waitingWhileEquivalentFree: waitEq, missingBugsField: missing, missingClosingReview: missingReview, findings: findings.map(({ name, text }) => ({ name, text })), held: quiet ? null : 'host busy' });
     } catch (e) {
       log.error?.('[done-check]', e.message);
       return (last = { ...last, at: now(), error: e.message });

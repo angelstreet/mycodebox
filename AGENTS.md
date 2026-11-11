@@ -14,6 +14,9 @@ turn with a STATUS line.
 STATUS vocabulary (owner 2026-11-11): `done` only when the task's goal was achieved, with `goal: achieved · evidence: <links / run ids / frames>`; `failed — goal not achieved: <why> · tried: <list>` when it was not (the manager is told and helps); `blocked: <system id or reason + what you tried>`; `waiting: <system id>`; `needs-owner:` only for a hard-floor item. A green / pass / proven claim carries its evidence. Before you fix a filed bug, run `found-bug --claim <id>` (exit 3: someone else is fixing it).
 A done line whose own words say the goal was not reached ("not valid", "no X was built", "goal not met", "0 of N") gets one wake
 to restate it, and the manager is told ([REFERENCE](docs/REFERENCE.md#status-vocabulary-owner-2026-11-11)).
+Goal check (owner 2026-11-11): before a done is accepted the harness asks once "Goal as given: <your first task line>. Did you reach it? Quote
+the evidence for each part"; reply by restating the goal with evidence per part (file, run / integration id, screenshot, KPI number) or keep
+working. A done listing 2+ filed leftovers in your own area is sent back: fix the small ones ([REFERENCE](docs/REFERENCE.md#goal-check-owner-2026-11-11)).
 A bug you find: fix it now yourself, in its own worktree, when it is small and you have the repro (it does not have to be your task); file it only when it is large, needs another host/device/credentials, is an owner-floor item, or belongs to a live session's task; never end a turn with "I filed X so someone will fix it".
 Filing needs `found-bug --why-not-fixed <large|other-area|host-or-device|credentials|owner-floor|live-session-task> --reason "..."`.
 This overrides the built-in "commit only when asked" default; a ghosty watcher pushes once per

@@ -5,6 +5,7 @@
 # "<session>: done-without-closing-review" when a done line has no `closing review:` segment (done-check.js closingReviewOf). A session whose last STATUS is one of these is never "idle".
 #   scripts/manager-status-scan.sh [--json]      (exit code 0 always)
 # Also lists `<TASK-NN>: orphaned-task: ...` for task docs with open rows and no live session (GET /api/unfinished).
+# Also lists `<session>: done-bounced: N today by the goal check` (GET /api/goal-check, goal-check.js).
 # Also lists `<session>: no-progress: <evidence>` (GET /api/progress-watch) and `<checkout>: shared-checkout-dirty: <paths>` (GET /api/shared-checkouts) and `<a>+<b>: overlap: <paths>` for two sessions changing the same file (GET /api/overlaps).
 # --json prints [{"session": ..., "status": ...}, ...]. Only reads panes (tmux capture-pane), never types into one.
 JSON=0; [ "$1" = "--json" ] && JSON=1
@@ -76,6 +77,12 @@ try:
     pw = json.load(urllib.request.urlopen('http://127.0.0.1:%s/api/progress-watch' % os.environ.get('PORT', '7777'), timeout=5))
     for x in pw.get('found', []):
         hits.append({'session': x['session'], 'status': '%s: %s' % ('no-progress' if x.get('kind') != 'loop' else 'no-progress (loop)', '; '.join(x.get('evidence', [])[:3]))})
+except Exception: pass
+# dones bounced by the goal check today (goal-check.js; codebox and Mac sessions; capped = the manager was told)
+try:
+    g = json.load(urllib.request.urlopen('http://127.0.0.1:%s/api/goal-check' % os.environ.get('PORT', '7777'), timeout=5))
+    for n, x in sorted(g.get('sessions', {}).items()):
+        if x.get('bouncedToday'): hits.append({'session': n, 'status': 'done-bounced: %d today by the goal check%s' % (x['bouncedToday'], ' (cap reached, manager told)' if x.get('capped') else '')})
 except Exception: pass
 # unresolved found-bugs (found-bugs.js; resolve with `found-bug --resolve <id> --commit <sha>`)
 try:

@@ -2,7 +2,7 @@
 // message here, the SAME manager that watches the tmux sessions decides (stall rules, round 7/8/10 policy, countdown / cancel), and the
 // hook long-polls for the answer. Routes (never public: tailnet / loopback address allowlist + bearer token of a `remote: true` client):
 //   POST /api/remote/v1/stops               { machine, project, session_id, session_name?, cwd?, text, status_line?, options?, at?, stop_hook_active?,
-//                                             remote_control_url?, prompt_at? } -> { ok, id, session, wait_max_s, answerable }
+//                                             remote_control_url?, prompt_at?, first_prompt? } -> { ok, id, session, wait_max_s, answerable }
 //   GET  /api/remote/v1/stops/<id>/answer?wait=<s>   long-poll -> { ok, state: pending|answered|none, answer?, reason? }
 // Answer channel (justified in docs/MAC-HOOK.md): the hook's own long-poll, returning {"decision":"block","reason":<answer>} to Claude Code.
 // The session shows on the dashboard as `mac:<session_name>`; manager.js treats it like any other session (s.remote = true, no tmux).
@@ -54,6 +54,8 @@ export function validateStop(b, now = Date.now()) {
     if (!Array.isArray(b.options) || b.options.length > 12) return { ok: false, error: 'options must be a list of at most 12' };
     out.options = b.options.map((o, i) => ({ n: Number.isInteger(o?.n) ? o.n : i + 1, text: clean(String(o?.text ?? '')).slice(0, 200), recommended: o?.recommended === true })).filter((o) => o.text);
   }
+  // the session's first prompt (the hook reads it from the transcript): the goal the goal check quotes (goal-check.js)
+  if (typeof b.first_prompt === 'string' && b.first_prompt.trim()) out.first_prompt = clean(b.first_prompt).slice(0, 4000);
   out.stop_hook_active = b.stop_hook_active === true;
   const at = b.at ? tms(b.at) : null;
   out.at = at != null && Math.abs(at - now) < 10 * 60e3 ? at : now;   // the Mac's clock is only believed when close to ours
@@ -72,7 +74,9 @@ export function stopText(v) {
 }
 
 // manager: { observe, sessionOn, setRemoteHooks, cancelAuto, forget, stallOf, triageOf, autoOf, REMOTE_PREFIX }
-export function createRemoteStops({ manager, dir, stateDir, cidrs = process.env.LEASE_ALLOW_CIDRS, viaServe = () => false, now = Date.now, graceMs = GRACE_MS, pollWaitMs = POLL_WAIT_MS } = {}) {
+// goalGate / goals: goal-check.js createGoalGate / createGoalStore (optional). A done stop the gate questions or bounces is answered with the
+// gate's text at once (no countdown); the manager journals the stop but schedules no answer of its own for it.
+export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goals = null, cidrs = process.env.LEASE_ALLOW_CIDRS, viaServe = () => false, now = Date.now, graceMs = GRACE_MS, pollWaitMs = POLL_WAIT_MS } = {}) {
   const allow = parseCidrs([...DEFAULT_CIDRS, ...String(cidrs || '').split(',')].join(','));
   const clientsFile = join(dir, 'clients.json');
   const configFile = join(stateDir, 'remote.json');   // { waitS, checkouts: { "<project>": "/abs/path/of/the/local/checkout" } }
@@ -152,7 +156,7 @@ export function createRemoteStops({ manager, dir, stateDir, cidrs = process.env.
   }
   const deliverKey = (name, key, mid = null) => deliver(name, `Go with option ${String(key).slice(0, 8)}.`, mid);
 
-  function ingest(v, client) {
+  async function ingest(v, client) {
     const t = now();
     // the title plus a fragment of the session id: two Mac sessions with the same title never share a row
     let name = `${manager.REMOTE_PREFIX}${slug(v.session_name || v.project)}-${slug(v.session_id.slice(0, 6))}`;
@@ -164,6 +168,9 @@ export function createRemoteStops({ manager, dir, stateDir, cidrs = process.env.
     Object.assign(s, { project: v.project, lastSeen: t, client: client.name, rcUrl: v.remote_control_url || null, cwd: v.cwd || null });
     // Only the deploy topic is evaluated for a Mac session (it reads origin); merge and push escalate in manager.js (remote block). A project without a
     // configured local checkout gets a path that does not exist, so every evaluation finds no repository and escalates.
+    if (v.first_prompt && goals) { try { goals.capture(name, v.first_prompt, 'mac-first-prompt'); } catch { /* best effort */ } }
+    let gate = null;
+    if (goalGate && manager.sessionOn(name)) { try { gate = await goalGate.evaluate({ name, text: stopText(v), doneAt: t, remote: true, canAnswer: !v.stop_hook_active }); } catch (e) { console.error('[remote] goal gate', e.message); } }
     const cwd = checkoutOf(v.project) || join(stateDir, 'remote-no-checkout');
     const base = { name, agent: 'claude', project: v.project, cwd, now: t, remote: true, machine: v.machine };
 
@@ -183,13 +190,19 @@ export function createRemoteStops({ manager, dir, stateDir, cidrs = process.env.
     s.open = stop; s.last = stop;
     armGrace(stop);
     if (!manager.sessionOn(name)) { resolve(stop, 'none', { reason: 'manager disabled for this session' }); }
+    if (gate?.message && !gate.dry && stop.state === 'pending') {   // the goal check answers this stop itself, the manager does not
+      stop.noAnswer = true; stop.goalCheck = gate.kind;
+      resolve(stop, 'answered', { answer: gate.message.slice(0, 2000) });
+      s.lastSendAt = t; s.lastSendText = gate.message.slice(0, 300);
+      goalGate.sent(name, gate).catch((e) => console.error('[remote] goal gate sent', e.message));
+    }
     const lines = text.split('\n');
     const turn = { text, at: t, reason: 'end_turn', backgroundWork: 0 };
     manager.observe({ ...base, state: 'done', plain: lines, raw: [], changed: true, realWork: false, lastSendAt: s.lastSendAt, lastSendText: s.lastSendText, rep: { turnForStop: () => turn, promptSince: () => null } });
     const mid = manager.pendingIdOf(name);   // the manager's id for this stop, set synchronously by observe
     if (mid && mid !== prevMid) { stop.managerId = mid; byMid.set(mid, stop); }
     if (stop.noAnswer && stop.state === 'pending') stop.why = 'stop_hook_active: never answered automatically';
-    return { id, name, answerable: !stop.noAnswer, wait_max_s: config().waitS };
+    return { id, name, answerable: stop.state === 'answered' || !stop.noAnswer, wait_max_s: config().waitS };
   }
 
   // ---- dashboard rows (no tmux) ----
@@ -243,7 +256,7 @@ export function createRemoteStops({ manager, dir, stateDir, cidrs = process.env.
       const v = validateStop(body, now());
       if (!v.ok) { send(res, 400, { ok: false, code: 'E_INVALID', error: v.error }); return true; }
       let r;
-      try { r = ingest(v.v, client); } catch (e) { console.error('[remote] ingest', who, e.message); send(res, 500, { ok: false, code: 'E_UNAVAILABLE', error: 'could not process the stop' }); return true; }
+      try { r = await ingest(v.v, client); } catch (e) { console.error('[remote] ingest', who, e.message); send(res, 500, { ok: false, code: 'E_UNAVAILABLE', error: 'could not process the stop' }); return true; }
       send(res, 200, { ok: true, id: r.id, session: r.name, wait_max_s: r.wait_max_s, answerable: r.answerable });
       return true;
     }

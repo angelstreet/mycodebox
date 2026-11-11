@@ -68,6 +68,7 @@ test('dry run: the payload carries the last assistant text from the transcript f
   assert.equal(payload.session_name, 'cache-work');
   assert.equal(payload.stop_hook_active, false);
   assert.equal(payload.prompt_at, '2026-10-15T08:30:00.000Z', 'the last real owner prompt, not the tool_result');
+  assert.equal(payload.first_prompt, 'please add the cache layer', 'the first prompt: the goal the goal check quotes');
   assert.ok(payload.machine && payload.project, 'machine and project are filled');
   assert.match(r.err, /dry run/);
   assert.ok(!r.out.includes(TOKEN) && !r.err.includes(TOKEN), 'the token is never printed');
