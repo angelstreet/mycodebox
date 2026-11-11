@@ -1692,6 +1692,25 @@ holders: the holders that are neither a session nor a platform agent).
   (`t-...`) or lease id is read from the lease view (never `ticket()`, which would collect the reservation) and wakes on granted / dropped / released.
   Staleness sweep: a session whose STATUS waiting is unresolved (no job identified, or the id is not found), whose pane was quiet for 20 min, with
   no live child, gets "nothing you wait on is still running: check the result and continue" once, at most every 30 min; logged as `own_job_stale_nudge`.
+- **Parked-session wake** (`own-jobs.js` `park()`; harness review 2026-11-11 Q5 item 5; `manager.json` `parkedWake`: `"off"` (default) | `"dry"` | `"live"`).
+  The own-job watcher above only follows stops classed `own_job_wait`; a session that stops on `STATUS: blocked` / `waiting` in any other case
+  (`owner_decision`, `background_wait`, `waiting_deploy`, `merge_wait`) was watched by nothing: on 2026-11-11 two sessions sat ~11 h blocked on a device
+  that came free, one P3 session yielded to a P1 CI claim and never retried, and lane results were dropped after `pending-wakes` gave up.
+  Design: `manager.js` parks every such stop (not the manager, not a Mac session, not `needs-owner`, no open owner ask, not a hard-floor
+  status (`ownerFloorMatch`), and a forbidden-topic status only when it names a system id) with what the line names, read once at park time:
+  integration ids, a deploy id, a lease ticket / lease id, a script run, `bug-<hex>` ids (outside the `bugs:` / `closing review:` tail), lab
+  resources (`<host>/device<N>` or any resource string the lease view knows) and an `until|after HH:MM UTC` time. Every minute (`parkPollMs`) it
+  re-reads them; a dependency **changed** when the integration / run / queue entry ended, the ticket was granted, dropped or reached position 1,
+  the lease was released, the bug was resolved, a resource held by someone else at park time is now free, or the named time passed. A change
+  must still hold after `parkGraceMin` (3) so the primary path (lane notify, pending wake, the agent's own background task) goes first. With no
+  change, the stop's **maximum age** (`parkMaxAgeMin`, 180) is the backstop. Then ONE wake per stop, `by: harness`, through the same gates as a
+  manager reply: still stopped on the same stop id (`stillStopped`), `canType` (finished turn, not paused, no draft, under the hourly cap), no live
+  background work, at most 2 parked wakes per session per rolling hour, and the wake text itself never matches a forbidden topic. Text:
+  "harness: <what changed> at HH:MM UTC while you were parked on STATUS <blocked|waiting>. Re-check and continue; if it still blocks you, end with
+  a STATUS that names the id you wait on." (age: "... parked for N h and nothing you named changed ..." plus the `vpt-lease claim <env> --any`
+  hint when a device is named). Journal in `stalls.jsonl`: `parked_watch` (deps), `parked_wake` (live) or `parked_wake_dry` (dry: the text it
+  WOULD send, one per stop). Judge a dry night with
+  `grep -h '"parked_wake' "$GHOSTY_STATE_DIR/stalls.jsonl" | tail -50`.
 - **Remote stops** (`remote-stops.js`, `scripts/mac-stop-hook.sh`, install in [MAC-HOOK](MAC-HOOK.md)): `POST /api/remote/v1/stops` and
   `GET /api/remote/v1/stops/<id>/answer?wait=<s>`, same address allowlist and bearer-token store as the lease API, but the token's client needs
   `remote: true` (`node scripts/lease-token.js add <name> --remote`). A stop enters `manager.js observe()` as the session `mac:<session name>`
