@@ -18,7 +18,7 @@ const py = (file, args, env) => new Promise((res) => execFile('python3', ['-I', 
 function fakes() {
   const dir = mkdtempSync(path.join(tmpdir(), 'rtsp-'));
   // url containing "dead": refuses; "novideo": no streams; "still": identical frames; else 12 moving frames
-  const ffprobe = sh(dir, 'ffprobe', `for a; do u=$a; done\ncase "$u" in *dead*) echo "$u: Connection refused" >&2; exit 1;; *novideo*) echo '{"streams":[]}';; *) echo '{"streams":[{"codec_name":"h264","width":640,"height":360}]}';; esac`);
+  const ffprobe = sh(dir, 'ffprobe', `for a; do u=$a; done\ncase "$u" in http*) for a; do [ "$a" = -rtsp_transport ] && { echo 'Option rtsp_transport not found' >&2; exit 1; }; done;; esac\ncase "$u" in *dead*) echo "$u: Connection refused" >&2; exit 1;; *novideo*) echo '{"streams":[]}';; *) echo '{"streams":[{"codec_name":"h264","width":640,"height":360}]}';; esac`);
   const ffmpeg = sh(dir, 'ffmpeg', `for a; do case "$a" in rtsp*) u=$a;; esac; done\necho '#format: frame checksums'\ncase "$u" in *still*) for i in 1 2 3 4; do echo "0, $i, $i, 1, 10, aaaa"; done;; *) for i in 1 2 3 4; do echo "0, $i, $i, 1, 10, m$i"; done;; esac`);
   return { dir, env: { RTSP_CHECK_FFPROBE: ffprobe, RTSP_CHECK_FFMPEG: ffmpeg } };
 }
@@ -130,7 +130,7 @@ test('the report says how many hosts were walked, so an empty night is readable'
   const r = await py(REPLACE, [], w.E);
   const inv = JSON.parse((await py(CHECK, ['--json', '--inventory'], w.E)).stdout); // the check reports it too
   w.close();
-  assert.match(r.stdout, /no rtsp devices found/);
+  assert.match(r.stdout, /no stream devices found/);
   assert.match(r.stdout, /1 host\(s\) walked, 1 read/);
   assert.equal(inv.hosts.walked, 1);
   assert.equal(inv.hosts.read, 1);
@@ -175,6 +175,23 @@ test('run live: a replacement that does not play is rolled back to the backup (f
   assert.equal(w.devices.DEVICE1.DEVICE_VIDEO, 'rtsp://test.example/dead-pub');
   assert.equal(w.devices.DEVICE2.DEVICE_VIDEO, '/dev/stb2');
   assert.match(readFileSync(path.join(w.state, 'rtsp-nightly', 'journal.jsonl'), 'utf8'), /rolled_back/);
+});
+
+test('scope: every rtsp_video device (HLS, file, empty source) is checked; only rtsp can be replaced, the rest is reported', async () => {
+  const w = await world({ pool: POOL, devices: {
+    DEVICE1: { ...dev('tv', 'https://cdn.example/good/index.m3u8'), DEVICE_MODEL: 'rtsp_video' },
+    DEVICE2: { ...dev('tv-dead', 'https://cdn.example/dead/index.m3u8'), DEVICE_MODEL: 'rtsp_video' },
+    DEVICE3: { ...dev('loop', '/var/lib/vpt-movies/good.mp4'), DEVICE_MODEL: 'rtsp_video' },
+    DEVICE4: { ...dev('empty', ''), DEVICE_MODEL: 'rtsp_video' },
+    DEVICE5: dev('hdmi', '/dev/stb5') } });   // not rtsp_video, not rtsp: ignored
+  const r = await py(REPLACE, ['--mode', 'live'], w.E);
+  w.close();
+  assert.match(r.stdout, /DEVICE1\s+hls\s+ok -> none/, r.stdout);
+  assert.match(r.stdout, /DEVICE2\s+hls\s+no_connect -> report: hls source not ok/);
+  assert.match(r.stdout, /DEVICE3\s+file\s+ok -> none/);
+  assert.match(r.stdout, /DEVICE4\s+no_source\s+no_source -> report: no_source source not ok/);
+  assert.ok(!/DEVICE5/.test(r.stdout));
+  assert.equal(w.posts.length, 0); // nothing is ever written for hls / file / empty
 });
 
 test('the pool file never holds credentials and only vetted entries are replacement candidates', () => {

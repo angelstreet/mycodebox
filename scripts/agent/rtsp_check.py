@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""rtsp_check: is an RTSP source alive? (stdlib only; ffprobe + ffmpeg on PATH)
+"""rtsp_check: is a network/file stream source alive? (stdlib only; ffprobe + ffmpeg on PATH)
+
+Scope (owner, 2026-11-11): every device of model `rtsp_video` (the app's generic stream model: rtsp://, HLS http(s)://, looping
+local files, empty source) plus any rtsp:// source. Kinds: loopback | public | ip_camera (rtsp), hls, file, no_source.
 
 Per stream: connects (ffprobe, 10 s), has a video stream (codec / resolution), and frames advance
 (ffmpeg decodes 12 frames, per-frame md5s must differ and pts must move). Statuses: ok, no_connect, no_video,
@@ -12,7 +15,7 @@ every printed or journaled string goes through redact().
              only reachable there
   --ssh ALIAS   probe these URLs from that ssh alias directly
   --json   JSON only   --timeout N   per-step seconds (default 10)
-Exit: 0 all ok, 1 a stream is not ok, 2 nothing could be checked (no server, no streams, auth failure).
+Exit: 0 all ok or unverified, 1 a stream is not ok, 2 nothing could be checked (no server, no streams, auth failure).
 Env: RTSP_CHECK_SERVERS="<label>=<server url>,..." ; RTSP_CHECK_TOKEN_CMD (prints an X-Auto-Sign token);
      RTSP_CHECK_SSH="<host>=<ssh alias>,..." (probe loopback sources on the host itself).
 """
@@ -22,6 +25,7 @@ from concurrent.futures import ThreadPoolExecutor
 FFPROBE = os.environ.get('RTSP_CHECK_FFPROBE', 'ffprobe')
 FFMPEG = os.environ.get('RTSP_CHECK_FFMPEG', 'ffmpeg')
 CRED = re.compile(r'(?i)(rtsps?|https?|rtmp|udp)://[^/\s@]*@')
+OK_STATES = ('ok', 'unverified')  # unverified = could not be probed from here, not a failure
 LOOPBACK = {'127.0.0.1', 'localhost', '::1'}
 
 
@@ -37,6 +41,15 @@ def clean_value(raw):
 
 def is_rtsp(value):
     return clean_value(value).lower().startswith(('rtsp://', 'rtsps://'))
+
+
+def is_http(value):
+    return clean_value(value).lower().startswith(('http://', 'https://'))
+
+
+def is_file(value):
+    v = clean_value(value)
+    return v.startswith('file://') or v.startswith('/')
 
 
 def host_of(url):
@@ -63,12 +76,17 @@ def _q(s):
 def check_stream(url, timeout=10, ssh=None):
     """-> dict(status, detail, codec, width, height, frames, distinct). Never contains the credentials."""
     url = clean_value(url)
+    if not url:
+        return {'status': 'no_source', 'detail': 'DEVICE_VIDEO is empty', 'codec': None, 'width': None, 'height': None, 'frames': 0, 'distinct': 0}
     out = {'status': 'no_connect', 'detail': '', 'codec': None, 'width': None, 'height': None, 'frames': 0, 'distinct': 0}
-    if is_loopback(url) and not ssh:
-        out.update(status='unverified', detail='loopback source: only the host can reach it (no ssh alias set)')
+    if (is_loopback(url) or is_file(url)) and not ssh:
+        out.update(status='unverified', detail='loopback/file source: only the host can reach it (no ssh alias set)')
         return out
+    # input options only the matching demuxer/protocol knows: an unknown one makes ffmpeg refuse the input
+    opts = (['-rtsp_transport', 'tcp', '-timeout', str(int(timeout * 1e6))] if is_rtsp(url)
+            else ['-rw_timeout', str(int(timeout * 1e6))] if is_http(url) else [])
     try:
-        p = _run([FFPROBE, '-v', 'error', '-rtsp_transport', 'tcp', '-timeout', str(int(timeout * 1e6)),
+        p = _run([FFPROBE, '-v', 'error', *opts,
                   '-show_streams', '-select_streams', 'v', '-of', 'json', url], timeout, ssh)
     except subprocess.TimeoutExpired:
         out.update(status='timeout', detail=f'ffprobe timed out after {timeout}s')
@@ -92,7 +110,7 @@ def check_stream(url, timeout=10, ssh=None):
     # pts is the publisher's uptime, so -t cut everything on a live smoke stream. framemd5 prints one line per frame:
     # "0, pts, dts, dur, size, md5".
     try:
-        stdout = _run([FFMPEG, '-v', 'error', '-rtsp_transport', 'tcp', '-timeout', str(int(timeout * 1e6)), '-i', url,
+        stdout = _run([FFMPEG, '-v', 'error', *opts, '-i', url,
                        '-frames:v', '12', '-an', '-f', 'framemd5', '-'], timeout, ssh).stdout
     except subprocess.TimeoutExpired as e:
         stdout = e.stdout.decode('utf-8', 'replace') if isinstance(e.stdout, bytes) else (e.stdout or '')
@@ -144,7 +162,13 @@ def host_config(server, token, host):
 
 
 def classify(url, pool):
-    """loopback | public (host is in the vetted pool's public hosts) | ip_camera (everything else: owner hardware)."""
+    """no_source | file | hls | loopback | public (host is in the pool's public hosts) | ip_camera (any other rtsp: owner hardware)."""
+    if not clean_value(url):
+        return 'no_source'
+    if is_file(url):
+        return 'file'
+    if is_http(url):
+        return 'hls'
     h = host_of(clean_value(url))
     if h in LOOPBACK:
         return 'loopback'
@@ -182,7 +206,7 @@ def inventory(servers, pool):
             read += 1
             for dev, f in sorted(devs.items()):
                 v = f.get('DEVICE_VIDEO', '')
-                if is_rtsp(v):
+                if is_rtsp(v) or f.get('DEVICE_MODEL') == 'rtsp_video':
                     entries.append({'env': env, 'server': server, 'host': host, 'device': dev, 'name': f.get('DEVICE_NAME', ''),
                                     'url': clean_value(v), 'kind': classify(v, pool)})
     return entries, errors, {'walked': walked, 'read': read}
@@ -243,7 +267,7 @@ def main(argv=None):
           + (f" ({hosts['walked']} host(s) walked, {hosts['read']} read)" if hosts else ''))
     if not rows:
         return 2
-    return 0 if all(r['status'] == 'ok' for r in rows) and not errors else 1
+    return 0 if all(r['status'] in OK_STATES for r in rows) and not errors else 1
 
 
 if __name__ == '__main__':
