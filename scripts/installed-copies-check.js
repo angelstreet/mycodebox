@@ -37,6 +37,21 @@ export function checkCopies({ repoRoot, home = homedir(), entries = ENTRIES } = 
   }
   return { results, findings };
 }
+// The Mac's copy of scripts/mac-stop-hook.sh cannot be read from here: the hook sends its own sha256 with every stop (remote-stops.js writes
+// <state>/remote-hooks-seen.json { machine: { hook_sha, at } }). A machine seen in the last 14 days with another sha than the repo's is DRIFT.
+export function checkMacHooks({ repoRoot, stateDir, now = Date.now(), maxAgeMs = 14 * 864e5 } = {}) {
+  const results = [], findings = [];
+  let want; try { want = sha(resolve(repoRoot, 'scripts/mac-stop-hook.sh')); } catch { return { results, findings }; }
+  let seen = {}; try { seen = JSON.parse(readFileSync(join(stateDir, 'remote-hooks-seen.json'), 'utf8')) || {}; } catch { return { results, findings }; }
+  for (const [machine, e] of Object.entries(seen)) {
+    const age = now - Date.parse(e.at);
+    if (!(age <= maxAgeMs)) continue;
+    const status = e.hook_sha === want ? 'ok' : 'drift';
+    results.push({ name: `mac-stop-hook@${machine}`, installed: 'Mac: ~/.local/bin or the path in ~/.claude/settings.json hooks.Stop', repo: 'scripts/mac-stop-hook.sh', status, ...(status === 'drift' ? { fix: 'copy scripts/mac-stop-hook.sh to the Mac again (docs/MAC-HOOK.md "Update")' } : {}) });
+    if (status === 'drift') findings.push({ key: `installed-copy:drift:mac-stop-hook:${machine}`, title: `Mac ${machine}: the Stop hook differs from the repo script`, body: `DRIFT: the hook on ${machine} (last stop ${e.at}) is not scripts/mac-stop-hook.sh. Fix: copy the repo script to the Mac (docs/MAC-HOOK.md "Update").`, priority: 'high' });
+  }
+  return { results, findings };
+}
 function isLink(p) { try { return lstatSync(p).isSymbolicLink(); } catch { return false; } }
 
 export function render({ results, findings }) {
@@ -47,5 +62,6 @@ export function render({ results, findings }) {
 
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
   const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-  console.log(JSON.stringify(render(checkCopies({ repoRoot }))));
+  const a = checkCopies({ repoRoot }), b = checkMacHooks({ repoRoot, stateDir: process.env.GHOSTY_STATE_DIR || join(homedir(), '.local/state/ghosty') });
+  console.log(JSON.stringify(render({ results: [...a.results, ...b.results], findings: [...a.findings, ...b.findings] })));
 }
