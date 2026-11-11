@@ -126,6 +126,7 @@ Hours were lost waiting on one web host while the other was free. When the work 
   on its own host. `GHOSTY_HOLDER_REAPER=off` disables the reaper. A dispatcher that exits between ticks (game_dispatch, pokemon_dispatch) must not
   pass `--holder-pid`. A heartbeating or dashboard-tracked (codebox session) exclusive lease with no activity
   for 20 minutes becomes a pin.
+  A `--holder-pid` / `$VPT_HOLDER_PID` that is not running on this host at claim time is dropped with a warning (the TTL applies), so a mistyped pid cannot make the reaper release the lease minutes later (bug-81094e7d).
 - Release as soon as the work is done: `vpt-lease release <id>`. Do not park a lease "for later".
 - A session whose STATUS is `waiting` or `blocked` never keeps an exclusive lease: release it first, claim again when
   you can work. Downgrade to a pin with `vpt-lease mode <id> pin` if you only need the state kept.
