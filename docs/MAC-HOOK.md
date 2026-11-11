@@ -116,8 +116,8 @@ found-bug --help          # the one-line check
 A bump rule for authors: change `scripts/integrate` or `scripts/found-bug` => raise `CLIENT_SCRIPTS_VERSION` in **both** (the test
 keeps them equal), so every client warns until it has updated.
 
-`found-bug --title T [--error "exact text"] [--repro R] [--blocking yes|no]` posts to `POST /api/bugs` over the tailnet with the
-bearer token (a remote client may only file and list: `--resolve`, `fixed` and `remove` are codebox-only). `GHOSTY_URL` overrides the
+`found-bug --title T --why-not-fixed <large|other-area|host-or-device|credentials|owner-floor|live-session-task> --reason "one line" [--error "exact text"] [--repro R] [--blocking yes|no]` posts to `POST /api/bugs` over the tailnet with the
+bearer token (since `CLIENT_SCRIPTS_VERSION=2` (owner, 2026-11-11) `--why-not-fixed` + `--reason` are required: without them the tool exits 2 with "Fix it yourself now (small + you have the repro)..."; an old copy that sends neither is still accepted and the record is stored with `why:"missing"`; run `found-bug --self-update`) (a remote client may only file and list: `--resolve`, `fixed` and `remove` are codebox-only). `GHOSTY_URL` overrides the
 URL (default: `url` in the config, else loopback `http://127.0.0.1:7777`). Without a `--session` / tmux session the report is named
 `mac-<client name>`. If the manager is unreachable the record is appended to `<state>/found-bug-queue.jsonl`
 (`GHOSTY_STATE_DIR`, default `~/.local/state/ghosty`), the exit code is 5, and the next `found-bug` call or `found-bug --flush` posts
@@ -125,7 +125,7 @@ it: a report is never lost. When the script is not installed, file the same JSON
 
 ```sh
 curl -sS -X POST -H "Authorization: Bearer $(cat ~/.config/mycodebox/token)" -H 'content-type: application/json' \
-  -d '{"title":"...","error":"exact text","repro":"...","blocking":"no","session":"mac-<label>"}' "$GHOSTY_URL/api/bugs"
+  -d '{"title":"...","why":"other-area","reason":"...","error":"exact text","repro":"...","blocking":"no","session":"mac-<label>"}' "$GHOSTY_URL/api/bugs"
 ```
 
 ## Ship rule for Mac sessions (owner, 2026-11-11)
@@ -139,6 +139,7 @@ of `~/.claude/CLAUDE.md` on the Mac so every project sees it in the first lines:
 After a change: run the touched tests/typecheck yourself, commit, push your branch, `integrate request <branch> [--deploy ...]`.
 Never ask permission for these and never end a turn with an offer ("I can ...", "if you want", "should I") for something the
 rules already authorise. Verify UI yourself with headless Playwright (skill vpt-headless-verify). End with a STATUS line.
+A bug you find: fix it now yourself, in its own worktree, when it is small and you have the repro (it does not have to be your task); file it only when it is large, needs another host/device/credentials, is an owner-floor item, or belongs to a live session's task; never end a turn with "I filed X so someone will fix it".
 ```
 
 The done-check does not see Mac sessions (it reads tmux panes), so this block is the only guard there; the Stop hook cannot

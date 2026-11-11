@@ -120,7 +120,7 @@ import { createRulesWatch } from './rules-watch.js';
 import { createOverlapGuard, DEFAULT_IGNORE } from './overlap-guard.js';
 import { createProgressWatch } from './progress-watch.js';
 import { createSharedCheckoutGuard, expandHome } from './shared-checkout-guard.js';
-import { createFoundBugs, unreportedBugOf } from './found-bugs.js';
+import { createFoundBugs, unreportedBugOf, sendBackOf, sendBackText } from './found-bugs.js';
 import { createDoneCheck, DEFAULT_IGNORE_BRANCHES, shipOfferOf, unconfirmedStatusOf, waitingOnLeaseStatus } from './done-check.js';
 import { createLeftovers, pushableItems } from './done-leftovers.js';
 import { scanTaskDocs, withHomeDirs, computeUnfinished, docLeftoversFor, createUnfinished } from './unfinished.js';
@@ -844,9 +844,21 @@ const mockups = createMockups({
   send: async (session, text, by) => { await assertAgentPane(session, by); await sendKeys(session, text, true); logSend(session, by, { keys: text }); noteAnswerer(session, by, 'mockup'); },   // the same guarded send as every other owner send
 });
 // Found bugs (found-bugs.js, owner 2026-10-28): a session files a bug outside its scope; owner feed (counter) + manager feed kind `bug`.
+const bugSendBacks = new Map();   // session -> send-back timestamps (cap per hour)
 const foundBugs = createFoundBugs({ stateDir: STATE_DIR, onNew: async (b) => {
   alert(`${b.session}:bug`, { title: `${b.session}: ${b.blocking ? 'BLOCKING bug' : 'bug'} found: ${b.title}`, body: [b.endpoint, b.error].filter(Boolean).join(' · ') || b.title,
-    url: `/?s=${encodeURIComponent(b.session)}`, priority: b.blocking ? 'high' : 'low', ntfyTags: 'bug', meta: { bug: { id: b.id, title: b.title, endpoint: b.endpoint, blocking: b.blocking, ...(b.test ? { test: true } : {}) } } }, 0);
+    url: `/?s=${encodeURIComponent(b.session)}`, priority: b.blocking ? 'high' : 'low', ntfyTags: 'bug', meta: { bug: { id: b.id, title: b.title, endpoint: b.endpoint, blocking: b.blocking, why: b.why, ...(b.test ? { test: true } : {}) } } }, 0);
+  // fix-first (owner, 2026-11-11): a small-looking bug from a live session goes back to it once (kept for its next stop, <= 4 per session per hour)
+  try {
+    if (sendBackOf(b) && (await listPanes()).has(b.session)) {
+      const hits = (bugSendBacks.get(b.session) || []).filter((t) => Date.now() - t < 3600e3);
+      if (hits.length < 4) {
+        bugSendBacks.set(b.session, [...hits, Date.now()]);
+        const r = pendingWakes.add({ session: b.session, key: `bugback:${b.id}`, text: sendBackText(b), by: 'found-bugs' });
+        logEvent({ type: 'bug-send-back', id: b.id, session: b.session, why: b.why, queued: !!r?.queued });
+      }
+    }
+  } catch (e) { console.error('[found-bugs] send-back', e.message); }
 } });
 const alertApi = createAlertApi({ alert, tokenOk: (t) => reporter.tokenOk(t) });
 // safety net for manager questions that were typed in chat but never filed (ask-guard.js)
@@ -2812,7 +2824,8 @@ async function handleHttp(req, res) {
     // planBudget.claudeWeeklyPct pro-rated to the elapsed fraction of the plan-week. The plan-week ends at the
     // Claude seven_day resets_at (read from claude-rate-limits.json by the loader), else the rolling last 7 days.
     const days = Math.max(1, Math.min(30, Number(url.searchParams.get('days')) || 7));
-    return json(res, 200, await cachedScorecard({ days, ttlMs: 60000, deployList: () => deployRunner.snapshot().deploys }));
+    const sc = await cachedScorecard({ days, ttlMs: 60000, deployList: () => deployRunner.snapshot().deploys });
+    return json(res, 200, { ...sc, bugs: await foundBugs.week(days) });   // fix-first (owner, 2026-11-11): filed vs fixed by the finder vs by a worker
   }
   if (req.method === 'GET' && p === '/api/vm') {
     return json(res, 200, health || await sampleHealth(HEALTH_DISKS));

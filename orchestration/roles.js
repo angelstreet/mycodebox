@@ -76,7 +76,7 @@ export const WORKTREE_NOTE = 'FIRST COMMAND: `git worktree list`; create or reus
 
 // Found bugs (owner, 2026-10-28), in every worker brief: a bug outside the task's scope is reported, not fixed in this diff and not ignored.
 export const BUG_NOTE = 'BUGS OUTSIDE YOUR SCOPE: do not fix them in this change and do not ignore them. Run `found-bug --title "<what>" --endpoint "<where>" --repro "<steps>" --error "<exact text>" --workaround "<if any>" --blocking yes|no` '
-  + '(the manager sends a worker) and mention the bug id in your answer; if the command is unavailable, put a "Found bug:" line with the same fields in your answer.';
+  + '(add `--why-not-fixed large|other-area|host-or-device|credentials|owner-floor|live-session-task --reason "..."`; filing is the last resort) and mention the bug id in your answer; if the command is unavailable, put a "Found bug:" line with the same fields in your answer.';
 
 // A developer that finds the requirements contradictory says so instead of spending its whole run (OWNER_DECISIONS §12.2).
 // The claim is never proof: an independent reviewer judges it on failing checks (goal loop feasibility review).
