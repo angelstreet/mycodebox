@@ -1093,7 +1093,10 @@ const goalGate = createGoalGate({
 
 // Done check (done-check.js): an idle session whose last STATUS is done is checked against git (commits not on main,
 // uncommitted files); a mismatch is told once to the session and the feed. manager.json `doneCheck`: live | dry | off.
+let stopFactsImpl = async () => ({});   // set where the manager is initialised (it needs own-jobs and the lane): stop-state.js facts
+const stopStateMode = () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).stopState; return m === 'live' || m === 'off' ? m : 'dry'; } catch { return 'dry'; } };
 const doneCheck = createDoneCheck({
+  stopFacts: (n, o) => stopFactsImpl(n, o), stateMode: stopStateMode,
   stateDir: STATE_DIR,
   ignoreBranches: () => { try { const l = JSON.parse(readFileSync(managerConfigFile, 'utf8')).doneCheckIgnoreBranches; return Array.isArray(l) ? l.map(String) : DEFAULT_IGNORE_BRANCHES; } catch { return DEFAULT_IGNORE_BRANCHES; } },
   git: async (cwd, args) => (await exec('git', ['-C', cwd, ...args], { timeout: 60000, maxBuffer: 8 * 1024 * 1024 })).stdout,
@@ -3024,6 +3027,7 @@ const integrationRoutes = createIntegrationRoutes({ lane: integrationLane, state
 // ===== END INTEGRATION BLOCK =====
 
 const remote = createRemoteStops({ manager: managerApi, dir: join(STATE_DIR, 'leases'), stateDir: STATE_DIR, goalGate, goals,
+  stopFacts: (n, o) => stopFactsImpl(n, o), stateMode: stopStateMode,
   blockedMode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).blockedCheck; return m === 'live' || m === 'off' ? m : 'dry'; } catch { return 'dry'; } },
   viaServe: (req) => ['x-forwarded-for', 'forwarded'].some((h) => req.headers[h] !== undefined) });   // POST /api/remote/v1/stops from the Mac Stop hook (token of a `remote` client)
 
@@ -3251,7 +3255,7 @@ server.listen(PORT, HOST, async () => {
     onJudgeDown: (a) => push.record({ title: a.title, body: a.body, url: '/', tag: `judge-down-${a.kind}`, priority: 'high' }),
     ownJobs, integration: integrationLane,
     // stop-state.js: the facts behind a stop, from what the harness already knows (own-jobs live child, lane, lease view, session history, the line's time)
-    stopFacts: async (name, { text = '', backgroundWork = 0 } = {}) => {
+    stopFacts: stopFactsImpl = async (name, { text = '', backgroundWork = 0 } = {}) => {
       const now = Date.now(), names = Object.keys(latest?.status || {});
       let bgJobs = Number(backgroundWork) || 0;
       if (!bgJobs) { try { if (await ownJobs.hasLiveChild(name, { text })) bgJobs = 1; } catch {} }
@@ -3259,6 +3263,8 @@ server.listen(PORT, HOST, async () => {
       let integrations = []; try { integrations = integrationLane.list({ limit: 300 }).filter((r) => r.session === name && (r.state === 'queued' || r.state === 'running')).map((r) => r.id); } catch {}
       let tickets = []; try { const v = await leaseSource.view(false); tickets = (v?.tickets || []).filter((x) => x.state !== 'cancelled' && holderSession(x.agent, names, MACHINES) === name).map((x) => String(x.id)); } catch {}
       const workers = names.filter((n) => n !== name && sessionMeta.startedBy(n) === name && (latest.status[n]?.state === 'working' || reporter.activityOf(n)?.working));
+      // a lane request the line names (a Mac session has no request of its own by name): open ones count too
+      for (const m of String(text).matchAll(/\bint-[0-9a-z]{6,40}\b/gi)) { try { const r = integrationLane.get(m[0].toLowerCase()); if (r && (r.state === 'queued' || r.state === 'running') && !integrations.includes(r.id)) integrations.push(r.id); } catch {} }
       const t = parkedDeps(text, null, { now }).find((d) => d.kind === 'time');
       return { bgJobs, integrations, tickets, workers, timeMs: t ? Number(t.id) : null };
     },

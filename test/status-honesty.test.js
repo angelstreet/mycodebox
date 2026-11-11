@@ -217,3 +217,13 @@ test('an unknown STATUS word is sent back naming the seven words; the seven, the
   for (const w of [...SEVEN_WORDS, 'acknowledged', 'handoff', 'ok', 'shipped']) assert.equal(unknownStatusWordOf(`STATUS: ${w}: x`), null, w);
   assert.equal(unknownStatusWordOf('no status here'), null);
 });
+
+// (J) a done line while the harness sees a running / waiting fact (stop-state.js): dry journals, live sends once and the goal question is not asked
+test('done-check (J): done while a lane request is open is told it is waiting (live, once); dry only journals', async () => {
+  const mk = (stateMode) => { const sent = []; const w = createDoneCheck({ stateDir: tmp('doneJ-'), git: async () => { throw new Error('x'); }, listDone: async () => [{ name: 'kpi', cwd: '/nowhere', text: 'STATUS: done — x merged · goal: achieved · evidence: int-1a1cc76f2cfaa4a04 · closing review: docs none needed · leftovers none · unverified none · bugs: none' }],
+    stopFacts: async () => ({ bgJobs: 0, integrations: ['int-1a1cc7e0de12c0e88'], tickets: [], workers: [], timeMs: null }), stateMode: () => stateMode, mode: () => 'live', log: { error() {} },
+    pressure: () => ({ loadPerCore: 0.1, ramAvailPct: 80 }), send: async (n, x) => { sent.push([n, x]); } }); return { w, sent }; };
+  const dry = mk('dry'); await dry.w.tick(); assert.equal(dry.sent.length, 0);
+  const live = mk('live'); await live.w.tick(); await live.w.tick();
+  assert.equal(live.sent.length, 1); assert.match(live.sent[0][1], /your STATUS says done, but the harness sees integration int-1a1cc7e0de12c0e88: that is waiting, not done/);
+});
