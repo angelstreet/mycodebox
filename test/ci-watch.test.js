@@ -40,7 +40,14 @@ test('decide: after MAX_ATTEMPTS it asks the owner once, then stays quiet; green
 
 test('brief: names the run, the failing jobs and the rules (no skipping checks, no force-push, watch the run)', () => {
   const b = brief({ cfg: { repo: 'org/fake', branch: 'main', cwd: '/w/fake' }, run: r(2, 'failure', 20), jobs: ['Frontend Lint'], logFile: '/s/2.log' });
-  for (const s of ['org/fake', '/w/fake', 'https://ci.example/run/2', 'Frontend Lint', '/s/2.log', 'Do not skip', 'Never force-push', 'gh run watch', 'STATUS']) assert.ok(b.includes(s), s);
+  for (const s of ['org/fake', '/w/fake', 'https://ci.example/run/2', 'Frontend Lint', '/s/2.log', 'Do not skip', 'never force-push', 'gh run watch', 'STATUS']) assert.ok(b.includes(s), s);
+});
+
+test('brief: ships through the integration lane, never tells the fixer to merge or push main itself (docs/CONTRACT.md "Who may do what")', () => {
+  const b = brief({ cfg: { repo: 'org/fake', branch: 'main', cwd: '/w/fake' }, run: r(2, 'failure', 20), jobs: [], logFile: '' });
+  assert.match(b, /integrate request <branch>/);
+  assert.match(b, /Never merge into main, push main or run the deploy script yourself/);
+  assert.doesNotMatch(b, /Merge and push the fix to main yourself/);
 });
 
 test('mergePlatformVerdict: success + platform failures -> failure (with the jobs); green stays green; gh-failure and cancelled are unchanged', () => {

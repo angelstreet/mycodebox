@@ -317,8 +317,9 @@ resets that list, so the same words then count as a new stop. An `outcome` only 
 be newer than the stall, and from the pane only a `❯ prompt` line below the stall's closing text counts (an older prompt
 above it, or a closing text no longer on screen, gives kind `unknown`).
 
-**Safe defaults.** `autoSend` off, `autoCases: []`, `aiTriage: 'simulate'`, `aiAutoCases: []`: the owner picks
-every case that may be auto-answered (`POST /api/manager`). `owner_decision` is never in a default list.
+**Defaults.** Since round 8 (OWNER_DECISIONS §15) `autoSend` is on and `autoCases` is `['continue', 'menu_recommended']`
+(`manager.js`); `aiTriage: 'simulate'`, `aiAutoCases: []`. A saved `autoSend:false` stays false, and an unreadable `manager.json`
+turns auto-answer off for that run. `owner_decision` is never in a default list.
 
 **Router shadow (`routerShadow`, default on).** For every new distinct stop, after the rules classified it, ghosty fires one
 `POST /server/ai/decide` (usage `text.decision.manager`, profile `jev`, `refs.source: "ghosty-router"`) with three questions: the stop's
@@ -828,6 +829,9 @@ still swaps a deployed body and is returned.
 `--supersedes Q12,Q13` names it (`owner-ask.js ask`, `manager-ask.js`). A different question stays open (Q237 had closed Q236).
 
 ### Autonomy by default: push, deploy and recommended options (owner, 2026-10-14)
+
+Who may merge, push, deploy, restart or close, the hard floor and its dated exceptions are stated once in
+[CONTRACT "Who may do what"](CONTRACT.md#who-may-do-what-one-rule-text); this section documents how the manager's evaluation implements them.
 
 OWNER_DECISIONS §15 ("yes merge, yes push, yes deploy, yes do the recommended one ... the correction can come at the
 end"). `topicSplit(text)` returns `{ merge, push, deploy, hard }`. A push or deploy counts only when the session asks to do
@@ -1540,7 +1544,8 @@ that is deep in a long file.
 
 ## Sessions are never auto-closed (owner, 2026-10-30)
 
-A session is closed only by the owner, by the manager (`DELETE /api/sessions/<s>?confirm=<s>`) or by the agent that spawned it.
+A session is closed only by the owner or by the agent that spawned it (`DELETE /api/sessions/<s>?confirm=<s>`); the manager closes one only
+when the owner asks for that session (owner, 2026-11-01). One rule text: [CONTRACT "Who may do what"](CONTRACT.md#who-may-do-what-one-rule-text).
 No ghosty tick sends `/exit` or `/quit` or kills a tmux session on its own. This replaces "Worker auto-close" (owner,
 2026-10-18, a done + idle + git-clean worker closed after `workerIdleMin`): `worker-auto-close.js` `shouldClose()` always
 returns `close:false`, `tick()` is a no-op, `server.js` does not start it and `manager.json` `workerAutoClose` is ignored
@@ -1777,7 +1782,7 @@ A task is **orphaned** when it has at least one open/in-progress row the session
 
 ## Integration lane (round 13, owner 2026-10-18)
 
-Design: [docs/v2/INTEGRATION-LANE.md](v2/INTEGRATION-LANE.md). Sessions are developers: they push a branch and ask the lane to integrate it. One lane per
+Design: [docs/v2/INTEGRATION-LANE.md](v2/INTEGRATION-LANE.md). The rule text (who merges, pushes and deploys): [CONTRACT "Who may do what"](CONTRACT.md#who-may-do-what-one-rule-text). Sessions are developers: they push a branch and ask the lane to integrate it. One lane per
 repository, run by the server in its own clone, one request at a time per repo (repos run in parallel).
 
 - **Rule:** Never ask the owner, or end a turn waiting on anyone, for a merge or PR decision: run `integrate request`, then keep working on anything independent, and end the turn with `STATUS: waiting: integration <id>` only when nothing else is left (owner, 2026-11-01). A session that stops on a merge or PR decision anyway (`STATUS: waiting/blocked/needs-owner` naming a merge or PR) is classified `merge_wait`: the manager queues the branch with the lane and tells the session the integration id; with no lane repo it runs the merge evaluation. A failure is a manager item of kind `merge`; only a hard-floor word (force-push, secrets) reaches the owner.
