@@ -94,7 +94,14 @@ function leasesConflict(a, b, ignoreModes = false) {
   if (a.agent === b.agent) return false;
   if (a.deployId && a.deployId === b.deployId) return false;      // a claim that joined a running deploy's lease group
   if (a.shared && b.shared) return false;
-  return a.resources.some((x) => b.resources.some((y) => resourceConflict(P(x), P(y), kindOf(a, x), kindOf(b, y))));
+  return a.resources.some((x) => b.resources.some((y) => !serverHold(a, x, b, y) && resourceConflict(P(x), P(y), kindOf(a, x), kindOf(b, y))));
+}
+// A shared hold of `server` (a CI guard: "do not restart it") wants the same thing a server-sensitive device lease wants, so the two do
+// not conflict (bug-ad68f59e). A restart/deploy claim of `server` is not shared and still conflicts with both.
+function serverHold(a, x, b, y) {
+  const hold = (l, c) => l.shared && P(c).type === 'server';
+  const dev = (c) => { const t = P(c).type; return t === 'host' || t === 'device'; };
+  return (hold(a, x) && dev(y)) || (hold(b, y) && dev(x));
 }
 const PRIOS = ['P0', 'P1', 'P2', 'P3'];     // P3 = background (scheduled bots)
 const isPrio = (p) => PRIOS.includes(p);
@@ -1337,6 +1344,10 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
       if (!isStr(a.agent)) return fail('E_INVALID', 'agent required');
       const at = parseTs(a.at), started = parseTs(a.started);
       if (at === false || started === false) return fail('E_INVALID', 'bad timestamp (epoch seconds or ISO 8601)');
+      // bug-2495f66e: a host key that is one name written twice, or two known names glued together, would be leased by every later host deploy
+      const known = Object.keys(S.deployed[a.env.toLowerCase()] || {}).filter((k) => !GENERIC.includes(k));
+      const glued = [...hostList(a.hosts), ...hostList(a.fail_targets), ...hostList(a.skipped_hosts)].find((h) => !known.includes(h) && (/^(.{3,})\1$/.test(h) || known.some((k) => h.startsWith(k) && known.includes(h.slice(k.length)))));
+      if (glued) return fail('E_INVALID', `host ${JSON.stringify(glued.slice(0, 80))} looks like two host names written together`);
       return mutate((emit) => {
         const r = ledgerRecord(emit, {
           env: a.env.toLowerCase(), scope: scopes.join(','), hosts: hostList(a.hosts), ref: a.ref || '', commit: a.commit || '', version: a.version || '', agent: a.agent, status: a.status,

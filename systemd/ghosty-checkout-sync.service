@@ -1,0 +1,10 @@
+# EXAMPLE (user unit, ~/.config/systemd/user/): replace /home/<user>/ghosty-sessions with your checkout path. Not installable as is.
+# Fast-forwards ~/virtualpytest to origin/main when it is clean and on main; skips and logs otherwise (scripts/checkout-sync.sh).
+[Unit]
+Description=Ghosty: fast-forward a shared checkout to origin/main when it is clean and on main
+
+[Service]
+Type=oneshot
+ExecStart=/home/<user>/ghosty-sessions/scripts/checkout-sync.sh %h/virtualpytest
+TimeoutStartSec=3min
+Nice=10

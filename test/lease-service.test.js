@@ -81,6 +81,25 @@ test('modes, same agent, shared and sensitivity defaults', async () => {
   assert.ok(held(await h.svc.claim({ env: 'env-b', resources: ['host-1/device1'], agent: 'zz' }).then(async () => h.claim('zz2', 'host-1/device1'))), 'envs are separate but the same env conflicts');
 });
 
+test('deploy record rejects a host key that is a name written twice or two known names glued (bug-2495f66e)', async () => {
+  const d = harness().svc.deploy;
+  const base = { env: 'env-a', scope: 'host', agent: 'u', status: 'done', ref: 'r1' };
+  assert.ok((await d.record({ ...base, hosts: 'vpt-wise1,vpt-pi1' })).ok);
+  assert.equal((await d.record({ ...base, ref: 'r2', hosts: 'vpt-wise1vpt-wise1' })).code, 'E_INVALID');
+  assert.equal((await d.record({ ...base, ref: 'r3', hosts: 'vpt-pi1vpt-wise1' })).code, 'E_INVALID');
+  assert.ok((await d.record({ ...base, ref: 'r4', hosts: 'vpt-new9' })).ok, 'a new real host is accepted');
+});
+
+test('a shared server hold (CI guard) coexists with a server-sensitive device lease; a deploy of the server does not (bug-ad68f59e)', async () => {
+  const h = harness();
+  assert.ok((await h.claim('dev', 'host-1/device1', { kind: 'server' })).ok);
+  assert.ok((await h.claim('ci', 'server', { kind: 'server', shared: true })).ok, 'CI hold is granted next to the device lease');
+  assert.ok((await h.claim('ci2', 'server', { kind: 'server', shared: true })).ok, 'a second CI hold too');
+  assert.ok(held(await h.claim('deploy', 'server', { kind: 'server' })), 'a non-shared server claim still conflicts with the hold');
+  await h.svc.release({ agent: 'dev' });
+  assert.ok((await h.claim('dev2', 'host-1/device1', { kind: 'server' })).ok, 'a server-sensitive device claim is granted next to the hold');
+});
+
 test('env validation: an unknown env (a host name used as env) is E_INVALID; without a list any sane token is accepted', async () => {
   const h = harness();
   const r = await h.svc.claim({ env: 'host-1', resources: ['frontend'], agent: 'a' });

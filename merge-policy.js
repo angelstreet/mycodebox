@@ -114,7 +114,8 @@ export async function repoToplevel(cwd) {
 const CODE_EXT = /\.(?:m?[jt]sx?|cjs|py|sh|bash|ps1|psm1|bat|cmd|rb|go|rs|java|c|cc|cpp|h|json|ya?ml|toml|sql|service|timer|socket|html?|css|php|pl)$|(?:^|\/)(?:GNU)?makefile$/i;
 const DOC_NAMES = /(^|\/)(?:LICENSE|CHANGELOG|NOTICE|AUTHORS|CONTRIBUTING|CODEOWNERS)(?:\.(?:md|txt))?$/;
 export const isDocFile = (f) => /\.(?:md|markdown)$/i.test(f) || DOC_NAMES.test(f) || (/^docs\//.test(f) && !CODE_EXT.test(f));
-const DOC_IMAGE = /^docs\/.*\.(?:png|jpe?g|gif|svg)$/i;
+// docs images and the Pages-tab thumbnails (frontend/public/project-pages/<key>.png, CUSTOM_PAGES.md; bug-b9ac5715) are not a binary floor
+const DOC_IMAGE = /^(?:docs\/.*|frontend\/public\/project-pages\/[^/]+)\.(?:png|jpe?g|gif|svg|webp)$/i;
 export const isConvention = (f, conv) => conv.some((c) => f === c || basename(f) === c);
 const SENSITIVE_CONTENT = [
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----/, 'private key'], [/AKIA[0-9A-Z]{16}/, 'cloud access key'], [/ghp_[A-Za-z0-9]{30,}/, 'git host token'],

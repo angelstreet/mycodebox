@@ -453,8 +453,8 @@ test('M6: an unscannable diff and a new binary file fail closed', async () => {
   const big = await gitFacts({ cwd: makeRepo({ files: { 'big.js': 'ab\n'.repeat(1300000) } }), branch: 'feat' });
   assert.ok(big.scanError);
   assert.ok(mergeFloor(big, testEvidence(GREEN), {}).includes('diff too large or unreadable to scan'));
-  const bin = await gitFacts({ cwd: makeRepo({ files: { 'x/data.bin': 'a\0b\0c', 'docs/shot.png': 'a\0b' } }), branch: 'feat' });
-  assert.deepEqual(bin.binary, ['x/data.bin']);
+  const bin = await gitFacts({ cwd: makeRepo({ files: { 'x/data.bin': 'a\0b\0c', 'docs/shot.png': 'a\0b', 'frontend/public/project-pages/cov.png': 'a\0b', 'frontend/public/other/x.png': 'a\0b' } }), branch: 'feat' });
+  assert.deepEqual(bin.binary.sort(), ['frontend/public/other/x.png', 'x/data.bin']);
   assert.match(mergeFloor(bin, testEvidence(GREEN), {}).join(), /adds a binary file: x\/data\.bin/);
 });
 test('M7: CI / deploy / infra and more secret file names are sensitive', async () => {
