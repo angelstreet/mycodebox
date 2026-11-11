@@ -33,6 +33,7 @@ const CONTINUE = 'Step 1 is done.\nShall I continue with step 2?';
 const tick = (name, state, plain, now) => m.observe({ name, state, agent: 'claude', plain, raw: plain, changed: true, realWork: state === 'working', project: 'p', now });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const flush = () => sleep(30);
+const until = async (f, ms = 3000) => { for (const t = Date.now(); Date.now() - t < ms && !f(); ) await sleep(20); };   // the log is written async: poll, a fixed sleep flakes under load
 const records = () => (existsSync(m.LOG_FILE) ? readFileSync(m.LOG_FILE, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []);
 const rec = (type, n) => records().filter((r) => r.type === type && r.session === n);
 const sentTo = (n) => [...keys, ...texts].filter((x) => x[0] === n);
@@ -100,6 +101,7 @@ test('owner Resume clears a manager hold', async () => {
   assert.ok(meta.held('h3'));
   assert.equal(m.releaseHold('h3'), true);
   await flush();
+  await until(() => rec('resume', 'h3').length > 0);
   assert.equal(meta.held('h3'), null);
   assert.equal(rec('resume', 'h3').at(-1).by, 'owner');
   assert.equal(m.releaseHold('h3'), false, 'nothing left to release');

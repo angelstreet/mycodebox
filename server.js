@@ -3137,6 +3137,7 @@ server.listen(PORT, HOST, async () => {
   integrationOwnJobs = ownJobs;
   setInterval(() => ownJobs.tick().catch((e) => console.error('[own-jobs] tick', e.message)), 20000).unref?.();
   await initManager({
+    onJudgeDown: (a) => push.record({ title: a.title, body: a.body, url: '/', tag: `judge-down-${a.kind}`, priority: 'high' }),
     ownJobs, integration: integrationLane,
     managerSessions: loadManagerSessions,
     credits: () => credits.peek(),
