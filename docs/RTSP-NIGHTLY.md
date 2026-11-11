@@ -14,7 +14,9 @@ Owner: "send a worker every night, MiniMax, to check the RTSP video and replace 
 ## The check (`rtsp_check.py`)
 
 Per stream: `ffprobe` (10 s timeout, TCP) connects and finds a video stream (codec, resolution), then `ffmpeg` decodes 12 frames
-as `framemd5`: the md5s must differ and the pts must advance, otherwise the stream is `frozen`. Statuses: `ok`, `no_connect`,
+as `framemd5`: the md5s must differ and the pts must advance, otherwise the stream is `frozen`. A **file** source that opens
+on a black leader (seconds of identical frames, e.g. Plan 9 on `lenovo-local-hd`) is probed again 60 s in, so a film that plays
+is not called frozen (found and fixed 2026-11-11). Statuses: `ok`, `no_connect`,
 `no_video`, `frozen`, `timeout`, `unverified` (a loopback source on a host with no ssh alias: only the host can reach it).
 `rtsp_check.py URL...` checks URLs, `--inventory` checks every `DEVICE<n>_VIDEO=rtsp(s)://` of the hosts of the configured servers
 (read through `GET /server/settings/host-config`). `--json` for JSON. Exit 0 all ok, 1 not ok, 2 nothing checked. Every printed
@@ -60,6 +62,9 @@ The journal keeps the per-stream check events, not the inventory errors, so a ni
   On 2026-11-11 the public candidates (`rtsp.stream`, the Wowza demo) were not reachable from codebox or three lab hosts (port 554
   blocked or the streams gone), so none is vetted: only `smoke` (on the one lab host that runs `vpt-rtsp`) is. Until a public source is vetted, a dead public
   stream is reported as "no vetted pool source plays now" on every host without `vpt-rtsp`.
+  Re-probed on the night of 2026-11-11 from `vpt-pi4` (the host that runs `vpt-rtsp`, so the best possible vantage): all three
+  public candidates still time out on port 554, `smoke` still plays (h264 640x360). **The pool is not edited by the nightly**: a
+  candidate that is not reachable from the host that would play it stays unvetted.
 
 **Pool (2026-11-11): rtsp = loopback smoke only.** Public RTSP on 554 is blocked from codebox and three lab hosts, so no public rtsp source is vetted; a dead public rtsp stream is reported. HLS devices never use this pool.
 
@@ -100,6 +105,32 @@ is in no list cannot be repaired (no group known) and is reported. The verified 
 report 05:15), clear of the 00:30 host cron windows and of the CoC hourly tail (`:00` to about `:38`), 45 min before the Pokemon
 review (06:30) and the CoC review (07:30). Mode comes from `<state>/rtsp-nightly/mode` (`dry` unless it holds `live`). The first live
 night is the manager's switch after reading one dry report: `echo live > ~/.local/state/ghosty/rtsp-nightly/mode`; back with `echo dry >`.
+The mode file held `live` on 2026-11-11 (first live night, done by hand from the `feat/rtsp-nightly-*` worktree).
+
+### Night of 2026-11-11 (the first live one)
+
+99 streams checked, **2 replaced**, 0 rolled back, 0 cameras down. Three passes, because two things needed a second look:
+
+1. First pass: 99 checked, 28 ok, 11 down, 1 replaced (`vpt-nipogi/DEVICE34`, a dead HLS channel, replaced by another channel of
+   the same group and renamed). The 60 file streams of `lenovo-local-hd` and `lenovo-local-low` were `unverified` (no ssh alias
+   for them in `RTSP_CHECK_SSH`): they are the boxes `vpt-lenovo-2` and `vpt-lenovo-3` (hostname and machine-id checked on
+   2026-11-11), and with the aliases added the night covers all 99.
+2. The dead Euronews FR channel (`vpt-nipogi/DEVICE2`) was **not** repaired in the first pass: the host lease was held by another
+   session for the whole 20 min wait, so the run gave up and reported it. **A busy lease costs the night one stream**: the run
+   waits for the lease, then reports without touching anything, and the stream stays down until the next pass. A second pass
+   with `RTSP_LEASE_MAX_WAIT=5` took the lease and restored the same channel under its new upstream URL (the device kept its name).
+3. Last pass (with the fixes): 99 checked, **89 ok, 0 unverified**, 10 down (8 empty sources + 2 live channels that were frozen
+   for a moment and played on the re-probe). Nothing left to repair: both replaced streams play.
+
+The night's budget is `maxReplacementsPerNight` (3) **for the day, not for the run**: the count comes from the journal, so two
+passes share it.
+
+`lenovo-local-hd/DEVICE7` (Plan 9) was the one `frozen` file: the film opens on a black leader of 8 identical seconds and the
+probe only looked at the first 3, so a file that plays fine was reported as frozen (fixed in `rtsp_check.py` the same night, with
+a test). A live picture that does not move is still reported as frozen and never changed.
+
+The run also left its scratch file (the chosen source) in the state dir, one per replacement and per night; it is now deleted
+after the apply step (test asserts the state dir holds no `apply-*` file).
 
 The session is MiniMax started by `cbsession` from the `~/ghosty-sessions` checkout (it makes its own worktree). It runs
 `rtsp_replace.py`, reads the report, writes one line to the manager as the first line of its STATUS when a stream was replaced,
@@ -115,6 +146,12 @@ rolled back or a camera is down, and files `found-bug` for a camera down or a ro
 (`unverified`, never `ok`), so with it unset every down stream is only reported. The live path also needs `vpt-lease` on the PATH of
 the session: `~/.local/bin` is where `cbsession` puts the agent tools, and the night otherwise reports "the lease command could not
 be run" and touches nothing.
+
+**Every host with a file or loopback source needs an ssh alias here**, or its streams are `unverified` (not checked at all, which
+looks like "fine" in the report). The host name on the server and the ssh alias are not always the same string: on 2026-11-11 the
+server's `lenovo-local-hd` and `lenovo-local-low` are the boxes `vpt-lenovo-2` and `vpt-lenovo-3` (hostname and machine-id checked).
+`RTSP_LOOPBACK_HOSTS` names the hosts that run `vpt-rtsp` (where the `smoke` source exists). A host that is missing from
+`RTSP_CHECK_SSH` is worth a look after every night: the report counts them as `unverified`.
 
 ## Install (user timer, host-unit routine path: reviewed and merged repo change, nothing replaced)
 
