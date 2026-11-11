@@ -448,6 +448,7 @@ def claim_body(a, wait=None):
     if getattr(a, "priority_since", None):
         body["priority_since"] = a.priority_since
     hp = getattr(a, "holder_pid", None) or int(os.environ.get("VPT_HOLDER_PID") or 0) or (session_holder_pid(a.agent) if a.mode == "exclusive" else 0) or 0
+    hp = checked_holder_pid(hp, getattr(a, "holder_host", None))
     if hp > 1:       # the service releases the lease when this pid (on holder_host) is gone; only sent when the caller names a long-lived pid
         body["holder_pid"] = hp
         body["holder_host"] = getattr(a, "holder_host", None) or socket.gethostname()
@@ -576,6 +577,21 @@ def session_alive(name):
     """True / False from tmux, None when tmux cannot be asked."""
     r = tmux_q(["has-session", "-t", "=" + name])
     return None if r is None else r.returncode == 0
+
+
+def checked_holder_pid(pid, host):
+    """An explicit holder pid that is not alive on this host is dropped with a warning (bug-81094e7d: a typed pid 756 made the reaper
+    release five of one agent's leases in 50 min). Another host's pid cannot be probed here: passed through."""
+    if not pid or pid <= 1 or (host and host != socket.gethostname()):
+        return pid
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        eprint("vpt-lease: holder pid %d is not running on this host: the claim goes without a holder pid (TTL applies); pass the pid of a long-lived process" % pid)
+        return 0
+    except OSError:
+        pass   # exists, not ours to signal
+    return pid
 
 
 def session_holder_pid(agent):

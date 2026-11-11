@@ -77,6 +77,16 @@ test('claim: granted prints the lease id on line 1, sends the contract body and 
   assert.equal(c.body.wait, undefined);
 });
 
+test('claim: an explicit --holder-pid that is not running here is dropped with a warning; a live one is sent (bug-81094e7d)', async () => {
+  setup(() => ({ ok: true, lease: lease({ id: 'hp000001', resources: ['env-a/device:host-1/stb-1'] }) }));
+  const dead = await run(['claim', 'env-A', 'host-1/stb-1', '--agent', 'codebox:x', '--purpose', 'run', '--holder-pid', '4194300']);
+  assert.equal(dead.code, 0); assert.match(dead.err, /holder pid 4194300 is not running/);
+  assert.equal(calls[0].body.holder_pid, undefined);
+  setup(() => ({ ok: true, lease: lease({ id: 'hp000002', resources: ['env-a/device:host-1/stb-1'] }) }));
+  const live = await run(['claim', 'env-A', 'host-1/stb-1', '--agent', 'codebox:x', '--purpose', 'run', '--holder-pid', String(process.pid)]);
+  assert.equal(live.code, 0); assert.equal(calls[0].body.holder_pid, process.pid);
+});
+
 test('claim: broad claim warns on stderr and a free-form agent name is flagged', async () => {
   setup(() => ({ ok: true, lease: lease({ id: 'w1' }) }));
   const r = await run(['claim', 'env-a', 'host-1', '--agent', 'script', '--ttl', '300', '--kind', 'server']);
