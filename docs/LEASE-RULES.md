@@ -161,7 +161,7 @@ Hours were lost waiting on one web host while the other was free. When the work 
   After skipping again it waits 10 min before its next try, one pending catch-up per host set (a newer ref replaces an older one), and it yields to a device ticket that has waited over 10 min.
 - A queued host deploy gates claims PER HOST (owner 2026-11-11: four free STB boxes, 13 tickets waiting, none granted because two catch-ups
   spanning other hosts waited on a Mi run). It never holds a host it does not touch. On a host its own blocking leases hold, it only stops
-  NEW claims of lower priority than the deploy (it counts as P0, so P1..P3), for at most 10 min after it became ready; then they go ahead.
+  NEW claims of lower priority than the deploy (it counts as P0, so P1..P3), for at most 10 min after it became ready; then they go ahead. Starvation guard: a deploy that has waited 30 min on a host (P1 claims keeping it busy one after another) closes the gate again on every new P1..P3 claim of that host until it starts, so it wins the next gap.
   On a host nothing blocks, the claim waits for the deploy, which is the next to run there (bounded by the same 10 min, and never behind
   another running or older overlapping deploy). A request limited to `--hosts` that is blocked on only some of them starts on the free ones;
   the busy hosts go back to the queue as their own strict request (same ref and age, `split-to=` in `deploy list`). A request whose host

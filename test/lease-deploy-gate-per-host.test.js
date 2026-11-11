@@ -111,3 +111,35 @@ test('a ticket that looks grantable but is gated says which deploy gates it', as
   const l = (await h.svc.list()).tickets.find((x) => x.id === t.id);
   assert.ok(l.gate_note, 'list carries it too');
 });
+
+test('starvation guard: a deploy that waited 30 min behind overlapping P1 claims on two devices of its host wins the next gap (manager 2026-11-11, vpt-pi1)', async () => {
+  const h = harness();
+  const P1 = (n, dev) => h.claim(`agent:p${n}`, `vpt-pi1/device${dev}`, { kind: 'host', priority: 'P1', ttl_min: 300 });
+  const lane = { 3: (await P1(0, 3)).lease, 4: null };
+  const r0 = await h.d.request({ env: 'lab', scope: 'host', ref: 'r', agent: 'a', hosts: ['vpt-pi1'], approved: true, purpose: 'catch-up for x' });
+  await h.d.start({ id: r0.id, skip_leased: true });
+  const q = { id: (await h.d.finish({ id: r0.id, status: 'done', skipped_hosts: 'vpt-pi1' })).catchup };   // the strict re-arm that waits for pi1
+  await h.advance(10 * MIN);                                      // cooldown over: ready now
+  const t0 = h.clock.t;
+  assert.equal((await h.d.start({ id: q.id })).code, 'E_HELD');
+  await h.advance(11 * MIN);                                      // the 10 min window passes with device3 still held
+  lane[4] = (await P1(99, 4)).lease;                              // P1 claims go ahead now
+  assert.ok(lane[4], 'P1 on device4 after the window');
+  // pi1 is never free: the two devices change hands 5 min apart, the next P1 claims before the other one releases
+  let n = 1, started = null, chained = 0, firstRefusal = null;
+  for (let step = 0; step < 24 && !started; step++) {
+    await h.advance(5 * MIN);
+    const dev = step % 2 ? 3 : 4, other = dev === 3 ? 4 : 3;
+    const old = lane[dev];
+    if (old) await h.svc.release({ id: old.id });                // this device's holder ends...
+    const next = await P1(n++, dev);                              // ...and the next P1 takes it while the other device is still held
+    if (next.ok) { lane[dev] = next.lease; chained++; continue; }
+    assert.equal(next.code, 'E_DEPLOY_PENDING'); firstRefusal ??= Math.round((h.clock.t - t0) / MIN);
+    lane[dev] = null;
+    if (!lane[other]) { const st = await h.d.start({ id: q.id }); if (st.ok) started = Math.round((h.clock.t - t0) / MIN); }
+    else await h.advance(1);                                      // the other holder ends at its next turn
+  }
+  assert.ok(chained >= 3, 'a chain of P1 claims went ahead after the 10 min window');
+  assert.ok(firstRefusal >= 30, `new claims are refused from +${firstRefusal} min (starvation guard)`);
+  assert.ok(started && started <= 45, `the deploy started in the gap at +${started} min`);
+});
