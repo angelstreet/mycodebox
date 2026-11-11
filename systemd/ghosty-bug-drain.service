@@ -1,0 +1,14 @@
+# User unit: install a copy into ~/.config/systemd/user (docs/BUG-DRAIN.md "Install"). Replace /home/<user> with the user's home.
+[Unit]
+Description=Ghosty: scheduled bug drain tick (dry until <state>/bug-drain/mode says live)
+After=network-online.target
+
+[Service]
+Type=oneshot
+# No User= / Group= in a user unit (216/GROUP on codebox, see the coc-daily-review unit).
+Environment=HOME=/home/<user>
+Environment=PATH=/home/<user>/.local/bin:/usr/local/bin:/bin:/usr/bin
+KillMode=process
+TimeoutStartSec=10min
+Nice=10
+ExecStart=/home/<user>/.local/bin/node /home/<user>/ghosty-sessions/scripts/bug-drain-tick.js
