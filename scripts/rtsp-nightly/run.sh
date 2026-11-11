@@ -19,4 +19,6 @@ CONF=$HOME/.config/rtsp-nightly/env
 # The prompt names the mode; the session sources the private config itself.
 PROMPT=$(mktemp "$STATE/prompt-XXXXXX.md")
 { sed "s/__MODE__/$MODE/g" "$HERE/prompt.md"; } > "$PROMPT"
-exec cbsession -n "rtsp-nightly-$(date -u +%Y%m%d)" -d "$HOME/ghosty-sessions" -p minimax -f "$PROMPT"
+# Name with the time: a second run on one day (a retry, a manual trigger) found the morning session still open and cbsession
+# refused to start ("tmux session ... already exists").
+exec cbsession -n "rtsp-nightly-$(date -u +%Y%m%d-%H%M)" -d "$HOME/ghosty-sessions" -p minimax -f "$PROMPT"
