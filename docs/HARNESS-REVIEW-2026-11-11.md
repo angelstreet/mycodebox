@@ -244,3 +244,43 @@ Design later:
 - Costs are ledger estimates, not billing; cache-read cost per model was not split.
 - Each feedback memory was not traced to a commit; the feedback-loop finding rests on the repeats named above.
 - No test was run and no endpoint was called: this review changes one doc only.
+
+## Follow-up: one-night lease report (item 9, 2026-11-11)
+
+Sources: `vpt-lease events` (registry, 2026-11-10 00:17 to 2026-11-11 08:12 UTC, all times UTC), `lease-nudges.jsonl`,
+`lease-actions.jsonl`. "Night" is 2026-11-10 20:22 to 2026-11-11 07:12: it starts when the waiting-claim orphan check merged
+and ends when the abandoned-claim fix (`54f6b48`) merged. The service restarted at 08:06 and 08:13, so the decisive fix was
+**not live for any full night yet**. Baseline is 00:17 to 20:22 on 2026-11-10.
+
+| Measure | Baseline (20 h) | Night (11 h) | After 07:12 (1 h) |
+|---|---|---|---|
+| Wait tickets started | 44 | 465 (420 cancelled, 1 missed) | 11 |
+| Longest wait / median | 2 min / 0.1 | 30 min / 2 min | 0 / 0 |
+| Waits of 30 min or more | 0 | 1 | 0 |
+| Holders that ran to the TTL (never released) | not counted | 50 (content-mobile, kpi-stb, content-web) | 1 |
+| Holders reaped for no heartbeat (15 min) | not counted | 9 (8 are one agent, kpi-stb, on two devices) | 0 |
+| Named waits while a free equivalent existed (nudge) | n/a | 7 (4 after the 22:26 health fix: 23:00, 23:24, 04:58, 05:02) | 0 |
+| Waits with no free equivalent (nudge, 15 to 17 min) | n/a | 8 (all before 22:05) | 0 |
+| Idle-holder nudges | n/a | 5 (idle 21, 21, 21, 33 and 86 min) | 1 (past expected time, 11 min) |
+| Holder-gone reaper releases | 0 | 6 | 0 |
+
+Reading:
+
+- **Named waits**: no wait reached the 11 h of the previous night; the longest was 30 min. The rule "never wait on a named
+  device while an equivalent is free" is still only a nudge: 7 sessions waited while one was free, 4 of them after the fix
+  that made equivalents real. The nudge arrives 1 to 41 min into the wait.
+- **Orphan claims**: 420 tickets were cancelled (10 times the baseline count; the cause, retries or the new orphan check, was not
+  separated, not verified). 50 holders did not release and ended at the TTL; that is the idle-holder class the 07:12 fix targets.
+- **Idle holders**: one was caught only after 86 min idle (02:46), the same gap as 11-10. Not closed.
+- **`pid 756` releases (5 of the 6)**: all for one agent (`codebox:bug-0756`), each a different lease id, 19:44 to 20:35 on
+  11-10, `src: claim`, so the claim itself carried `holder_pid` 756 (not the name-derived pid). The digits equal the session
+  name, so a made-up or mistaken pid is the likely origin; the registry journal for that day was empty, so the claim call
+  could not be read back (not verified). Effect: the agent lost five leases in 50 min. The 11-11 auto holder (pane pid) does
+  not use a typed pid, but a typed `--holder-pid` is still accepted unchecked (filed as an improvement, see the closing line).
+  The sixth release (`TASK-168-842439`, a real pid that died) is correct behaviour.
+
+**Row 3 of Q1 is not closed.** Named waits are down from hours to at most 30 min, but idle holders (86 min nudge, 50 TTL
+endings, 8 no-heartbeat reaps) and named waits beside a free equivalent (4 after the fix) still occur, and the main fix was
+not live overnight. Re-run this report on the night of 2026-11-11 to 2026-11-12 (window 21:00 to 07:00 UTC) with the same
+three sources; row 3 closes when there is no wait above 30 min, no named wait beside a free healthy equivalent, no idle-holder
+nudge above 30 min and no `holder-gone` release for a live session.

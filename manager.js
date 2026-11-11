@@ -45,6 +45,7 @@ import { createJevSwitch, isDisabledReply, DISABLED } from './jev-switch.js';
 import { createWakeAnnotator, dueOutcomes, OUTCOME_BY, CAP_MS } from './wake-shadow.js';
 import { classifyKey, FILE_NAME as EVENTS_FILE } from './manager-events.js';
 import { isHardwareAsk, readyReply } from './ready-window.js';
+import { createJudgeAlarm } from './judge-alarm.js';
 import { createFallbackDecider, FALLBACK_MODES, FALLBACK_SOURCE } from './minimax-fallback.js';
 import { createRoundtrips, roundtripRecord, summarizeRoundtrips, FILE_NAME as ROUNDTRIPS_FILE } from './roundtrips.js';
 import { createDecisionsClient, createOutcomeQueue, outcomeFromLabel, outcomeFromReplyKind, outcomeBody, jevRequestBody, effectiveLabels, effectiveAiVerdicts, tabData, decisionsPage, MANAGER_USAGE, FALLBACK_USAGE } from './decisions.js';
@@ -99,6 +100,8 @@ let triageContext = () => ({});   // injected by server.js: (session) -> { prior
 let reviewerFetch = (...a) => fetch(...a);
 const watch = new Map();   // session -> { since, hash, stall, pending: {id, at, auto}, last, auto }
 const sentLog = new Map(); // session -> [ms epoch of each auto answer] (hourly cap)
+let judgeAlarmPush = () => {};   // injected: ({ kind, why, minutes, title, body }) -> one owner push per outage
+const judgeAlarm = createJudgeAlarm({ file: join(STATE_DIR, 'judge-alarm.json'), push: (a) => judgeAlarmPush(a) });
 let notify = () => {};
 let send = { key: null, keys: null };   // injected by server.js: the one tmux code path
 let isPaused = () => false;             // injected by server.js: the owner's pause hold (session-meta.js)
@@ -124,7 +127,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 export const stopKey = (text) => String(text || '').replace(/\s+/g, '').slice(-400);
 const hash = (s) => createHash('sha1').update(s).digest('hex').slice(0, 10);
 
-export async function initManager({ managerSessions, credits, onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context, onHandoff = () => {}, onMergeDecision: mergeHook, onMergeCancelled: cancelHook, mergeJev: mergeJevFn, decideContext: decideCtx, onDigest: digestHook, onNotice, leaseView, onStatus, onManagerItem, hasOpenAsk, ownJobs: ownJobsDep, integration: integrationDep, readyStore } = {}) {
+export async function initManager({ onJudgeDown, managerSessions, credits, onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context, onHandoff = () => {}, onMergeDecision: mergeHook, onMergeCancelled: cancelHook, mergeJev: mergeJevFn, decideContext: decideCtx, onDigest: digestHook, onNotice, leaseView, onStatus, onManagerItem, hasOpenAsk, ownJobs: ownJobsDep, integration: integrationDep, readyStore } = {}) {
   await mkdir(STATE_DIR, { recursive: true });
   try {
     const saved = JSON.parse(await readFile(CONFIG_FILE, 'utf8'));
@@ -158,6 +161,7 @@ export async function initManager({ managerSessions, credits, onOwnerNeeded, sen
   if (managerSessions) managerSessionsOf = managerSessions;
   if (credits) creditsPeek = credits;
   if (onOwnerNeeded) notify = onOwnerNeeded;
+  if (onJudgeDown) judgeAlarmPush = onJudgeDown;
   if (sendKey) send.key = sendKey;
   if (sendKeys) send.keys = sendKeys;
   if (paused) isPaused = paused;
@@ -517,6 +521,7 @@ export async function triageStop({ name, id, final, jevOut, state, agent, projec
   }
   // what the eval sync and the Langfuse generation show: the prompt version used and the facts' flags (no closing text)
   const ctxInfo = { ...(fb ? { source: FALLBACK_SOURCE, fallback: fb } : {}), ...(prompt.version != null ? { prompt: { name: prompt.name, version: prompt.version } } : {}), src: final.source, flags };
+  if (r.ai) judgeAlarm.ok('triage'); else if (r.error) judgeAlarm.fail('triage', r.error);
   return finish(r.ai ? { ...ctxInfo, ai: r.ai, cost: r.cost, costEstimated: r.costEstimated, ms: r.ms, model: r.model, tin: r.tin, tout: r.tout } : { ...ctxInfo, error: r.error, cost: r.cost || 0, ms: r.ms });
 }
 
@@ -846,7 +851,8 @@ export const resetJevCooldown = () => { creditsDownUntil = 0; };   // tests, and
 // MiniMax M3 through headless mcode instead of being skipped. Every call is logged ({type:'fallback', source:'minimax-fallback'}) and counted.
 let fallbackDecider = null;
 export const setFallbackDecider = (d) => { fallbackDecider = d; };   // tests inject a fake-mcode decider
-const getFallback = () => (fallbackDecider ||= createFallbackDecider());
+const providerDeciders = {};
+const getFallback = () => fallbackDecider || (providerDeciders[config.aiFallback] ||= createFallbackDecider({ provider: config.aiFallback === 'claude' ? 'claude' : 'mcode' }));
 const creditsOut = () => { if (Date.now() < creditsDownUntil) return true; try { const cr = creditsPeek(); return !!(cr?.ok && cr.balance != null && cr.balance <= 0); } catch { return false; } };
 const fallbackOn = () => config.aiFallback !== 'off';
 const fallbackGate = () => (!fallbackOn() ? 'MiniMax fallback is off' : fallbackBudget.over(Infinity, config.aiFallbackDailyCalls) ? `MiniMax fallback daily cap reached (${config.aiFallbackDailyCalls})` : null);
@@ -925,7 +931,7 @@ function shadowRoute({ id, session, agent, final, stall, escalated, escalatedTo 
     (async () => {
       const tech = technicalStop(final);
       const rec = { type: 'router', id, session, rule_case: final.case, escalated, escalated_to: escalatedTo, technical: tech.technical, technicalWhy: tech.why };
-      const skip = (why) => { st.done = true; return logLater({ ...rec, router: { skipped: why } }); };
+      const skip = (why) => { st.done = true; if (/credit|Jev down/.test(why)) judgeAlarm.fail('router', why); return logLater({ ...rec, router: { skipped: why } }); };
       if (jevSwitch.off()) return skip(DISABLED);
       if (budget.day !== today()) budget = { day: today(), calls: 0, cost: 0 };
       if (budget.cost >= JEV_DAILY_USD || budget.calls >= JEV_DAILY_CALLS) return skip('daily budget reached');
@@ -937,7 +943,8 @@ function shadowRoute({ id, session, agent, final, stall, escalated, escalatedTo 
         facts: { session, agent, forbidden: final.forbidden, no_status: final.no_status, excerpt: stall.excerpt, stallId: id, ruleCase: final.case, escalated },
         kindOf: jevErrorKind });
       if (router.skipped === DISABLED) { jevSwitch.markOff(); st.done = true; return logLater({ ...rec, router }); }
-      if (router.error && !/^http 2\d\d$/.test(router.error)) jevBreaker.failure(router.error); else jevBreaker.success();   // an answer the shadow could not parse (http 200) is not an outage
+      if (router.error && !/^http 2\d\d$/.test(router.error)) jevBreaker.failure(router.error); else jevBreaker.success();
+      if (router.error) judgeAlarm.fail('router', router.error); else if (!router.skipped) judgeAlarm.ok('router');   // an answer the shadow could not parse (http 200) is not an outage
       budget.calls += 1; budget.cost += Number(router.cost || 0);
       saveBudget();
       st.decision_id = router.decision_id || null; st.done = true;

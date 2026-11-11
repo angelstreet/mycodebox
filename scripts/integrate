@@ -107,6 +107,8 @@ case "$cmd" in
     [ -n "$SESSION" ] || { [ -n "$TMUX" ] && SESSION=$(tmux display-message -p '#S' 2>/dev/null); }
     # on the Mac the tmux name is a Mac session: the server only accepts `mac:`-prefixed names from a remote client
     case "$SESSION" in ""|mac:*) ;; *) [ "$(uname -s)" = Darwin ] && SESSION="mac:$SESSION" ;; esac
+    # a Mac request is always external: label it with the session name (or "mac") unless --mac says otherwise
+    [ -n "$MAC" ] || { [ "$(uname -s)" = Darwin ] && MAC=${SESSION:-mac}; }
     ORIGIN=$(git remote get-url origin 2>/dev/null)
     BODY="{\"branch\":\"$(json_esc "$BRANCH")\",\"cwd\":\"$(json_esc "$PWD")\""
     WT=$(git rev-parse --show-toplevel 2>/dev/null) && [ -n "$WT" ] && BODY="$BODY,\"worktree\":\"$(json_esc "$WT")\""

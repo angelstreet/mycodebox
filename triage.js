@@ -68,18 +68,36 @@ function parseOptions(v) {
   return out;
 }
 
+// The JSON object in a model answer. Reasoning models (MiniMax M3, small Claude models) wrap it in <think> blocks, fences or prose,
+// and the prose may hold braces: the old first-"{"-to-last-"}" slice then failed ("answer is not JSON", 559 of 783 fallback calls).
+// Strips think blocks and fences, scans every balanced top-level {...} (string-aware) and returns the LAST object that has one of
+// `keys` (else the last object), or null. `keys` lets a stray example object in the reasoning lose against the real answer.
+export function extractJson(content, keys = []) {
+  let t = String(content ?? '').replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, '').replace(/^[\s\S]*<\/think(?:ing)?>/i, '').replace(/<think(?:ing)?>[\s\S]*$/i, '').trim();
+  t = t.replace(/```(?:json)?/gi, '').trim();
+  const objs = [];
+  try { const o = JSON.parse(t); if (o && typeof o === 'object' && !Array.isArray(o)) return o; } catch { /* scan */ }
+  for (let i = 0; i < t.length; i++) {
+    if (t[i] !== '{') continue;
+    let depth = 0, inStr = false, esc = false, end = -1;
+    for (let j = i; j < t.length; j++) {
+      const c = t[j];
+      if (inStr) { if (esc) esc = false; else if (c === '\\') esc = true; else if (c === '"') inStr = false; continue; }
+      if (c === '"') inStr = true; else if (c === '{') depth++; else if (c === '}' && --depth === 0) { end = j; break; }
+    }
+    if (end < 0) continue;
+    try { const o = JSON.parse(t.slice(i, end + 1)); if (o && typeof o === 'object' && !Array.isArray(o)) { objs.push(o); i = end; } } catch { /* next brace */ }
+  }
+  const keyed = objs.filter((o) => keys.some((k) => k in o));
+  return (keyed.length ? keyed : objs).at(-1) || null;
+}
+
 // Parses the reviewer's text defensively. Returns { ai } or { error }.
 // Whatever the model said, a reply that names a forbidden topic is never a proposal: it becomes owner_needed.
 export function parseReviewerAnswer(content) {
-  let t = String(content ?? '').trim();
-  if (!t) return { error: 'empty answer' };
-  t = t.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-  let obj = null;
-  try { obj = JSON.parse(t); } catch {
-    const a = t.indexOf('{'), b = t.lastIndexOf('}');
-    if (a >= 0 && b > a) { try { obj = JSON.parse(t.slice(a, b + 1)); } catch {} }
-  }
-  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return { error: 'answer is not JSON' };
+  if (!String(content ?? '').trim()) return { error: 'empty answer' };
+  const obj = extractJson(content, ['proposed_reply', 'owner_needed']);
+  if (!obj) return { error: 'answer is not JSON' };
   let reply = typeof obj.proposed_reply === 'string' ? obj.proposed_reply.replace(/\s+/g, ' ').trim().slice(0, 300) : '';
   const reasoning = typeof obj.reasoning === 'string' ? sentences(obj.reasoning, 3).slice(0, 500) : '';
   let confidence = Number(obj.confidence);

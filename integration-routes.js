@@ -133,7 +133,9 @@ export function createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk
         }
         // external origin (Mac/cloud branch queued by the manager or loopback): `mac` label, or a --for name that is not a live session
         const macLabel = typeof body.mac === 'string' && body.mac.trim() ? body.mac.trim() : null;
-        const external = who.by.startsWith('client:') ? null : macLabel || (forNote && body.forSession ? String(body.forSession) : null);
+        // A client token (Mac) has no session the server can wake: it is always external, labelled by --mac, else the per-request session name, else the client name (review 2026-11-11 item 4).
+        const clientSession = typeof body.session === 'string' && body.session.trim() ? body.session.trim().slice(0, 60) : null;
+        const external = who.by.startsWith('client:') ? (macLabel || clientSession || who.client) : macLabel || (forNote && body.forSession ? String(body.forSession) : null);
         const out = lane.enqueue({ repo, branch: body.branch, session, forSession, external, worktree: who.loopback && typeof body.worktree === 'string' ? body.worktree : null, deploy: body.deploy || null, note: body.note, sha: body.sha, by: who.by, approvedBy: body.approvedBy != null ? (who.by === 'loopback' ? String(body.approvedBy) : `${String(body.approvedBy)} (${who.by})`) : undefined, migrationApplied: body.migrationApplied === true ? true : undefined });
         send(res, 200, { ok: true, ...out, flat: { id: out.id, position: out.position, repo: out.repo, ...(out.coalesced ? { coalesced: 1 } : {}), ...(forSession ? { forSession } : {}), ...(forNote ? { forNote } : {}), ...(out.approvalIgnored ? { approvalIgnored: 1, approvalRefused: JSON.stringify(out.approvalRefused) } : {}) } }, fmt);
       } else if (req.method === 'GET' && sub === '/requests') {

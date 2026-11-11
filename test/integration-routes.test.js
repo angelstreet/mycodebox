@@ -287,6 +287,18 @@ test('INTEGRATION_MANAGER_CLIENT_ONLY=1: the shared reporter token no longer pas
   } finally { delete process.env.INTEGRATION_MANAGER_CLIENT_ONLY; b.close(); }
 });
 
+test('client:* requests are always external: --mac label, else the session name, else the client name', async () => {
+  const w = makeWorld(); w.branch('c1', { 'a.js': 'x\n' }); w.branch('c2', { 'b.js': 'x\n' }); w.branch('c3', { 'c.js': 'x\n' });
+  const b = await boot(w, { cfg: { test: 'fake' }, laneOpts: { run: () => new Promise(() => {}) } });
+  const hdr = { authorization: `Bearer ${CLIENT}` };
+  try {
+    const lab = async (body) => { const r = b.lane.get((await b.call('POST', `${P}/requests`, { body, headers: hdr })).json.id); return [r.origin, r.externalLabel]; };
+    assert.deepEqual(await lab({ branch: 'c1', mac: 'mac tetris' }), ['external', 'mac tetris']);
+    assert.deepEqual(await lab({ branch: 'c2', session: 'mac:sess-x' }), ['external', 'mac:sess-x']);
+    assert.deepEqual(await lab({ branch: 'c3' }), ['external', 'mac']);
+  } finally { b.close(); }
+});
+
 test('external origin: --mac label or an unknown --for marks the request; ack is manager-only and needs a result', async () => {
   const w = makeWorld(); w.branch('feat', { 'new.js': 'x\n' }); w.branch('feat2', { 'n2.js': 'x\n' }); w.branch('feat3', { 'n3.js': 'x\n' });
   const b = await boot(w);

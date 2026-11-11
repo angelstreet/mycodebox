@@ -10,7 +10,7 @@ import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync, accessSync, constants } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { REVIEWER_SYSTEM, buildReviewerPrompt, parseReviewerAnswer } from './triage.js';
+import { REVIEWER_SYSTEM, buildReviewerPrompt, parseReviewerAnswer, extractJson } from './triage.js';
 
 export const NO_LIGHTWEIGHT = 'mcode without lightweight mode';
 let warned = false;   // logged once per process
@@ -18,7 +18,9 @@ export const resetNoLightweightWarning = () => { warned = false; };   // tests
 export const FALLBACK_SOURCE = 'minimax-fallback';
 export const FALLBACK_MODEL = 'MiniMax-M3';
 export const FALLBACK_TIMEOUT_MS = 20000;
-export const FALLBACK_MODES = ['minimax', 'off'];
+export const FALLBACK_MODES = ['minimax', 'claude', 'off'];   // 'claude': a small Claude model on the plan through headless `claude -p` (owner switch, default stays minimax)
+export const CLAUDE_FALLBACK_MODEL = 'claude-haiku-5-5';
+export const CLAUDE_FALLBACK_TIMEOUT_MS = 45000;   // `claude -p` start-up plus a short answer: the 20 s MiniMax limit timed out 10% of calls
 const MAX_CONFIDENCE = 0.95;   // a self-reported confidence from a cheaper path never reaches certainty
 const MAX_OUT = 200000;
 
@@ -49,16 +51,17 @@ export function parseExecOutput(stdout) {
 // opts: { bin, nodeDir, model, timeoutMs, env, spawnFn, tmpRoot }
 export function createFallbackDecider(opts = {}) {
   const env = opts.env ?? process.env;
-  const timeoutMs = opts.timeoutMs ?? FALLBACK_TIMEOUT_MS;
-  const model = opts.model ?? FALLBACK_MODEL;
+  const claude = opts.provider === 'claude';
+  const timeoutMs = opts.timeoutMs ?? (claude ? CLAUDE_FALLBACK_TIMEOUT_MS : FALLBACK_TIMEOUT_MS);
+  const model = opts.model ?? (claude ? CLAUDE_FALLBACK_MODEL : FALLBACK_MODEL);
   const spawnFn = opts.spawnFn ?? spawn;
   const nodeDir = opts.nodeDir ?? env.MCODE_NODE_DIR ?? '';
-  let bin = opts.bin ?? env.MCODE_BIN ?? 'mcode';
+  let bin = opts.bin ?? (claude ? env.CLAUDE_BIN : env.MCODE_BIN) ?? (claude ? 'claude' : 'mcode');
   let nodeBin = null;
   if (!opts.bin && nodeDir && path.isAbsolute(nodeDir)) { try { accessSync(path.join(nodeDir, 'mcode'), constants.X_OK); nodeBin = path.join(nodeDir, 'mcode'); } catch { /* PATH */ } }
   const childEnv = () => {
     const e = { PATH: [nodeDir && path.isAbsolute(nodeDir) ? nodeDir : null, env.PATH].filter(Boolean).join(path.delimiter), HOME: env.HOME || '' };
-    for (const [k, v] of Object.entries(env)) if (/^(?:MINIMAX_|MCODE_)/.test(k)) e[k] = v;
+    for (const [k, v] of Object.entries(env)) if (claude ? /^CLAUDE_CONFIG_DIR$/.test(k) : /^(?:MINIMAX_|MCODE_)/.test(k)) e[k] = v;
     return e;
   };
   let fails = 0, downUntil = 0;   // 3 failures in a row: not tried again for 10 minutes
@@ -93,7 +96,7 @@ export function createFallbackDecider(opts = {}) {
     if (Date.now() < downUntil) return { error: 'MiniMax fallback paused after 3 failures', ms: 0 };
     if (busy) return { skipped: 'fallback busy', ms: 0 };
     busy = true;
-    const run = await choose();
+    const run = claude ? bin : await choose();
     if (!run) { busy = false; return { skipped: NO_LIGHTWEIGHT, ms: 0 }; }
     return new Promise((resolve) => {
       let dir = null, out = '', err = '', done = false, child = null, timer = null;
@@ -106,19 +109,19 @@ export function createFallbackDecider(opts = {}) {
       };
       try {
         dir = mkdtempSync(path.join(opts.tmpRoot || tmpdir(), 'mcode-fallback-'));
-        const args = ['exec', '--cwd', dir, '--output-format', 'stream-json', '--permission', 'smart', '--max-steps', '1', '--model', model.includes('/') ? model : `minimax/${model}`, '--timeout', `${Math.max(1, Math.ceil(timeoutMs / 1000))}s`];
-        args.push('--mode', 'lightweight');
+        const args = claude ? ['-p', '--model', model, '--tools', '', '--no-session-persistence', '--disable-slash-commands', '--strict-mcp-config', '--setting-sources', '', '--output-format', 'text'] : ['exec', '--cwd', dir, '--output-format', 'stream-json', '--permission', 'smart', '--max-steps', '1', '--model', model.includes('/') ? model : `minimax/${model}`, '--timeout', `${Math.max(1, Math.ceil(timeoutMs / 1000))}s`];
+        if (!claude) args.push('--mode', 'lightweight');
         if (system) args.push('--system-prompt', system);
-        if (prompt.startsWith('-')) args.push('--');
-        args.push(prompt);
-        child = spawnFn(run, args, { cwd: dir, env: childEnv(), stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+        if (!claude) { if (prompt.startsWith('-')) args.push('--'); args.push(prompt); }
+        child = spawnFn(run, args, { cwd: dir, env: childEnv(), stdio: [claude ? 'pipe' : 'ignore', 'pipe', 'pipe'], detached: true });
+        if (claude) { child.stdin?.on?.('error', () => {}); child.stdin?.end?.(prompt); }   // the prompt goes in on stdin: no argv length or leading-dash trouble
       } catch (e) { return finish({ error: `cannot start mcode: ${e.message}`.slice(0, 200) }); }
       timer = setTimeout(() => { try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch { /* gone */ } } finish({ error: `timeout after ${Math.round(timeoutMs / 1000)}s` }); }, timeoutMs);
       child.stdout.on('data', (c) => { if (out.length < MAX_OUT) out += c; });
       child.stderr.on('data', (c) => { if (err.length < 4000) err += c; });
       child.on('error', (e) => finish({ error: `cannot run mcode: ${e.code || e.message}`.slice(0, 200) }));
       child.on('close', (code) => {
-        const p = parseExecOutput(out);
+        const p = claude ? (out.trim() ? { text: out.trim() } : { error: err.trim().split('\n').pop() || 'no answer from claude' }) : parseExecOutput(out);
         if (p.text) return finish({ text: p.text });
         finish({ error: (code ? `mcode exit ${code}: ${p.error || err.trim().split('\n').pop() || ''}` : p.error).slice(0, 200) });
       });
@@ -131,7 +134,7 @@ export function createFallbackDecider(opts = {}) {
     if (r.skipped) return { skipped: r.skipped, source: FALLBACK_SOURCE, cost: 0 };
     if (r.error) return { error: r.error, ms: r.ms, source: FALLBACK_SOURCE, cost: 0 };
     const p = parseReviewerAnswer(r.text);
-    return { ...p, ms: r.ms, source: FALLBACK_SOURCE, model: `minimax/${model}`, cost: 0 };
+    return { ...p, ms: r.ms, source: FALLBACK_SOURCE, model: claude ? model : `minimax/${model}`, cost: 0 };
   }
 
   // A Jev-style choice from a request body ({ state, questions: { choice: { instructions, criteria } } }): the reply is shaped like the server's,
@@ -150,16 +153,14 @@ export function createFallbackDecider(opts = {}) {
     if (r.error) return { error: r.error, ms: r.ms, source: FALLBACK_SOURCE };
     const a = parseChoice(r.text, keys);
     if (!a) return { error: 'answer is not a valid choice', ms: r.ms, source: FALLBACK_SOURCE };
-    return { success: true, answers: { choice: a }, cost: 0, ms: r.ms, model: `minimax/${model}`, source: FALLBACK_SOURCE };
+    return { success: true, answers: { choice: a }, cost: 0, ms: r.ms, model: claude ? model : `minimax/${model}`, source: FALLBACK_SOURCE };
   }
   return { ask, reviewer, choice, bin };
 }
 
 // Validates a choice answer against the allowed keys; probabilities are re-normalised, a missing one is rebuilt from the confidence.
 export function parseChoice(text, keys) {
-  let t = String(text ?? '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-  let o = null;
-  try { o = JSON.parse(t); } catch { const a = t.indexOf('{'), b = t.lastIndexOf('}'); if (a >= 0 && b > a) { try { o = JSON.parse(t.slice(a, b + 1)); } catch { /* none */ } } }
+  const o = extractJson(text, ['choice']);
   if (!o || typeof o !== 'object' || Array.isArray(o) || !keys.includes(o.choice)) return null;
   let conf = Number(o.confidence);
   conf = Number.isFinite(conf) ? Math.min(MAX_CONFIDENCE, Math.max(0, conf)) : 0;
