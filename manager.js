@@ -1509,7 +1509,7 @@ export function observe(s) {
       jev: jevOut, wouldSend: ws.send, why: ws.why, confidence, excerpt: stall.excerpt,
       ...(final.handoff ? { handoff: final.handoff } : {}),
     });
-    if (/^(?:waiting|blocked)$/i.test(final.status || '')) { try { statusHook(s.name, String(final.status).toLowerCase(), String(final.question || '').slice(0, 300)); } catch (e) { console.error('[manager] onStatus', e.message); } }
+    if (/^(?:waiting|running|blocked)$/i.test(final.status || '')) { try { statusHook(s.name, String(final.status).toLowerCase(), String(final.question || '').slice(0, 300)); } catch (e) { console.error('[manager] onStatus', e.message); } }
     // a session that waits on a job of its own is woken when the job ends (own-jobs.js); a deploy it queued is followed the same way
     // a blocked STATUS that names a job in words only: it is the session's own when the agent has a live child process at the stop
     if (ownJobs?.hasLiveChild && final.jobNoun && final.case === 'owner_decision' && !isRemoteSession(s.name) && !isManagerSession(s.name)) {
@@ -1523,7 +1523,7 @@ export function observe(s) {
     // Parked-session wake (harness review 2026-11-11 Q5 item 5): any other STATUS blocked / waiting is parked and woken once when what it names changes
     // or at its maximum age (own-jobs.js park(); manager.json parkedWake off|dry|live). The floor / ask / forbidden gates are decided here, at park time.
     // A needs-manager / failed stop that names a lease ticket is parked for the grant only (grant notice, owner 2026-11-11): own-jobs.js grantOf.
-    else if (ownJobs?.park && !isManagerSession(s.name) && !isRemoteSession(s.name) && (/^(?:waiting|blocked)$/i.test(final.status || '') || (/^(?:needs-manager|failed)$/i.test(final.status || '') && /\bt-[0-9a-f]{6,}\b/i.test(String(final.question || ''))))) {
+    else if (ownJobs?.park && !isManagerSession(s.name) && !isRemoteSession(s.name) && (/^(?:waiting|running|blocked)$/i.test(final.status || '') || (/^(?:needs-manager|failed)$/i.test(final.status || '') && /\bt-[0-9a-f]{6,}\b/i.test(String(final.question || ''))))) {
       const gate = parkGate(String(final.question || ''), { openAsk: !!hasOpenAskHook(s.name), floor: ownerFloorMatch, forbidden: forbiddenMatch });
       if (gate.ok) ownJobs.park(s.name, { text: String(final.question || ''), stopAt: id, status: final.status }).catch((e) => console.error('[manager] park', e.message));
       else logLater({ type: 'parked_skip', id, session: s.name, why: gate.why });

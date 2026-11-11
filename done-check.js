@@ -5,7 +5,7 @@
 // is idle and the host is not busy), once per finding. Switch: manager.json `doneCheck` "live" (default) | "dry" | "off".
 // Journal: done-check.jsonl.
 import { pushableItems } from './done-leftovers.js';
-import { doneButFailedOf, doneButFailedMessage, proofWithoutEvidenceOf, proofWithoutEvidenceMessage, blockedHonestyOf, blockedHonestyMessage } from './status-honesty.js';
+import { doneButFailedOf, doneButFailedMessage, proofWithoutEvidenceOf, proofWithoutEvidenceMessage, blockedHonestyOf, blockedHonestyMessage, unknownStatusWordOf, unknownStatusWordMessage } from './status-honesty.js';
 import { readFile, writeFile, appendFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -412,7 +412,8 @@ export function createDoneCheck({
       st.toldBlocked ||= {};
       for (const n of Object.keys(st.toldBlocked)) if (!live.has(n) && !(await listBlocked().catch(() => [])).some((b) => b.name === n)) delete st.toldBlocked[n];
       for (const s of await listBlocked().catch(() => [])) {
-        const bf = blockedHonestyOf(s.text);
+        const uw = unknownStatusWordOf(s.text);   // a word outside the seven: sent back naming them
+        const bf = uw ? { running: [], missing: [], text: `unknown word: ${uw.word}`, unknown: uw } : blockedHonestyOf(s.text);
         if (!bf) continue;
         const sig = createHash('sha1').update(lastStatusLine(s.text)).digest('hex').slice(0, 12);
         if (st.toldBlocked[s.name]?.sig === sig) continue;
@@ -421,7 +422,7 @@ export function createDoneCheck({
         if (bm === 'off') continue;
         if (bm === 'dry') { await note({ dry: true, session: s.name, blockedHonesty: detail }); st.toldBlocked[s.name] = { sig, dry: true }; continue; }
         if (s.working || s.draft || touched.has(s.name) || !quiet || nudged >= MAX_NUDGES_PER_TICK) continue;
-        try { await send(s.name, blockedHonestyMessage(bf)); st.toldBlocked[s.name] = { sig }; nudged++; await note({ session: s.name, blockedHonesty: detail }); }
+        try { await send(s.name, bf.unknown ? unknownStatusWordMessage(bf.unknown) : blockedHonestyMessage(bf)); st.toldBlocked[s.name] = { sig }; nudged++; await note({ session: s.name, blockedHonesty: detail }); }
         catch (e) { log.error?.('[done-check] send blocked honesty', s.name, e.message); }
       }
       // (D) a lease wait while a healthy equivalent is free: one push; the manager is told on the second distinct stop

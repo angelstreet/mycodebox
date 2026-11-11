@@ -1934,11 +1934,23 @@ repository, run by the server in its own clone, one request at a time per repo (
 
 Owner: "done and goal not achieved should not be a done status: it should be blocked or failure, which means the agent needs help and the
 manager should look at it." opus-openexit ended `STATUS: done — anchor not valid ... no v3 was built`, task208-pick5 called radio green from
-success flags. Canonical rule text (AGENTS.md of mycodebox and VirtualPyTest, `cbsession` preamble for every prompt, the MAC-HOOK snippet;
-`test/status-honesty.test.js` keeps them equal): "STATUS vocabulary (owner 2026-11-11): `done` only when the task's goal was achieved, with
-`goal: achieved · evidence: <links / run ids / frames>`; `failed — goal not achieved: <why> · tried: <list>` when it was not (the manager is
-told and helps); `waiting: <what is running: integration / deploy id, lease ticket, own background job, a worker session, a time>`; `blocked: <what stops you> · tried: <list> · need: <what the manager must do>` (blocked is for an agent that cannot work and needs the manager, never for a wait); a session whose part is done while workers it started still run ends on `waiting: <worker names>`; `needs-owner:` only for a hard-floor item. A green /
-pass / proven claim carries its evidence. Before you fix a filed bug, run `found-bug --claim <id>` (exit 3: someone else is fixing it)."
+success flags. Canonical rule text (AGENTS.md of mycodebox and VirtualPyTest, `cbsession` preamble for every prompt, the MAC-HOOK snippet; `test/status-honesty.test.js` keeps them equal to `docs/STATUS-TABLE.md`, owner 2026-11-11 third follow-up): **the seven STATUS words, one table, the first true row wins**:
+
+**The seven STATUS words (owner 2026-11-11). Take the first row that is true.**
+
+| # | Word | Use it when | Never when | Who acts next |
+|---|---|---|---|---|
+| 1 | `done` | The goal is reached, you have the proof, nothing of yours is still running | A part is open, a worker or job of yours still runs, or it is "merged, not checked" | Nobody |
+| 2 | `running` | Work **of yours** is still going: your background job, a worker session you started. You will be woken and continue | Nothing is actually running | Nobody; the harness wakes you |
+| 3 | `waiting` | You depend on something **not yours** that ends by itself: a lane request, a deploy, a lease ticket, another session's work, a named time | You could work on something else meanwhile, or nothing will ever end it | Nobody; the harness wakes you |
+| 4 | `needs-manager` | You need a decision or an answer (technical, merge, deploy, lease, design) | You have a recommendation and the choice is reversible: decide | Manager |
+| 5 | `needs-owner` | Money, customers, deleting shared data, a credential only the owner holds, a physical action | Anything else | Owner |
+| 6 | `blocked` | You **cannot work** and nothing running will fix it: someone must act (a device is dead, an access is missing) | Something is running or queued (that is `running` or `waiting`) | Manager |
+| 7 | `failed` | You stopped and the goal is **not** reached after you tried what you could | You have not tried, or work is still running | Manager |
+
+Forms: `done — <what> · goal: achieved · evidence: <links / run ids / frames>`; `running: <job id / worker names> — <what is left>`; `waiting: <id / ticket / session / time>`; `blocked: <what stops you> · tried: <list> · need: <who must do what>`; `failed — goal not achieved: <why> · tried: <list>`. "blocked: waiting on ..." is never right. A green / pass / proven claim carries its evidence.
+
+Before you fix a filed bug, run `found-bug --claim <id>` (exit 3: someone else is fixing it).
 
 - **`failed`** (`stall.js`): case `needs_manager` with `failed: true` and `managerAsk: goal not achieved: ...`: a manager event and the manager
   LED, never a finished turn, never parked as one (`status-honesty.js` `failedOf` parses why / tried). The Mac Stop hook posts the text and the
@@ -2015,6 +2027,16 @@ bug-2f32e7a7, bug-8fc8fc0d, bug-03ccc6a7, bug-80bdcdc1 · unverified: none · bu
   time), `off`. Mac stops are not covered yet (no facts on this side of the hook). A done line while a fact holds is journalled as `said done / computed
   waiting`; the goal check still asks its question (not yet suppressed). Replay: `node scripts/stop-state-replay.js [since] [--list]` (a floor: worker
   sessions and live child processes are not journalled).
+- **The seven words and `running` (owner, 2026-11-11, third follow-up)**: [docs/STATUS-TABLE.md](STATUS-TABLE.md) is the one table (done / running /
+  waiting / needs-manager / needs-owner / blocked / failed; use when, never when, who acts next), verbatim in AGENTS.md, the cbsession preamble, the
+  MAC-HOOK snippet and the section above. `running` = work of the session's own (its background job, a worker it started); `waiting` = something not its
+  own that ends by itself (lane, deploy, lease ticket, another session, a time). `stall.js` reads `running` as a non-finished, non-escalated state
+  (`background_wait`; `own_job_wait` with a pid / log / run id) that the parked wake follows like `waiting`; before this it was not a STATUS word, so a
+  `running:` line fell to the heuristics (2026-11-11, 4 distinct stops of content-androidtv and a Mac session: 2 landed as `background_wait` through
+  the reporter's background count, 2 as a finished `done` turn). `acknowledged` (28 distinct stops that day, 23 of them a plain finished turn) stays
+  tolerated: guard messages ask an idle session for `STATUS: acknowledged`. An unknown word is sent back once naming the seven (done-check (I), same
+  `blockedCheck` switch, dry by default: `unknownStatusWordOf`). In the state-from-facts work an own job or own worker alive computes `running`; a lane
+  request, lease ticket or named time computes `waiting`.
 - Switch `manager.json` `goalCheck`: `live` (default) | `dry` (journal only) | `off`. Journal `goal-check.jsonl`, state `goal-check.json`.
   `GET /api/goal-check` -> bounced dones per session today; `scripts/manager-status-scan.sh` prints `<session>: done-bounced: N today by the goal
   check` (codebox and Mac). Tests: `test/goal-check.test.js` (replays the example line: it bounces), `test/goal-check-remote.test.js`.

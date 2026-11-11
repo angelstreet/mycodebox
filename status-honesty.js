@@ -130,7 +130,23 @@ export function proofWithoutEvidenceMessage(f) {
 }
 
 // ---- the closed vocabulary ----
-export const VOCABULARY = ['done', 'failed', 'blocked', 'waiting', 'needs-owner', 'needs-manager', 'handoff', 'acknowledged'];
+export const VOCABULARY = ['done', 'running', 'waiting', 'needs-manager', 'needs-owner', 'blocked', 'failed', 'handoff', 'acknowledged'];
+// The seven words of the owner's table (docs/STATUS-TABLE.md, 2026-11-11). `handoff` and `acknowledged` (and the done aliases stall.js reads: ack, noted,
+// ok, shipped, complete(d), finished) are tolerated: guard messages ask for `STATUS: acknowledged` from an idle session. Anything else is unknown.
+export const SEVEN_WORDS = ['done', 'running', 'waiting', 'needs-manager', 'needs-owner', 'blocked', 'failed'];
+const TOLERATED = new Set([...SEVEN_WORDS, 'handoff', 'acknowledged', 'ack', 'noted', 'ok', 'shipped', 'complete', 'completed', 'finished', 'not', 'partial']);   // `not fully confirmed` / `partial` have their own check
+// Pure. -> null, or { word } when the last STATUS line starts with a word that is not one of the seven (nor a tolerated system reply).
+export function unknownStatusWordOf(text) {
+  const st = lastStatus(text);
+  return st && !TOLERATED.has(st.kind) ? { word: st.kind, line: st.line.slice(0, 160) } : null;
+}
+// blocked lines and unknown words are what done-check (I) looks at
+export const blockedOrUnknownStatus = (text) => { const st = lastStatus(text); return !!st && (st.kind === 'blocked' || !TOLERATED.has(st.kind)); };
+export function unknownStatusWordMessage(f) {
+  return `Status check: \`STATUS: ${f.word}\` is not a STATUS word. The seven: done (goal reached, proof in hand, nothing of yours running) · running (work of yours still goes: your background job, a worker you started) · `
+    + 'waiting (you depend on something not yours that ends by itself: lane, deploy, lease ticket, another session, a time) · needs-manager (you need a decision or an answer) · needs-owner (money, customers, deleting shared data, an owner-only credential, a physical action) · '
+    + 'blocked (you cannot work and nothing running will fix it: `blocked: <what stops you> · tried: <list> · need: <who must do what>`) · failed (`failed — goal not achieved: <why> · tried: <list>`). Rewrite your STATUS line with the true one of the seven. One push only.';
+}
 // Pure. `STATUS: failed — goal not achieved: <why> · tried: <list>` -> { why, tried } | null.
 export function failedOf(text) {
   const st = lastStatus(text);
@@ -180,10 +196,15 @@ export function blockedHonestyOf(text) {
   if (!/\bneeds?\s*[:=]/i.test(head)) missing.push('need:');
   return running.length || missing.length ? { running, missing, text: head.slice(0, 200) } : null;
 }
+// own work (a background job of the session) is `running`; something not its own (lane, deploy, lease, another session, a time) is `waiting`
+const OWN_LABELS = new Set(['background job', 'waiting on a run']);
 export function blockedHonestyMessage(f) {
   const parts = [];
-  if (f.running.length) parts.push(`it names something running or queued (${f.running.join(', ')}): that is a wait, restate it as \`STATUS: waiting: <integration / deploy id, lease ticket, your own background job, the worker sessions you started, or a time>\``);
+  if (f.running.length) {
+    const own = f.running.every((k) => OWN_LABELS.has(k));
+    parts.push(`it names something running or queued (${f.running.join(', ')}): that is not a block, restate it as ${own ? '`STATUS: running: <job id / worker names> — <what is left>` (work of yours that still goes)' : '`STATUS: waiting: <integration / deploy id, lease ticket, session, or a time>` (something not yours that ends by itself)'}; if both apply, running comes first`);
+  }
   if (f.missing.length && !f.running.length) parts.push(`it lacks ${f.missing.join(' and ')}`);
   return `Status check: your STATUS is blocked, but ${parts.join('; ')}. \`blocked\` is only for an agent that cannot work and needs the manager: `
-    + '`STATUS: blocked: <what stops you> · tried: <what you tried> · need: <what the manager must do>`. If your part is done while workers you started still run, end on `STATUS: waiting: <worker names>`. One push only.';
+    + '`STATUS: blocked: <what stops you> · tried: <what you tried> · need: <what the manager must do>`. If your part is done while workers you started still run, end on `STATUS: running: <worker names>`. One push only.';
 }

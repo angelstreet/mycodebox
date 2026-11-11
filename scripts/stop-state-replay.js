@@ -34,11 +34,11 @@ for (const r of rows) {
     timeMs: (parkedDeps(text, null, { now: t }).find((d) => d.kind === 'time') || {}).id ? Number(parkedDeps(text, null, { now: t }).find((d) => d.kind === 'time').id) : null,
   };
   const c = computeStopState({ said, facts, now: t });
-  tally[c.said] ||= { stops: 0, waiting: 0, removedEscalations: 0 };
+  tally[c.said] ||= { stops: 0, waiting: 0, running: 0, removedEscalations: 0 };
   tally[c.said].stops++;
-  if (c.mismatch) { tally[c.said].waiting++; if (escalated.has(r.id)) { tally[c.said].removedEscalations++; removed++; } listed.push(`${r.session}\t${c.said}->waiting\t${c.reasons.map((x) => `${x.kind} ${x.id}`).join(', ')}\t${escalated.has(r.id) ? 'escalation removed' : ''}`); }
+  if (c.mismatch) { tally[c.said][c.computed]++; if (escalated.has(r.id)) { tally[c.said].removedEscalations++; removed++; } listed.push(`${r.session}\t${c.said}->${c.computed}\t${c.reasons.map((x) => `${x.kind} ${x.id}`).join(', ')}\t${escalated.has(r.id) ? 'escalation removed' : ''}`); }
 }
 if (process.argv.includes('--list')) console.log(listed.join('\n'));
 console.log(`distinct stops ${stops} since ${since}`);
-for (const [k, v] of Object.entries(tally).sort((a, b) => b[1].stops - a[1].stops)) console.log(`said ${k.padEnd(13)} stops ${String(v.stops).padStart(4)}  would be waiting ${String(v.waiting).padStart(4)}  manager escalations removed ${v.removedEscalations}`);
+for (const [k, v] of Object.entries(tally).sort((a, b) => b[1].stops - a[1].stops)) console.log(`said ${k.padEnd(13)} stops ${String(v.stops).padStart(4)}  would be waiting ${String(v.waiting).padStart(4)}  running ${String(v.running).padStart(4)}  manager escalations removed ${v.removedEscalations}`);
 console.log(`manager escalations removed in total: ${removed} (of ${escalated.size} escalated stops since ${since})`);
