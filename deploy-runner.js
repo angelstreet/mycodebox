@@ -585,8 +585,20 @@ export function createDeployRunner({
                   if (own) leaseIds.set(d.id, String(own.id));
                 } catch { /* no lease id: the child claims by deploy_id (service-side join) */ }
               }
+              // the registry splits a host request per host (some hosts leased): the deploy now lists only the hosts it runs on,
+              // the rest is a new queued request. Run with the narrowed list, never the stale one from this tick's snapshot.
+              let dd = d;
+              if (d.scope === 'host' && d.hosts?.length > 1) {
+                try {
+                  const cur = (JSON.parse((await reg(['deploy', 'list', '--json'])).stdout).deploys || []).find((x) => x.id === d.id);
+                  if (cur?.hosts?.length && cur.hosts.join(',') !== d.hosts.join(',')) {
+                    dd = { ...d, hosts: cur.hosts };
+                    await note(d.id, `# split per host: running on ${cur.hosts.join(',')}; ${d.hosts.filter((h) => !cur.hosts.includes(h)).join(',')} re-queued${cur.splitTo ? ` as ${cur.splitTo}` : ''} (leased or covered by a newer ref)`);
+                  }
+                } catch { /* keep the full list: update_core skips a leased host itself */ }
+              }
               running.set(key, d.id);
-              runDeploy(d, deploys).catch((e) => { running.delete(key); log.error?.('[deploy] run', e.message); });
+              runDeploy(dd, deploys).catch((e) => { running.delete(key); log.error?.('[deploy] run', e.message); });
               break;
             }
           }

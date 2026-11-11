@@ -923,3 +923,21 @@ test('runner: a catch-up for an older ref does not cancel the newer queued one; 
     assert.deepEqual(nw.hosts, expectCancel ? ['host-a', 'host-b'] : ['host-a']);
   }
 });
+
+test('a host request the registry split per host runs with the narrowed host list, not the stale snapshot (owner 2026-11-11)', async () => {
+  const reg = fakeRegistry({ deploys: [dep('4', { scope: 'host', ref: 'main', hosts: ['host-a', 'host-b'], strict: true, purpose: 'catch-up: x' })] });
+  const inner = reg.fn;
+  reg.fn = async (args, o) => {
+    const r = await inner(args, o);
+    if (args[1] === 'start' && r.code === 0) {            // the registry splits: host-b goes back to the queue as its own request
+      const d = reg.deploys.find((x) => x.id === '4'); d.hosts = ['host-a']; d.splitTo = 'c9';
+      reg.deploys.push(dep('c9', { scope: 'host', hosts: ['host-b'], strict: true, purpose: 'catch-up: split', created: 5 }));
+    }
+    return r;
+  };
+  const { runner, ran } = make(reg);
+  await runner.tick();
+  await until(() => ran.length > 0);
+  assert.match(ran[0].remoteCmd, /host-a/);
+  assert.doesNotMatch(ran[0].remoteCmd, /host-b/);
+});

@@ -1,4 +1,4 @@
-# User unit: install a copy into ~/.config/systemd/user (docs/BUG-DRAIN.md "Install"). Replace /home/<user> with the user's home.
+# EXAMPLE (user unit): install a copy into ~/.config/systemd/user (docs/BUG-DRAIN.md "Install"). Replace /home/<user> with the user's home.
 [Unit]
 Description=Ghosty: scheduled bug drain tick (dry until <state>/bug-drain/mode says live)
 After=network-online.target

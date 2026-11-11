@@ -270,6 +270,10 @@ def show_deploys(ds, prefix="DEPLOY"):
         extra = " coalesced-into=%s" % d["coalescedInto"] if d.get("coalescedInto") else ""
         if d.get("hosts"):
             extra += " hosts=%s" % ",".join(d["hosts"])
+        if d.get("splitTo"):
+            extra += " split-to=%s" % d["splitTo"]
+        if d.get("supersededBy"):
+            extra += " superseded-by=%s" % d["supersededBy"]
         if d.get("skippedHosts"):
             extra += " skipped=%s" % ",".join(d["skippedHosts"])
         print("%s %s  %s  state=%s  scope=%s  ref=%s  by=%s  purpose=%s%s" % (
@@ -288,6 +292,8 @@ def holders_text(holders):
 def progress_line(t):
     holders = holders_text(t.get("holders"))
     line = "waiting #%s, eta %s (held by %s)" % (t.get("position", "?"), hhmm(t.get("eta")), holders)
+    if t.get("gate_note"):
+        line += "; " + t["gate_note"]
     if t.get("any") or t.get("alternatives"):
         line += "; granted to whichever of %d options frees first" % len(t.get("alternatives") or [])
     eq = t.get("equivalents_free") or []
@@ -862,6 +868,8 @@ def cmd_list(a):
             "  any=%s" % t["any"] if t.get("any") else "",
             "  free-equivalent=%s" % ",".join(e.get("legacy") or "?" for e in t["equivalents_free"]) if t.get("equivalents_free") else "",
             "  unhealthy-equivalent=%s" % ",".join("%s (%s)" % (e.get("legacy") or "?", e.get("reason") or "unhealthy") for e in t["equivalents_unhealthy"]) if t.get("equivalents_unhealthy") else ""))
+        if t.get("gate_note"):
+            print("  note: %s" % t["gate_note"])
     return 0
 
 
