@@ -48,7 +48,7 @@ export const FILE_NAME_OLD = 'manager-events.jsonl.1';
 // Short, no question, names the re-read of AGENTS.md or the notice's tag, and carries no needs-owner / blocked question.
 export function isRulesAck(text) {
   const t = String(text || '').replace(/\s+/g, ' ').trim();
-  if (!t || t.length > 400 || /\?/.test(t) || /\bSTATUS:\s*(?:needs-owner|needs-manager|blocked)\b/i.test(t)) return false;
+  if (!t || t.length > 400 || /\?/.test(t) || /\bSTATUS:\s*(?:needs-owner|needs-manager|failed|blocked)\b/i.test(t)) return false;
   return /rules-watch|\b(?:re-?read|re-?reading|read|reread)\b[^.]{0,60}\bAGENTS\.md|\bAGENTS\.md\b[^.]{0,80}\b(?:re-?read|acknowledg|noted|up to date)/i.test(t);
 }
 

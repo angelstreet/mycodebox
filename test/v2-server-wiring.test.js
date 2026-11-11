@@ -76,7 +76,8 @@ function freePort() {
 
 async function boot(w, { v2 = true, extra = {} } = {}) {
   const port = await freePort();
-  const env = { PATH: process.env.PATH, HOME: path.join(w.base, 'home'), LANG: 'C.UTF-8', HOST: '127.0.0.1', PORT: String(port), GHOSTY_STATE_DIR: w.state,
+  const env = { PATH: process.env.PATH, HOME: path.join(w.base, 'home'), LANG: 'C.UTF-8', HOST: '127.0.0.1', PORT: String(port), GHOSTY_STATE_DIR: w.state, GHOSTY_DISK_GUARD: 'off',   // the host disk level is not under test (a 90% host failed 9 tests, 2026-11-11)
+   
     TMUX_BIN: TMUX_WRAPPER, TLS_KEY: path.join(w.base, 'none.pem'), TLS_CERT: path.join(w.base, 'none.pem'),
     ...(v2 ? { GHOSTY_V2: '1', GHOSTY_V2_WORK_ROOT: w.work, GHOSTY_V2_REPOS: w.repo, GHOSTY_V2_TEST_FAKE_ADAPTER: w.scripts, GHOSTY_V2_PUSH_REMOTE: 'origin' } : {}), ...extra };
   fs.mkdirSync(env.HOME, { recursive: true });

@@ -5,6 +5,7 @@
 // is idle and the host is not busy), once per finding. Switch: manager.json `doneCheck` "live" (default) | "dry" | "off".
 // Journal: done-check.jsonl.
 import { pushableItems } from './done-leftovers.js';
+import { doneButFailedOf, doneButFailedMessage, proofWithoutEvidenceOf, proofWithoutEvidenceMessage } from './status-honesty.js';
 import { readFile, writeFile, appendFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -186,7 +187,7 @@ export function uncommittedOf(porcelain) {
 }
 
 export function createDoneCheck({
-  stateDir, git, listDone, send, record = async () => {}, equivalentOf = async () => null, mode = () => 'live', home = process.env.HOME || '',
+  stateDir, git, listDone, send: sendRaw, record = async () => {}, equivalentOf = async () => null, goalOf = async () => '', mode = () => 'live', home = process.env.HOME || '',
   pressure = () => ({ loadPerCore: 0, ramAvailPct: 100 }), now = Date.now, pollMs = POLL_MS, log = console, ignoreBranches = () => DEFAULT_IGNORE_BRANCHES,
 } = {}) {
   const stFile = join(stateDir, 'done-check.json');
@@ -271,6 +272,8 @@ export function createDoneCheck({
     try {
       const m = mode();
       if (m === 'off') return (last = { at: now(), mode: m, checked: 0, findings: [] });
+      const touched = new Set();   // sessions pushed in this tick: (F)/(G) wait for the next tick rather than type a second message
+      const send = async (n, x) => { touched.add(n); return sendRaw(n, x); };
       const sessions = await listDone();
       const st = await load();
       const live = new Set(sessions.map((s) => s.name));
@@ -306,6 +309,7 @@ export function createDoneCheck({
         const cr = closingReviewOf(s.text);
         if (s.doneAt && now() - s.doneAt > REVIEW_MAX_AGE_MS) continue;   // a done turn from before the rule: not reopened
         if (!cr?.missing || s.working || s.draft || findings.some((f) => f.name === s.name) || leftoverItemsOf(s.text).length) continue;
+        if (doneButFailedOf(s.text)) continue;   // (F) asks it to restate the line as failed / blocked first: a closing review of a failed goal is noise
         missingReview.push(s.name);
         const sig = createHash('sha1').update(lastStatusLine(s.text)).digest('hex').slice(0, 12);
         const t = st.toldReview[s.name];
@@ -375,6 +379,32 @@ export function createDoneCheck({
         try { await send(name, shipOfferMessage(f)); st.toldShip[name] = { sig, day, n: used + 1 }; nudged++; await note({ session: name, shipOffer: shipOfferOf(s.text), finding: f.text }); }
         catch (e) { log.error?.('[done-check] send ship offer', name, e.message); }
       }
+      // (F) STATUS honesty (owner 2026-11-11): a done line whose own words say the goal was not achieved ("anchor not valid ... no v3 was built",
+      // "goal not met", "proof is incomplete") gets ONE wake per done line (restate as failed / blocked) and one manager event, never a second push.
+      // (G) a done claim of green / pass / proven with no link, run id or frame: one warning per done line. (F) wins over (G) for the same line.
+      st.toldHonest ||= {};
+      for (const n of Object.keys(st.toldHonest)) if (!live.has(n)) delete st.toldHonest[n];
+      const doneButFailed = [], noEvidence = [];
+      for (const s of sessions) {
+        if (s.doneAt && now() - s.doneAt > REVIEW_MAX_AGE_MS) continue;
+        let goal = ''; try { goal = String(await goalOf(s.name) || ''); } catch { goal = ''; }
+        const fail = doneButFailedOf(s.text, goal), proof = fail ? null : proofWithoutEvidenceOf(s.text);
+        if (!fail && !proof) continue;
+        (fail ? doneButFailed : noEvidence).push(s.name);
+        if (s.working || s.draft || touched.has(s.name)) continue;   // one push per session per tick: the next tick sends this one
+        const sig = createHash('sha1').update(lastStatusLine(s.text)).digest('hex').slice(0, 12);
+        if (st.toldHonest[s.name]?.sig === sig) continue;   // once per done line, whatever happens next
+        const kind = fail ? 'doneButFailed' : 'proofWithoutEvidence';
+        const detail = fail ? fail.hits.map((h) => `${h.label}: ${h.clause}`).join(' | ').slice(0, 300) : proof.claim;
+        if (m === 'dry') { await note({ dry: true, session: s.name, [kind]: detail }); st.toldHonest[s.name] = { sig, kind, dry: true }; continue; }
+        if (!quiet || nudged >= MAX_NUDGES_PER_TICK) continue;
+        try {
+          await send(s.name, fail ? doneButFailedMessage(fail, goal) : proofWithoutEvidenceMessage(proof));
+          st.toldHonest[s.name] = { sig, kind }; nudged++;
+          await note({ session: s.name, [kind]: detail, goal: goal.slice(0, 160) });
+          if (fail) await record({ key: `done-but-failed:${s.name}`, title: `${s.name} said done, its text says the goal was not achieved`, body: `${detail}${goal ? ` · goal: ${goal.slice(0, 160)}` : ''}`, url: '/', priority: 'default' }).catch(() => {});
+        } catch (e) { log.error?.('[done-check] send honesty', s.name, e.message); }
+      }
       // (D) a lease wait while a healthy equivalent is free: one push; the manager is told on the second distinct stop
       st.toldEq ||= {};
       for (const n of Object.keys(st.toldEq)) if (!live.has(n)) delete st.toldEq[n];
@@ -398,7 +428,7 @@ export function createDoneCheck({
         } catch (e) { log.error?.('[done-check] send equivalent wait', s.name, e.message); }
       }
       await save(st);
-      return (last = { at: now(), mode: m, checked: sessions.length, shipOffers, waitingWhileEquivalentFree: waitEq, missingBugsField: missing, missingClosingReview: missingReview, findings: findings.map(({ name, text }) => ({ name, text })), held: quiet ? null : 'host busy' });
+      return (last = { at: now(), mode: m, checked: sessions.length, doneButFailed, proofWithoutEvidence: noEvidence, shipOffers, waitingWhileEquivalentFree: waitEq, missingBugsField: missing, missingClosingReview: missingReview, findings: findings.map(({ name, text }) => ({ name, text })), held: quiet ? null : 'host busy' });
     } catch (e) {
       log.error?.('[done-check]', e.message);
       return (last = { ...last, at: now(), error: e.message });

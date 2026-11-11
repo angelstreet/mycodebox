@@ -17,6 +17,8 @@
 #   -H  handover file: the session reads it, summarises state and open items, then does the work (owner autonomy rule)
 #   -W  with -H: review only — summarise, propose the next step, then wait for the owner
 #   -f  prompt file, used verbatim;  -t  prompt text
+#   -g  the task goal, one line: written as `Goal: ...` under the preamble; the done-check compares the closing STATUS with it
+#       (status-honesty.js goalOf; without -g the first task line of the prompt is the goal)
 #   -w  worktree branch (default <type>/<name>: fix/ for BUG*, docs/ for docs*, else feat/; name lowercased)
 #   -N  no worktree: start in DIR itself
 #   -x  dry run: print the launch command (and the worktree step), start nothing
@@ -27,10 +29,10 @@
 # Env: MCODE_NODE_DIR (node bin dir for mcode), GHOSTY_STATE_DIR, GHOSTY_PORT (default $PORT or 7777) (to report the start to the dashboard history).
 set -euo pipefail
 q() { printf '%q' "$1"; }
-NAME= DIR= PROV=claude MODEL= BILL=sub HANDOVER= PFILE= TEXT= DRY=0 WAIT=0 WTB= NOWT=0
-while getopts "n:d:p:m:b:H:f:t:w:NxWh" o; do case $o in
+NAME= DIR= PROV=claude MODEL= BILL=sub HANDOVER= PFILE= TEXT= DRY=0 WAIT=0 WTB= NOWT=0 GOAL=
+while getopts "n:d:p:m:b:H:f:t:w:g:NxWh" o; do case $o in
   n) NAME=$OPTARG;; d) DIR=$OPTARG;; p) PROV=$OPTARG;; m) MODEL=$OPTARG;; b) BILL=$OPTARG;; H) HANDOVER=$OPTARG;;
-  f) PFILE=$OPTARG;; t) TEXT=$OPTARG;; w) WTB=$OPTARG;; N) NOWT=1;; x) DRY=1;; W) WAIT=1;; *) sed -n 2,29p "$0"; exit 2;; esac; done
+  f) PFILE=$OPTARG;; t) TEXT=$OPTARG;; w) WTB=$OPTARG;; N) NOWT=1;; x) DRY=1;; W) WAIT=1;; g) GOAL=$OPTARG;; *) sed -n 2,31p "$0"; exit 2;; esac; done
 [[ $NAME =~ ^[A-Za-z0-9_-]{1,40}$ ]] || { echo "cbsession: -n NAME required (A-Z a-z 0-9 _ -, max 40)" >&2; exit 2; }
 [ -d "$DIR" ] || { echo "cbsession: -d DIR must be an existing directory" >&2; exit 2; }
 DIR=$(cd "$DIR" && pwd)
@@ -115,7 +117,7 @@ Ship rule (owner 2026-11-11): after a change run the touched tests/typecheck you
 4. Ask the owner only for the hard floor: deleting data, credentials or secrets, money, customers, sudoers or system units
    on hosts, destructive database migrations (additive ones are yours), force-push or history rewrites, tag pushes or
    publishing a package, or a physical action only the owner can do (mycodebox: docs/CONTRACT.md "Who may do what").
-End every turn with one STATUS line: done / needs-owner (only for step 4) / blocked. A done line ends with
+End every turn with one STATUS line: done (only when the goal was achieved) / failed / needs-owner (only for step 4) / blocked. A done line ends with
 \`closing review: docs <updated list|none needed> · leftovers <none|filed ids> · unverified <none|list> · bugs: none | fixed <what> | reported <id>\`
 (without it ghosty pushes once): before it, update every doc your change makes stale, fix or found-bug each leftover and
 idea, and name what you did not verify (AGENTS.md "Closing review").
@@ -131,6 +133,10 @@ else echo "cbsession: give -H HANDOVER, -f PROMPT_FILE or -t TEXT" >&2; exit 2; 
 [ "${BUGRULE:-}" = 1 ] && printf '\nFirst command: `git worktree list`; create or reuse your worktree and work only there, never in a shared checkout.\n' >> "$P"
 [ "${BUGRULE:-}" = 1 ] && printf '\nA bug you find: fix it now yourself, in its own worktree, when it is small and you have the repro (it does not have to be your task); file it only when it is large, needs another host/device/credentials, is an owner-floor item, or belongs to a live session\047s task; never end a turn with "I filed X so someone will fix it". Bug outside your scope: to file it run `found-bug --title ... --why-not-fixed large|other-area|host-or-device|credentials|owner-floor|live-session-task --reason "..." --repro ... --error ... --blocking yes|no` (check `found-bug --help`; if missing, POST the JSON to $GHOSTY_URL/api/bugs with curl, see docs/MAC-HOOK.md); never leave it in a closing line. A STATUS: done line ends with `bugs: none | fixed <what> | reported <id>`.\n' >> "$P"
 [ "${BUGRULE:-}" = 1 ] && printf '\nClosing review before any STATUS: done: update every doc your change makes stale now (task doc, REFERENCE/MAP/INDEX, user guide, skill, release note); fix each leftover or file it with found-bug; file each improvement idea with found-bug; name what you did not verify. The done line carries `closing review: docs <updated list|none needed> · leftovers <none|filed ids> · unverified <none|list>`.\n' >> "$P"
+# STATUS vocabulary (owner 2026-11-11, status-honesty.js): every prompt, every provider
+printf '\n%s\n' 'STATUS vocabulary (owner 2026-11-11): `done` only when the task'"'"'s goal was achieved, with `goal: achieved · evidence: <links / run ids / frames>`; `failed — goal not achieved: <why> · tried: <list>` when it was not (the manager is told and helps); `blocked: <system id or reason + what you tried>`; `waiting: <system id>`; `needs-owner:` only for a hard-floor item. A green / pass / proven claim carries its evidence. Before you fix a filed bug, run `found-bug --claim <id>` (exit 3: someone else is fixing it).' >> "$P"
+# -g GOAL: the explicit goal right under the first line (the done-check reads it: status-honesty.js goalOf)
+if [ -n "$GOAL" ]; then { head -n 1 "$P"; printf '\nGoal: %s\n' "$(printf '%s' "$GOAL" | tr '\n' ' ')"; tail -n +2 "$P"; } > "$P.tmp" && mv "$P.tmp" "$P"; fi
 
 # -b NAME: settings file with an apiKeyHelper that reads the key file at launch (the key never lands in a file here).
 CS=

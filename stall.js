@@ -937,12 +937,12 @@ export function unmarkedFirst(opts, lines = []) {
 }
 
 // The agent's own last-line verdict (AGENTS.md "End every turn with a STATUS line"):
-//   STATUS: done | needs-owner: <question> | needs-manager: <what the manager must do> | blocked: <what> | handoff: <resource> -> <session> by <HH:MM> | waiting: deploy <id>
+//   STATUS: done | failed: goal not achieved: <why> · tried: <list> | needs-owner: <question> | needs-manager: <what the manager must do> | blocked: <what> | handoff: <resource> -> <session> by <HH:MM> | waiting: deploy <id>
 // Looked for in the last 3 closing lines only. Returns { kind, text } or null (Codex/MiniMax panes, turns without the line).
 // "needs-manager" is the agent addressing the AI manager directly ("please verify and request <branch> with --approved-by manager"):
 // its own verdict, never the owner's. It used to be missing here, so such a turn fell through to a plain "done" (blue LED, no manager
 // event) and the manager never saw it (2026-10-20 ~17:30, TASK142 waited ~20 min until the owner noticed).
-const STATUS_LINE_RE = /^\s*(?:[*_`]*)STATUS:(?:[*_`]*)\s*(needs-manager|done|needs-owner|blocked|handoff|waiting|acknowledged|ack|noted|ok|shipped|completed?|finished)\b[*_`]*\s*[:.]?\s*(.*)$/i;
+const STATUS_LINE_RE = /^\s*(?:[*_`]*)STATUS:(?:[*_`]*)\s*(needs-manager|failed|done|needs-owner|blocked|handoff|waiting|acknowledged|ack|noted|ok|shipped|completed?|finished)\b[*_`]*\s*[:.]?\s*(.*)$/i;
 // Verdicts agents write instead of "done" ("STATUS: acknowledged.", "STATUS: shipped"): a finished turn, never a question.
 // Read as plain text they fell to the heuristics: "I will ask before any force-push" became stopped_short (2026-10-15).
 const DONE_ALIASES = new Set(['acknowledged', 'ack', 'noted', 'ok', 'shipped', 'complete', 'completed', 'finished']);
@@ -1026,6 +1026,9 @@ export function classifyStall({ plain, raw = null, state, fromReport = false, sc
     // "STATUS: needs-manager: <what the manager must do>" hands the next step to the AI manager, not to the owner.
     // Checked before the merge-wait rules below: "request branch x with --approved-by manager" reads like a merge ask and the
     // merge lane would swallow it. Never auto-answered, never a needs-you (2026-10-20: TASK142 waited ~20 min for the owner).
+    // "STATUS: failed — goal not achieved: <why> · tried: <list>" (owner 2026-11-11, status-honesty.js): the agent needs help. A manager item
+    // like needs-manager (event, manager LED), never a finished turn and never parked as one.
+    if (st.kind === 'failed') { out.case = 'needs_manager'; out.failed = true; out.answer = null; out.autoCase = undefined; out.managerAsk = `goal not achieved: ${st.text.replace(/^goal not achieved\s*[:—–-]?\s*/i, '')}`.slice(0, 600); out.forbiddenText = askText(out, [], close); return finish(out); }
     if (st.kind === 'needs-manager') { out.case = 'needs_manager'; out.answer = null; out.autoCase = undefined; out.managerAsk = st.text; out.forbiddenText = askText(out, [], close); return finish(out); }
     const mw = ['needs-owner', 'blocked', 'waiting'].includes(st.kind) && !((waitsOnOwnJob(st.text, st.kind) || /\b(?:finish(?:es|ed)?|completes?|ends?)\b/i.test(st.text)) && !/\bPR\s*#?\d|pull request|decision/i.test(st.text)) ? mergeWaitOf(st.text) : null;   // "the nightly job must finish before I can merge" waits on a job, not on a merge decision
     if (mw) { out.case = 'merge_wait'; out.mergeAsk = mw; out.answer = null; }

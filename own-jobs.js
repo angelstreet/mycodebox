@@ -90,6 +90,22 @@ export function resourceHeld(res, view, session = '') {
   }));
 }
 
+// Grant notice (owner 2026-11-11: mobile-orchtnet-owner held lease 1a79f027 for 30 min without knowing its ticket was granted).
+// Pure. A ticket that left the queue -> the session's own lease on the ticket's resources (the grant), or null. `res`: the ticket's resources
+// read at park time; `since`: ms of the park (a lease the session already held before is not this grant).
+export function grantOf(view, session, { res = [], since = 0 } = {}) {
+  const s = String(session || '').toLowerCase();
+  if (!s) return null;
+  const mine = (l) => `${l.session || ''} ${l.agent || ''}`.toLowerCase().split(/[\s:]+/).includes(s);
+  const want = res.map((x) => String(x).toLowerCase());
+  const hit = (l) => !want.length || (l.resources || []).some((x) => { const y = String(x).toLowerCase(); return want.some((w) => y === w || y.startsWith(`${w}/`) || w.startsWith(`${y}/`)); });
+  const l = (view?.leases || []).filter((x) => mine(x) && hit(x) && (!x.sinceMs || x.sinceMs >= since - 120e3)).sort((a, b) => (b.sinceMs || 0) - (a.sinceMs || 0))[0];
+  if (!l) return null;
+  const until = Number.isFinite(l.ttlLeftMin) ? Date.now() + l.ttlLeftMin * 60e3 : null;
+  return { leaseId: String(l.id), resources: l.resources || [], untilMs: until };
+}
+export const grantText = (ticket, g, hhmmOf) => `harness: your claim ${ticket} was granted: ${(g.resources || []).join(', ') || 'the resource'}${g.untilMs ? ` until ${hhmmOf(g.untilMs)}` : ''} (lease ${g.leaseId}). It is yours now and the device sits idle: use it at once (the lease env is set by vpt-lease, check with vpt-lease validate ${g.leaseId}), release it when done. If you no longer need it, release it now.`;
+
 // deps: { now, procRoot, table: () => ps table, agentPid: (session) => pid|null, deployState: (id) => { state, finished }|null,
 //         integrationState: async (id) => lane request { state, ... } | null (GET /api/integration/requests/:id),
 //         stillWaiting: (session, stopAt) => bool, send: (session, text) => Promise, record: (event) => Promise, log: (rec) => void }
@@ -101,7 +117,7 @@ export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', tabl
   // parked-session wake: leaseView: async () => lease view, bugState: async (id) => 'open'|'fixed'|...|null, busy: (session) => live background work,
   // sendParked: (session, text) => Promise (by: harness), parkMode: () => 'off'|'dry'|'live'
   leaseView = async () => null, bugState = async () => null, busy = () => false, sendParked = null, parkMode = () => 'off',
-  parkPollMs = 60e3, parkGraceMin = 3, parkMaxAgeMin = 180, parkPerHour = 2 } = {}) {
+  parkPollMs = 60e3, parkGraceMin = 3, parkMaxAgeMin = 180, parkPerHour = 2, grantGraceMin = 5 } = {}) {
   const watched = new Map();   // session -> { job, stopAt, since, ... }
   // a zombie is finished: /proc/<pid>/stat is "pid (comm) S ...", the state follows the last ")"
   const alive = (pid) => {
@@ -229,7 +245,10 @@ export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', tabl
       if (!v) return { state: 'unknown' };
       if (d.kind === 'ticket') {
         const tk = (v.tickets || []).find((x) => String(x.id).toLowerCase() === d.id);
-        if (!tk) return { state: 'changed', change: `${d.label} left the queue (granted or ended)` };
+        if (!tk) {
+          const g = grantOf(v, session, { res: d.res || [], since: d.parkedAt || 0 });
+          return g ? { state: 'changed', grant: g, change: `${d.label} was granted` } : { state: 'changed', change: `${d.label} left the queue (granted or ended)` };
+        }
         if (tk.state && tk.state !== 'waiting') return { state: 'changed', change: `${d.label} was ${tk.state}` };
         return { state: 'open', v: tk.position ?? null, first: tk.position === 1 };
       }
@@ -252,8 +271,14 @@ export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', tabl
     const ctx = {};
     ctx.view = await leaseView().catch(() => null);
     const deps = parkedDeps(text, ctx.view, { now: now() });
-    for (const d of deps) { const s = await depNow(d, session, ctx); d.before = s.state === 'open' ? s.v : s.state; if (s.state === 'changed') d.before = 'changed'; }
-    parked.set(session, { stopAt, since: now(), status: String(status || 'waiting').toLowerCase(), text: String(text).slice(0, 300), deps, checkedAt: 0, device: deps.some((d) => d.kind === 'resource' || d.kind === 'ticket') });
+    for (const d of deps) {
+      const s = await depNow(d, session, ctx); d.before = s.state === 'open' ? s.v : s.state; if (s.state === 'changed') d.before = 'changed';
+      if (d.kind === 'ticket') { d.parkedAt = now(); d.res = ((ctx.view?.tickets || []).find((x) => String(x.id).toLowerCase() === d.id)?.resources || []).slice(0, 8); }
+    }
+    // a needs-manager / done stop is parked for its ticket grants only: the manager owns the rest of it (no age backstop, no other dependency)
+    const grantOnly = !/^(?:waiting|blocked)$/i.test(String(status || 'waiting'));
+    if (grantOnly) { for (let i = deps.length - 1; i >= 0; i--) if (deps[i].kind !== 'ticket' || deps[i].before === 'changed') deps.splice(i, 1); if (!deps.length) { parked.delete(session); return { parked: false, deps }; } }
+    parked.set(session, { stopAt, since: now(), status: String(status || 'waiting').toLowerCase(), grantOnly, text: String(text).slice(0, 300), deps, checkedAt: 0, device: deps.some((d) => d.kind === 'resource' || d.kind === 'ticket') });
     log({ type: 'parked_watch', session, stopAt, status, deps: deps.map((d) => ({ kind: d.kind, id: d.id, before: d.before ?? null })) });
     return { parked: true, deps };
   }
@@ -270,27 +295,31 @@ export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', tabl
       let reason = null;
       for (const d of p.deps) {
         if (d.before === 'changed') continue;   // already over at park time: the session knew it when it stopped; the age backstop covers it
-        const c = changeOf(d, await depNow(d, session, ctx));
+        const now0 = await depNow(d, session, ctx);
+        const c = changeOf(d, now0);
+        // a grant waits grantGraceMin: the session's own --wait claim usually wakes it within 0-4 min (5 of 6 grants on 2026-11-11); the 6th sat 30 min
+        if (now0.grant && d.kind === 'ticket') { d.grantAt ??= t; if (t - d.grantAt >= grantGraceMin * 60e3) { reason = { kind: 'grant', dep: d, grant: now0.grant, text: grantText(d.id, now0.grant, hhmm) }; break; } continue; }
         if (!c) { d.changedAt = null; continue; }   // flapped back (a freed device was taken again): the grace starts over
         d.changedAt ??= t; d.change = c;
         if (t - d.changedAt >= parkGraceMin * 60e3) { reason = { kind: 'change', dep: d, text: `${c} at ${hhmm(d.changedAt)}` }; break; }
       }
       const ageMin = (t - p.since) / 60e3;
-      if (!reason && ageMin >= parkMaxAgeMin) reason = { kind: 'age', text: null };
+      if (!reason && ageMin >= parkMaxAgeMin && !p.grantOnly) reason = { kind: 'age', text: null };
+      if (!reason && p.grantOnly && ageMin >= parkMaxAgeMin) { parked.delete(session); continue; }
       if (!reason) continue;
       // the gates of a manager reply, re-checked right before typing
-      if (!canSend(session) || busy(session)) continue;
+      if (!canSend(session) || (busy(session) && reason.kind !== 'grant')) continue;   // a grant is told even to a busy pane: the busy task is often the --wait claim holding the lease
       const hour = (parkedSent.get(session) || []).filter((x) => t - x < 3600e3);
       if (hour.length >= parkPerHour) { log({ type: 'parked_wake_capped', session, perHour: hour.length }); continue; }
       const st = p.status === 'blocked' ? 'blocked' : 'waiting';
       // a change detail that names a forbidden word (an integration "deployed", a ticket "dropped") falls back to the neutral form
       if (reason.kind === 'change' && forbiddenMatch(reason.text)) reason.text = `${reason.dep.label} changed at ${hhmm(reason.dep.changedAt)}`;
-      const text = reason.kind === 'change'
+      const text = reason.kind === 'grant' ? reason.text : reason.kind === 'change'
         ? `harness: ${reason.text} while you were parked on STATUS ${st}. Re-check and continue; if it still blocks you, end with a STATUS that names the id you wait on.`
         : `harness: you have been parked on STATUS ${st} for ${ageMin >= 120 ? `${Math.round(ageMin / 60)} h` : `${Math.round(ageMin)} min`} and nothing you named changed. Re-check it now and continue if it no longer blocks you${p.device ? '; for a device, take a free equivalent with vpt-lease claim <env> --any <group> --wait' : ''}; otherwise end with a STATUS that names the id you wait on.`;
       if (forbiddenMatch(text)) { parked.delete(session); log({ type: 'parked_skip', session, why: 'forbidden topic in the wake text', text }); continue; }
       if (!stillWaiting(session, p.stopAt)) { parked.delete(session); continue; }
-      const rec = { session, stopAt: p.stopAt, why: reason.kind, dep: reason.dep ? `${reason.dep.kind}:${reason.dep.id}` : null, parkedMin: Math.round(ageMin), text };
+      const rec = { session, stopAt: p.stopAt, why: reason.kind, dep: reason.dep ? `${reason.dep.kind}:${reason.dep.id}` : null, parkedMin: Math.round(ageMin), text, ...(reason.grant ? { lease: reason.grant.leaseId } : {}) };
       if (mode === 'dry') { parked.delete(session); parkedSent.set(session, [...hour, t]); log({ type: 'parked_wake_dry', ...rec }); out.push({ ...rec, dry: true }); continue; }
       try { await (sendParked || send)(session, text); } catch (e) { log({ type: 'parked_wake_failed', session, error: e.message }); continue; }
       parked.delete(session); parkedSent.set(session, [...hour, t]);

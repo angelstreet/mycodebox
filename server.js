@@ -121,6 +121,7 @@ import { createOverlapGuard, DEFAULT_IGNORE } from './overlap-guard.js';
 import { createProgressWatch } from './progress-watch.js';
 import { createSharedCheckoutGuard, expandHome } from './shared-checkout-guard.js';
 import { createFoundBugs, unreportedBugOf, sendBackOf, sendBackText, sweepGroups } from './found-bugs.js';
+import { goalOf as goalOfPrompt } from './status-honesty.js';
 import { createDoneCheck, DEFAULT_IGNORE_BRANCHES, shipOfferOf, unconfirmedStatusOf, waitingOnLeaseStatus } from './done-check.js';
 import { createLeftovers, pushableItems } from './done-leftovers.js';
 import { scanTaskDocs, withHomeDirs, computeUnfinished, docLeftoversFor, createUnfinished } from './unfinished.js';
@@ -1056,6 +1057,8 @@ const doneCheck = createDoneCheck({
     const t = (v.tickets || []).find((x) => x.equivalents?.length && !x.any && holderSession(x.agent, names, MACHINES) === name);
     return t ? { ticketId: t.id, env: t.env, resources: t.resources, agent: t.agent, equivalents: t.equivalents, refused: t.equivalentsRefused || [], group: t.groups?.[0] || '' } : null;
   },
+  // (F) the task goal: `Goal:` line or first task line of the prompt cbsession wrote (~/handovers/<name>.prompt.md); '' when there is none
+  goalOf: async (name) => { try { return goalOfPrompt(readFileSync(join(homedir(), 'handovers', `${String(name).replace(/[^\w.-]/g, '')}.prompt.md`), 'utf8')); } catch { return ''; } },
   send: (name, text) => sendKeys(name, text),
   pressure: hostPressure,
   record: (e) => managerEvents.record(e),
@@ -1259,7 +1262,7 @@ const quota = createQuota({
 // Per-session MiniMax calls in the plan's 5h window and the last 24 h, from the ledger (minimax-meter.js); read-only.
 const minimaxMeterConfig = () => { try { return meterConfig(JSON.parse(readFileSync(managerConfigFile, 'utf8'))); } catch { return meterConfig({}); } };
 const minimaxMeter = createMinimaxMeter({ ledgerFile: join(STATE_DIR, 'usage-ledger.jsonl'), quota: () => quota.get(), config: minimaxMeterConfig, isManager: (n) => loadOwnerHiddenSessions().includes(n) });
-const minimaxToldShare = new Set();
+const minimaxToldShare = new Map();   // session -> ms of its last share alert (minimax-meter.js newShareAlerts)
 
 // The voice item of a session's open stop right now (voice.js), or null. Reads the manager's live view, not `latest` (notifySession runs mid-poll).
 function voiceItemOf(session, kind, stateHint = null) {
@@ -2753,11 +2756,11 @@ async function handleHttp(req, res) {
     // loopback (codebox), or a Mac/cloud client with an `integrate` bearer token (same tokens as scripts/integrate): file + list only
     const loop = isLoopback(req.socket.remoteAddress), remoteClient = loop ? null : integrationRoutes.bugClient(req);
     if (!loop && !remoteClient) return json(res, 403, { ok: false, error: 'loopback only, or a bearer token of an integrate client (lease-token.js add <name> --integrate)' });
-    if (remoteClient && !((req.method === 'GET' && p === '/api/bugs') || (req.method === 'POST' && p === '/api/bugs'))) return json(res, 403, { ok: false, error: 'a remote client may only file and list bugs' });
+    if (remoteClient && !((req.method === 'GET' && p === '/api/bugs') || (req.method === 'POST' && (p === '/api/bugs' || /^\/api\/bugs\/[^/]+\/claim$/.test(p))))) return json(res, 403, { ok: false, error: 'a remote client may only file, list and claim bugs' });
     try {
       if (req.method === 'GET' && p === '/api/bugs') {
         const q = url.searchParams, bugs = await foundBugs.list({ limit: Number(q.get('limit')) || 100, offset: Number(q.get('offset')) || 0, state: q.get('state') || '' });   // ?state=open|fixed|duplicate..&limit=&offset= page back (bug-6829b74a)
-        if (url.searchParams.get('format') === 'text') { res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' }); return res.end(bugs.map((b) => `${b.id}  ${b.resolved ? `[${b.state}] ` : ''}${b.blocking ? 'BLOCKING ' : ''}${b.session}: ${b.title}`).join('\n') + (bugs.length ? '\n' : '')); }
+        if (url.searchParams.get('format') === 'text') { res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' }); return res.end(bugs.map((b) => `${b.id}  ${b.resolved ? `[${b.state}] ` : ''}${b.claim ? `[claimed by ${b.claim.by} until ${b.claim.until.slice(11, 16)} UTC] ` : ''}${b.blocking ? 'BLOCKING ' : ''}${b.session}: ${b.title}`).join('\n') + (bugs.length ? '\n' : '')); }
         return json(res, 200, { ok: true, bugs, counts: await foundBugs.counts() });
       }
       if (req.method === 'POST' && p === '/api/bugs') { const b = await readJsonBody(req); if (remoteClient && b && typeof b === 'object' && !String(b.session || '').replace(/^unknown$/, '')) b.session = `mac-${remoteClient}`;   // a remote report with no session is named after its client
@@ -2770,6 +2773,9 @@ async function handleHttp(req, res) {
       }
       const fm = p.match(/^\/api\/bugs\/([^/]+)\/fixed$/);
       if (fm && req.method === 'POST') { const r = await foundBugs.fixed(decodeURIComponent(fm[1]), (await readJsonBody(req)).note); return json(res, r.ok ? 200 : 404, r); }
+      // fix claim (found-bug --claim <id> [--release]): 409 when another session holds it; a remote client with no session is mac-<client>
+      const cm = p.match(/^\/api\/bugs\/([^/]+)\/claim$/);
+      if (cm && req.method === 'POST') { const b = await readJsonBody(req); const sess = String(b?.session || '').replace(/^unknown$/, '') || (remoteClient ? `mac-${remoteClient}` : ''); const r = await foundBugs.claim(decodeURIComponent(cm[1]), { session: sess, release: !!b?.release }); return json(res, r.ok ? 200 : r.claimedBy ? 409 : r.error === 'no such bug' ? 404 : 400, r); }
       const rm = p.match(/^\/api\/bugs\/([^/]+)\/resolve$/);
       if (rm && req.method === 'POST') { const b = await readJsonBody(req); const r = await foundBugs.resolve(decodeURIComponent(rm[1]), b); return json(res, r.ok ? 200 : r.error === 'no such bug' ? 404 : 400, r); }
       if (req.method === 'DELETE' && p.startsWith('/api/bugs/')) { const r = await foundBugs.remove(decodeURIComponent(p.slice('/api/bugs/'.length))); return json(res, r.ok ? 200 : 404, r); }

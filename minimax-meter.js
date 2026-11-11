@@ -69,13 +69,16 @@ export function aggregate(rows, { now = Date.now(), wStart, isManager = () => fa
   return { window: { start: wStart, ...tot.window }, h24: tot.h24, sessions };
 }
 
-// Sessions that crossed the share threshold in this window and were not announced yet. `told` is a Set of `${wStart}:${name}`, updated here.
-export function newShareAlerts(snap, config, told) {
+// Sessions that crossed the share threshold in this window and were not announced yet. `told` is a Map name -> ms of the last alert, updated here.
+// A session is announced again only in a window that started after its last alert. The key used to be `${window start}:${name}`: with no plan
+// reset time the start slides every minute, so the key never matched and only the 1 h alert dedupe throttled it (6 wakes on 2026-11-11 for
+// one session at 90-92%).
+export function newShareAlerts(snap, config, told, now = Date.now()) {
   const out = [];
   if (!snap || snap.window.calls < config.shareMinCalls) return out;
   for (const s of snap.sessions) {
-    const key = `${snap.window.start}:${s.name}`;
-    if (s.share > config.sharePct && !told.has(key)) { told.add(key); out.push(s); }
+    const prev = told.get(s.name);
+    if (s.share > config.sharePct && !(prev >= snap.window.start)) { told.set(s.name, now); out.push(s); }
   }
   return out;
 }

@@ -1790,6 +1790,16 @@ whose reply approves the plan around the question (round 9 `approvedAction`).
   hint when a device is named). Journal in `stalls.jsonl`: `parked_watch` (deps), `parked_wake` (live) or `parked_wake_dry` (dry: the text it
   WOULD send, one per stop). Judge a dry night with
   `grep -h '"parked_wake' "$GHOSTY_STATE_DIR/stalls.jsonl" | tail -50`.
+- **Grant notice** (owner 2026-11-11; `own-jobs.js` `grantOf` / `grantText`, same `parkedWake` switch). mobile-orchtnet-owner held lease
+  `1a79f027` for 30 min without knowing its ticket was granted: its last stop was `STATUS: needs-manager` about the "stuck" ticket, and the
+  busy background task (the `--wait` claim) never woke it. Now a `needs-manager` / `failed` stop that names a `t-<hex>` ticket is parked too, for
+  the grant only (no other dependency, no age backstop). When a parked ticket leaves the queue and the lease view shows a lease of THIS session
+  (session / agent equal to the name) on the ticket's resources, granted after the park, the wake is "harness: your claim <t-id> was granted:
+  <resource> until HH:MM UTC (lease <id>). It is yours now ...", after `grantGraceMin` (5) and even when the pane has background work (the busy
+  task is often the claim holding the lease). Without such a lease the neutral "left the queue (granted or ended)" text stays. Replay of
+  2026-11-11: 80 ticket grants to codebox sessions, 6 to a session whose last stop named that ticket; 5 of those resumed on their own within
+  0-4 min, the sixth (the case above) would have been told at 16:43 UTC instead of the manager at 17:09. Dry rows: `parked_wake_dry` with
+  `why: grant` and the text.
 - **Remote stops** (`remote-stops.js`, `scripts/mac-stop-hook.sh`, install in [MAC-HOOK](MAC-HOOK.md)): `POST /api/remote/v1/stops` and
   `GET /api/remote/v1/stops/<id>/answer?wait=<s>`, same address allowlist and bearer-token store as the lease API, but the token's client needs
   `remote: true` (`node scripts/lease-token.js add <name> --remote`). A stop enters `manager.js observe()` as the session `mac:<session name>`
@@ -1910,9 +1920,68 @@ repository, run by the server in its own clone, one request at a time per repo (
 
 `anthropic-spend.js` pulls at most once an hour (the disk cache `anthropic-spend.json` survives a restart): the Claude Max account's monthly extra-usage budget (`extra €180 left`, from `api.anthropic.com/api/oauth/usage` with the Claude Code login token, read in the server only). `GET /api/anthropic-spend` returns the cached reading; a failed pull keeps the last good one, marked stale; an expired Claude login shows no chip.
 
+## STATUS vocabulary (owner, 2026-11-11)
+
+Owner: "done and goal not achieved should not be a done status: it should be blocked or failure, which means the agent needs help and the
+manager should look at it." opus-openexit ended `STATUS: done — anchor not valid ... no v3 was built`, task208-pick5 called radio green from
+success flags. Canonical rule text (AGENTS.md of mycodebox and VirtualPyTest, `cbsession` preamble for every prompt, the MAC-HOOK snippet;
+`test/status-honesty.test.js` keeps them equal): "STATUS vocabulary (owner 2026-11-11): `done` only when the task's goal was achieved, with
+`goal: achieved · evidence: <links / run ids / frames>`; `failed — goal not achieved: <why> · tried: <list>` when it was not (the manager is
+told and helps); `blocked: <system id or reason + what you tried>`; `waiting: <system id>`; `needs-owner:` only for a hard-floor item. A green /
+pass / proven claim carries its evidence. Before you fix a filed bug, run `found-bug --claim <id>` (exit 3: someone else is fixing it)."
+
+- **`failed`** (`stall.js`): case `needs_manager` with `failed: true` and `managerAsk: goal not achieved: ...`: a manager event and the manager
+  LED, never a finished turn, never parked as one (`status-honesty.js` `failedOf` parses why / tried). The Mac Stop hook posts the text and the
+  server parses it the same way. `scripts/manager-status-scan.sh` lists `failed` lines.
+- **The goal** (`status-honesty.js` `goalOf`): a `Goal:` line of the prompt (`cbsession -g "<goal>"` writes it under the preamble), else the
+  first task line after the preamble, one sentence. The done-check reads `~/handovers/<name>.prompt.md`.
+- **Done but failed** (`done-check.js` (F), `doneButFailedOf`): the claim part of the last done line (before `closing review` / `bugs` /
+  `unverified`) is read clause by clause. Strong signals fire whatever the goal: "goal not achieved / not met", "did not achieve / work / pass",
+  "not valid", "no X was built / created / published", "nothing was built", "0 of N", "failed N/N", "could not / unable to", "proof is
+  incomplete", "still failing", "gave up" ("no X was needed" is not one). Soft signals ("blocked", "not measured / run / verified ...",
+  "unverified") and the `unverified:` segment count only when the clause names the goal (2 goal words; 3 for the segment) and the line does not
+  say `goal: achieved`. ONE wake per done line ("your own text says the goal was not achieved: <its words> ... restate as failed / blocked /
+  waiting, or add goal: achieved · evidence") and ONE manager event (`done-but-failed:<session>`); the closing-review push is skipped for such a
+  line. Replay of the 184 distinct done stops of 2026-11-11 (66 sessions): 17 stops of 5 sessions flagged, all read by hand as true (opus-openexit
+  "anchor not valid ... no v3 was built", content-mobile "goal not met: 5 of 10", kpi-zap-fix "5-zap proof is incomplete", fix-ci-parallel-timing
+  "unverified: the CI job" for a "CI on main is red" goal, website-lane-learnfit "unverified: a real Mac session" for a Mac-shipping goal).
+- **Proof without evidence** (`done-check.js` (G), `proofWithoutEvidenceOf`): a done claim of green / pass / proven / works / validated with no
+  URL, report / run / result id, uuid, or frame / audio / screenshot / report file in the line or the closing paragraph gets ONE warning (a test
+  suite claim is its own evidence). Replay: 21 stops of 10 sessions, among them task208-pick5 "green on stbv1" and opus-openexit "TC310 v7 3/3
+  green"; the same session's later line with report links passes.
+- Both run in `doneCheck` mode (`dry` journals `doneButFailed` / `proofWithoutEvidence` rows in `done-check.jsonl`), at most one push per
+  session per tick, idle and no draft only, done turns younger than 6 h.
+
+## Session guard hook (owner, 2026-11-11)
+
+`scripts/session-guard-hook.js`, a Claude PreToolUse(Bash) hook on codebox next to `~/.claude/hooks/kill-guard.py`, refuses three commands of
+2026-11-11 with the fix printed (pure logic `guardCommand()`, tests `test/session-guard-hook.test.js`):
+
+| Rule | Refused | Fix printed | The case |
+|---|---|---|---|
+| `sql` | `psql` / `pgcli` with UPDATE ... SET, INSERT INTO, DELETE FROM, DROP, TRUNCATE, ALTER TABLE (inline, or in a readable `-f` file; heredocs that only write a file are not calls). A local `*test*` database passes | write through the platform PUT routes (node / edge PUT, settings routes); reads are fine; no route -> `STATUS: needs-manager` with the statement and its rollback | kpi-web wrote `navigation_edges` by psql over the jump host |
+| `restart` | `systemctl restart|stop <vpt-*>` after a `vpt-lease claim` joined by `;`, `||`, newline or a pipe; on a host this session holds no exclusive lease on; or (restart) while another session's lease covers it (`restartBlocker`, bug-486f0188) | `vpt-lease claim <env>/<host> --kind host --wait && ssh <host> sudo systemctl ...` or `vpt-lease run ... -- ...` | fp194-opus-status restarted vpt-host after a BUSY claim |
+| `host-config` | `curl` POST / PUT to `/host/system/config` or `/server/settings/host-config` whose body has no `devices` object, an empty one, or comes from stdin / an unreadable file | GET the config, change only your key, send it back with `devices` filled | web-kpi-unblock's `devices:{}` deleted every DEVICE key of a host (bug-591e8166) |
+
+Owner override: `GHOSTY_GUARD_OVERRIDE=sql|restart|host-config|all` in the session's environment; the same variable typed into a command is
+refused. The lease registry is read (`vpt-lease list --json`) only for a vpt-* restart / stop and the hook fails open when it cannot be read or
+throws. Install (idempotent, backup first): `node scripts/install-guard-hooks.js` (the entry runs the live checkout's copy and is a no-op while
+that copy does not exist). Replay of the 6,789 Bash commands in Claude transcripts of 2026-11-11 (leases not replayed): 12 refused, all real
+(kpi-web 5 and content-mobile 4 raw SQL writes, web-kpi-unblock's 2 `devices:{}` saves, fp194's unchecked claim + restart), no false refusal
+after the heredoc and route-target rules. Mac sessions: not installed (docs/MAC-HOOK.md "Guard hook").
+
 ## Found bugs (owner, 2026-10-28)
 
 A bug a session finds outside its scope is fixed or filed, never left in a closing line. Fix-first rule (owner, 2026-11-11): the finder fixes it itself, in its own worktree, shipped with `integrate request`, when the fix is small and clear and it already has the context (cheapest and most accurate); it files with `found-bug` only when the fix is large, needs another area/host/device/credentials, is an owner-floor item, or belongs to a live session's task. Canonical rule text (AGENTS.md of mycodebox and VirtualPyTest Ship Rule blocks, the `cbsession` preamble, the MAC-HOOK snippet; `test/found-bugs-enforce.test.js` keeps them equal): "A bug you find: fix it now yourself, in its own worktree, when it is small and you have the repro (it does not have to be your task); file it only when it is large, needs another host/device/credentials, is an owner-floor item, or belongs to a live session's task; never end a turn with "I filed X so someone will fix it"." **Why-not-fixed (owner, 2026-11-11, `CLIENT_SCRIPTS_VERSION=2`).** `found-bug` requires `--why-not-fixed large|other-area|host-or-device|credentials|owner-floor|live-session-task` and `--reason "one line"`; without them it exits 2 ("Fix it yourself now (small + you have the repro). If you really cannot, re-run with --why-not-fixed ..."). The server stores `why` + `reason`; an old client (neither field) is accepted with `why:"missing"`. **Send-back:** a new report with `why` missing/large/other-area, a repro, not blocking, no hard-floor word (`sendBackOf`), from a session that still has a tmux pane, queues ONE kept wake (`pending-wakes.js`, key `bugback:<id>`, same gates as the integration wakes, at most 4 per session per hour): "You filed <id>. If it is small, fix it now in your own worktree and resolve it (found-bug --resolve); otherwise reply with the reason." Journal event `bug-send-back`. The manager starts a worker only when `why` is large/other-area and no live session owns the bug. **Scorecard:** `GET /api/manager/scorecard` carries `bugs: {days, filed, fixed, fixedByFinder, fixedByWorker, open, whyMissing}` (`foundBugs.week`). **Sweep + UI:** `POST /api/bugs/send-back-sweep` (loopback) queues one kept wake per live filer listing its open small-looking reports (`sweepGroups`, key `bugsweep:<session>:<day>`, idempotent per day; journal `bug-send-back-sweep`); the Usage > Today Manager block shows a "Bugs (7 d)" row from `scorecard.bugs`. The bug-drain worker takes the filed ones. `scripts/found-bug --title T --why-not-fixed W --reason R [--endpoint E] [--repro R] [--error "exact text"] [--workaround W] [--blocking yes|no] [--session S] [--test]` (session defaults to the tmux session; also `found-bug list`, `found-bug remove <id>` for test reports) posts to loopback `POST /api/bugs`. `found-bugs.js` redacts obvious secrets (tokens, keys, passwords, URL credentials, long opaque strings), dedupes the same title + session for 24 h, appends to `<state dir>/found-bugs.jsonl` (untracked) and fires an alert `<session>:bug` (owner feed, high priority when blocking) that is also a manager event of kind `bug` with a `bug` object `{id, title, endpoint, blocking}`. `GET /api/bugs` lists them with counts (`?state=open|fixed|duplicate|...&limit=<=5000&offset=` pages back through the ledger, default the newest 100); `GET /api/manager` carries `bugs: {total, blocking, last24h}`. The leftovers watcher also classifies an idle stop whose closing text says "could not / returned an error / unrelated / outside my scope / pre-existing / not caused by me / workaround" (`unreportedBugOf`) with no found-bug record from that session in the last hour as `<session>:bug-unreported` (`items`: the sentence); the manager asks the session for the report.
+
+### Fix claim (owner, 2026-11-11)
+
+bug-e1c49ec8 was fixed twice in parallel (a Mac session and a worker, same test file, lane conflict). `found-bug --claim <id> [--release]
+[--session NAME]` (`POST /api/bugs/<id>/claim`, loopback or an integrate client token, so the Mac path works; a remote claim with no session is
+`mac-<client>`) marks "I am fixing it" for 2 h (`CLAIM_MS`); the holder renews by claiming again. Another session gets HTTP 409 and exit 3
+("claimed by X until T: do not fix it in parallel"); a resolved bug cannot be claimed; a resolve ends the claim. `found-bug list` and
+`GET /api/bugs` show `claim: { by, at, until }`. Workers, the manager and Mac sessions claim before they start (the STATUS vocabulary sentence
+carries it; the send-back text asks the filer to claim). `CLIENT_SCRIPTS_VERSION` 3: Mac copies update with `found-bug --self-update`.
 
 ### Found bugs: enforcement and reach (owner, 2026-10-28)
 

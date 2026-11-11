@@ -88,7 +88,7 @@ Hours were lost waiting on one web host while the other was free. When the work 
 - Restarting one device's own unit instance (the per-device BLE/HID daemons and per-device stream, grabber and monitor-img
   instances, see REFERENCE) needs only `<host>/<device>` of that device and is blocked only by another session's lease on the same
   device. Name the device in the request (`device5`); host-wide units such as vpt-host keep the host lease.
-- Enforced, not just a rule (bug-486f0188): the `scripts/lease-guard-hook.js` PreToolUse hook refuses `systemctl restart` of a device-driving unit on host H while another session's lease covers H or one of its devices (message names lease id, holder, expiry); deviceless units (vpt-kpi, vpt-avq, vpt-archiver, vpt-timeline) stay allowed, there is no `--force`.
+- Enforced, not just a rule (bug-486f0188; installed 2026-11-11): the codebox PreToolUse hook `scripts/session-guard-hook.js` (installed into `~/.claude/settings.json` by `scripts/install-guard-hooks.js`; it also runs the older `lease-guard-hook.js` check) refuses `systemctl restart` of a device-driving unit on host H while another session's lease covers H or one of its devices (message names lease id, holder, expiry); deviceless units (vpt-kpi, vpt-avq, vpt-archiver, vpt-timeline) stay allowed, there is no `--force`. Since 2026-11-11 it also refuses `systemctl restart|stop` of a vpt-* unit on a host this session holds no lease on, and after a `vpt-lease claim` whose result is not checked (`;`, `||`, newline or a pipe between them): chain with `&&` or use `vpt-lease run ... -- <cmd>`. See [REFERENCE](REFERENCE.md#session-guard-hook-owner-2026-11-11).
 
 ## How to claim
 
