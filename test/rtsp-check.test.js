@@ -18,7 +18,8 @@ const py = (file, args, env) => new Promise((res) => execFile('python3', ['-I', 
 function fakes() {
   const dir = mkdtempSync(path.join(tmpdir(), 'rtsp-'));
   // url containing "dead": refuses; "novideo": no streams; "still": identical frames; else 12 moving frames
-  const ffprobe = sh(dir, 'ffprobe', `for a; do u=$a; done\ncase "$u" in http*) for a; do [ "$a" = -rtsp_transport ] && { echo 'Option rtsp_transport not found' >&2; exit 1; }; done;; esac\ncase "$u" in *dead*) echo "$u: Connection refused" >&2; exit 1;; *novideo*) echo '{"streams":[]}';; *) echo '{"streams":[{"codec_name":"h264","width":640,"height":360}]}';; esac`);
+  const ffprobe = sh(dir, 'ffprobe', `case "$*" in *stream=codec_type*) for a; do f=$a; done; echo video; n=$(cat "$f" | tr -dc 0-9); n=\${n:-1}; i=0; while [ $i -lt $n ]; do echo audio; i=$((i+1)); done; exit 0;; esac
+for a; do u=$a; done\ncase "$u" in http*) for a; do [ "$a" = -rtsp_transport ] && { echo 'Option rtsp_transport not found' >&2; exit 1; }; done;; esac\ncase "$u" in *dead*) echo "$u: Connection refused" >&2; exit 1;; *novideo*) echo '{"streams":[]}';; *) echo '{"streams":[{"codec_name":"h264","width":640,"height":360}]}';; esac`);
   const ffmpeg = sh(dir, 'ffmpeg', `case "$*" in *signalstats*) for a; do last=$a; done; inp=""; prev=""; for a; do [ "$prev" = -i ] && inp=$a; prev=$a; done
   if [ -f "$inp" ] && grep -q BLACK "$inp"; then echo "lavfi.signalstats.YAVG=4.0" >&2; elif case "$inp" in *blacksrc*) true;; *) false;; esac; then echo "lavfi.signalstats.YAVG=3.0" >&2; else echo "lavfi.signalstats.YAVG=118.0" >&2; fi; exit 0;; esac
 for a; do case "$a" in rtsp*|http*|file*|/*) u=$a;; esac; done\necho '#format: frame checksums'\ncase "$u" in *still*) for i in 1 2 3 4; do echo "0, $i, $i, 1, 10, aaaa"; done;; *) for i in 1 2 3 4; do echo "0, $i, $i, 1, 10, m$i"; done;; esac`);
@@ -99,8 +100,14 @@ async function world({ devices, pool, leaseBusy = false, leaseMissing = false, l
       if (m) { // the tile's snapshot: snapshots[capture] = 'BLACK' | 'STALE' | 'MISSING', default a picture, fresh
         const kind = snapshots[m[2]] || 'PICTURE';
         if (kind === 'MISSING') { res.statusCode = 404; return res.end(); }
+        if (kind.startsWith('MULTI')) return res.end('PICTURE'); // a fine snapshot; the stream is the problem
         res.setHeader('Last-Modified', new Date(Date.now() - (kind === 'STALE' ? 3600e3 : 1e3)).toUTCString());
         return res.end(kind === 'STALE' ? 'PICTURE' : kind);
+      }
+      const sg = u.pathname.match(/^\/host\/([^/]+)\/stream\/([^/]+)\/segments\/(.+)$/);
+      if (sg) { // the stream the live player loads: MULTI4 = 4 audio tracks in its segments, else 1
+        const n = (snapshots[sg[2]] || '').startsWith('MULTI') ? snapshots[sg[2]].slice(5) : '1';
+        return res.end(sg[3] === 'output.m3u8' ? '#EXTM3U\n#EXTINF:0.4,\nsegment_1.ts\n' : `TS${n}`);
       }
       res.statusCode = 404; send({});
     });
@@ -116,7 +123,7 @@ async function world({ devices, pool, leaseBusy = false, leaseMissing = false, l
   // leaseMissing: a PATH without any vpt-lease, so the run really cannot find the lease CLI
   const pathV = leaseMissing ? `${dir}:/usr/bin:/bin` : `${dir}:${process.env.PATH}`;
   const E = { ...env, PATH: pathV, GHOSTY_STATE_DIR: state, RTSP_POOL_FILE: poolFile, RTSP_CHECK_TOKEN_CMD: path.join(dir, 'tok'),
-    RTSP_CHECK_SERVERS: `envA=http://127.0.0.1:${server.address().port}`, RTSP_SETTLE_SECONDS: '0', RTSP_CONFIRM_SECONDS: '0', RTSP_API_RETRY_SECONDS: '0', RTSP_CHECK_SSH: 'h1=local', RTSP_LOOPBACK_HOSTS: 'h1' };
+    RTSP_CHECK_SERVERS: `envA=http://127.0.0.1:${server.address().port}`, RTSP_SETTLE_SECONDS: '0', RTSP_CONFIRM_SECONDS: '0', RTSP_API_RETRY_SECONDS: '0', RTSP_BLACK_RESAMPLE_SECONDS: '0', RTSP_CHECK_SSH: 'h1=local', RTSP_LOOPBACK_HOSTS: 'h1' };
   // the ssh alias must not run ssh in tests: the probe goes through a fake ssh that runs the command locally
   sh(dir, 'ssh', 'shift 5 2>/dev/null; eval "$*"');
   return { E, state, posts, restarts, devices, close: () => server.close() };
@@ -325,4 +332,15 @@ test('a channel whose own picture is black: reported while capture checks are dr
   w.close();
   assert.match(r.stdout, /DEVICE1\s+hls\s+ok -> replaced \(replace: 'Bright News'\)/, r.stdout);
   assert.equal(w.devices.DEVICE1.DEVICE_VIDEO, 'https://cdn.example/good/bright.m3u8');
+});
+
+test('a host stream with several audio tracks (the browser player stays black) is reported', async () => {
+  const w = await world({ pool: POOL, snapshots: { 'cap-BFM2': 'MULTI4' }, devices: {
+    DEVICE1: { ...dev('BFM2', 'https://cdn.example/good/master.m3u8'), DEVICE_MODEL: 'rtsp_video' },
+    DEVICE2: { ...dev('P2M', 'https://cdn.example/good/one.m3u8'), DEVICE_MODEL: 'rtsp_video' } } });
+  const r = await py(REPLACE, ['--mode', 'live'], w.E);
+  w.close();
+  assert.match(r.stdout, /DEVICE1\s+hls\s+ok -> report: the source plays but the host stream has 4 audio tracks: the browser's live player cannot play it/, r.stdout);
+  assert.match(r.stdout, /DEVICE2\s+hls\s+ok -> none\s+ok/);
+  assert.equal(w.posts.length, 0);
 });
