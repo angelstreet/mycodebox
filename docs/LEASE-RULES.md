@@ -22,6 +22,8 @@ or `mac:<name>`.
   holds up a server deploy. Add `--kind server` when a server restart breaks you (a run that needs the server API, the UI,
   MCP or take-control the whole time); a server-kind lease queues every server deploy of the env until it ends, so keep it
   short and release it as soon as the run is done (owner, 2026-11-01).
+  A `--shared` hold of `server` (the CI lease guard: "do not restart it") does not conflict with a server-kind host or device lease,
+  so a device run never turns CI red (bug-ad68f59e); a non-shared `server` claim (a deploy) still conflicts with both.
 - A routine restart of a vpt-* service on a lab host (`systemctl restart <unit>`) needs that host's lease (`--kind host`) only, never the server or an env-wide lease, and does not wait for the owner.
 - A frontend change never needs a backend or device lease, and a run on one device never blocks another device.
 - Deploys go through the queue: `vpt-lease deploy request ...`, then `vpt-lease deploy wait ...`. Never run a deploy
