@@ -86,7 +86,9 @@ export function closingReviewOf(text) {
   const absent = REVIEW_PARTS.filter((k) => !out[k]);
   if (absent.length) return { missing: true, parts: absent };
   const l = out.leftovers;
-  out.openLeftovers = /^(?:none|nothing|n\/a|-)\b/i.test(l) || /^(?:(?:filed|reported)\s*)?(?:[\w]+-[0-9a-f]{6,}[\s,]*)+$/i.test(l) ? null : l;
+  // a filed id may carry a note: `bug-298c8750 (host-or-device: the owner's Mac)` is filed, not open work (3 false pushes on 2026-11-11)
+  const ids = l.replace(/\s*\([^()]*\)/g, '').replace(/\s*[;,]?\s*$/, '');
+  out.openLeftovers = /^(?:none|nothing|n\/a|-)\b/i.test(l) || /^(?:(?:filed|reported)\s*:?\s*)?(?:[\w]+-[0-9a-f]{6,}[\s,;]*(?:and\s+)?)+$/i.test(ids) ? null : l;
   return out;
 }
 export function closingReviewMessage({ bugsMissing = false } = {}) {

@@ -2087,7 +2087,8 @@ leftovers push only fired on leftovers the closing text already admitted. Now a 
 
 - `done-check.js` `closingReviewOf` (pure) reads the last STATUS line (pane-wrapped continuation included): null when it is not a
   literal done, `{ missing, parts }` without the segment or with a part absent, else `{ docs, leftovers, unverified, openLeftovers }`.
-  A segment with all three `none` is accepted.
+  A segment with all three `none` is accepted. `openLeftovers` is null for `none` or filed ids, also when an id carries a note in brackets
+  (`bug-298c8750 (host-or-device: ...)`, 2026-11-11); any other text, even next to an id, is open work.
 - An idle done session without the segment gets one push (`closingReviewMessage`: the owner's checklist question, plus the bugs
   field when that is missing too, so one push covers both): once per session turn (signature of the done line), at most
   `REVIEW_PUSHES_PER_DAY` (3) per session per day, only for a done turn younger than 6 h (`REVIEW_MAX_AGE_MS`: the rollout does not wake old idle sessions), not while working, with a draft in the input box, paused or a manager session,
