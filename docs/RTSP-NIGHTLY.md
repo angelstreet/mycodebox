@@ -86,6 +86,7 @@ Guards (found on the first real dry run, 2026-11-11):
   live mode alike. Pluto channels that played an hour before timed out at 10 s under load; without the re-probe the job would
   have "replaced" working channels.
 - **Frozen is reported, never changed**: identical frames over ~3 s can be a still, slate or radio channel.
+- **Reads retry**: a GET that gets a 5xx or a network error is retried 3 times (10, 20 s); a 502 blip from the slow pi4 server had skipped all of its hosts for the night. Writes are never retried.
 - **One channel per host**: a channel picked tonight counts as used on that host, so two dead devices never get the same one.
 
 The channel a device plays is found by its URL in the lists, else by a stream id shared with a list URL (Euronews FR's

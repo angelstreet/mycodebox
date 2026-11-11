@@ -146,7 +146,24 @@ def server_token():
     return subprocess.run([cmd], capture_output=True, text=True, timeout=30).stdout.strip()
 
 
-def api(server, path, token, body=None, timeout=60):
+def api(server, path, token, body=None, timeout=60, retries=None):
+    """GETs retry on 5xx / network errors (a slow server behind its proxy answers 502 now and then: one blip skipped a whole
+    server's hosts for the night). A POST is never retried."""
+    import time, urllib.error
+    tries = (int(os.environ.get('RTSP_API_RETRIES', '3')) if retries is None else retries) if body is None else 1
+    for attempt in range(tries):
+        try:
+            return _api_once(server, path, token, body, timeout)
+        except urllib.error.HTTPError as e:
+            if e.code < 500 or attempt == tries - 1:
+                raise
+        except (urllib.error.URLError, TimeoutError, ConnectionError):
+            if attempt == tries - 1:
+                raise
+        time.sleep(float(os.environ.get('RTSP_API_RETRY_SECONDS', '10')) * (attempt + 1))
+
+
+def _api_once(server, path, token, body=None, timeout=60):
     req = urllib.request.Request(server.rstrip('/') + path, headers={'X-Auto-Sign': token, 'Content-Type': 'application/json', 'User-Agent': 'rtsp-nightly/1'},
                                  data=json.dumps(body).encode() if body is not None else None, method='POST' if body is not None else 'GET')
     with urllib.request.urlopen(req, timeout=timeout) as r:
