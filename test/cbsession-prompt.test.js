@@ -60,3 +60,13 @@ test('every prompt kind (-H, -t, -f) opens with the ship rule in its first lines
     assert.match(top, /Ship rule[\s\S]*`integrate request <branch> \[--deploy \.\.\.\]`[\s\S]*never ask permission[\s\S]*vpt-headless-verify/);
   }
 });
+
+test('the handover prompt has one merge rule: ship through integrate request, never "merge your own tested work" (2026-11-11)', () => {
+  const r = run('-x', '-n', 'cbp-m', '-d', work, '-H', handover);
+  assert.equal(r.status, 0, r.stderr);
+  const p = promptOf('cbp-m');
+  assert.doesNotMatch(p, /merge your own tested work/);
+  assert.match(p, /ship\s+your own tested work \(commit, push your branch, `integrate request`: the lane merges/);
+  assert.match(p, /never\s+merge into the target, push the target or run the deploy script yourself/);
+  assert.match(p, /force-push or history rewrites/);
+});

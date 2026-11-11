@@ -73,9 +73,9 @@ export function brief({ cfg, run, jobs, logFile }) {
     'Do this:',
     '1. Read the failure (gh run view --log-failed), find the cause in the code, and fix the code. Do not skip, disable or loosen a check to get green.',
     '2. Run the failing checks locally on your worktree first (the same commands the workflow runs).',
-    '3. Merge and push the fix to main yourself (owner mandate 2026-10-14). Never force-push, never set a *_SKIP bypass, keep the pre-push hook happy.',
-    '   A lint/type/docs fix needs no deploy; a runtime change goes through the normal deploy procedure on a free lease.',
-    '4. Watch the run your push starts (gh run watch) until it finishes. If it is red for another reason, fix that too.',
+    '3. Ship it like any session (owner rule, round 13 2026-10-18; ship rule 2026-11-11): commit on your own branch, git push -u origin <branch>, then integrate request <branch> (add --deploy <scope> only for a runtime change). Never merge into main, push main or run the deploy script yourself; never force-push, never set a *_SKIP bypass. If integrate answers that the repo has no lane, end with STATUS: waiting: merge <branch> and the manager runs the merge evaluation.',
+    '   Keep working on anything independent; when nothing else is left end with STATUS: waiting: integration <id>: the lane tells you the result.',
+    '4. After the lane merges, watch the CI run on main (gh run watch) until it finishes. If it is red for another reason, fix that too.',
     '5. Do not touch runners, hosts, secrets or other sessions\' branches beyond the fix. If the cause is outside the code (runner offline, infra), say so and stop.',
     'End every turn with one STATUS line. ci-watch re-checks main every 30 min and nudges you while it is red.',
   ].filter((l) => l !== null).join('\n');

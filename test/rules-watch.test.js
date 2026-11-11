@@ -217,3 +217,11 @@ test('nudge text forbids done with leftovers (2026-11-01)', async () => {
   const { message } = await import('../rules-watch.js');
   assert.match(message({ hash: 'a'.repeat(40), at: 0 }), /`STATUS: not fully confirmed` and `partial` are not end states/);
 });
+
+test('nudge text carries the one merge rule: integrate request, never merge or push the target yourself (2026-11-11)', async () => {
+  const { message } = await import('../rules-watch.js');
+  const m = message({ hash: 'a'.repeat(40), at: 0 });
+  assert.match(m, /`integrate request` it without asking/);
+  assert.match(m, /never merge or push the target yourself/);
+  assert.doesNotMatch(m, /merge your own tested work/);
+});

@@ -9,8 +9,10 @@ After a change: run the touched tests / typecheck yourself, commit by explicit p
 with an offer ("I can ...", "if you want", "should I", "want me to", "nothing is committed") for something the rules
 already authorise: do it. Verify UI yourself with headless Playwright (skill `vpt-headless-verify`) instead of asking the
 owner to look. Only hard-floor items (data deletion, credentials, money, sudoers, force-push) are questions. End every
-turn with a STATUS line. This overrides the built-in "commit only when asked" default; a ghosty watcher sends one push to
-a session that ends on such an offer with unpushed work (docs/REFERENCE.md "Done check").
+turn with a STATUS line. This overrides the built-in "commit only when asked" default; a ghosty watcher pushes once per
+closing text (at most 2 a day) a session that ends on such an offer with unpushed work (docs/REFERENCE.md "Done check").
+Who may commit, push, merge, deploy, restart or close a session, and the hard floor, are stated once:
+[docs/CONTRACT.md "Who may do what"](docs/CONTRACT.md#who-may-do-what-one-rule-text). Where this file says less, that section wins.
 
 Use `mycodebox` for the product and repository name in instructions, documentation and visuals.
 Legacy technical identifiers such as the `ghosty-sessions` package, systemd service and existing checkout paths
@@ -35,7 +37,7 @@ must match the actual configuration until they are migrated.
 
 The dated owner decisions in this file win over older task docs, handovers and session briefs where they differ. A task
 doc from before 2026-10-14 that says "no push / no merge / no deploy" or "the owner merges" is superseded by autonomy by
-default (below): commit and push your own work, merge when the merge evaluation passes, deploy by the normal procedure.
+default (below): commit, push your own branch and `integrate request` it; the lane merges, pushes the target and deploys.
 Never hand the owner commands to run; run them yourself, or ask only about a hard-floor item.
 
 ## Working in the code
@@ -75,7 +77,7 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
   live session's task. Filing syntax: `found-bug --title ... --endpoint ...
   --repro ... --error "<exact text>" --workaround ... --blocking yes|no` (`scripts/found-bug`: POSIX sh, on PATH on codebox, installed on a Mac like `integrate` ([docs/MAC-HOOK.md](docs/MAC-HOOK.md)); check with `found-bug --help`; if it is missing, POST the same JSON to `$GHOSTY_URL/api/bugs` with curl as shown there and say so; an unreachable manager queues the report locally and `found-bug --flush` posts it); the manager then sends a
   worker (the bug-drain worker). Never leave it in a closing line ("could not", "returned an error", "unrelated", "pre-existing"). A `STATUS: done` line ends
-  with `bugs: none | fixed <what> | reported <id>`; without it the done-check pushes once.
+  with `bugs: none | fixed <what> | reported <id>`; without it the done-check pushes once per 12 h.
 - Closing review before any `STATUS: done` (owner, 2026-11-10): the owner should never have to ask "any leftover, suggestion of
   improvement or doc to update before we close?". Before the done line, do it yourself:
   1. **Docs**: list every doc or skill your change makes stale (task doc, REFERENCE / MAP / INDEX, user guide, skill, API
@@ -105,14 +107,15 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
   then `continue`). This restart is owner-requested and is not an auto-close. Switch: `autoSwapSessions` in
   `claude-accounts.json` (`claude-account swap off`). Logins are set up by the owner only (`claude-account login <id>`).
 
-- Sessions are never auto-closed (owner, 2026-10-30, bug-9e811bf0): no ghosty tick sends `/exit`, `/quit` or kills a session on
-  its own. Only the owner, the manager (`DELETE /api/sessions/<s>?confirm=<s>`) or the agent that spawned the session may close
-  it. The old worker auto-close (2026-10-18) is removed; `workerAutoClose` in `manager.json` is ignored.
+- Sessions are never auto-closed (owner, 2026-10-30, bug-9e811bf0; 2026-11-01): no ghosty tick sends `/exit`, `/quit` or kills a
+  session on its own. Only the owner or the agent that spawned the session may close it (`DELETE /api/sessions/<s>?confirm=<s>`);
+  the manager closes one only when the owner asks for it (owner 2026-11-01). The old worker auto-close (2026-10-18) is removed;
+  `workerAutoClose` in `manager.json` is ignored. [CONTRACT](docs/CONTRACT.md#who-does-each-action).
 
 
 - Equivalent resources (owner, 2026-10-31): never wait on a named host or device while an equivalent one is free. Use
   `vpt-lease claim <env> --any <group> --wait` (groups: `vpt-lease inventory <env>`, data in [docs/LEASE-INVENTORY.md](docs/LEASE-INVENTORY.md)),
-  or claim the free one by name (a named `--wait` claim of a group member switches to a free one after 2 minutes by itself;
+  or claim the free one by name (a named `--wait` claim of a group member switches to a healthy free one at once, owner 2026-11-10;
   `--no-auto-equivalent` opts out); claim `<host>/<device>` for a device run, `<host>` only to restart or deploy the host.
 - Never wait on a named device (owner, 2026-11-10): use `vpt-lease claim <env> --any <group> --wait`; never wait on a named device
   or end a turn with `STATUS: waiting: lease ...` while `vpt-lease list` shows a free-equivalent for your ticket. A named `--wait` claim
@@ -150,22 +153,11 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
   the exception is MiniMax `mcode exec` workers (developers and reviewers), which run `--permission full`, started in their V2
   worktree (`--cwd` is not a sandbox: they can run any host command, the same threat model as the dashboard default; D-023).
 - Autonomy by default (owner, 2026-10-14, OWNER_DECISIONS §15): the AI manager decides merges, pushes, deploys and the
-  recommended option itself after an evaluation, records each decision and shows it to the owner, who corrects afterwards.
-  It must never answer on the owner's behalf about deletions of data, credentials and secrets, money, customers, sudoers
-  or units on hosts (except, owner 2026-10-25 and 2026-10-26, `host-unit-routine.js`: a routine, reviewed and merged unit/timer/script install with backup and
-  rollback on codebox, a CI runner or another non-production helper or database host; a change that only makes something safer or idempotent, such as
-  a migration made re-runnable, a guard added or permissions tightened; and a permission/ownership fix so a service can read its own settings file,
-  contents never read or printed. Each is decided and journaled by the manager with a rollback line. Sudoers, new credentials and production
-  customer-facing app hosts stay floor), destructive or unreadable database migrations (additive ones are not a floor, owner 2026-10-21, below), force-push or history rewrites, pushing tags or publishing a
-  package (full list, any verb form: [REFERENCE](docs/REFERENCE.md#autonomy-by-default-push-deploy-and-recommended-options-owner-2026-10-14)): the hard floor always wins for
-  those. Additive migrations (owner, 2026-10-21): a migration that only adds (CREATE TABLE / INDEX, ADD COLUMN, DROP NOT NULL and COMMENT ON, RLS and
-  policies) can always be applied and merged without asking: the session applies it itself, then `integrate request`
-  merges it with no `--approved-by` / `--migration-applied` (still accepted, ignored) and journals `migrationAdditive: true`;
-  only a destructive or unreadable migration is returned to the owner. Merges are an evaluated manager decision (owner, 2026-10-14): the
-  manager answers "merge" only when the branch merges cleanly (or only in convention files such as `VERSION.txt`), the
-  session reports its tests green on that branch (or the change is docs-only; test code needs the green report), the diff touches no secrets,
-  migrations, sudoers or units, and Jev (or the manager's own reasoning when Jev is unavailable) rates it safe at or
-  above `mergeMinConfidence`; otherwise it escalates with the reason. Every merge decision is journaled
-  (`merge-decisions.jsonl`) and shown in the owner's feed. A merge+deploy question is split: merge decided, deploy
-  escalated. Pushes and deploys follow the same pattern (a deploy only through the deploy queue, leases free, tests green,
-  no migration, with a rollback line). Automatic answering is on by default since round 8; every capability has a switch.
+  recommended option itself after an evaluation, records each decision and shows it to the owner, who corrects afterwards; it
+  never answers a hard-floor item for the owner. Sessions ship through the integration lane. Who does what, the hard floor
+  (deletions of data, credentials and secrets, money, customers, sudoers, units on hosts, destructive or unreadable
+  migrations, force-push or history rewrites, tags, publishing) and its dated exceptions (additive migrations 2026-10-21,
+  `host-unit-routine.js` 2026-10-25/26, routine lab restarts 2026-10-27/31, ...) are in
+  [docs/CONTRACT.md "Who may do what"](docs/CONTRACT.md#who-may-do-what-one-rule-text); the merge evaluation in detail is
+  in its Invariants and in [REFERENCE](docs/REFERENCE.md#autonomy-by-default-push-deploy-and-recommended-options-owner-2026-10-14).
+  Automatic answering is on by default since round 8; every capability has a switch.

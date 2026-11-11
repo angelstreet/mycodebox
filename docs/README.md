@@ -11,7 +11,7 @@ Start here to choose the right guide. Examples use placeholders; replace them lo
 | Use the dashboard | [Usage](USAGE.md) | First session, sending replies, pause, notifications and troubleshooting |
 | V2 Phase-0 baseline (historical) | [Baseline inventory](v2/CURRENT_STATE.md) | Source observations before V2 was built; line references are stale |
 | Find implementation code | [Repository map](MAP.md) | Components, data flow, state and test locations |
-| Work as an agent | [AGENTS.md](../AGENTS.md), then [agent contract](CONTRACT.md) | Safety invariants, workflow and completion evidence |
+| Work as an agent | [AGENTS.md](../AGENTS.md), then [agent contract](CONTRACT.md) | Safety invariants, workflow, completion evidence and the one rule text for merge, push, deploy, restart, closing sessions and the hard floor ([Who may do what](CONTRACT.md#who-may-do-what-one-rule-text)) |
 | Look up settings and behavior | [Technical reference](REFERENCE.md) | Environment settings, feature APIs and implementation details |
 | Work hands-free (phone, car, gym) | [Voice](VOICE.md) | Voice mode page, spoken digest, notification buttons, headset controls and platform limits |
 | Put a Mac's Claude Code sessions under the manager | [Mac Stop hook](MAC-HOOK.md) | Hook install, token, answer channel, privacy and how to disable |
