@@ -55,6 +55,12 @@ const STRONG = [
   ['incomplete', /\b(?:proof|goal|run|check|validation|test|measurement)s? (?:is|was|are|were|remains?|stays?) (?:still )?(?:incomplete|unfinished|partial)\b/i],
   ['still failing', /\bstill (?:fails|failing|broken|red|not working|does not work)\b/i],
   ['gave up', /\b(?:gave up|abandoned)\b/i],
+  // owner 2026-11-11 (harness-done-honest): a done line that says the work is not done is refused without AI
+  ['not done', /\b(?:is|are|was|were|remains?|stays?)?\s*not (?:yet )?(?:done|finished|complete|completed|fixed|started|published|merged|deployed|confirmed)\b|\bnot yet (?:deployed|verified|merged|measured|published|confirmed|run|tested|fixed|done|built)\b/i],
+  ['still open', /\b(?:still|remains?) (?:open|pending|unresolved|missing|unfinished|queued|waiting|to do)\b/i],
+  ['partly achieved', /\b(?:partly|partially|half) (?:achieved|done|fixed|delivered|complete|completed|met|reached|working)\b/i],
+  ['incomplete', /\b(?:is|are|was|were|remains?) incomplete\b|\bincomplete\b(?=\s*(?:[,;.:·]|$|with\b))/i],
+  ['goal not met', /\bgoal not (?:met|reached|achieved)\b/i],
 ];
 // Soft: a part not delivered. Fires only when that clause names the goal (two of its words), or when it stands in the headline of a line
 // that does not state `goal: achieved`.

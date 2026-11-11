@@ -146,3 +146,24 @@ test('the canonical STATUS vocabulary sentence is in AGENTS.md, the cbsession pr
   const norm = (x) => x.replace(/'"'"'/g, "'").replace(/\s+/g, ' ');
   for (const f of ['AGENTS.md', 'scripts/cbsession', 'docs/MAC-HOOK.md', 'docs/REFERENCE.md']) assert.ok(norm(readFileSync(join(ROOT, f), 'utf8')).includes(RULE), f);
 });
+
+// harness-done-honest (2026-11-11): not-done phrases in a done line are refused with no AI and no goal needed
+test('done line with a not-done phrase is caught', () => {
+  for (const t of [
+    'one node fully fingerprint-only, batches 4-5 and the stb4 tile job not done',
+    'the tree publish is not done and waits for the manager',
+    'new run not yet confirmed moving',
+    "Gold's B3F stall is only partly fixed",
+    'the safe-restart is still pending',
+    'the monitor-path comparison is still open under bug-db063be2',
+    'bug-9d7d5af5 NOT fixed, open as bug-d6d82374',
+    'goal partly achieved',
+  ]) assert.ok(doneButFailedOf(`STATUS: done — ${t} · closing review: docs none needed · leftovers none · unverified none · bugs: none`, ''), t);
+});
+test('done line that is clean, or names only closing-review leftovers, is not caught', () => {
+  for (const t of [
+    'merged at 03a97c530937 · goal: achieved · evidence: int-1a1cc5388f884ffdb · closing review: docs none needed · leftovers bug-1 filed · unverified: stb3 not run · bugs: none',
+    'no tree change was needed, all checks done and deployed (int-1a1cc5388f884ffdb)',
+    'fix merged; bug-db063be2 stays open for another area',
+  ]) assert.equal(doneButFailedOf(`STATUS: done — ${t}`, ''), null, t);
+});

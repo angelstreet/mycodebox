@@ -197,3 +197,15 @@ test('per-part evidence: one reference for the whole reply is not enough when th
   await g2.sent('p', q);
   assert.equal((await g2.evaluate({ name: 'p', text: one, doneAt: day0 + 60e3 })).kind, 'reply-rejected');
 });
+
+// harness-done-honest (2026-11-11): the goal check judges evidence per Done-when item, not a count of goal words
+import { taskPartsOf as _parts, goalReplyOf as _reply } from '../goal-check.js';
+test('Done when items are the parts; a reply with one evidenced line per item is accepted whatever words it uses', () => {
+  const prompt = 'Goal: A session can no longer end on STATUS: done while its own line says the work is not done, on codebox and on the Mac\nDone when:\n1. A done line with a not-done phrase is refused. Replay: 27 caught.\n2. The goal check asks for evidence per Done-when item.\n3. cbsession requires Goal + Done when.\n';
+  const parts = _parts(prompt);
+  assert.equal(parts.length, 3);
+  const reply = '1. refusal: status-honesty.js:60, replay 26 caught (int-1a1cc5388f884ffdb)\n2. goal-check.js:121, test/goal-check.test.js 33/33 tests pass\n3. cbsession brief check, commit 3fa1004ab\nSTATUS: done — x · goal: achieved · evidence: int-1a1cc5388f884ffdb';
+  const r = _reply(reply, prompt.split('\n')[0].slice(6), parts);
+  assert.equal(r.ok, true, r.missing.join('; '));
+  assert.equal(_reply('1. refusal: status-honesty.js:60\n2. goal-check.js:121', 'x'.repeat(5), parts).ok, false, 'part 3 has no evidence');
+});

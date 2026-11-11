@@ -68,6 +68,18 @@ export function evidenceOf(text) { const t = String(text || ''); return EVIDENCE
 const PREAMBLE_STEP = /\b(?:first command|read the handover|write a short summary|then do the work|ask the owner only)\b/i;
 export function taskPartsOf(prompt) {
   const lines = String(prompt || '').split('\n');
+  // a `Done when:` block wins (harness-done-honest 2026-11-11): its numbered or bulleted items are the parts, each judged on its own evidence
+  const dw = lines.findIndex((l) => /^\s*(?:[*_#>\s-]*)done[ -]when\b[^:]*:/i.test(l));
+  if (dw >= 0) {
+    const items = [];
+    const inline = lines[dw].replace(/^[^:]*:\s*/, '').trim();
+    if (inline) items.push(inline);
+    for (let j = dw + 1; j < lines.length && items.length < 8; j++) {
+      const m = /^\s*(?:\(?\d+[.)]|[-*•])\s+(.+)$/.exec(lines[j]);
+      if (m) items.push(m[1].trim()); else if (!lines[j].trim() && items.length) break; else if (lines[j].trim() && !/^\s{2,}\S/.test(lines[j])) { if (items.length) break; }
+    }
+    if (items.length) return items.map((x) => { const t = unmark(x).replace(/\s+/g, ' '); const c = /^(.{6,60}?):\s/.exec(t); return (c ? c[1] : t).slice(0, 120); });
+  }
   for (let i = 0; i < lines.length; i++) {
     if (!/^\s*\(?1[.)]\s+\S/.test(lines[i])) continue;
     const items = [];
@@ -102,14 +114,15 @@ export function goalReplyOf(text, goal = '', parts = []) {
   const t = unmark(text);
   const gw = words(goal), tw = words(t);
   let hit = 0; for (const w of gw) if (tw.has(w)) hit++;
-  const need = Math.min(6, Math.max(2, Math.ceil(gw.size / 2)));
-  const restated = gw.size ? hit >= need : /\bgoal(?: as given)?\s*[:=]\s*\S{3,}/i.test(t);
+  const need = Math.min(3, Math.max(2, Math.ceil(gw.size / 2)));   // was up to 6: "names 5 of the goal words, 6 needed" rejected a good reply (2026-11-11)
   const evidence = evidenceOf(t);
+  const noPart = evidence.length ? partsWithoutEvidence(text, parts) : [];
+  // with parts, the reply is judged on evidence per part: a reply that gives one per part restates the goal by doing so
+  const restated = (parts.length && evidence.length && !noPart.length) || /\bgoal(?: as given)?\s*[:=]\s*(?!achieved\b)\S{3,}/i.test(t) || (gw.size ? hit >= need : false);
   const notReached = NOT_REACHED.exec(t.replace(/\bgoal not achieved\b(?=[^.]*\bif not\b)/i, ''));
   const missing = [];
   if (!restated) missing.push(gw.size ? `a restatement of the goal (it names ${hit} of the goal's words, ${need} needed)` : 'a restatement of the goal ("Goal: ...")');
   if (!evidence.length) missing.push('evidence for each part (a file path, run / integration id, commit, screenshot or KPI number)');
-  const noPart = evidence.length ? partsWithoutEvidence(text, parts) : [];
   if (noPart.length) missing.push(`evidence for part ${noPart.map((p) => `${p.n} (${p.part.slice(0, 60)})`).join(', ')}: one line per part, with its file / run id / screenshot / KPI number`);
   if (notReached) missing.push(`the goal reached: your reply says "${notReached[0]}"`);
   return { ok: !missing.length, restated, evidence, missing, partsMissing: noPart.map((p) => p.n) };
