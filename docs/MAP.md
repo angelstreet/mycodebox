@@ -64,6 +64,7 @@ Origin checks protect browser requests but are not user authentication. Any allo
 | V2 scoring report, scorecard, tool score, proposals | `scripts/v2-score.js`, `scripts/v2-ledger.js`, `orchestration/scorecard.js`, `orchestration/proposals.js`, [SCORING](v2/SCORING.md) | `test/v2-score.test.js`, `test/v2-ledger.test.js`, `test/v2-scorecard.test.js` |
 | V2 integration agent and delivery bridge | `orchestration/integration-controller.js`, `integration-queue.js`, `ci-gates.js`, `delivery.js` | `test/v2-integration*.test.js`, `test/v2-delivery*.test.js` |
 | V2 acceptance and live smoke (dev only) | `scripts/v2-acceptance.js`, `scripts/v2-live-smoke.js`, [ACCEPTANCE](v2/ACCEPTANCE.md) | `test/v2-acceptance-*.test.js`, shared fixture `test/fixtures/v2-world.js` |
+| Nightly RTSP check and replacement | `scripts/agent/rtsp_check.py`, `rtsp_replace.py`, `config/rtsp-pool.json`, `scripts/rtsp-nightly/`, `systemd/rtsp-nightly.*`, [RTSP-NIGHTLY](RTSP-NIGHTLY.md) | `test/rtsp-check.test.js` |
 | Documentation links | `README.md`, `docs/` | `test/v2-docs-links.test.js` |
 | Operations and reports | `scripts/` (daily checks incl. `harness-health-check.js`), `systemd/` | `test/daily-checks.test.js`, `test/harness-health-check.test.js`, `test/scorecard.test.js` |
 

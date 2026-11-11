@@ -534,6 +534,12 @@ Thresholds live in
 `worktreeActiveMin` 30, `worktreeRepos`, `worktreeRoots`).
 Every tick (also healthy ones) it first removes stale test leftovers: directories directly in `os.tmpdir()` owned by the service uid, named with one of `TMP_PREFIXES` (every test/script `mkdtemp` prefix; `test/health-watch.test.js` fails when a new one is missing), `lstat`-checked (symlinks never followed) and with mtime older than 2 h, at most 2000 per tick and 20 s (the backlog goes on next tick); it never throws and logs one line with the count when it removed something. Next to the disk check it reads inode use of `/` (`statfs` files/ffree) and trips an `inode` issue at `inodePct` (85 %) with the same report / debounce / manager-wake path (2026-10-20: 186k leaked tmp dirs exhausted the inodes).
 
+**Nightly RTSP check (owner, 2026-11-11).** `systemd/rtsp-nightly.timer` (05:45 UTC) starts a MiniMax session through `scripts/rtsp-nightly/run.sh`
+that runs `scripts/agent/rtsp_replace.py`: every rtsp `DEVICE<n>_VIDEO` is probed (`rtsp_check.py`); a dead public test stream or loopback
+`smoke` source is replaced from the vetted `config/rtsp-pool.json` (host lease, full host-config payload, backup, rollback, at most 3 a night),
+an IP camera is only reported. Default mode `dry`; `<state>/rtsp-nightly/mode` = `live` is the manager's switch. Details, install and rollback:
+[RTSP-NIGHTLY](RTSP-NIGHTLY.md).
+
 **Daily checks (zero tokens unless something is wrong).** `scripts/daily-checks.js` (no deps, no AI calls) runs once a day at
 07:00 Europe/Zurich from `systemd/ghosty-daily-checks.timer` (install like the health watchdog; `Persistent=true` catches a
 missed run). It is a generic runner: the checks are defined in the private, untracked
