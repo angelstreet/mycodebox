@@ -111,7 +111,7 @@ through the device's own server (the same path the browser uses, the auto-sign t
 | capture | Meaning | What the job does |
 |---|---|---|
 | `ok` | fresh (≤ `RTSP_STALE_SECONDS`, 120 s) and not black | nothing; it also turns an `unverified` file device into a checked one |
-| `black` | mean brightness (ffmpeg `signalstats` YAVG) under `RTSP_BLACK_LUMA` (24) on **three snapshots 10 s apart** (one dark scene of a film is not a black screen) | the source frame is measured too: source bright = the host's capture is wrong, **reported**; source black too = the channel itself is black, **repaired from the lists** like a dead channel (only when `capture-mode` is `live`) |
+| `black` | even the bright part is dark: 90th-percentile luma (ffmpeg `signalstats` YHIGH) under `RTSP_BLACK_LUMA` (32) on **three snapshots 10 s apart**. Not the mean: a dark, letterboxed Sintel scene averaged under 24 and was called black | the source frame is measured too: source bright = the host's capture is wrong, **reported**; source black too = the channel itself is black, **repaired from the lists** like a dead channel (only when `capture-mode` is `live`) |
 | `stale` | older than 120 s | reported: the host stopped writing it (capture side) |
 | `multi_audio` | the host stream's newest segment (`segments/output.m3u8`, what the live player loads) carries more than one audio track | reported: hls.js buffers nothing, the live tile is black while the snapshot is fine (bug-ea31641c: a multi-rendition HLS master, BFM2, gives 4 tracks; the host maps every usable audio track) |
 | `missing` / `unreachable` | 404, or the server did not answer after 3 tries | reported |

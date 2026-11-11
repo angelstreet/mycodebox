@@ -283,20 +283,22 @@ def public_entry(e, res=None):
 
 # ---- what the app shows: the host's snapshot of the device, read through its server (owner 2026-11-11: "I still see
 # BFM black screen"; the source played, so a source check alone said "fixed") ----
-BLACK_LUMA = float(os.environ.get('RTSP_BLACK_LUMA', '24'))     # mean Y (0-255); a black frame is ~16 in limited range
+# Black = even the bright part of the picture is dark: the 90th-percentile luma (signalstats YHIGH, 0-255) under 32.
+# The mean (YAVG) is not enough: a dark, letterboxed film scene averaged under 24 and was called black (Sintel, 2026-11-11).
+BLACK_LUMA = float(os.environ.get('RTSP_BLACK_LUMA', '32'))
 STALE_SECONDS = int(os.environ.get('RTSP_STALE_SECONDS', '120'))  # latest.jpg is rewritten about once a second
 
 
 def luma(path_or_url, timeout=20, ssh=None):
-    """Mean brightness (signalstats YAVG) of the first frame of a picture or stream, or None."""
+    """Brightness of the bright part (signalstats YHIGH, 90th percentile) of the first frame of a picture or stream, or None."""
     v = clean_value(path_or_url)
     opts = (['-rtsp_transport', 'tcp'] if is_rtsp(v) else ['-rw_timeout', str(int(timeout * 1e6))] if is_http(v) else [])
     try:
         p = _run([FFMPEG, '-v', 'info', *opts, '-i', v, '-frames:v', '1', '-vf',
-                  'signalstats,metadata=print:key=lavfi.signalstats.YAVG', '-f', 'null', '-'], timeout, ssh)
+                  'signalstats,metadata=print:key=lavfi.signalstats.YHIGH', '-f', 'null', '-'], timeout, ssh)
     except (subprocess.TimeoutExpired, OSError):
         return None
-    m = re.findall(r'YAVG=([0-9.]+)', (p.stderr or '') + (p.stdout or ''))
+    m = re.findall(r'YHIGH=([0-9.]+)', (p.stderr or '') + (p.stdout or ''))
     return float(m[-1]) if m else None
 
 
