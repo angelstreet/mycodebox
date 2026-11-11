@@ -98,8 +98,8 @@ You are picking up work in a fresh session on this host. Working directory: $DIR
    Never ask the owner, or end a turn waiting on anyone, for a merge or PR decision: run \`integrate request\`, then continue, or \`STATUS: waiting: integration <id>\` if nothing else is left.
    VirtualPyTest: a new script is a virtual script or a simple test case, never a file under test_scripts/ (deprecated
    2026-10-28; the commit/push/CI guard refuses one).
-   Bug outside your scope (owner, 2026-10-28): fix it in a worktree, or run \`found-bug --title ... --repro ... --error ...
-   --blocking yes|no\`; never leave it in a closing line. The manager sends a worker. Check it exists with \`found-bug --help\`
+   Bug outside your scope (owner, 2026-11-11): fix it yourself in your own worktree when the fix is small and clear and you have the context; run \`found-bug --title ... --repro ... --error ...
+   --blocking yes|no\` only when the fix is large, needs another area/host/device/credentials or belongs to a live session's task; never leave it in a closing line. The manager sends a worker for filed bugs. Check it exists with \`found-bug --help\`
    (Mac/cloud: \`found-bug\` posts over the tailnet with ~/.config/mycodebox/token and queues offline); if it is missing, POST the same
    JSON to \`\$GHOSTY_URL/api/bugs\` with curl (docs/MAC-HOOK.md "found-bug") and say so in your report.
    This brief and the repo's AGENTS.md win over older task docs and handovers that say "no push / no merge / no
@@ -120,7 +120,7 @@ else echo "cbsession: give -H HANDOVER, -f PROMPT_FILE or -t TEXT" >&2; exit 2; 
 [ -n "$WTCMD" ] && printf '\nYour worktree is ready: %s (branch %s, made by cbsession from main before this prompt). Work only there; rename the branch if the task needs another name.\n' "$DIR" "$WTB" >> "$P"
 # -f / -t prompts get the found-bugs rule too (every provider launches from this one file; owner 2026-10-28)
 [ "${BUGRULE:-}" = 1 ] && printf '\nFirst command: `git worktree list`; create or reuse your worktree and work only there, never in a shared checkout.\n' >> "$P"
-[ "${BUGRULE:-}" = 1 ] && printf '\nBug outside your scope: fix it in a worktree, or run `found-bug --title ... --repro ... --error ... --blocking yes|no` (check `found-bug --help`; if missing, POST the JSON to $GHOSTY_URL/api/bugs with curl, see docs/MAC-HOOK.md); never leave it in a closing line. A STATUS: done line ends with `bugs: none | fixed <what> | reported <id>`.\n' >> "$P"
+[ "${BUGRULE:-}" = 1 ] && printf '\nBug outside your scope: fix it yourself in your own worktree when small and clear (you have the context); otherwise run `found-bug --title ... --repro ... --error ... --blocking yes|no` (check `found-bug --help`; if missing, POST the JSON to $GHOSTY_URL/api/bugs with curl, see docs/MAC-HOOK.md); never leave it in a closing line. A STATUS: done line ends with `bugs: none | fixed <what> | reported <id>`.\n' >> "$P"
 [ "${BUGRULE:-}" = 1 ] && printf '\nClosing review before any STATUS: done: update every doc your change makes stale now (task doc, REFERENCE/MAP/INDEX, user guide, skill, release note); fix each leftover or file it with found-bug; file each improvement idea with found-bug; name what you did not verify. The done line carries `closing review: docs <updated list|none needed> · leftovers <none|filed ids> · unverified <none|list>`.\n' >> "$P"
 
 # -b NAME: settings file with an apiKeyHelper that reads the key file at launch (the key never lands in a file here).
