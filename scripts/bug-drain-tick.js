@@ -35,8 +35,25 @@ const GENERIC = new Set(['fix', 'bug', 'bugs', 'drain', 'build', 'task', 'tasks'
 const text = (b) => [b.title, b.endpoint, b.repro, b.error].filter(Boolean).join(' ');
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
 
+// Hard floor by subject (manager, 2026-11-11: a worker must never start on sudo / cron / units / hypervisor hosts / host config / secrets / DNS / firewall / data deletion / DB work).
+const FLOOR = /\b(sudo|sudoers|cron|crontab|cron ?jobs?|systemd|systemctl|units?\s+(?:file|on)|proxmox\d*|hypervisor|docker\s+(?:daemon|socket)|dockerd|nginx|host[- ]?config|\.env|secrets?|dns|firewall|iptables|ufw|credentials?|delet\w+\s+(?:of\s+)?(?:the\s+)?(?:data|database|db)|(?:db|database)\s+(?:migration|repair)s?|migrations?\s+(?:of|on)\s+(?:the\s+)?(?:db|database))\b/i;
+export const fullText = (b) => [b.title, b.endpoint, b.repro, b.error, b.workaround, b.reason].filter(Boolean).join(' ');
+// Hosts a bug is about; a worker needs a lease/inventory entry to reach one.
+const HOST = /\b(vpt-(?:pi|mf|lenovo|wise|nipogi|windows)\d*|host-clone-\d+|labox-(?:web|backend|dongle|mobile|tablet)|runner-\d+)\b/gi;
+export const hostsOf = (b) => [...new Set((fullText(b).match(HOST) || []).map((h) => h.toLowerCase()))];
+
 export function isOwnerOnly(b) {
-  return OWNER_WHY.has(b.why) || OWNER_TEXT.test(`${b.title} ${b.reason || ''}`);
+  return OWNER_WHY.has(b.why) || OWNER_TEXT.test(`${b.title} ${b.reason || ''}`) || FLOOR.test(fullText(b));
+}
+
+// reachable = Set of host names that have a healthy lease-inventory entry, or null when the inventory is unknown (then any host-bound bug is held back).
+export const unreachableHosts = (b, reachable) => hostsOf(b).filter((h) => !reachable || !reachable.has(h));
+
+// `vpt-lease inventory <env>` lines: "group: host[/device] (state)  host (UNHEALTHY: ...)". Healthy = not UNHEALTHY.
+export function reachableFrom(inventoryText) {
+  const set = new Set();
+  for (const m of String(inventoryText).matchAll(/([a-z][\w-]*?)(?:\/device\d+)?\s+\(([^)]*)\)/gi)) if (!/^UNHEALTHY/i.test(m[2])) set.add(m[1].toLowerCase());
+  return set.size ? set : null;
 }
 
 // 3 deploy / lease / CI / data, 2 everything else real, 1 UI, 0 idea (owner: "deploy/lease/CI/data > UI > idea")
@@ -56,9 +73,11 @@ export function isSmall(b) {
 const tokens = (name) => String(name).toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 4 && !GENERIC.has(t) && !/^\d+$/.test(t));
 
 // Why a bug is NOT drained now, or '' when it is a candidate. live = Set of live tmux session names, now = ms.
-export function skipReason(b, { live, now }) {
+export function skipReason(b, { live, now, reachable = null }) {
   if (b.test) return 'test report';
   if (isOwnerOnly(b)) return 'owner-only / hard floor';
+  const bad = unreachableHosts(b, reachable);
+  if (bad.length) return `host not reachable from a worker (no lease inventory entry): ${bad.join(', ')}`;
   if (b.claim && (!b.claim.until || Date.parse(b.claim.until) > now || now - Date.parse(b.claim.at) < RECENT_MS)) return `claimed by ${b.claim.by}`;
   const filerLive = live.has(b.session);
   if (filerLive && now - Date.parse(b.at) < RECENT_MS) return 'filed by a live session in the last 2 h (send-back wake)';
@@ -100,7 +119,7 @@ export function stats(all, now) {
 }
 
 // Pure planner. -> { start: [{bug, provider, model, why}], skipped: [{id, why}], gates: {...} }
-export function plan({ bugs, live, quota, diskPct, now }) {
+export function plan({ bugs, live, quota, diskPct, now, reachable = null }) {
   const alive = [...live].filter((s) => s.startsWith(WORKER_PREFIX)).length;
   const win = (planName, name) => quota?.plans?.find((p) => p.plan === planName)?.windows?.find((w) => w.name === name)?.usedPercent;
   const mmPct = num(win('minimax', '5h')), clPct = num(win('claude', 'week'));
@@ -110,7 +129,7 @@ export function plan({ bugs, live, quota, diskPct, now }) {
   const room = Math.min(TICK_LIMIT, MAX_ALIVE - alive);
   if (room <= 0) { out.halt = `${alive} drain workers alive (max ${MAX_ALIVE})`; return out; }
   const cand = [];
-  for (const b of bugs) { const why = skipReason(b, { live, now }); if (why) out.skipped.push({ id: b.id, why }); else cand.push(b); }
+  for (const b of bugs) { const why = skipReason(b, { live, now, reachable }); if (why) out.skipped.push({ id: b.id, why }); else cand.push(b); }
   for (const b of rank(cand)) {
     if (out.start.length >= room) break;
     if (isSmall(b)) {
@@ -151,13 +170,17 @@ STATUS vocabulary (owner 2026-11-11): end every turn with a STATUS line. \`done\
 }
 
 const j = (r) => JSON.stringify(r);
+function defaultReachable() {
+  const r = spawnSync(process.env.BUG_DRAIN_LEASE || 'vpt-lease', ['inventory', process.env.BUG_DRAIN_LEASE_ENV || 'node1-vpt'], { encoding: 'utf8', timeout: 20000 });
+  return r.status === 0 ? reachableFrom(r.stdout) : null;
+}
 async function get(url, path) {
   const r = await fetch(url + path, { signal: AbortSignal.timeout(20000) });
   if (!r.ok) throw new Error(`${path}: HTTP ${r.status}`);
   return r.json();
 }
 
-export async function tick({ url, stateDir, mode, now = Date.now(), cbsession, dir, diskPct, fetchJson = get, run = (cmd, args, env) => spawnSync(cmd, args, { encoding: 'utf8', timeout: 240000, env: { ...process.env, ...env } }) }) {
+export async function tick({ reachable = defaultReachable, url, stateDir, mode, now = Date.now(), cbsession, dir, diskPct, fetchJson = get, run = (cmd, args, env) => spawnSync(cmd, args, { encoding: 'utf8', timeout: 240000, env: { ...process.env, ...env } }) }) {
   const out = join(stateDir, 'bug-drain');
   mkdirSync(out, { recursive: true });
   const [openRes, allRes, sess, quota] = await Promise.all([
@@ -167,7 +190,7 @@ export async function tick({ url, stateDir, mode, now = Date.now(), cbsession, d
   const live = new Set((sess.sessions || []).map((s) => s.name));
   const bugs = (openRes.bugs || []).filter((b) => b.title && !b.resolved);
   const st = stats(allRes.bugs || [], now);
-  const p = plan({ bugs, live, quota, diskPct, now });
+  const p = plan({ bugs, live, quota, diskPct, now, reachable: reachable() });
   const started = [];
   for (const s of p.start) {
     const b = s.bug, name = `${WORKER_PREFIX}${b.id.replace(/^bug-/, '')}`;
@@ -184,7 +207,7 @@ export async function tick({ url, stateDir, mode, now = Date.now(), cbsession, d
     }
     started.push(rec);
   }
-  const line = { at: new Date(now).toISOString(), mode, started, halt: p.halt || undefined, skipped: p.skipped.length, skippedWhy: countBy(p.skipped.map((x) => x.why.replace(/ [\d.]+%.*$/, '').replace(/by .*$/, 'by <who>').replace(/session .*$/, 'session <s>'))), gates: p.gates, candidates: bugs.length, stats: st };
+  const line = { at: new Date(now).toISOString(), mode, started, halt: p.halt || undefined, skipped: p.skipped.length, ownerOnly: p.skipped.filter((x) => x.why.startsWith('owner-only')).map((x) => x.id), unreachable: p.skipped.filter((x) => x.why.startsWith('host not reachable')).map((x) => x.id), skippedWhy: countBy(p.skipped.map((x) => x.why.replace(/ [\d.]+%.*$/, '').replace(/by .*$/, 'by <who>').replace(/session .*$/, 'session <s>').replace(/: [\w, -]+$/, ''))), gates: p.gates, candidates: bugs.length, stats: st };
   appendFileSync(join(out, 'journal.jsonl'), j(line) + '\n');
   writeFileSync(join(out, 'scorecard.json'), j({ at: line.at, ...st, lastTick: { mode, started: started.length, halt: p.halt || null } }) + '\n');
   const what = started.length ? started.map((r) => `${r.id}->${r.provider}${r.error ? ` (${r.error})` : ''}`).join(', ') : (p.halt || 'nothing to start');

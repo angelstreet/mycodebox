@@ -542,7 +542,7 @@ an IP camera is only reported. Default mode `dry`; `<state>/rtsp-nightly/mode` =
 
 **Scheduled bug drain (owner, 2026-11-11).** `systemd/ghosty-bug-drain.timer` (08:05 / 11:05 / 14:05 / 17:05 / 20:05 UTC) runs `scripts/bug-drain-tick.js`: it drops owner-only, claimed,
 live-filer (2 h) and live-area bugs, ranks the rest (blocking, age, impact), and starts up to 3 `bugdrain-<id>` workers (max 2 alive): small -> MiniMax (5h <= 80 %), else Sonnet
-(Claude default week < 85 %); never at disk >= 90 %. Default `dry`; `<state>/bug-drain/mode` = `live` is the manager's switch. Journal, scorecard numbers, install and rollback: [BUG-DRAIN](BUG-DRAIN.md).
+(Claude default week < 85 %); never at disk >= 90 %; a hard-floor subject (sudo, cron, units, proxmox, nginx, secrets, DNS, firewall, data / DB work) or an unreachable host is owner-only. Default `dry`; `<state>/bug-drain/mode` = `live` is the manager's switch. Journal, scorecard numbers, install and rollback: [BUG-DRAIN](BUG-DRAIN.md).
 
 **Daily checks (zero tokens unless something is wrong).** `scripts/daily-checks.js` (no deps, no AI calls) runs once a day at
 07:00 Europe/Zurich from `systemd/ghosty-daily-checks.timer` (install like the health watchdog; `Persistent=true` catches a

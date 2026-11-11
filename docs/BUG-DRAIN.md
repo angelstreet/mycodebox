@@ -15,6 +15,10 @@ the manager counted bugs at the hourly sweep and started workers ad hoc. Now `sc
 1. Reads the ledger (`GET /api/bugs`, limit 1000, open) and drops: owner-only / hard floor (`why` owner-floor or credentials, or the title names a db repair, a
    physical replug, credentials / login, money), bugs with a live fix claim (`found-bug --claim`, 2 h), bugs filed by a **live** session in the last 2 h
    (the send-back wake handles those) or marked `live-session-task`, and bugs whose area a live session owns (every distinctive word of that session's name occurs in the report).
+   **Floor filter** (manager, 2026-11-11): a bug whose title, endpoint, repro, error, workaround or reason mentions sudo / sudoers, cron / crontab, systemd / systemctl / unit files, proxmox, a hypervisor,
+   the docker daemon, nginx, host config, `.env`, secrets, DNS, firewall, credentials, deletion of data or a DB migration / repair is owner-only and never auto-started; the ids go under `ownerOnly` in the
+   journal line. A bug about a host a worker cannot reach (named `vpt-pi*` / `vpt-mf*` / `vpt-lenovo*` / `host-clone-*` / `labox-*` / `runner-*` with no healthy entry in `vpt-lease inventory node1-vpt`, or the
+   inventory unreadable) is skipped too (`unreachable` ids in the journal).
 2. Ranks: blocking first, then age (older first), then impact (deploy / lease / CI / data > other > UI > idea). Takes at most 3, never more than 2 drain workers alive (`bugdrain-*`).
 3. Starts one `cbsession` worker per bug (own worktree of the main checkout, `-g fix <id>`, brief in `<state>/bug-drain/brief-<id>.md`): **small and clear** (repro and exact error, not
    blocking, not large, not an idea) -> `-p minimax` (MiniMax-M3) while the MiniMax 5h window is <= 80 %; otherwise `-m sonnet` only while the Claude default account's weekly window is < 85 %

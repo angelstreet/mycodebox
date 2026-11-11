@@ -6,7 +6,7 @@ import http from 'node:http';
 import { mkdtempSync, readFileSync, writeFileSync, chmodSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { plan, rank, stats, skipReason, isSmall, impactOf, isOwnerOnly, tick, brief } from '../scripts/bug-drain-tick.js';
+import { plan, rank, stats, skipReason, isSmall, impactOf, isOwnerOnly, tick, brief, hostsOf, reachableFrom } from '../scripts/bug-drain-tick.js';
 
 const NOW = Date.parse('2026-11-11T12:00:00Z');
 const ago = (h) => new Date(NOW - h * 3600e3).toISOString();
@@ -89,14 +89,14 @@ test('tick: dry starts and claims nothing, writes journal, scorecard and one man
   const state = mkdtempSync(path.join(tmpdir(), 'bd-')), fake = path.join(state, 'cbsession'), log = path.join(state, 'cb.log');
   writeFileSync(fake, `#!/bin/sh\nprintf "%s\\n" "$*" >> ${log}\n`); chmodSync(fake, 0o755);
   try {
-    const dry = await tick({ url: f.url, stateDir: state, mode: 'dry', now: NOW, cbsession: fake, dir: '/x', diskPct: 50 });
+    const dry = await tick({ reachable: () => new Set(), url: f.url, stateDir: state, mode: 'dry', now: NOW, cbsession: fake, dir: '/x', diskPct: 50 });
     assert.equal(dry.line.started.length, 2); assert.equal(f.claims.length, 0); assert.ok(!existsSync(log));
     const ev = readFileSync(path.join(state, 'manager-events.jsonl'), 'utf8').trim().split('\n');
     assert.equal(ev.length, 1); assert.match(JSON.parse(ev[0]).body, /^dry: /);
     assert.equal(readFileSync(path.join(state, 'bug-drain', 'journal.jsonl'), 'utf8').trim().split('\n').length, 1);
     assert.equal(JSON.parse(readFileSync(path.join(state, 'bug-drain', 'scorecard.json'), 'utf8')).open, 3);
 
-    const live = await tick({ url: f.url, stateDir: state, mode: 'live', now: NOW, cbsession: fake, dir: '/x', diskPct: 50 });
+    const live = await tick({ reachable: () => new Set(), url: f.url, stateDir: state, mode: 'live', now: NOW, cbsession: fake, dir: '/x', diskPct: 50 });
     assert.equal(f.claims.length, 2); assert.match(f.claims[0].session, /^bugdrain-/);
     const calls = readFileSync(log, 'utf8').trim().split('\n');
     assert.equal(calls.length, 2, JSON.stringify([calls, live.line.started]));
@@ -113,9 +113,9 @@ test('tick: a refused claim starts no worker; sessions API down starts nothing',
   const state = mkdtempSync(path.join(tmpdir(), 'bd-')), fake = path.join(state, 'cbsession'), log = path.join(state, 'cb.log');
   writeFileSync(fake, `#!/bin/sh\nprintf "%s\\n" "$*" >> ${log}\n`); chmodSync(fake, 0o755);
   try {
-    const r = await tick({ url: f.url, stateDir: state, mode: 'live', now: NOW, cbsession: fake, dir: '/x', diskPct: 50 });
+    const r = await tick({ reachable: () => new Set(), url: f.url, stateDir: state, mode: 'live', now: NOW, cbsession: fake, dir: '/x', diskPct: 50 });
     assert.match(r.line.started[0].error, /claim refused/); assert.ok(!existsSync(log));
-    await assert.rejects(tick({ url: f.url, stateDir: state, mode: 'live', now: NOW, cbsession: fake, dir: '/x', diskPct: 50, fetchJson: async (u, p) => { if (p === '/api/sessions') throw new Error('down'); return { bugs: [] }; } }), /sessions/);
+    await assert.rejects(tick({ reachable: () => new Set(), url: f.url, stateDir: state, mode: 'live', now: NOW, cbsession: fake, dir: '/x', diskPct: 50, fetchJson: async (u, p) => { if (p === '/api/sessions') throw new Error('down'); return { bugs: [] }; } }), /sessions/);
   } finally { f.srv.close(); }
 });
 
@@ -123,4 +123,44 @@ test('brief carries the bug, the claim command and the STATUS vocabulary, no for
   const t = brief(bug({ title: 'T' }), { provider: 'minimax' });
   assert.match(t, /Goal: fix bug-/); assert.match(t, /integrate request/); assert.match(t, /failed — goal not achieved/); assert.match(t, /--release/);
   assert.doesNotMatch(brief(bug(), { provider: 'claude' }), /MiniMax/);
+});
+
+// Manager, 2026-11-11: the real 1490e2fe (sudo on a hypervisor cron) was classed small; 79a8e46a (a renamed script row) stays small.
+const B1490 = { id: 'bug-1490e2fe', title: 'proxmox: clawbox-watchdog cron restarts disabled nginx every 2 min', repro: 'ssh the hypervisor and read the crontab of root', error: 'nginx restarted every 2 min', why: 'other-area' };
+const B79A8 = { id: 'bug-79a8e46a', title: "Virtual script row renamed to Play_ClashOfClan during the owner's script edit", repro: 'open the virtual scripts page and list the rows', error: 'row name changed unexpectedly', why: 'other-area' };
+
+test('floor filter: sudo / cron / units / hypervisor / nginx / host config / secrets / DNS / firewall / data deletion / DB work are owner-only', () => {
+  assert.ok(isOwnerOnly(bug(B1490)));
+  assert.ok(!isOwnerOnly(bug(B79A8)) && isSmall(bug(B79A8)));
+  for (const t of ['needs sudo to read the log', 'sudoers entry missing', 'crontab of the worker', 'systemd unit file wrong', 'systemctl restart fails', 'docker daemon down', 'host-config payload wrong', 'secret in .env leaks', 'DNS record wrong', 'firewall blocks port', 'deletion of data on the lane', 'DB migration fails', 'database repair needed']) assert.ok(isOwnerOnly(bug({ title: t })), t);
+  for (const t of ['ui tab label cut off', 'ci status badge wrong', 'secretary view empty']) assert.ok(!isOwnerOnly(bug({ title: t })), t);
+  // the floor words may sit in the repro or error only
+  assert.ok(isOwnerOnly(bug({ title: 'watchdog flaps', repro: 'run it under sudo' })));
+  const r = P([bug(B1490), bug(B79A8)]);
+  assert.deepEqual(r.start.map((s) => s.bug.id), ['bug-79a8e46a']); assert.equal(r.skipped[0].id, 'bug-1490e2fe'); assert.match(r.skipped[0].why, /^owner-only/);
+});
+
+test('hosts: a bug about a host with no healthy lease-inventory entry is never started', () => {
+  const inv = 'web: host-clone-1 (held by manager:deploy)  host-clone-2 (free)\nstb: vpt-pi1/device4 (held by x)  vpt-pi3/device4 (UNHEALTHY: host does not answer)\n';
+  const reach = reachableFrom(inv);
+  assert.deepEqual([...reach].sort(), ['host-clone-1', 'host-clone-2', 'vpt-pi1']);
+  assert.deepEqual(hostsOf(bug({ title: 'vpt-pi3 stream stalls on host-clone-1' })), ['vpt-pi3', 'host-clone-1']);
+  const ok = bug({ title: 'tile on host-clone-2 blank' }), down = bug({ title: 'vpt-pi3 grabber stalls' }), none = bug({ title: 'vpt-lenovo9 has no entry' });
+  const r = P([ok, down, none].map((b) => b), { quota: quota() });   // no inventory known: host-bound bugs held back
+  assert.equal(r.start.length, 0);
+  const r2 = plan({ bugs: [ok, down, none], live: new Set(), quota: quota(), diskPct: 50, now: NOW, reachable: reach });
+  assert.deepEqual(r2.start.map((s) => s.bug.id), [ok.id]);
+  assert.match(r2.skipped.map((s) => s.why).join('|'), /not reachable.*vpt-pi3/);
+  assert.equal(reachableFrom(''), null);
+});
+
+test('tick journal lists owner-only and unreachable ids', async () => {
+  const f = await fakeServer([bug(B1490), bug(B79A8), bug({ id: 'bug-aaaaaaaa', title: 'vpt-lenovo9 tile blank' })]);
+  const state = mkdtempSync(path.join(tmpdir(), 'bd-'));
+  try {
+    const r = await tick({ reachable: () => new Set(['host-clone-1']), url: f.url, stateDir: state, mode: 'dry', now: NOW, cbsession: 'x', dir: '/x', diskPct: 50 });
+    assert.deepEqual(r.line.ownerOnly, ['bug-1490e2fe']); assert.deepEqual(r.line.unreachable, ['bug-aaaaaaaa']);
+    assert.deepEqual(r.line.started.map((s) => s.id), ['bug-79a8e46a']);
+    assert.deepEqual(JSON.parse(readFileSync(path.join(state, 'bug-drain', 'journal.jsonl'), 'utf8')).ownerOnly, ['bug-1490e2fe']);
+  } finally { f.srv.close(); }
 });
