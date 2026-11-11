@@ -102,6 +102,28 @@ The channel a device plays is found by its URL in the lists, else by a stream id
 is in no list cannot be repaired (no group known) and is reported. The verified copy should be re-probed about monthly
 (`STREAMS.md`); the nightly does not edit it.
 
+## What the app shows: the tile snapshot and black pictures (owner, 2026-11-11)
+
+The owner still saw a black BFM2 tile while its source played. A source check alone cannot see that, so every device is
+also checked where the app looks: the tile's snapshot `/host/<host>/stream/<captureN>/thumbnails/latest.jpg`, read
+through the device's own server (the same path the browser uses, the auto-sign token as header). Per device, column `capture`:
+
+| capture | Meaning | What the job does |
+|---|---|---|
+| `ok` | fresh (≤ `RTSP_STALE_SECONDS`, 120 s) and not black | nothing; it also turns an `unverified` file device into a checked one |
+| `black` | mean brightness (ffmpeg `signalstats` YAVG) under `RTSP_BLACK_LUMA` (24) | the source frame is measured too: source bright = the host's capture is wrong, **reported**; source black too = the channel itself is black, **repaired from the lists** like a dead channel (only when `capture-mode` is `live`) |
+| `stale` | older than 120 s | reported: the host stopped writing it (capture side) |
+| `missing` / `unreachable` | 404, or the server did not answer after 3 tries | reported |
+
+The capture-driven repair has its own switch, `<state>/rtsp-nightly/capture-mode` (`dry` unless it holds `live`), so it
+runs report-only until one clean night has been read (manager, 2026-11-11). The report ends with a
+`tile snapshots (what the app shows): {...}` count.
+
+What this still does not see: a tile that is black only in the browser while the host snapshot is fine. That was the
+2026-11-11 BFM2 case: the snapshot was bright and fresh, but the browser could not mint the host-session cookie on the
+other server (CORS refused the new `X-Control-Session` header), virtualpytest BUG-8e34e51d. A browser check of the
+device page is the only proof for that layer (`vpt-headless-verify` skill, section 2c).
+
 ## Schedule and mode
 
 `rtsp-nightly.timer`: **05:45 UTC** daily (`Persistent=true`). After the nightly fleet validation (leases 23:58, runs from 00:30, morning

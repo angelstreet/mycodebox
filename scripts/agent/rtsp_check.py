@@ -174,7 +174,17 @@ def parse_pairs(text):
     return d
 
 
+_TOKEN = {}
+
+
 def server_token():
+    if 'v' in _TOKEN:  # one token per run: every server accepts the same auto-sign token
+        return _TOKEN['v']
+    _TOKEN['v'] = _server_token()
+    return _TOKEN['v']
+
+
+def _server_token():
     cmd = os.environ.get('RTSP_CHECK_TOKEN_CMD') or os.path.expanduser('~/virtualpytest/scripts/agent/auto_sign_token.sh')
     return subprocess.run([cmd], capture_output=True, text=True, timeout=30).stdout.strip()
 
@@ -258,7 +268,8 @@ def inventory(servers, pool):
                 v = f.get('DEVICE_VIDEO', '')
                 if is_rtsp(v) or f.get('DEVICE_MODEL') == 'rtsp_video':
                     entries.append({'env': env, 'server': server, 'host': host, 'device': dev, 'name': f.get('DEVICE_NAME', ''),
-                                    'url': clean_value(v), 'kind': classify(v, pool)})
+                                    'url': clean_value(v), 'kind': classify(v, pool),
+                                    'capture': os.path.basename(clean_value(f.get('DEVICE_VIDEO_CAPTURE_PATH', '')).rstrip('/'))})
     return entries, errors, {'walked': walked, 'read': read}
 
 
@@ -270,16 +281,77 @@ def public_entry(e, res=None):
     return d
 
 
+# ---- what the app shows: the host's snapshot of the device, read through its server (owner 2026-11-11: "I still see
+# BFM black screen"; the source played, so a source check alone said "fixed") ----
+BLACK_LUMA = float(os.environ.get('RTSP_BLACK_LUMA', '24'))     # mean Y (0-255); a black frame is ~16 in limited range
+STALE_SECONDS = int(os.environ.get('RTSP_STALE_SECONDS', '120'))  # latest.jpg is rewritten about once a second
+
+
+def luma(path_or_url, timeout=20, ssh=None):
+    """Mean brightness (signalstats YAVG) of the first frame of a picture or stream, or None."""
+    v = clean_value(path_or_url)
+    opts = (['-rtsp_transport', 'tcp'] if is_rtsp(v) else ['-rw_timeout', str(int(timeout * 1e6))] if is_http(v) else [])
+    try:
+        p = _run([FFMPEG, '-v', 'info', *opts, '-i', v, '-frames:v', '1', '-vf',
+                  'signalstats,metadata=print:key=lavfi.signalstats.YAVG', '-f', 'null', '-'], timeout, ssh)
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    m = re.findall(r'YAVG=([0-9.]+)', (p.stderr or '') + (p.stdout or ''))
+    return float(m[-1]) if m else None
+
+
+def capture_check(e, timeout=20):
+    """-> {capture: ok|black|stale|missing|unreachable|unknown, age, luma}. The tile's snapshot, via the device's server."""
+    import email.utils, tempfile, time, urllib.error
+    cap = e.get('capture')
+    if not cap or not e.get('server'):
+        return {'capture': 'unknown', 'age': None, 'luma': None}
+    url = f"{e['server'].rstrip('/')}/host/{urllib.parse.quote(e['host'])}/stream/{urllib.parse.quote(cap)}/thumbnails/latest.jpg"
+    req = urllib.request.Request(url, headers={'X-Auto-Sign': server_token(), 'User-Agent': 'Mozilla/5.0 rtsp-nightly/1'})
+    body, last = None, None
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                body, last = r.read(), r.headers.get('Last-Modified')
+            break
+        except urllib.error.HTTPError as x:
+            if x.code == 404:
+                return {'capture': 'missing', 'age': None, 'luma': None}
+            if x.code < 500 or attempt == 2:
+                return {'capture': 'unreachable', 'age': None, 'luma': None, 'detail': f'HTTP {x.code}'}
+        except Exception as x:
+            if attempt == 2:
+                return {'capture': 'unreachable', 'age': None, 'luma': None, 'detail': type(x).__name__}
+        time.sleep(float(os.environ.get('RTSP_API_RETRY_SECONDS', '10')) * (attempt + 1))
+    age = None
+    if last:
+        try:
+            age = int(time.time() - email.utils.parsedate_to_datetime(last).timestamp())
+        except (TypeError, ValueError):
+            age = None
+    with tempfile.NamedTemporaryFile(suffix='.jpg') as f:
+        f.write(body or b''); f.flush()
+        y = luma(f.name, timeout)
+    status = ('stale' if age is not None and age > STALE_SECONDS else
+              'black' if y is not None and y < BLACK_LUMA else 'ok')
+    return {'capture': status, 'age': age, 'luma': None if y is None else round(y, 1)}
+
+
+def check_captures(entries):
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        return list(ex.map(capture_check, entries))
+
+
 def check_entries(entries, ssh_map, timeout):
     with ThreadPoolExecutor(max_workers=4) as ex:
         return list(ex.map(lambda e: check_stream(e['url'], timeout, ssh_map.get(e['host'])), entries))
 
 
 def table(rows):
-    cols = ['host', 'device', 'kind', 'status', 'codec', 'res', 'source']
+    cols = ['host', 'device', 'kind', 'status', 'capture', 'codec', 'res', 'source']
     lines = [[str(r.get(c, '') or '') for c in cols] for r in rows]
     for r, l in zip(rows, lines):
-        l[5] = f"{r.get('width')}x{r.get('height')}" if r.get('width') else ''
+        l[6] = f"{r.get('width')}x{r.get('height')}" if r.get('width') else ''
     w = [max(len(c), *(len(l[i]) for l in lines)) if lines else len(c) for i, c in enumerate(cols)]
     fmt = lambda l: '  '.join(x.ljust(w[i]) for i, x in enumerate(l)).rstrip()
     return '\n'.join([fmt(cols), *map(fmt, lines)])

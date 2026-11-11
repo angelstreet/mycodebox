@@ -29,6 +29,14 @@ SETTLE = int(os.environ.get('RTSP_SETTLE_SECONDS', '15'))
 AGENT = 'codebox:rtsp-nightly'
 
 
+def read_mode(name, default='dry'):
+    try:
+        with open(os.path.join(STATE, name), encoding='utf-8') as f:
+            return 'live' if f.read().strip() == 'live' else default
+    except OSError:
+        return default
+
+
 def journal(ev):
     os.makedirs(STATE, exist_ok=True)
     ev = {'at': datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds'), **ev}
@@ -216,16 +224,36 @@ def run(mode, timeout=10):
     ssh_map = rc.parse_pairs(os.environ.get('RTSP_CHECK_SSH'))
     entries, errors, hosts = rc.inventory(rc.parse_pairs(os.environ.get('RTSP_CHECK_SERVERS')), pool)
     results = rc.check_entries(entries, ssh_map, timeout)
+    caps = rc.check_captures(entries)  # what the app shows: the tile's snapshot through its server
+    capture_mode = read_mode('capture-mode')  # the capture-driven repair has its own switch: dry until one clean night
     budget = int(pool.get('maxReplacementsPerNight', 3)) - replaced_today()
     rows = []
     catalog = None
     chosen = {}
     deferred = []  # repairs the host lease blocked: retried at the end of the night
-    for e, r in zip(entries, results):
+    for e, r, cap in zip(entries, results, caps):
         row = rc.public_entry(e, r)
-        if r['status'] == 'ok':
+        row.update({k: v for k, v in cap.items() if k != 'detail'})
+        src_ok = r['status'] in rc.OK_STATES
+        black_src = False
+        if src_ok and cap['capture'] == 'black' and e['kind'] == 'hls':
+            y = rc.luma(e['url'], 20, ssh_map.get(e['host']))  # is the channel itself black, or only the host's capture?
+            row['source_luma'] = None if y is None else round(y, 1)
+            black_src = y is not None and y < rc.BLACK_LUMA
+        if src_ok and not black_src and cap['capture'] not in ('ok', 'unknown'):
+            row['action'] = (f"report: the source plays but the tile's snapshot is {cap['capture']}"
+                             + (f" ({cap['age']} s old)" if cap['capture'] == 'stale' and cap.get('age') is not None else '')
+                             + ": host capture side (vpt-stream / thumbnails), not changed")
+        elif src_ok and not black_src:
+            row['action'] = ('none' if r['status'] == 'ok' or cap['capture'] == 'ok'
+                             else 'report: cannot verify from codebox (no ssh alias, no host snapshot)')
+        elif black_src and capture_mode != 'live':
+            row['action'] = "report: the channel's own picture is black (host snapshot and source frame); capture checks are dry, nothing changed"
+        elif black_src and budget <= 0:
+            row['action'] = 'report: black channel; replacement budget used up tonight'
+        elif r['status'] == 'ok' and not black_src:
             row['action'] = 'none'
-        elif r['status'] == 'unverified':
+        elif r['status'] == 'unverified' and not black_src:
             row['action'] = 'report: cannot verify from codebox (no ssh alias for the host)'
         elif e['kind'] in ('file', 'no_source'):
             row['action'] = f"report: {e['kind']} source not ok (never replaced automatically: no file pool, and an empty source is the owner's call)"
@@ -233,9 +261,9 @@ def run(mode, timeout=10):
             row['action'] = 'report: camera down (owner hardware, never replaced)'
         elif budget <= 0:
             row['action'] = 'report: replacement budget used up tonight'
-        elif (confirmed := confirm_down(e, ssh_map, timeout)) in rc.OK_STATES:
+        elif not black_src and (confirmed := confirm_down(e, ssh_map, timeout)) in rc.OK_STATES:
             row['action'] = f"report: {r['status']} once, played on the re-probe (slow or flaky), nothing touched"
-        elif confirmed == 'frozen':
+        elif not black_src and confirmed == 'frozen':
             row['action'] = 'report: frozen picture confirmed (could be a still or radio channel), not changed automatically'
         else:
             if e['kind'] == 'hls':
@@ -270,7 +298,7 @@ def run(mode, timeout=10):
                     if res['outcome'] in ('replaced', 'rolled_back'):
                         budget -= 1
         rows.append(row)
-        journal({'event': 'check', 'host': row['host'], 'device': row['device'], 'kind': row['kind'], 'status': row['status'], 'action': row['action'], 'source': row['source']})
+        journal({'event': 'check', 'host': row['host'], 'device': row['device'], 'kind': row['kind'], 'status': row['status'], 'capture': row.get('capture'), 'luma': row.get('luma'), 'action': row['action'], 'source': row['source']})
     # The night is over: retry the repairs the host lease blocked, with the long wait.
     for e, s, row in deferred:
         if budget <= 0:
@@ -284,7 +312,7 @@ def run(mode, timeout=10):
             row['action'] = f"{res['outcome']} ({s['how']}: '{s['label']}')"
             if res['outcome'] in ('replaced', 'rolled_back'):
                 budget -= 1
-        journal({'event': 'check', 'host': row['host'], 'device': row['device'], 'kind': row['kind'], 'status': row['status'], 'action': row['action'], 'source': row['source']})
+        journal({'event': 'check', 'host': row['host'], 'device': row['device'], 'kind': row['kind'], 'status': row['status'], 'capture': row.get('capture'), 'luma': row.get('luma'), 'action': row['action'], 'source': row['source']})
     return {'mode': mode, 'streams': rows, 'errors': errors, 'hosts': hosts}
 
 
@@ -312,6 +340,10 @@ def main(argv):
         by.setdefault(r['kind'], {}).setdefault(r['status'], 0)
         by[r['kind']][r['status']] += 1
     print(f"{len(rep['streams'])} streams, {len(bad)} down, {unv} unverified; by kind: {json.dumps(by)}")
+    capc = {}
+    for r in rep['streams']:
+        capc[r.get('capture', 'unknown')] = capc.get(r.get('capture', 'unknown'), 0) + 1
+    print(f"tile snapshots (what the app shows): {json.dumps(capc)}; capture repairs: {read_mode('capture-mode')}")
     walked = f"{rep['hosts']['walked']} host(s) walked, {rep['hosts']['read']} read"
     if not rep['streams']:
         print('no stream devices found' + (' (inventory errors above)' if rep['errors'] else '') + f' ({walked})')
