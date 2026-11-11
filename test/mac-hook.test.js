@@ -165,3 +165,15 @@ test('dry-run output with awkward names ("[TASK72] fix", _proj, non-ASCII) is ac
   assert.equal(v.v.project, '_proj-ete');
   assert.equal(v.v.session_name, 'TASK72-fix');
 });
+
+test('first_prompt is the real first owner prompt when it is a content list; a later <task-notification> string is not it', { skip }, async () => {
+  const s = setup({ url: 'http://127.0.0.1:1', transcript: path.join(ROOT, 'test', 'fixtures', 'mac-transcript-list-first.jsonl') });
+  const payload = JSON.parse((await run(['--dry-run'], s)).out.trim().split('\n')[0]);
+  assert.equal(payload.first_prompt, 'Fix the menu edge so goto home passes three runs.');
+});
+
+test('the payload carries the sha256 of the hook script', { skip }, async () => {
+  const s = setup({ url: 'http://127.0.0.1:1' });
+  const payload = JSON.parse((await run(['--dry-run'], s)).out.trim().split('\n')[0]);
+  assert.match(payload.hook_sha, /^[0-9a-f]{64}$/);
+});

@@ -63,3 +63,16 @@ test('Mac: the owner\'s example line is bounced by the fix-first rule', async ()
   await new Promise((res) => setTimeout(res, 100));   // the gate records the sent bounce in the background
   assert.equal((await goalGate.snapshot()).sessions[r.body.session].bouncedToday, 1);
 });
+
+test('Mac: a done line that says the work is not done is refused through the hook at once, once per line (deterministic, no goal check state)', async () => {
+  const LINE = 'The tree publish is waiting.\nSTATUS: done — dev tree fixed, the tree publish is not done and waits for approval · closing review: docs none needed · leftovers none · unverified none · bugs: none';
+  const post = (text, extra = {}) => call('POST', '/stops', { machine: 'mac-test', project: 'demo', session_id: 'sid-honest-3cccc', session_name: 'honest', text, ...extra });
+  const r = await post(LINE);
+  assert.equal(r.body.answerable, true);
+  const a = await call('GET', `/stops/${r.body.id}/answer?wait=2`);
+  assert.equal(a.body.state, 'answered');
+  assert.match(a.body.answer, /^Status check: your STATUS says done, but your own text says the goal was not achieved/);
+  assert.match(a.body.answer, /STATUS: failed — goal not achieved/);
+  const again = await post(LINE, { stop_hook_active: true });
+  assert.equal(again.body.answerable, false, 'the loop guard still holds');
+});

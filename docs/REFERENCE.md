@@ -1987,6 +1987,16 @@ bug-2f32e7a7, bug-8fc8fc0d, bug-03ccc6a7, bug-80bdcdc1 · unverified: none · bu
   `stop_hook_active` (loop guard): it is judged, never answered; a rejected one becomes a manager event `goal-check:<session>`.
 - **Order**: git findings, (B) leftovers, (C) closing review and (F)/(G) honesty go first; (H) only questions a line they let through. Same gates:
   idle, no draft, host not busy, done turn younger than 6 h, one push per session per tick.
+- **Harness done-honest (owner, 2026-11-11, TASK-239 items 1-2)**: (a) `status-honesty.js` `doneButFailedOf` also refuses, with no AI and no goal, a done
+  line whose headline says "not done / not yet deployed|verified|merged / still open|pending / partly achieved / incomplete / goal not met" (codebox via
+  done-check (F), Mac via `remote-stops.js`, answered through the hook at once, once per line). Replay: `node scripts/done-honest-replay.js` over
+  `stalls.jsonl` (2026-11-11: 240 distinct done lines, 26 caught; a filed bug that "stays open" is not a catch). A Mac done line without
+  `goal: achieved` and `evidence:` is refused once the goal check has nothing to ask (`doneWithoutGoalOf`). (b) The goal check judges per Done-when
+  item: `taskPartsOf` reads a `Done when:` block (numbered or bulleted) as the parts; a reply is accepted when each part has its own line with
+  evidence, whatever words it uses (the "5 of 6 goal words" count is gone: 3 words at most, or a `Goal:` line, or one evidenced line per part).
+  (c) `scripts/cbsession` copies the handover's `Goal:` line and `Done when:` block into the prompt; a brief with neither (and no `-g`) starts with a
+  warning and the session is told to write both first. (d) The Mac hook sends the real first prompt (a content-list prompt counts; `<task-notification>`,
+  `<system-reminder>` blocks do not) and its own `hook_sha`; `scripts/installed-copies-check.js` reports a Mac whose hook differs from the repo.
 - Switch `manager.json` `goalCheck`: `live` (default) | `dry` (journal only) | `off`. Journal `goal-check.jsonl`, state `goal-check.json`.
   `GET /api/goal-check` -> bounced dones per session today; `scripts/manager-status-scan.sh` prints `<session>: done-bounced: N today by the goal
   check` (codebox and Mac). Tests: `test/goal-check.test.js` (replays the example line: it bounces), `test/goal-check-remote.test.js`.

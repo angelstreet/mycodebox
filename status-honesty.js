@@ -10,7 +10,7 @@
 // ---- the task goal ----
 // cbsession writes the prompt to ~/handovers/<name>.prompt.md behind its own preamble (Ship rule, worktree line, found-bug and closing review
 // rules). The goal is an explicit `Goal:` line when there is one, else the first line of the task text (a `# Task: ...` heading or the first sentence).
-const PREAMBLE_RE = /^(?:ship rule\b|ship rule \(|your worktree is ready|first command|a bug you find|closing review before|bug outside your scope|public repos?\b)/i;
+const PREAMBLE_RE = /^(?:you are picking up work|ship rule\b|ship rule \(|your worktree is ready|first command|a bug you find|closing review before|bug outside your scope|public repos?\b)/i;
 export function goalOf(prompt) {
   const lines = String(prompt || '').split('\n').map((l) => l.trim());
   const g = lines.find((l) => /^(?:[*_#>\s]*)goal\s*:/i.test(l));
@@ -55,6 +55,12 @@ const STRONG = [
   ['incomplete', /\b(?:proof|goal|run|check|validation|test|measurement)s? (?:is|was|are|were|remains?|stays?) (?:still )?(?:incomplete|unfinished|partial)\b/i],
   ['still failing', /\bstill (?:fails|failing|broken|red|not working|does not work)\b/i],
   ['gave up', /\b(?:gave up|abandoned)\b/i],
+  // owner 2026-11-11 (harness-done-honest): a done line that says the work is not done is refused without AI
+  ['not done', /\b(?:is|are|was|were|remains?|stays?)?\s*not (?:yet )?(?:done|finished|complete|completed|fixed|started|published|merged|deployed|confirmed)\b|\bnot yet (?:deployed|verified|merged|measured|published|confirmed|run|tested|fixed|done|built)\b/i],
+  ['still open', /\b(?:still|remains?) (?:open|pending|unresolved|missing|unfinished|queued|waiting|to do)\b/i],
+  ['partly achieved', /\b(?:partly|partially|half) (?:achieved|done|fixed|delivered|complete|completed|met|reached|working)\b/i],
+  ['incomplete', /\b(?:is|are|was|were|remains?) incomplete\b|\bincomplete\b(?=\s*(?:[,;.:·]|$|with\b))/i],
+  ['goal not met', /\bgoal not (?:met|reached|achieved)\b/i],
 ];
 // Soft: a part not delivered. Fires only when that clause names the goal (two of its words), or when it stands in the headline of a line
 // that does not state `goal: achieved`.
@@ -133,4 +139,20 @@ export function failedOf(text) {
   const why = (/goal not achieved\s*[:—–-]?\s*(.+?)(?=\s[·|;]\s*tried\b|$)/i.exec(t) || [, t.split(/\s[·|;]\s*tried\b/i)[0]])[1].trim();
   const tried = (/\btried\s*[:=]?\s*(.+?)(?=\s[·|;]\s*(?:closing|bugs)\b|$)/i.exec(t) || [])[1]?.trim() || '';
   return { why: why.slice(0, 300), tried: tried.slice(0, 300) };
+}
+
+// ---- (3) done without `goal: achieved` + evidence (Mac stops; harness-done-honest 2026-11-11) ----
+// Pure. -> null, or { missing: ['goal: achieved', 'evidence'] } when the last STATUS is done and lacks the goal statement or a reference.
+export function doneWithoutGoalOf(text) {
+  const st = lastStatus(text);
+  if (!st || !DONE_KINDS.has(st.kind)) return null;
+  const missing = [];
+  if (!/\bgoal\s*[:=]\s*achieved\b/i.test(st.text)) missing.push('goal: achieved');
+  if (!/\bevidence\s*[:=]\s*\S{3,}/i.test(st.text)) missing.push('evidence: <links / run ids / frames>');
+  return missing.length ? { missing } : null;
+}
+export function doneWithoutGoalMessage(f) {
+  return `Status check: your done line lacks ${f.missing.join(' and ')}. Done is only for an achieved goal: rewrite it as `
+    + '`STATUS: done — <what> · goal: achieved · evidence: <report links / run ids / commits / frames> · closing review: ...`, '
+    + 'or, if the goal was not reached, `STATUS: failed — goal not achieved: <why> · tried: <list>` / `blocked: <reason + what you tried>` / `waiting: <system id>`. Do not ask; pick the true one.';
 }

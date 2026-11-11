@@ -186,3 +186,10 @@ and passed to curl through a 0600 header file, never on a command line.
 
 The hook never blocks a session on its own failure: a missing or world-readable token, a missing URL or transcript, a
 dead server, a slow server, an unexpected answer or any script error all end in exit 0. It is silent unless `--dry-run`.
+
+## Done honesty and hook version (harness-done-honest, 2026-11-11)
+
+The hook sends `hook_sha` (sha256 of itself) with every stop; the daily `installed-copies-check` reports a machine seen in the last 14 days whose hook
+differs from `scripts/mac-stop-hook.sh` (copy it again). `first_prompt` is the first user line that is a string or a content list with a text block,
+never an injected `<task-notification>` / `<system-reminder>` block. A done stop whose line says the work is not done, or lacks `goal: achieved` +
+`evidence:`, is answered at once through the hook (once per line; a loop-guarded stop is never answered).

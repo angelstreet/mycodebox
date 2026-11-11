@@ -9,6 +9,8 @@
 import fs from 'node:fs';
 import { join, isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
+import { doneButFailedOf, doneButFailedMessage, doneWithoutGoalOf, doneWithoutGoalMessage, lastStatus } from './status-honesty.js';
 import { DEFAULT_CIDRS, parseCidrs, addrAllowed, readClients, clientOf, callerIdentity, readBody } from './lease-routes.js';
 
 export const PREFIX = '/api/remote/v1';
@@ -56,6 +58,7 @@ export function validateStop(b, now = Date.now()) {
   }
   // the session's first prompt (the hook reads it from the transcript): the goal the goal check quotes (goal-check.js)
   if (typeof b.first_prompt === 'string' && b.first_prompt.trim()) out.first_prompt = clean(b.first_prompt).slice(0, 4000);
+  if (typeof b.hook_sha === 'string' && /^[0-9a-f]{64}$/.test(b.hook_sha)) out.hook_sha = b.hook_sha;   // sha256 of the Mac hook script (installed-copies-check.js)
   out.stop_hook_active = b.stop_hook_active === true;
   const at = b.at ? tms(b.at) : null;
   out.at = at != null && Math.abs(at - now) < 10 * 60e3 ? at : now;   // the Mac's clock is only believed when close to ours
@@ -158,6 +161,7 @@ export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goa
 
   async function ingest(v, client) {
     const t = now();
+    if (v.hook_sha) { try { const f = join(stateDir, 'remote-hooks-seen.json'); let o = {}; try { o = JSON.parse(fs.readFileSync(f, 'utf8')); } catch {} o[v.machine] = { hook_sha: v.hook_sha, at: new Date(t).toISOString() }; fs.writeFileSync(f, JSON.stringify(o)); } catch { /* best effort */ } }
     // the title plus a fragment of the session id: two Mac sessions with the same title never share a row
     let name = `${manager.REMOTE_PREFIX}${slug(v.session_name || v.project)}-${slug(v.session_id.slice(0, 6))}`;
     const prev0 = sessions.get(name);
@@ -169,8 +173,23 @@ export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goa
     // Only the deploy topic is evaluated for a Mac session (it reads origin); merge and push escalate in manager.js (remote block). A project without a
     // configured local checkout gets a path that does not exist, so every evaluation finds no repository and escalates.
     if (v.first_prompt && goals) { try { goals.capture(name, v.first_prompt, 'mac-first-prompt'); } catch { /* best effort */ } }
+    // Deterministic done check (harness-done-honest 2026-11-11, the same words as done-check.js (F)): a done line that says the work is not done, or
+    // lacks `goal: achieved` + evidence, is answered at once through the hook; it only refuses a done line, so it is live. Once per done line.
+    let refusal = null;
+    if (!v.stop_hook_active && manager.sessionOn(name)) {
+      const stx = stopText(v), line = lastStatus(stx)?.line || '';
+      const goal = (() => { try { return goals?.get(name)?.goal || ''; } catch { return ''; } })();
+      const f = doneButFailedOf(stx, goal);
+      const sig = createHash('sha1').update(line).digest('hex').slice(0, 12);
+      if (f && s.honestSig !== sig) { s.honestSig = sig; refusal = { kind: 'done-but-failed', message: doneButFailedMessage(f, goal) }; }
+    }
     let gate = null;
-    if (goalGate && manager.sessionOn(name)) { try { gate = await goalGate.evaluate({ name, text: stopText(v), doneAt: t, remote: true, canAnswer: !v.stop_hook_active }); } catch (e) { console.error('[remote] goal gate', e.message); } }
+    if (goalGate && !refusal && manager.sessionOn(name)) { try { gate = await goalGate.evaluate({ name, text: stopText(v), doneAt: t, remote: true, canAnswer: !v.stop_hook_active }); } catch (e) { console.error('[remote] goal gate', e.message); } }
+    // the goal check had nothing to say (not wired, or this done turn was already handled): a done line without `goal: achieved` + evidence is still refused, once per line
+    if (!refusal && !gate && !v.stop_hook_active && manager.sessionOn(name)) {
+      const stx = stopText(v), g = doneWithoutGoalOf(stx), sig = createHash('sha1').update(lastStatus(stx)?.line || '').digest('hex').slice(0, 12);
+      if (g && s.honestSig !== sig) { s.honestSig = sig; refusal = { kind: 'done-without-goal', message: doneWithoutGoalMessage(g) }; }
+    }
     const cwd = checkoutOf(v.project) || join(stateDir, 'remote-no-checkout');
     const base = { name, agent: 'claude', project: v.project, cwd, now: t, remote: true, machine: v.machine };
 
@@ -190,6 +209,11 @@ export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goa
     s.open = stop; s.last = stop;
     armGrace(stop);
     if (!manager.sessionOn(name)) { resolve(stop, 'none', { reason: 'manager disabled for this session' }); }
+    if (refusal && stop.state === 'pending') {
+      stop.noAnswer = true; stop.goalCheck = refusal.kind;
+      resolve(stop, 'answered', { answer: refusal.message.slice(0, 2000) });
+      s.lastSendAt = t; s.lastSendText = refusal.message.slice(0, 300);
+    }
     if (gate?.message && !gate.dry && stop.state === 'pending') {   // the goal check answers this stop itself, the manager does not
       stop.noAnswer = true; stop.goalCheck = gate.kind;
       resolve(stop, 'answered', { answer: gate.message.slice(0, 2000) });

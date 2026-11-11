@@ -1,0 +1,6 @@
+{"type":"custom-title","customTitle":"menu-work","sessionId":"sid-fixture-bbbb"}
+{"type":"user","isMeta":true,"message":{"role":"user","content":"<system-reminder>ignore me</system-reminder>"},"timestamp":"2026-11-11T08:00:00.000Z"}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Fix the menu edge so goto home passes three runs."}]},"timestamp":"2026-11-11T08:00:01.000Z"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"On it."}]},"timestamp":"2026-11-11T08:00:05.000Z"}
+{"type":"user","message":{"role":"user","content":"<task-notification>\n<task-id>b1</task-id> completed</task-notification>"},"timestamp":"2026-11-11T08:10:00.000Z"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Done for now."}]},"timestamp":"2026-11-11T08:11:00.000Z"}

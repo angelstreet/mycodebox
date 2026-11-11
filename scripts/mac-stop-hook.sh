@@ -85,7 +85,15 @@ if [ -n "$TP" ] && [ -r "$TP" ]; then
   PROMPT_AT=$(grep -E '"type": *"user"' "$TP" | grep -E '"content": *"' | grep -v '"tool_use_id"' | tail -n 1 | sed -n 's/.*"timestamp": *"\([0-9TZ:.+-]*\)".*/\1/p' | head -n 1)
   NAME=$(grep '"customTitle"' "$TP" | tail -n 1 | sed -nE 's/.*"customTitle": *"(([^"\\]|\\.)*)".*/\1/p' | head -n 1)
   # the first prompt (still JSON-escaped, first 2000 chars): the goal the server's goal check quotes back (goal-check.js)
-  FIRST=$(grep -E '"type": *"user"' "$TP" | grep -E '"content": *"' | grep -v '"tool_use_id"' | head -n 1 | sed -nE 's/.*"content": *"(([^"\\]|\\.)*)".*/\1/p' | cut -c1-2000 | sed 's/\\*$//')
+  # the real first prompt: the first user line whose text is a string OR a content list with a text block (a desktop session starts with a list),
+  # skipping injected blocks (<task-notification>, <system-reminder>, <command-...>, "Caveat:") and tool results (harness-done-honest 2026-11-11)
+  FIRST=$(grep -E '"type": *"user"' "$TP" | grep -v '"tool_use_id"' | awk '{
+    s = $0; t = ""
+    if (match(s, /"content": *"([^"\\]|\\.)*"/)) { t = substr(s, RSTART, RLENGTH); sub(/^"content": *"/, "", t); sub(/"$/, "", t) }
+    else if (match(s, /"type": *"text", *"text": *"([^"\\]|\\.)*"/)) { t = substr(s, RSTART, RLENGTH); sub(/^"type": *"text", *"text": *"/, "", t); sub(/"$/, "", t) }
+    if (t == "" || t ~ /^(<|\\u003c|Caveat:)/) next
+    print t; exit
+  }' | cut -c1-2000 | sed 's/\\*$//')
 fi
 
 # --- machine / project ---
@@ -101,6 +109,9 @@ NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 PAYLOAD="{\"machine\":\"$(esc "$MACHINE")\",\"project\":\"$(esc "$PROJECT")\",\"session_id\":\"$(esc "$SESSION_ID")\",\"session_name\":\"$(printf '%s' "$NAME" | sed 's/[^A-Za-z0-9 ._@:+-]/-/g' | cut -c1-80)\",\"cwd\":\"$(esc "$WD")\",\"text\":\"$TEXT\",\"stop_hook_active\":$ACTIVE,\"at\":\"$NOW\""
 [ -n "$PROMPT_AT" ] && PAYLOAD="$PAYLOAD,\"prompt_at\":\"$PROMPT_AT\""
 [ -n "${FIRST:-}" ] && PAYLOAD="$PAYLOAD,\"first_prompt\":\"$FIRST\""
+# sha256 of this script: the dashboard's daily check reports a Mac copy that differs from the repo (installed-copies-check.js)
+SELF_SHA=$( { sha256sum "$0" 2>/dev/null || shasum -a 256 "$0" 2>/dev/null; } | cut -d' ' -f1 | grep -E '^[0-9a-f]{64}$' )
+[ -n "$SELF_SHA" ] && PAYLOAD="$PAYLOAD,\"hook_sha\":\"$SELF_SHA\""
 [ -n "${MYCODEBOX_RC_URL:-}" ] && PAYLOAD="$PAYLOAD,\"remote_control_url\":\"$(esc "$MYCODEBOX_RC_URL")\""
 PAYLOAD="$PAYLOAD}"
 
