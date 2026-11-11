@@ -145,7 +145,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
   const now = () => { const t = nowIn(); if (!Number.isFinite(t)) throw new Error('wall clock is not finite'); return t; };   // wall clock: TTL and display only
   const mono = config.mono || (() => performance.now());       // heartbeat-miss, idle and ticket-poll clocks never follow the wall clock
   const cfg = {
-    envs: [], ttlDefaultMin: 120, ttlMaxMin: 480, ttlCapMin: 24 * 60, reserveMs: 60 * 1000, passMax: 3, strictAgeMs: 15 * MIN, catchUpYieldMs: 10 * MIN, catchUpBlockMs: 30 * MIN,catchUpCooldownMs: 10 * MIN, requestKeepMs: 24 * 60 * MIN, missFactor: 3, holderCheckMs: 30 * 1000, holderDeadChecks: 2, ticketIdleMs: 90 * 1000, goneGraceMs: 2 * MIN,
+    envs: [], ttlDefaultMin: 120, ttlMaxMin: 480, ttlCapMin: 24 * 60, reserveMs: 60 * 1000, passMax: 3, strictAgeMs: 15 * MIN, catchUpYieldMs: 10 * MIN, catchUpBlockMs: 30 * MIN, deployGateMaxMs: 10 * MIN,catchUpCooldownMs: 10 * MIN, requestKeepMs: 24 * 60 * MIN, missFactor: 3, holderCheckMs: 30 * 1000, holderDeadChecks: 2, ticketIdleMs: 90 * 1000, goneGraceMs: 2 * MIN,
     snapshotEvery: 200, runningMaxMin: 90, deployLeaseMin: 12, deployCeilingMin: 45,
     // Priority (owner 2026-10-20): every lease and ticket carries its holder's P0..P2 (P0 highest). A lease of priority `lowPriority` or lower is capped at
     // `lowPriorityMaxTtlMin` per claim/renew and cannot be renewed while a ticket of strictly higher priority waits on a resource it blocks (`yield`).
@@ -430,6 +430,13 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
       const t = etaOf(tk, ahead);
       const hs = heldConflicts(tk);
       Object.assign(out, { behind: ahead.map((a) => a.id), position: ahead.length + 1, priority_since: iso(tk.created), eta: iso(t), eta_latest: iso(latestOf(tk)), eta_in_min: Math.max(0, Math.ceil((t - now()) / MIN)), holders: hs.map(leaseView) });
+      // why a ticket that looks grantable (free resource, first in line) is still waiting: the deploy gating it (bug 2026-11-11: nobody could tell)
+      const gateOf = (virt) => (tk.system ? [] : S.deploys.filter((d) => d.id !== tk.deployId && d.env === tk.env && deployTouches(d, virt) && gateWhy(d, virt)).map((d) => ({ d, why: gateWhy(d, virt) })));
+      const gates = [tk, ...(tk.alts || []).map((resources) => ({ ...tk, resources }))].map(gateOf);
+      if (gates.every((g) => g.length) && gates[0].length) {
+        out.gated_by = gates[0].map(({ d, why }) => ({ deploy: d.id, scope: d.scope, ref: d.ref, state: d.state, hosts: d.hosts || null, why }));
+        out.gate_note = `${hs.length || ahead.length ? 'also ' : ''}gated by deploy ${gates[0][0].d.id} (${gates[0][0].d.state}, ${gates[0][0].why}); the gate lifts when it starts, or ${Math.round(cfg.deployGateMaxMs / MIN)} min after it became ready`;
+      }
       const bad = [], eqv = freeEquivalents(tk, bad), hint = deviceOnlyHint(tk, hs);
       if (eqv.length) out.equivalents_free = eqv;
       if (bad.length) out.equivalents_unhealthy = bad;
@@ -463,7 +470,44 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
   // `catchUpBlockMs`, so back-to-back P1 bot runs (a cron dispatcher re-claiming the host the moment it releases) cannot starve the
   // host of its deploy forever. Bounded: after the window it stops blocking and the next skip queues a fresh one.
   const readyCatchUp = (d) => { const t = now(); const from = d.notBefore || d.created || t; return !!d.strict && t >= from && t < from + cfg.catchUpBlockMs; };
-  const pendingFor = (env, req, joinId) => S.deploys.filter((d) => d.id !== joinId && d.env === env && (d.state === 'running' || (d.state === 'queued' && (!isCatchUp(d) || readyCatchUp(d)))) && deployTouches(d, req));
+  // Per-host claim gate (owner 2026-11-11: four free STB boxes, 13 tickets, none granted because two catch-up deploys spanning other
+  // hosts waited on a Mi run). A QUEUED host-scope deploy gates a claim only where it can matter:
+  //  - on a host its own blocking leases hold: only claims of LOWER priority than the deploy (it counts as P0) and only for
+  //    `deployGateMaxMs` after it became ready to run (starvation guard), then the claims go ahead;
+  //  - on a host nothing blocks: the deploy starts there on the next runner tick (start splits the request per host), so the
+  //    claim waits for it, bounded by the same window;
+  //  - never while an old ticket waits on it (a catch-up yields to tickets in `start`).
+  // A RUNNING deploy still gates everything it touches (rolling release narrows it per host), frontend/server/full queued ones too.
+  const hostsOfRes = (rs) => { const hs = new Set(); for (const c of rs || []) { const r = P(c); if (r.type === 'host' || r.type === 'device') hs.add(r.host); else return null; } return hs; };   // null: every host
+  const readySeen = new Map();
+  function gateWhy(d, req) {
+    if (d.state === 'running') return 'running';
+    if (d.state !== 'queued') return null;
+    if (d.scope !== 'host') return (!isCatchUp(d) || readyCatchUp(d)) ? 'queued' : null;
+    if (isCatchUp(d) && !d.strict) return null;                                  // opportunistic catch-up: never gates while queued
+    const t = now();
+    const from = Math.max(d.approvedAt || d.created || t, d.notBefore || 0);
+    if (t < from) return null;                                                   // cooldown
+    if (waitingTickets(d.env).some((tk) => t - tk.created >= cfg.catchUpYieldMs && deployTouches(d, tk))) return null;
+    const bl = deployBlockers(d, { skipLeased: true }).blockers;
+    const blockedAll = bl.some((l) => hostsOfRes(l.resources) === null);
+    const blockedHosts = new Set(); for (const l of bl) for (const h of hostsOfRes(l.resources) || []) blockedHosts.add(h);
+    const rh = hostsOfRes(req.resources);
+    let touched = rh ? [...rh] : (d.hosts?.length ? d.hosts : null);
+    if (touched && d.hosts?.length) touched = touched.filter((h) => d.hosts.includes(h));
+    const free = touched === null ? !blockedAll && !blockedHosts.size : touched.some((h) => !blockedAll && !blockedHosts.has(h));
+    // ready: the window starts when the registry first sees the deploy startable (a deploy that waited hours for a lease and just
+    // became startable is protected for one window, not for ever); blocked: the window is the deploy's age since ready-to-run.
+    if (free) {
+      // only the deploy that is NEXT to run holds the gate: not while another host deploy runs (it gates itself) or an older queued one overlaps
+      if (S.deploys.some((x) => x.id !== d.id && x.env === d.env && (x.state === 'running' ? !independentScopes(x.scope, d.scope) : x.state === 'queued' && x.scope === 'host' && x.created < d.created && (!isCatchUp(x) || x.strict) && deployTouches(x, req)))) return null;
+      const k = `${d.id}|${touched ? touched.join(',') : '*'}`;
+      if (!readySeen.has(k)) { readySeen.set(k, t); if (readySeen.size > 2000) readySeen.delete(readySeen.keys().next().value); }
+      return t < readySeen.get(k) + cfg.deployGateMaxMs ? 'ready' : null;
+    }
+    return t < from + cfg.deployGateMaxMs && prioRank(prioOf(req)) > 0 ? 'blocked-lower-priority' : null;
+  }
+  const pendingFor = (env, req, joinId) => S.deploys.filter((d) => d.id !== joinId && d.env === env && deployTouches(d, req) && gateWhy(d, req));
   const ownServerHosts = (env) => new Set(((cfg.ownServers || {})[env] || []).map((h) => String(h).toLowerCase()));
   // every resource of the lease is a host or device on an own-server host (so it can only be disturbed by that Pi's server)
   const ownServerOnly = (l, own) => own.size > 0 && l.resources.length > 0 && l.resources.every((c) => { const r = P(c); return (r.type === 'host' || r.type === 'device') && own.has(r.host); });
@@ -1217,7 +1261,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     async start(a = {}) {
       const agent = typeof a.agent === 'string' && a.agent ? a.agent : RUNNER;
       return mutate((emit) => {
-        const d = findDeploy(a.id);
+        let d = findDeploy(a.id);
         if (!d) return fail('E_NOT_FOUND', `no such deploy ${a.id}`);
         const no = deployAuth(d, a); if (no) return no;
         if (d.state !== 'queued') return fail('E_INVALID', `deploy ${d.id} is ${d.state}, not queued`);
@@ -1228,16 +1272,54 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
         // Same-scope coalescing: a newer queued deploy of the same env and scope will run instead; this one is covered when it finishes.
         const newer = coalescible(d) && S.deploys.find((x) => sameCoal(d, x) && x.state === 'queued' && x.created > d.created);
         if (newer) return fail('E_HELD', `deploy ${d.id} is covered by the newer ${d.scope} deploy ${newer.id} (${newer.ref}), which runs instead`, { reason: 'covered', covered_by: newer.id, holders: [] });
-        const { blockers, leasedHosts } = deployBlockers(d, { skipLeased: !!a.skip_leased, agent });
-        if (blockers.length) return fail('E_HELD', 'leases in the way', { holders: blockers.map(leaseView) });
         const t = now();
+        // Never deploy an older ref over a newer one (owner 2026-11-11): a host another queued host deploy lists at a ref that CONTAINS
+        // this one is left to that deploy; this request keeps only the rest (or ends `superseded` when nothing is left).
+        if (d.scope === 'host' && d.hosts?.length) {
+          const contains = cfg.isAncestor || (() => null);
+          const newer = S.deploys.filter((x) => x.id !== d.id && x.env === d.env && x.scope === 'host' && x.state === 'queued' && x.ref !== d.ref && contains(x.ref, d.ref) === true);
+          const covered = new Set(newer.flatMap((x) => (x.hosts?.length ? x.hosts : d.hosts)));
+          const gone = d.hosts.filter((h) => covered.has(h));
+          if (gone.length) {
+            const keep = d.hosts.filter((h) => !covered.has(h));
+            const by = newer.find((x) => !x.hosts?.length || x.hosts.some((h) => gone.includes(h)));
+            if (!keep.length) {
+              emit({ t: 'dep_set', deploy: { ...d, state: 'cancelled', finished: t, reason: `superseded by deploy ${by.id} at ${by.ref} (contains ${d.ref}); hosts ${gone.join(',')} left to it`, supersededBy: by.id }, event: 'cancel', at: t });
+              return fail('E_HELD', `deploy ${d.id} is superseded by the newer deploy ${by.id} (${by.ref}) on ${gone.join(',')}`, { reason: 'covered', covered_by: by.id, holders: [] });
+            }
+            d = { ...d, hosts: keep, supersededHosts: [...(d.supersededHosts || []), ...gone] };
+            emit({ t: 'dep_set', deploy: d, at: t });
+          }
+        }
+        let { blockers, leasedHosts } = deployBlockers(d, { skipLeased: !!a.skip_leased, agent });
+        // Per host (owner 2026-11-11): a host request blocked on only SOME of its hosts starts on the free ones; the blocked hosts
+        // go back to the queue as their own strict request (same age and ref), so one busy host never holds the others.
+        let splitOff = null;
+        if (blockers.length && d.scope === 'host' && d.hosts?.length > 1) {
+          const bh = new Set(); let all = false;
+          for (const l of blockers) { const hs = hostsOfRes(l.resources); if (hs === null) all = true; else for (const h of hs) bh.add(h); }
+          const free = d.hosts.filter((h) => !bh.has(h)), busy = d.hosts.filter((h) => bh.has(h));
+          if (!all && free.length && busy.length) {
+            splitOff = busy;
+            d = { ...d, hosts: free };
+            ({ blockers, leasedHosts } = deployBlockers(d, { skipLeased: !!a.skip_leased, agent }));
+          }
+        }
+        if (blockers.length) return fail('E_HELD', 'leases in the way', { holders: blockers.map(leaseView) });
         if (isCatchUp(d)) {
           // a catch-up that skipped again waits out its cooldown, and yields to a device ticket that has already waited too long
           if (d.notBefore && d.notBefore > t) return fail('E_HELD', `catch-up ${d.id} is in cooldown until ${iso(d.notBefore)}`, { reason: 'cooldown', holders: [] });
           const old = waitingTickets(d.env).filter((tk) => t - tk.created >= cfg.catchUpYieldMs && deployTouches(d, tk));
           if (old.length) return fail('E_HELD', `catch-up ${d.id} yields to ticket ${old[0].id} (${old[0].agent}), waiting over ${Math.round(cfg.catchUpYieldMs / MIN)} min`, { reason: 'tickets-first', holders: [] });
         }
-        const nd = { ...d, state: 'running', started: t, runner: agent, runnerClient: typeof a.client === 'string' ? a.client : INTERNAL };
+        const nd = { ...d, state: 'running', started: t, runner: agent, runnerClient: typeof a.client === 'string' ? a.client : INTERNAL, ...(splitOff ? { splitTo: null } : {}) };
+        if (splitOff) {
+          const c = { ...d, id: depNew(), state: 'queued', hosts: splitOff, strict: true, splitFrom: d.id, approvedAt: t, notBefore: d.notBefore && d.notBefore > t ? d.notBefore : undefined, purpose: String(d.purpose || '').startsWith('catch-up') ? d.purpose : `catch-up: split from ${d.id}, hosts ${splitOff.join(',')} were leased`, approved: true };
+          for (const k of ['started', 'runner', 'runnerClient', 'finished', 'doneHosts', 'supersededHosts']) delete c[k];
+          if (c.notBefore === undefined) delete c.notBefore;
+          nd.splitTo = c.id;
+          emit({ t: 'dep_set', deploy: c, event: 'request', at: t });
+        } else delete nd.splitTo;
         emit({ t: 'dep_set', deploy: nd, event: 'start', at: t });
         // check and claim in one step (inside the mutex): the deploy's own lease, so nothing can slip in between. Joiners claim with its deploy_id.
         const skip = new Set(leasedHosts.map((x) => x.host));
