@@ -200,3 +200,10 @@ test('manager block shows the weekly bugs row only when the scorecard carries bu
   assert.match(html, /Bugs \(7 d\).*9 filed/s); assert.match(html, /3 fixed by the finder.*1 by a worker.*5 open.*2 filed without a reason/s);
   assert.doesNotMatch(managerBlockHtml(score, [], {}), /Bugs \(/);
 });
+
+test('a report stored before the why field existed counts as missing (send-back, sweep, weekly number)', async () => {
+  assert.equal(sendBackOf({ id: 'bug-1', session: 'a', title: 't', repro: 'r' }), true);
+  const dir = tmp('fb-legacy-'); const fs = await import('node:fs');
+  fs.writeFileSync(join(dir, 'found-bugs.jsonl'), JSON.stringify({ id: 'bug-aaaaaaaa', session: 'a', title: 'old', at: new Date().toISOString(), repro: 'r', blocking: false }) + '\n');
+  assert.equal((await createFoundBugs({ stateDir: dir }).week(7)).whyMissing, 1);
+});
