@@ -119,6 +119,22 @@ curl -sS -X POST -H "Authorization: Bearer $(cat ~/.config/mycodebox/token)" -H 
   -d '{"title":"...","error":"exact text","repro":"...","blocking":"no","session":"mac-<label>"}' "$GHOSTY_URL/api/bugs"
 ```
 
+## Ship rule for Mac sessions (owner, 2026-11-11)
+
+A small model (Haiku) on the Mac ended a fix with "Nothing is committed. If you want, I can open the dialog ... then commit."
+and never typechecked, committed or ran `integrate request`: Claude Code's built-in default is "commit only when asked", and a
+rule deep in a long file loses to it. The repo's `AGENTS.md` now opens with a ship rule; also put this block at the **very top**
+of `~/.claude/CLAUDE.md` on the Mac so every project sees it in the first lines:
+
+```
+After a change: run the touched tests/typecheck yourself, commit, push your branch, `integrate request <branch> [--deploy ...]`.
+Never ask permission for these and never end a turn with an offer ("I can ...", "if you want", "should I") for something the
+rules already authorise. Verify UI yourself with headless Playwright (skill vpt-headless-verify). End with a STATUS line.
+```
+
+The done-check does not see Mac sessions (it reads tmux panes), so this block is the only guard there; the Stop hook cannot
+answer such a stop because merge and push questions always escalate for a Mac session.
+
 ## Disable
 
 Any one of: `touch ~/.config/mycodebox/disabled`, `export MYCODEBOX_HOOK=off`, delete the `hooks.Stop` entry, revoke

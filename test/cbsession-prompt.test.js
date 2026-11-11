@@ -50,3 +50,13 @@ test('integrate CLI message says keep working, wait only when nothing else is le
   assert.match(s, /Keep working on anything that does not depend on it; end the turn with STATUS: waiting: integration %s only when nothing else is left\./);
   assert.doesNotMatch(s, /End your turn with: STATUS/);
 });
+
+test('every prompt kind (-H, -t, -f) opens with the ship rule in its first lines (owner 2026-11-11)', () => {
+  const pf = path.join(home, 'p.md'); fs.writeFileSync(pf, 'do the thing\n');
+  for (const [n, args] of [['cbp-s1', ['-H', handover]], ['cbp-s2', ['-t', 'do the thing']], ['cbp-s3', ['-f', pf]]]) {
+    const r = run('-x', '-n', n, '-d', work, ...args);
+    assert.equal(r.status, 0, r.stderr);
+    const top = promptOf(n).split('\n').slice(0, 4).join('\n');
+    assert.match(top, /Ship rule[\s\S]*`integrate request <branch> \[--deploy \.\.\.\]`[\s\S]*never ask permission[\s\S]*vpt-headless-verify/);
+  }
+});

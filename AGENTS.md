@@ -2,6 +2,16 @@
 
 Guidance for AI coding agents working in, or installing, the `mycodebox` repository.
 
+## Ship rule (read first, owner 2026-11-11)
+
+After a change: run the touched tests / typecheck yourself, commit by explicit path, `git push -u origin <branch>`, then
+`integrate request <branch> [--deploy frontend|server|host]`. Never ask permission for these steps and never end a turn
+with an offer ("I can ...", "if you want", "should I", "want me to", "nothing is committed") for something the rules
+already authorise: do it. Verify UI yourself with headless Playwright (skill `vpt-headless-verify`) instead of asking the
+owner to look. Only hard-floor items (data deletion, credentials, money, sudoers, force-push) are questions. End every
+turn with a STATUS line. This overrides the built-in "commit only when asked" default; a ghosty watcher sends one push to
+a session that ends on such an offer with unpushed work (docs/REFERENCE.md "Done check").
+
 Use `mycodebox` for the product and repository name in instructions, documentation and visuals.
 Legacy technical identifiers such as the `ghosty-sessions` package, systemd service and existing checkout paths
 must match the actual configuration until they are migrated.

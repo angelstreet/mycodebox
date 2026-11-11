@@ -21,7 +21,8 @@ test('dry run per provider writes the launch file and starts nothing', () => {
   assert.match(c, /--dangerously-skip-permissions --remote-control cb-claude -n cb-claude --model haiku/);
   assert.match(c, new RegExp(`cd ${work}`));
   const pr = fs.readFileSync(path.join(home, 'handovers', 'cb-claude.prompt.md'), 'utf8');
-  assert.ok(pr.startsWith('do it\n'), 'the text comes first');
+  assert.ok(pr.startsWith('Ship rule (owner 2026-11-11)'), 'the ship rule comes first');
+  assert.match(pr, /\n\ndo it\n/, 'then the text');
   assert.match(pr, /found-bug --title/, 'then the found-bugs rule footer');
   r = run('-x', '-n', 'cb-codex', '-d', work, '-p', 'codex', '-m', 'gpt-x', '-t', 'x');
   assert.match(launch('cb-codex'), /codex --dangerously-bypass-approvals-and-sandbox -m gpt-x/);

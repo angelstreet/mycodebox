@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { finding, message, uncommittedOf, namedRefs, createDoneCheck } from '../done-check.js';
+import { finding, shipOfferOf, shipOfferMessage, message, uncommittedOf, namedRefs, createDoneCheck } from '../done-check.js';
 
 test('finding: commits not on main and uncommitted files disagree with done; a clean checkout agrees', () => {
   assert.equal(finding({ branch: 'main', notOnMain: [], uncommitted: [] }), null);
@@ -150,4 +150,47 @@ test('unconfirmed STATUS: pushed once per distinct list, capped at 3 a day, then
   assert.equal(h.sent.length, 3);
   assert.match(h.sent[0][1], /not an end state/);
   assert.equal(h.events.filter((k) => k === 'done-check-left-cap:a').length, 1);
+});
+
+// (E) ship without asking (owner, 2026-11-11). The Haiku Mac session, closing texts verbatim.
+const OWNER_HAIKU = "Done: the Details row is now 36px high in Navigation_NodeEditDialog.tsx.\n\nI haven't checked this visually or run the typecheck. Nothing is committed. If you want, I can open the dialog in the browser to confirm, then commit.\n\nShould I open the dialog in the browser to check it visually?";
+const OWNER_HAIKU_2 = 'Okay, I\'ll leave it there. The change is in the working tree, not committed, not visually checked.';
+const HAIKU_VARIANT = 'Fixed the off-by-one in paginate(). Want me to commit and push this?';
+
+test('shipOfferOf: the owner\'s Haiku transcript and a variant are offers; STATUS lines, hard-floor topics and plain reports are not', () => {
+  assert.match(shipOfferOf(OWNER_HAIKU), /Nothing is committed|haven't checked|If you want/i);
+  assert.ok(shipOfferOf(OWNER_HAIKU_2));
+  assert.ok(shipOfferOf(HAIKU_VARIANT));
+  assert.ok(shipOfferOf('Done. Should I push the branch?'));
+  assert.equal(shipOfferOf(OWNER_HAIKU + '\nSTATUS: needs-owner: open the browser?'), null);
+  assert.equal(shipOfferOf('Fixed it. Want me to delete the production database backups?'), null);
+  assert.equal(shipOfferOf('Fixed and pushed; integration int-1 merged.'), null);
+  assert.equal(shipOfferOf(''), null);
+  assert.match(shipOfferMessage({ text: '1 uncommitted file(s) (a.tsx)' }), /do not ask[\s\S]*vpt-headless-verify[\s\S]*integrate request/);
+});
+
+test('tick (E): an offer with a dirty tree gets one authorised-push, not the generic git message; a clean tree or a STATUS line gets none; once per text', async (t) => {
+  const s = [
+    { name: 'haiku', cwd: '/w/dirty', text: OWNER_HAIKU }, { name: 'clean', cwd: '/w/clean', text: OWNER_HAIKU },
+    { name: 'status', cwd: '/w/dirty', text: 'Done.\nSTATUS: done — x' },
+  ];
+  const h = harness(t, { sessions: () => s });
+  const r = await h.w.tick();
+  const toHaiku = h.sent.filter((x) => x[0] === 'haiku');
+  assert.equal(toHaiku.length, 1);
+  assert.match(toHaiku[0][1], /You are authorised|authorised \(AGENTS\.md/);
+  assert.doesNotMatch(toHaiku[0][1], /STATUS says done/);
+  assert.equal(h.sent.some((x) => x[0] === 'clean'), false);
+  assert.deepEqual(r.shipOffers, ['haiku']);
+  await h.w.tick();
+  assert.equal(h.sent.filter((x) => x[0] === 'haiku').length, 1);
+});
+
+test('tick (E): dry mode and a drafting owner send nothing', async (t) => {
+  const h = harness(t, { sessions: () => [{ name: 'haiku', cwd: '/w/dirty', text: HAIKU_VARIANT }], mode: 'dry' });
+  await h.w.tick();
+  assert.equal(h.sent.length, 0);
+  const h2 = harness(t, { sessions: () => [{ name: 'haiku', cwd: '/w/dirty', text: HAIKU_VARIANT, draft: true }] });
+  await h2.w.tick();
+  assert.equal(h2.sent.length, 0);
 });

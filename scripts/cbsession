@@ -75,6 +75,7 @@ if [ -n "$HANDOVER" ]; then
   # which silently ran the integration commands and emptied them out of the prompt (2026-10-20).
   cat > "$P" <<EOF
 You are picking up work in a fresh session on this host. Working directory: $DIR.
+Ship rule (owner 2026-11-11): after a change run the touched tests/typecheck yourself, commit, push your branch, \`integrate request <branch> [--deploy ...]\`; never ask permission for these and never end a turn with an offer ("I can ...", "if you want", "should I", "nothing is committed") for something the rules already authorise; verify UI yourself with headless Playwright (skill vpt-headless-verify); end with a STATUS line.
 0. First command: \`git worktree list\`; create or reuse your worktree (\`git worktree add <dir> -b <branch> origin/main\`) and
    work only there, never in a shared checkout (~/ghosty-sessions, ~/virtualpytest): a guard reports edits made there.
 1. Read the handover: $HANDOVER, then the files it links as needed.
@@ -113,8 +114,8 @@ idea, and name what you did not verify (AGENTS.md "Closing review").
 EOF
   [ "$WAIT" = 1 ] && printf '\nReview only (owner asked): after step 2, propose the next step and stop; do not start step 3.\n' >> "$P"
   [ -n "$TEXT" ] && printf '\nExtra instruction from the owner: %s\n' "$TEXT" >> "$P"
-elif [ -n "$PFILE" ]; then cp "$PFILE" "$P"; BUGRULE=1
-elif [ -n "$TEXT" ]; then printf '%s\n' "$TEXT" > "$P"; BUGRULE=1
+elif [ -n "$PFILE" ]; then { printf '%s\n\n' 'Ship rule (owner 2026-11-11): after a change run the touched tests/typecheck yourself, commit, push your branch, `integrate request <branch> [--deploy ...]`; never ask permission for these and never end a turn with an offer ("I can ...", "if you want", "should I", "nothing is committed") for something the rules already authorise; verify UI yourself with headless Playwright (skill vpt-headless-verify); end with a STATUS line.'; cat "$PFILE"; } > "$P"; BUGRULE=1
+elif [ -n "$TEXT" ]; then { printf '%s\n\n' 'Ship rule (owner 2026-11-11): after a change run the touched tests/typecheck yourself, commit, push your branch, `integrate request <branch> [--deploy ...]`; never ask permission for these and never end a turn with an offer ("I can ...", "if you want", "should I", "nothing is committed") for something the rules already authorise; verify UI yourself with headless Playwright (skill vpt-headless-verify); end with a STATUS line.'; printf '%s\n' "$TEXT"; } > "$P"; BUGRULE=1
 else echo "cbsession: give -H HANDOVER, -f PROMPT_FILE or -t TEXT" >&2; exit 2; fi
 
 [ -n "$WTCMD" ] && printf '\nYour worktree is ready: %s (branch %s, made by cbsession from main before this prompt). Work only there; rename the branch if the task needs another name.\n' "$DIR" "$WTB" >> "$P"
