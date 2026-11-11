@@ -21,7 +21,7 @@ function fakes() {
   const ffprobe = sh(dir, 'ffprobe', `case "$*" in *stream=index,codec_type*) for a; do f=$a; done; n=$(cat "$f" | tr -dc 0-9); n=\${n:-1}; for pass in program streams; do echo 0,video; i=1; while [ $i -le $n ]; do echo $i,audio; i=$((i+1)); done; done; exit 0;; esac
 for a; do u=$a; done\ncase "$u" in http*) for a; do [ "$a" = -rtsp_transport ] && { echo 'Option rtsp_transport not found' >&2; exit 1; }; done;; esac\ncase "$u" in *dead*) echo "$u: Connection refused" >&2; exit 1;; *novideo*) echo '{"streams":[]}';; *) echo '{"streams":[{"codec_name":"h264","width":640,"height":360}]}';; esac`);
   const ffmpeg = sh(dir, 'ffmpeg', `case "$*" in *signalstats*) for a; do last=$a; done; inp=""; prev=""; for a; do [ "$prev" = -i ] && inp=$a; prev=$a; done
-  if [ -f "$inp" ] && grep -q BLACK "$inp"; then echo "lavfi.signalstats.YAVG=4.0" >&2; elif case "$inp" in *blacksrc*) true;; *) false;; esac; then echo "lavfi.signalstats.YAVG=3.0" >&2; else echo "lavfi.signalstats.YAVG=118.0" >&2; fi; exit 0;; esac
+  if [ -f "$inp" ] && grep -q BLACK "$inp"; then echo "lavfi.signalstats.YHIGH=18.0" >&2; elif case "$inp" in *blacksrc*) true;; *) false;; esac; then echo "lavfi.signalstats.YHIGH=17.0" >&2; else echo "lavfi.signalstats.YHIGH=190.0" >&2; fi; exit 0;; esac
 for a; do case "$a" in rtsp*|http*|file*|/*) u=$a;; esac; done\necho '#format: frame checksums'\ncase "$u" in *still*) for i in 1 2 3 4; do echo "0, $i, $i, 1, 10, aaaa"; done;; *) for i in 1 2 3 4; do echo "0, $i, $i, 1, 10, m$i"; done;; esac`);
   return { dir, env: { RTSP_CHECK_FFPROBE: ffprobe, RTSP_CHECK_FFMPEG: ffmpeg } };
 }
