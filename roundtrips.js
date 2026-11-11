@@ -1,13 +1,13 @@
 // Owner round-trip ledger (round 9, item 9): one record per stop that reached the owner or was answered for the owner, written when
 // the stop RESOLVES, so waits can be measured for every session and machine. File: <state>/owner-roundtrips.jsonl.
-//   { id, session, machine, at (stop time), answered_at, wait_s, class (the stall case), by (owner | manager | owner-voice | remote-hook),
+//   { id, session, machine, at (stop time), answered_at, wait_s, class (the stall case), by (owner | manager | owner-voice | remote-hook | unknown),
 //     via (where the answer came from: dashboard | voice | pane | tmux | hook | mac | none), resolution (answered | superseded | moved_on | removed) }
 // History: nothing in this repository ever wrote this file (the old writer was an out-of-tree helper that stopped on 2026-10-09,
 // HARNESS-REVIEW-2026-10-14 finding 10); manager.js now writes it in-process, so it cannot silently stop while the service runs.
 import { appendFile, readFile } from 'node:fs/promises';
 
 export const FILE_NAME = 'owner-roundtrips.jsonl';
-export const BY = ['owner', 'manager', 'owner-voice', 'remote-hook'];
+export const BY = ['owner', 'manager', 'owner-voice', 'remote-hook', 'unknown'];   // unknown: nobody was seen answering (never counted as the owner)
 const iso = (ms) => new Date(ms).toISOString();
 const ms = (v) => { if (v == null || v === '') return null; if (typeof v === 'number') return v; const t = Date.parse(v); return Number.isFinite(t) ? t : null; };
 
@@ -17,7 +17,7 @@ export function roundtripRecord({ id, session, machine = 'local', at, answeredAt
   const a = ms(at), b = ms(answeredAt);
   if (a == null) return null;
   const end = b != null && b >= a ? b : a;
-  return { id, session, machine: machine || 'local', at: iso(a), answered_at: iso(end), wait_s: Math.round((end - a) / 1000), class: cls || 'unknown', by: BY.includes(by) ? by : 'owner', via: via || 'none', resolution: resolution || 'answered' };
+  return { id, session, machine: machine || 'local', at: iso(a), answered_at: iso(end), wait_s: Math.round((end - a) / 1000), class: cls || 'unknown', by: BY.includes(by) ? by : 'unknown', via: via || 'none', resolution: resolution || 'answered' };
 }
 
 export function createRoundtrips({ file }) {

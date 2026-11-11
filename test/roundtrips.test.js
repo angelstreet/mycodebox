@@ -25,7 +25,7 @@ test('roundtripRecord: shape, owner-only classes, clamped wait', () => {
   const r = roundtripRecord({ id: 'a', session: 's', at: 1000, answeredAt: 61000, cls: 'owner_decision', by: 'owner-voice', via: 'voice', resolution: 'answered', reachedOwner: true });
   assert.deepEqual({ ...r }, { id: 'a', session: 's', machine: 'local', at: '1970-01-01T00:00:01.000Z', answered_at: '1970-01-01T00:01:01.000Z', wait_s: 60, class: 'owner_decision', by: 'owner-voice', via: 'voice', resolution: 'answered' });
   assert.equal(roundtripRecord({ id: 'a', session: 's', at: 5000, answeredAt: 1000, reachedOwner: true }).wait_s, 0);   // an answer "before" the stop never goes negative
-  assert.equal(roundtripRecord({ id: 'a', session: 's', at: 0, answeredAt: 9, by: 'someone', reachedOwner: true }).by, 'owner');
+  assert.equal(roundtripRecord({ id: 'a', session: 's', at: 0, answeredAt: 9, by: 'someone', reachedOwner: true }).by, 'unknown');
 });
 
 test('summarizeRoundtrips: median / mean per class, owner waits only', () => {
@@ -63,7 +63,7 @@ test('a stop replaced by a newer one is recorded as superseded; a removed sessio
   const ASK2 = pane('Different problem now.\nShall I delete the staging copy or leave it?\nSTATUS: needs-owner: delete or leave?');
   tick('rt2', 'done', ASK2, t0 - 6e4); tick('rt2', 'done', ASK2, t0 - 5e4);
   const sup = await until((x) => x.session === 'rt2' && x.resolution === 'superseded');
-  assert.equal(sup.by, 'owner'); assert.equal(sup.via, 'none');
+  assert.equal(sup.by, 'unknown'); assert.equal(sup.via, 'none');
   await settle(300);
   m.forget('rt2');
   await until((x) => x.session === 'rt2' && x.resolution === 'removed');

@@ -473,7 +473,7 @@ function settleRoundtrip(name, p, resolution, answeredAt, machine = 'local') {
   const reached = escalatedStops.has(p.id) || p.auto === true;
   const a = answerers.get(name), answeredByOwner = resolution === 'answered' && !p.auto;
   const ownerSent = a && a.at >= p.at - 1000;
-  const by = p.auto ? (p.remote ? 'remote-hook' : 'manager') : answeredByOwner && ownerSent ? a.by : 'owner';
+  const by = p.auto ? (p.remote ? 'remote-hook' : 'manager') : answeredByOwner ? (ownerSent ? a.by : 'owner') : 'unknown';   // an answer nobody was seen sending stays the owner's (a pane or Mac reply); a superseded / moved-on / removed stop has no answerer: unknown (review 2026-11-11 item 7)
   const via = p.auto ? (p.remote ? 'hook' : 'tmux') : answeredByOwner ? (ownerSent ? a.via : p.remote ? 'mac' : 'pane') : 'none';
   roundtrips.record(roundtripRecord({ id: p.id, session: name, machine: p.machine || machine, at: p.at, answeredAt, cls: p.cls, by, via, resolution, reachedOwner: reached })).catch(() => {});
 }

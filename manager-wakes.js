@@ -15,7 +15,7 @@ import { dirname } from 'node:path';
 import { priceFor, costOf } from './usage/ingest.js';
 
 export const WAKES_FILE = 'manager-wakes.jsonl';
-export const TRIGGERS = ['owner', 'monitor_event', 'monitor_expired', 'sweep', 'task_done', 'subagent_done', 'peer_message', 'other'];
+export const TRIGGERS = ['owner', 'monitor_event', 'monitor_expired', 'sweep', 'task_done', 'subagent_done', 'peer_message', 'lane', 'kick', 'other'];
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const DEFAULT_PRICES_FILE = join(HERE, 'usage', 'prices.json');
 
@@ -57,7 +57,13 @@ export function classifyTrigger(o, agentToolIds = new Set()) {
   }
   if (o.promptSource === 'scheduled' || /^\s*(Manager hourly sweep|Scheduled wakeup)/i.test(text)) return text.trim() ? 'sweep' : null;
   if (kind === 'peer') return 'peer_message';
-  if (kind === 'human') return text.trim() ? 'owner' : null;
+  if (kind === 'human') {
+    if (!text.trim()) return null;
+    // typed by the harness, not by the owner: the nightly kick and the integration lane's result wake (review 2026-11-11 item 7)
+    if (/^\s*Fresh start of the AI manager/i.test(text)) return 'kick';
+    if (/^\s*\[?integration\b|^\s*Integration (?:request )?int-/i.test(text)) return 'lane';
+    return 'owner';
+  }
   if (o.isMeta) return null;
   if (kind && text.trim()) return 'other';
   return null;
