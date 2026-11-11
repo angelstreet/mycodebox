@@ -171,12 +171,44 @@ def apply_one(env, host, device, src_file, out):
 
 
 # ---------------- the nightly run ----------------
-def lease_cmd(env, host, device, pool_id, out):
-    # max-wait 20 min: a host carries short device runs all evening; the night window is quiet, but a run may still hold it
+def lease_cmd(env, host, device, pool_id, out, max_wait=None):
+    # The first wait is short (5 min): a busy host must not hold the whole night. A repair the lease blocked is
+    # retried at the end of the night with the long wait (RTSP_LEASE_RETRY_MAX_WAIT).
     return ['vpt-lease', 'run', os.environ.get('RTSP_LEASE_ENV', 'node1-vpt'), host, '--agent', AGENT, '--kind', 'host', '--ttl', '20',
-            '--max-wait', os.environ.get('RTSP_LEASE_MAX_WAIT', '20'),
+            '--max-wait', str(max_wait if max_wait is not None else os.environ.get('RTSP_LEASE_MAX_WAIT', '5')),
             '--purpose', f'rtsp nightly: replace {device} source', '--',
             sys.executable, os.path.abspath(__file__), '--apply', env, host, device, pool_id, '--out', out]  # env = the server label of RTSP_CHECK_SERVERS
+
+
+def apply_with_lease(e, s, max_wait=None):
+    """Run the apply step inside the host lease. -> (res, detail, cli_missing). res is None when the lease was not
+    granted (nothing was touched) or the apply step wrote no result."""
+    out = os.path.join(STATE, f"apply-{e['host']}-{e['device']}.json")
+    src_file = os.path.join(STATE, f"apply-src-{e['host']}-{e['device']}.json")
+    os.makedirs(STATE, exist_ok=True)
+    with open(src_file, 'w', encoding='utf-8') as f:
+        json.dump(s, f)
+    p = None
+    try:
+        p = subprocess.run(lease_cmd(e['env'], e['host'], e['device'], src_file, out, max_wait), capture_output=True, text=True)
+    except OSError as exc:
+        # The lease CLI itself is missing (or not executable): nothing was touched, but the night must
+        # go on and report it instead of dying on the first down stream. (not `as e`: that unbinds the
+        # loop variable `e` at the end of the clause.)
+        detail = rc.redact(f'{type(exc).__name__}: {exc}')
+    else:
+        detail = rc.redact((p.stderr or '')[-200:])
+    try:
+        res = json.load(open(out)); os.unlink(out)
+    except (OSError, ValueError):
+        res = None
+    finally:
+        # the chosen source is scratch: it must not pile up in the state dir night after night
+        try:
+            os.unlink(src_file)
+        except OSError:
+            pass
+    return res, detail, p is None
 
 
 def run(mode, timeout=10):
@@ -188,6 +220,7 @@ def run(mode, timeout=10):
     rows = []
     catalog = None
     chosen = {}
+    deferred = []  # repairs the host lease blocked: retried at the end of the night
     for e, r in zip(entries, results):
         row = rc.public_entry(e, r)
         if r['status'] == 'ok':
@@ -222,41 +255,35 @@ def run(mode, timeout=10):
             elif mode != 'live':
                 row['action'] = f"dry: would {s['how']} with '{s['label']}'" + (f" (device renamed '{s['name']}')" if s.get('name') and s['name'] != e.get('name') else '')
             else:
-                out = os.path.join(STATE, f"apply-{e['host']}-{e['device']}.json")
-                src_file = os.path.join(STATE, f"apply-src-{e['host']}-{e['device']}.json")
-                os.makedirs(STATE, exist_ok=True)
-                with open(src_file, 'w', encoding='utf-8') as f:
-                    json.dump(s, f)
-                p = None
-                try:
-                    p = subprocess.run(lease_cmd(e['env'], e['host'], e['device'], src_file, out), capture_output=True, text=True)
-                except OSError as exc:
-                    # The lease CLI itself is missing (or not executable): nothing was touched, but the night must
-                    # go on and report it instead of dying on the first down stream. (not `as e`: that unbinds the
-                    # loop variable `e` at the end of the clause.)
-                    detail = rc.redact(f'{type(exc).__name__}: {exc}')
-                else:
-                    detail = rc.redact((p.stderr or '')[-200:])
-                try:
-                    res = json.load(open(out)); os.unlink(out)
-                except (OSError, ValueError):
-                    res = None
-                finally:
-                    # the chosen source is scratch: it must not pile up in the state dir night after night
-                    try:
-                        os.unlink(src_file)
-                    except OSError:
-                        pass
+                res, detail, cli_missing = apply_with_lease(e, s)
                 if res is None:  # BUSY / lease error: vpt-lease never ran the command, nothing was touched
                     row['action'] = ('report: the lease command could not be run (vpt-lease missing), nothing touched'
-                                     if p is None else 'report: host lease not granted (or the apply step stopped before any write), nothing touched')
+                                     if cli_missing else 'report: host lease not granted (or the apply step stopped before any write), nothing touched')
                     journal({'event': 'replace', 'host': e['host'], 'device': e['device'],
-                             'outcome': 'lease_not_available' if p is None else 'lease_not_granted', 'detail': detail})
+                             'outcome': 'lease_not_available' if cli_missing else 'lease_not_granted', 'detail': detail})
+                    if not cli_missing:
+                        # The host was busy for the short wait: try again at the end of the night, when the other
+                        # work is done and the lease is more likely free. A busy lease must not cost the night a stream.
+                        deferred.append((e, s, row))
                 else:
                     row['action'] = f"{res['outcome']} ({s['how']}: '{s['label']}')"
                     if res['outcome'] in ('replaced', 'rolled_back'):
                         budget -= 1
         rows.append(row)
+        journal({'event': 'check', 'host': row['host'], 'device': row['device'], 'kind': row['kind'], 'status': row['status'], 'action': row['action'], 'source': row['source']})
+    # The night is over: retry the repairs the host lease blocked, with the long wait.
+    for e, s, row in deferred:
+        if budget <= 0:
+            row['action'] = 'report: replacement budget used up tonight'
+            continue
+        res, detail, cli_missing = apply_with_lease(e, s, max_wait=int(os.environ.get('RTSP_LEASE_RETRY_MAX_WAIT', '20')))
+        if res is None:
+            row['action'] = 'report: host lease not granted again at the end of the night, nothing touched'
+            journal({'event': 'replace', 'host': e['host'], 'device': e['device'], 'outcome': 'lease_not_granted', 'detail': detail})
+        else:
+            row['action'] = f"{res['outcome']} ({s['how']}: '{s['label']}')"
+            if res['outcome'] in ('replaced', 'rolled_back'):
+                budget -= 1
         journal({'event': 'check', 'host': row['host'], 'device': row['device'], 'kind': row['kind'], 'status': row['status'], 'action': row['action'], 'source': row['source']})
     return {'mode': mode, 'streams': rows, 'errors': errors, 'hosts': hosts}
 
