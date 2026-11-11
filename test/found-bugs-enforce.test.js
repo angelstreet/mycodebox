@@ -81,7 +81,7 @@ test('feed: an asks / waiting event that only acknowledges the re-read is droppe
 });
 
 const home = tmp('cbp-b-'); const work = join(home, 'work'); fs.mkdirSync(work);
-const handover = join(home, 'h.md'); fs.writeFileSync(handover, '# h\n'); const pfile = join(home, 'p.md'); fs.writeFileSync(pfile, 'do the thing\n');
+const handover = join(home, 'h.md'); fs.writeFileSync(handover, '# h\nGoal: do it.\nDone when:\n1. the check passes with a run id\n'); const pfile = join(home, 'p.md'); fs.writeFileSync(pfile, 'do the thing\nDone when:\n1. the check passes with a run id\n');
 const bin = join(home, 'bin'); fs.mkdirSync(bin); for (const c of ['tmux', 'mcode']) fs.writeFileSync(join(bin, c), '#!/usr/bin/env bash\nexit 1\n', { mode: 0o755 });   // mcode stub: the minimax dry run looks for it
 const env = { PATH: `${bin}:${process.env.PATH}`, HOME: home, GHOSTY_STATE_DIR: join(home, 'state') };
 const prompt = (name, ...a) => { const r = spawnSync('bash', [join(ROOT, 'scripts', 'cbsession'), '-x', '-n', name, '-d', work, ...a], { encoding: 'utf8', env }); assert.equal(r.status, 0, name + ': ' + r.stderr + r.stdout); return fs.readFileSync(join(home, 'handovers', `${name}.prompt.md`), 'utf8'); };

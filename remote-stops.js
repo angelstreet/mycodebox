@@ -11,7 +11,7 @@ import { join, isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createHash } from 'node:crypto';
 import { computeStopState, doneWhileMessage } from './stop-state.js';
-import { blockedHonestyOf, blockedHonestyMessage, doneButFailedOf, doneButFailedMessage, doneWithoutGoalOf, doneWithoutGoalMessage, lastStatus } from './status-honesty.js';
+import { verificationOf, verificationMessage, timeBoxWakeMessage, blockedHonestyOf, blockedHonestyMessage, doneButFailedOf, doneButFailedMessage, doneWithoutGoalOf, doneWithoutGoalMessage, lastStatus } from './status-honesty.js';
 import { DEFAULT_CIDRS, parseCidrs, addrAllowed, readClients, clientOf, callerIdentity, readBody } from './lease-routes.js';
 
 export const PREFIX = '/api/remote/v1';
@@ -80,7 +80,7 @@ export function stopText(v) {
 // manager: { observe, sessionOn, setRemoteHooks, cancelAuto, forget, stallOf, triageOf, autoOf, REMOTE_PREFIX }
 // goalGate / goals: goal-check.js createGoalGate / createGoalStore (optional). A done stop the gate questions or bounces is answered with the
 // gate's text at once (no countdown); the manager journals the stop but schedules no answer of its own for it.
-export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goals = null, blockedMode = () => 'dry', stopFacts = null, stateMode = () => 'dry', cidrs = process.env.LEASE_ALLOW_CIDRS, viaServe = () => false, now = Date.now, graceMs = GRACE_MS, pollWaitMs = POLL_WAIT_MS } = {}) {
+export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goals = null, blockedMode = () => 'dry', stopFacts = null, stateMode = () => 'dry', timeBoxMode = () => 'dry', cidrs = process.env.LEASE_ALLOW_CIDRS, viaServe = () => false, now = Date.now, graceMs = GRACE_MS, pollWaitMs = POLL_WAIT_MS } = {}) {
   const allow = parseCidrs([...DEFAULT_CIDRS, ...String(cidrs || '').split(',')].join(','));
   const clientsFile = join(dir, 'clients.json');
   const configFile = join(stateDir, 'remote.json');   // { waitS, checkouts: { "<project>": "/abs/path/of/the/local/checkout" } }
@@ -210,8 +210,24 @@ export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goa
         }
       } catch (e) { console.error('[remote] stop state', e.message); }
     }
+    // Goal first, verification last (docs/GOAL-RULE.md): a done line needs a `Verification:` block with one row per stored Done-when line, every row pass
+    // (rows journalled to verification.jsonl); a Mac session past its time box is told once at its next stop (dry: journal only).
+    let verified = false;
+    if (goals && !v.stop_hook_active && manager.sessionOn(name)) {
+      try {
+        const entry = goals.get(name), stx = stopText(v), ls = lastStatus(stx), vj = (o) => { try { fs.appendFileSync(join(stateDir, 'verification.jsonl'), JSON.stringify({ at: new Date(t).toISOString(), session: name, ...o }) + '\n'); } catch {} };
+        const sig = createHash('sha1').update(ls?.line || stx.slice(-200)).digest('hex').slice(0, 12);
+        const vr = entry?.parts?.length ? verificationOf(stx, entry.parts) : null;
+        if (vr) { vj({ passed: vr.passed, total: vr.total, problems: vr.problems }); if (vr.ok) verified = true; else if (!refusal && !stateWaiting && s.verifySig !== sig) { s.verifySig = sig; refusal = { kind: 'verification', message: verificationMessage(vr, entry.parts) }; } }
+        const startAt = Date.parse(entry?.at || ''), box = entry?.timeBoxMs;
+        if (box && Number.isFinite(startAt) && t - startAt >= box && !s.boxWoke && timeBoxMode() !== 'off') {
+          s.boxWoke = t; vj({ timeBox: 'reached', boxMin: Math.round(box / 6e4), elapsedMin: Math.round((t - startAt) / 6e4), dry: timeBoxMode() === 'dry' });
+          if (timeBoxMode() === 'live' && !refusal) refusal = { kind: 'time-box', message: timeBoxWakeMessage(box) };
+        }
+      } catch (e) { console.error('[remote] verification', e.message); }
+    }
     let gate = null;
-    if (goalGate && !refusal && !stateWaiting && manager.sessionOn(name)) { try { gate = await goalGate.evaluate({ name, text: stopText(v), doneAt: t, remote: true, canAnswer: !v.stop_hook_active }); } catch (e) { console.error('[remote] goal gate', e.message); } }
+    if (goalGate && !refusal && !stateWaiting && !verified && manager.sessionOn(name)) { try { gate = await goalGate.evaluate({ name, text: stopText(v), doneAt: t, remote: true, canAnswer: !v.stop_hook_active }); } catch (e) { console.error('[remote] goal gate', e.message); } }
     // the goal check had nothing to say (not wired, or this done turn was already handled): a done line without `goal: achieved` + evidence is still refused, once per line
     if (!refusal && !gate && !v.stop_hook_active && manager.sessionOn(name)) {
       const stx = stopText(v), g = doneWithoutGoalOf(stx), sig = createHash('sha1').update(lastStatus(stx)?.line || '').digest('hex').slice(0, 12);

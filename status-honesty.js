@@ -208,3 +208,55 @@ export function blockedHonestyMessage(f) {
   return `Status check: your STATUS is blocked, but ${parts.join('; ')}. \`blocked\` is only for an agent that cannot work and needs the manager: `
     + '`STATUS: blocked: <what stops you> · tried: <what you tried> · need: <what the manager must do>`. If your part is done while workers you started still run, end on `STATUS: running: <worker names>`. One push only.';
 }
+
+// ---- goal first, verification last (owner, 2026-11-11, docs/GOAL-RULE.md) ----
+// Time box: `Time box: 2 h` / `90 min` / `6h` -> ms, or null. A bare number is hours.
+export function timeBoxOf(prompt) {
+  const m = /^\s*(?:[*_#>\s-]*)time[ -]?box\s*[:=]\s*~?(\d+(?:[.,]\d+)?)\s*(h(?:ours?|rs?)?|min(?:utes?)?|m)?\b/im.exec(String(prompt || ''));
+  if (!m) return null;
+  const n = Number(m[1].replace(',', '.')), minutes = /^m/i.test(m[2] || '');
+  const ms = Math.round(n * (minutes ? 60e3 : 3600e3));
+  return ms >= 60e3 && ms <= 72 * 3600e3 ? ms : null;
+}
+// The last `Verification:` block of the closing text -> [{ n, verdict: 'pass'|'fail'|'not checked'|'dropped', text }] (rows `<n>. pass | fail | not checked — <why>`).
+export function verificationRowsOf(text) {
+  const lines = String(text || '').split('\n');
+  let at = -1;
+  lines.forEach((l, i) => { if (/^\s*(?:[*_#>\s-]*)verification\s*:?[*_]*\s*$/i.test(l.trim())) at = i; });
+  if (at < 0) return null;
+  const rows = [];
+  for (let i = at + 1; i < lines.length; i++) {
+    const l = lines[i].trim();
+    if (!l) { if (rows.length) break; continue; }
+    if (/^\W*STATUS:/i.test(l)) break;
+    const m = /^(?:[-*]\s*)?(\d+)\s*[.)]\s*\**\s*(pass(?:ed)?|fail(?:ed)?|not checked|dropped by owner|dropped)\b\**\s*(?:[—–:-]\s*)?(.*)$/i.exec(l);
+    if (m) rows.push({ n: Number(m[1]), verdict: /^pass/i.test(m[2]) ? 'pass' : /^fail/i.test(m[2]) ? 'fail' : /^not/i.test(m[2]) ? 'not checked' : 'dropped', text: m[3].slice(0, 200) });
+    else if (rows.length) break;
+  }
+  return rows;
+}
+// Pure. text: the closing text; parts: the stored Done-when lines. -> null (not a done line, or no stored parts), else { ok, total, passed, problems: [..] }.
+// A done line needs a Verification block with one row per stored line, same count and numbering, every row pass (a row the owner dropped counts as passed).
+export function verificationOf(text, parts = []) {
+  const st = lastStatus(text);
+  if (!st || !DONE_KINDS.has(st.kind) || !parts.length) return null;
+  const rows = verificationRowsOf(text);
+  const total = parts.length, problems = [];
+  if (!rows) return { ok: false, total, passed: 0, problems: ['no `Verification:` block'] };
+  const byN = new Map(rows.map((r) => [r.n, r]));
+  let passed = 0;
+  for (let i = 1; i <= total; i++) {
+    const r = byN.get(i);
+    if (!r) { problems.push(`row ${i} is missing (${String(parts[i - 1]).slice(0, 60)})`); continue; }
+    if (r.verdict === 'pass' || r.verdict === 'dropped') passed++;
+    else problems.push(`row ${i} is ${r.verdict} (${String(parts[i - 1]).slice(0, 60)})`);
+  }
+  for (const r of rows) if (r.n < 1 || r.n > total) problems.push(`row ${r.n} has no Done-when line (the list has ${total}: never change it at the end)`);
+  return { ok: !problems.length, total, passed, problems };
+}
+export function verificationMessage(v, parts = []) {
+  return `Status check: your done line needs a \`Verification:\` block with one row per Done-when line, same count and numbering, every row \`pass\`: ${v.problems.slice(0, 4).join('; ')} (${v.passed} of ${v.total} rows pass). `
+    + `The Done-when list of this task: ${parts.slice(0, 6).map((p, i) => `${i + 1}. ${String(p).slice(0, 70)}`).join(' ')}. `
+    + 'Write `Verification:` then `<n>. pass | fail | not checked — <evidence that resolves, or why>` for each line, then the STATUS line. All pass = done; any fail or not checked = `running`, `waiting` or `failed`. Never change the Done-when list to fit what you did. One push only.';
+}
+export const timeBoxWakeMessage = (box) => `Time box reached (${Math.round(box / 6e4)} min): write \`Verification:\` as it stands (one row per Done-when line) and end \`failed\` or \`needs-manager\` with what would unblock it. You do not extend your own time box: the manager or the owner does.`;

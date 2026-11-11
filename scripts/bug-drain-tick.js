@@ -201,7 +201,7 @@ export async function tick({ reachable = defaultReachable, url, stateDir, mode, 
       // claim for the worker's session name so nobody else (the send-back wake, another worker) fixes it in parallel
       const c = await fetch(`${url}/api/bugs/${b.id}/claim`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: j({ session: name }) }).catch((e) => ({ ok: false, status: 0, e }));
       if (!c.ok) { rec.error = `claim refused (HTTP ${c.status})`; started.push(rec); continue; }
-      const args = ['-n', name, '-d', dir, '-p', s.provider, ...(s.provider === 'claude' ? ['-m', s.model] : []), '-g', `fix ${b.id}`, '-f', file];
+      const args = ['-n', name, '-d', dir, '-p', s.provider, ...(s.provider === 'claude' ? ['-m', s.model] : []), '-g', `fix ${b.id}`, '-A', '-f', file];
       const r = run(cbsession, args, { CBSESSION_BY: 'bug-drain-tick' });
       if (r.status !== 0) { rec.error = `cbsession exit ${r.status}: ${String(r.stderr || r.stdout || '').trim().slice(-160)}`; await fetch(`${url}/api/bugs/${b.id}/claim`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: j({ session: name, release: true }) }).catch(() => {}); }
     }

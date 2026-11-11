@@ -1035,7 +1035,7 @@ const ciWatch = createCiWatch({
   },
   startSession: async ({ name, cwd, provider, model, promptFile }) => {
     if (await sessionExists(name)) await exec(TMUX, ['kill-session', '-t', `=${name}`]);   // only reached with no live agent in it
-    await exec(join(dirname(fileURLToPath(import.meta.url)), 'scripts', 'cbsession'), ['-n', name, '-d', cwd, '-p', provider, ...(model ? ['-m', model] : []), '-f', promptFile], { timeout: 180000 });
+    await exec(join(dirname(fileURLToPath(import.meta.url)), 'scripts', 'cbsession'), ['-n', name, '-d', cwd, '-p', provider, '-A', ...(model ? ['-m', model] : []), '-f', promptFile], { timeout: 180000 });
   },
   sendToSession: (name, text) => sendKeys(name, text),
   record: (e) => managerEvents.record(e),
@@ -1097,6 +1097,8 @@ let stopFactsImpl = async () => ({});   // set where the manager is initialised 
 const stopStateMode = () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).stopState; return m === 'live' || m === 'off' ? m : 'dry'; } catch { return 'dry'; } };
 const doneCheck = createDoneCheck({
   stopFacts: (n, o) => stopFactsImpl(n, o), stateMode: stopStateMode,
+  goalEntryOf: (n) => goals.get(n), timeBoxMode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).timeBox; return m === 'live' || m === 'off' ? m : 'dry'; } catch { return 'dry'; } },
+  listSessions: async () => { const out = []; for (const [name, st] of Object.entries(latest?.status || {})) { if (loadManagerSessions().includes(name) || sessionMeta.isPaused(name)) continue; out.push({ name, working: st?.state === 'working', draft: !!st?.stall?.draft, text: String(st?.stall?.excerpt || '').slice(-3000) }); } return out; },
   stateDir: STATE_DIR,
   ignoreBranches: () => { try { const l = JSON.parse(readFileSync(managerConfigFile, 'utf8')).doneCheckIgnoreBranches; return Array.isArray(l) ? l.map(String) : DEFAULT_IGNORE_BRANCHES; } catch { return DEFAULT_IGNORE_BRANCHES; } },
   git: async (cwd, args) => (await exec('git', ['-C', cwd, ...args], { timeout: 60000, maxBuffer: 8 * 1024 * 1024 })).stdout,
@@ -3027,7 +3029,7 @@ const integrationRoutes = createIntegrationRoutes({ lane: integrationLane, state
 // ===== END INTEGRATION BLOCK =====
 
 const remote = createRemoteStops({ manager: managerApi, dir: join(STATE_DIR, 'leases'), stateDir: STATE_DIR, goalGate, goals,
-  stopFacts: (n, o) => stopFactsImpl(n, o), stateMode: stopStateMode,
+  stopFacts: (n, o) => stopFactsImpl(n, o), stateMode: stopStateMode, timeBoxMode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).timeBox; return m === 'live' || m === 'off' ? m : 'dry'; } catch { return 'dry'; } },
   blockedMode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).blockedCheck; return m === 'live' || m === 'off' ? m : 'dry'; } catch { return 'dry'; } },
   viaServe: (req) => ['x-forwarded-for', 'forwarded'].some((h) => req.headers[h] !== undefined) });   // POST /api/remote/v1/stops from the Mac Stop hook (token of a `remote` client)
 

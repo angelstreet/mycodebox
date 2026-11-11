@@ -83,3 +83,21 @@ test('Mac: a blocked line that is a wait is journalled only while blockedCheck i
   const j = fs.readFileSync(path.join(stateDir, 'blocked-check.jsonl'), 'utf8');
   assert.match(j, /"dry":true/); assert.match(j, /background job/);
 });
+
+test('Mac: a done line needs a Verification block per stored Done-when line (answered once through the hook, rows journalled); all pass is accepted without the goal question', async () => {
+  const first = 'Goal: ship the menu fix.\nDone when:\n1. merged, integration id\n2. goto home passes three runs, run id\nTime box: 2 h';
+  const DONE = 'STATUS: done — menu fixed · goal: achieved · evidence: int-1a1cbfa071 · closing review: docs none needed · leftovers none · unverified none · bugs: none';
+  const post = (text, extra = {}) => call('POST', '/stops', { machine: 'mac-test', project: 'demo', session_id: 'sid-verify-5eeee', session_name: 'verify', first_prompt: first, text, ...extra });
+  const r = await post(DONE);
+  const a = await call('GET', `/stops/${r.body.id}/answer?wait=2`);
+  assert.equal(a.body.state, 'answered');
+  assert.match(a.body.answer, /needs a `Verification:` block.*no `Verification:` block \(0 of 2 rows pass\)/);
+  assert.equal(goals.get(r.body.session).timeBoxMs, 2 * 3600e3);
+  const j = fs.readFileSync(path.join(stateDir, 'verification.jsonl'), 'utf8');
+  assert.match(j, /"passed":0,"total":2/);
+  const ok = await post('Verification:\n1. pass — int-1a1cbfa071\n2. pass — run 1a2b3c4d5e6f\n' + DONE.replace('menu fixed', 'menu fixed again'));
+  assert.equal(ok.status, 200);
+  const b = await call('GET', `/stops/${ok.body.id}/answer?wait=1`);
+  assert.ok(!/Verification/.test(b.body.answer || ''), 'verified: no verification refusal and no goal question');
+  assert.match(fs.readFileSync(path.join(stateDir, 'verification.jsonl'), 'utf8'), /"passed":2,"total":2/);
+});

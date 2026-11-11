@@ -6,7 +6,7 @@
 // Journal: done-check.jsonl.
 import { pushableItems } from './done-leftovers.js';
 import { computeStopState, doneWhileMessage } from './stop-state.js';
-import { doneButFailedOf, doneButFailedMessage, proofWithoutEvidenceOf, proofWithoutEvidenceMessage, blockedHonestyOf, blockedHonestyMessage, unknownStatusWordOf, unknownStatusWordMessage, lastStatus as lastStatusOf } from './status-honesty.js';
+import { doneButFailedOf, doneButFailedMessage, proofWithoutEvidenceOf, proofWithoutEvidenceMessage, blockedHonestyOf, blockedHonestyMessage, verificationOf, verificationMessage, timeBoxWakeMessage, unknownStatusWordOf, unknownStatusWordMessage, lastStatus as lastStatusOf } from './status-honesty.js';
 import { readFile, writeFile, appendFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -193,6 +193,7 @@ export function createDoneCheck({
   stateDir, git, listDone, send: sendRaw, record = async () => {}, equivalentOf = async () => null, goalOf = async () => '', mode = () => 'live', home = process.env.HOME || '',
   pressure = () => ({ loadPerCore: 0, ramAvailPct: 100 }), now = Date.now, pollMs = POLL_MS, log = console, ignoreBranches = () => DEFAULT_IGNORE_BRANCHES,
   goalGate = null,   // goal-check.js createGoalGate: (H) below
+  goalEntryOf = () => null, listSessions = async () => [], timeBoxMode = () => 'dry',   // (K) Verification block per stored Done-when line; (L) time box wake (dry first)
   stopFacts = null, stateMode = () => 'dry',   // (J) a done line while the harness sees a running / waiting fact: not accepted as done (stop-state.js); dry until manager.json stopState is live
   listBlocked = async () => [], blockedMode = () => 'dry',   // (I) blocked is not a wait: dry (journal only) until the owner switches manager.json blockedCheck to live
 } = {}) {
@@ -471,11 +472,52 @@ export function createDoneCheck({
           catch (e) { log.error?.('[done-check] send done-while', s.name, e.message); }
         }
       }
+      // (K) goal first, verification last (owner 2026-11-11, docs/GOAL-RULE.md): a done line needs a `Verification:` block with one row per stored Done-when line,
+      // same count and numbering, every row pass. A done line that only refuses is live whatever `doneCheck` says is dry; the rows are journalled.
+      const verified = new Set(), verifyBounced = new Set();
+      st.toldVerify ||= {};
+      for (const s of sessions) {
+        if (s.working || s.draft || touched.has(s.name) || stateWait.has(s.name)) continue;
+        if (s.doneAt && now() - s.doneAt > REVIEW_MAX_AGE_MS) continue;
+        let entry = null; try { entry = await goalEntryOf(s.name); } catch { entry = null; }
+        const v = verificationOf(s.text, entry?.parts || []);
+        if (!v) continue;
+        const sig = createHash('sha1').update(lastStatusLine(s.text)).digest('hex').slice(0, 12);
+        if (v.ok) { verified.add(s.name); if (st.toldVerify[s.name]?.sig !== sig) { st.toldVerify[s.name] = { sig, ok: true }; await note({ session: s.name, verification: { passed: v.passed, total: v.total } }); } continue; }
+        verifyBounced.add(s.name);
+        if (st.toldVerify[s.name]?.sig === sig) continue;
+        if (m === 'dry') { await note({ dry: true, session: s.name, verification: { passed: v.passed, total: v.total }, problems: v.problems }); st.toldVerify[s.name] = { sig, dry: true }; continue; }
+        if (!quiet || nudged >= MAX_NUDGES_PER_TICK) continue;
+        try { await send(s.name, verificationMessage(v, entry.parts)); st.toldVerify[s.name] = { sig }; nudged++; await note({ session: s.name, verification: { passed: v.passed, total: v.total }, problems: v.problems }); }
+        catch (e) { log.error?.('[done-check] send verification', s.name, e.message); }
+      }
+      // (L) time box (owner 2026-11-11): at 100% of the stored box ONE wake ("write Verification as it stands and end failed / needs-manager"); 30 min later, when the
+      // session is still going, ONE manager item. Never kills or closes a session. timeBoxMode dry (default) journals only.
+      st.toldBox ||= {};
+      const TIMEBOX_GRACE_MS = 30 * 60e3, tbMode = timeBoxMode();
+      if (tbMode !== 'off') for (const s of await listSessions().catch(() => [])) {
+        let e = null; try { e = await goalEntryOf(s.name); } catch { e = null; }
+        const startAt = Date.parse(e?.at || ''), box = e?.timeBoxMs;
+        if (!box || !Number.isFinite(startAt) || now() - startAt < box) continue;
+        const tb = (st.toldBox[s.name] ||= {});
+        const ended = /^(?:done|failed|needs-manager|needs-owner)$/i.test(lastStatusOf(s.text || '')?.kind || '');
+        if (!tb.woke) {
+          if (tbMode === 'dry') { tb.woke = now(); tb.dry = true; await note({ dry: true, session: s.name, timeBox: 'reached', boxMin: Math.round(box / 6e4), elapsedMin: Math.round((now() - startAt) / 6e4) }); continue; }
+          if (s.draft || !quiet || nudged >= MAX_NUDGES_PER_TICK) continue;
+          try { await send(s.name, timeBoxWakeMessage(box)); tb.woke = now(); nudged++; await note({ session: s.name, timeBox: 'wake', boxMin: Math.round(box / 6e4), elapsedMin: Math.round((now() - startAt) / 6e4) }); }
+          catch (err) { log.error?.('[done-check] send time box', s.name, err.message); }
+        } else if (!tb.mgr && !ended && now() - tb.woke >= TIMEBOX_GRACE_MS) {
+          tb.mgr = now();
+          await note({ ...(tb.dry ? { dry: true } : {}), session: s.name, timeBox: 'manager-item', boxMin: Math.round(box / 6e4) });
+          if (!tb.dry) await record({ key: `time-box:${s.name}`, title: `${s.name} is past its time box (${Math.round(box / 6e4)} min) and keeps going`, body: `woken once ${Math.round((now() - tb.woke) / 6e4)} min ago; the manager or the owner extends or stops it${e?.goal ? ` · goal: ${String(e.goal).slice(0, 160)}` : ''}`, url: '/', priority: 'default' }).catch(() => {});
+        }
+      }
       const goalCheck = { asked: [], bounced: [], accepted: [], capped: [] };
       if (goalGate) {
         await goalGate.forget(live).catch(() => {});
         for (const s of sessions) {
-          if (s.working || s.draft || touched.has(s.name) || stateWait.has(s.name) || findings.some((f) => f.name === s.name)) continue;
+          if (s.working || s.draft || touched.has(s.name) || stateWait.has(s.name) || verifyBounced.has(s.name) || findings.some((f) => f.name === s.name)) continue;
+          if (verified.has(s.name)) { goalCheck.accepted.push(s.name); continue; }   // every Done-when row passes with its evidence: the Verification block is the owner's question answered
           if (s.doneAt && now() - s.doneAt > REVIEW_MAX_AGE_MS) continue;   // an old done turn is not reopened by the rollout
           if (leftoverItemsOf(s.text).length || closingReviewOf(s.text)?.missing || doneButFailedOf(s.text) || proofWithoutEvidenceOf(s.text)) continue;   // (B)/(C)/(F)/(G) first
           if (m === 'dry') continue;

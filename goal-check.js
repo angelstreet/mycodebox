@@ -13,7 +13,7 @@ import { readFile, writeFile, appendFile, mkdir } from 'node:fs/promises';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { createHash } from 'node:crypto';
-import { lastStatus, goalOf } from './status-honesty.js';
+import { lastStatus, goalOf, timeBoxOf } from './status-honesty.js';
 
 export const BOUNCES_PER_DAY = 2;
 const DONE_KINDS = new Set(['done', 'ok', 'complete', 'completed', 'finished', 'shipped']);
@@ -161,7 +161,7 @@ export function createGoalStore({ stateDir, now = Date.now } = {}) {
       const all = load(), prev = all[name];
       const explicit = /^\s*(?:[*_#>\s]*)goal\s*:/im.test(String(prompt));
       if (prev && !(explicit && !prev.explicit)) return prev;
-      all[name] = { goal, parts: taskPartsOf(prompt), source, explicit, at: new Date(now()).toISOString() };
+      all[name] = { goal, parts: taskPartsOf(prompt), timeBoxMs: timeBoxOf(prompt), source, explicit, at: new Date(now()).toISOString() };
       const keys = Object.keys(all);
       for (const k of keys.slice(0, Math.max(0, keys.length - 2000))) delete all[k];   // bounded
       try { mkdirSync(stateDir, { recursive: true }); writeFileSync(file, JSON.stringify(all)); } catch { /* best effort */ }

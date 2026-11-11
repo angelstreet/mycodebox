@@ -19,6 +19,10 @@
 #   -f  prompt file, used verbatim;  -t  prompt text
 #   -g  the task goal, one line: written as `Goal: ...` under the preamble; the done-check compares the closing STATUS with it
 #       (status-honesty.js goalOf; without -g the first task line of the prompt is the goal)
+#   -D  a Done-when line (repeatable, 1 to 5; numbered in order): checkable by something other than the session. Without -D the brief's `Done when:` lines are used;
+#       none at all = start refused (exit 2), except a -t one-liner or -A (an auto line + warning)
+#   -T  time box, e.g. "2 h" / "90 min" (else the brief's `Time box:`, else 2 h for a fix / bug* name, 6 h for a feature)
+#   -A  automation start (lane, bug-drain, nightly): accept a prompt without Done-when lines, with an auto line
 #   -w  worktree branch (default <type>/<name>: fix/ for BUG*, docs/ for docs*, else feat/; name lowercased)
 #   -N  no worktree: start in DIR itself
 #   -x  dry run: print the launch command (and the worktree step), start nothing
@@ -29,10 +33,10 @@
 # Env: MCODE_NODE_DIR (node bin dir for mcode), GHOSTY_STATE_DIR, GHOSTY_PORT (default $PORT or 7777) (to report the start to the dashboard history).
 set -euo pipefail
 q() { printf '%q' "$1"; }
-NAME= DIR= PROV=claude MODEL= BILL=sub HANDOVER= PFILE= TEXT= DRY=0 WAIT=0 WTB= NOWT=0 GOAL=
-while getopts "n:d:p:m:b:H:f:t:w:g:NxWh" o; do case $o in
+NAME= DIR= PROV=claude MODEL= BILL=sub HANDOVER= PFILE= TEXT= DRY=0 WAIT=0 WTB= NOWT=0 GOAL= TIMEBOX= AUTOMATION=0 DONEWHEN=()
+while getopts "n:d:p:m:b:H:f:t:w:g:D:T:ANxWh" o; do case $o in
   n) NAME=$OPTARG;; d) DIR=$OPTARG;; p) PROV=$OPTARG;; m) MODEL=$OPTARG;; b) BILL=$OPTARG;; H) HANDOVER=$OPTARG;;
-  f) PFILE=$OPTARG;; t) TEXT=$OPTARG;; w) WTB=$OPTARG;; N) NOWT=1;; x) DRY=1;; W) WAIT=1;; g) GOAL=$OPTARG;; *) sed -n 2,31p "$0"; exit 2;; esac; done
+  f) PFILE=$OPTARG;; t) TEXT=$OPTARG;; w) WTB=$OPTARG;; N) NOWT=1;; x) DRY=1;; W) WAIT=1;; g) GOAL=$OPTARG;; D) DONEWHEN+=("$OPTARG");; T) TIMEBOX=$OPTARG;; A) AUTOMATION=1;; *) sed -n 2,40p "$0"; exit 2;; esac; done
 [[ $NAME =~ ^[A-Za-z0-9_-]{1,40}$ ]] || { echo "cbsession: -n NAME required (A-Z a-z 0-9 _ -, max 40)" >&2; exit 2; }
 [ -d "$DIR" ] || { echo "cbsession: -d DIR must be an existing directory" >&2; exit 2; }
 DIR=$(cd "$DIR" && pwd)
@@ -150,6 +154,53 @@ else echo "cbsession: give -H HANDOVER, -f PROMPT_FILE or -t TEXT" >&2; exit 2; 
 Forms: `done — <what> · goal: achieved · evidence: <links / run ids / frames>`; `running: <job id / worker names> — <what is left>`; `waiting: <id / ticket / session / time>`; `blocked: <what stops you> · tried: <list> · need: <who must do what>`; `failed — goal not achieved: <why> · tried: <list>`. "blocked: waiting on ..." is never right. A green / pass / proven claim carries its evidence.
 STATUS_TABLE
 printf '\n%s\n' 'Before you fix a filed bug, run `found-bug --claim <id>` (exit 3: someone else is fixing it).'; } >> "$P"
+# Goal, Done when, Time box (owner 2026-11-11, docs/GOAL-RULE.md): a task opens and closes with the same list. The Done-when lines and the time box come from -D / -T,
+# else from the brief (`Done when:` numbered lines, `Time box:`); they go into the prompt, and the server stores them with the goal in goals.json (outside the worktree).
+# A start with no checkable Done-when line is REFUSED (exit 2). Exceptions that get one auto line instead (and a warning): a -t one-liner, and -A (automation: generated
+# prompts of the lane, bug-drain, nightly jobs). The auto line is "the goal is reached and the result carries evidence another party can open".
+SRCF=$P; [ -n "$HANDOVER" ] && SRCF=$HANDOVER
+HAVE_GOAL=0; [ -n "$GOAL" ] && HAVE_GOAL=1
+if [ "$HAVE_GOAL" = 0 ]; then
+  GL=$(grep -m1 -iE '^[*_#> ]*goal ?:' "$SRCF" 2>/dev/null | sed -E 's/^[*_#> ]*[Gg][Oo][Aa][Ll] ?:[*_ ]*//' || true)
+  [ -n "$GL" ] && { GOAL=$GL; HAVE_GOAL=1; }
+fi
+# numbered lines of the `Done when:` block of a file
+dw_lines() { awk 'f && /^[[:space:]]*$/ {exit} tolower($0) ~ /^[*_#> -]*done[ -]when/ {f=1; next} f && /^[[:space:]]*\(?[0-9]+[.)][[:space:]]+[^[:space:]]/ {print}' "$1" 2>/dev/null || true; }
+DWOUT=; INPROMPT=0
+[ -n "$(dw_lines "$P")" ] && INPROMPT=1
+if [ "${#DONEWHEN[@]}" -gt 0 ]; then
+  n=0; for l in "${DONEWHEN[@]}"; do n=$((n+1)); DWOUT="$DWOUT$n. $l"$'\n'; done
+elif [ "$INPROMPT" = 0 ]; then DWOUT=$(dw_lines "$SRCF"); [ -n "$DWOUT" ] && DWOUT="$DWOUT"$'\n'; fi
+if [ -z "$DWOUT" ] && [ "$INPROMPT" = 0 ]; then
+  if [ -n "$TEXT" ] && [ -z "$HANDOVER" ] && [ -z "$PFILE" ]; then
+    echo "cbsession: warning: a -t one-liner has no Done-when line (-D): using one auto line (the goal is reached, with evidence another party can open). Add -D \"<checkable line>\" for a real one." >&2; AUTODW=1
+  elif [ "$AUTOMATION" = 1 ]; then AUTODW=1
+  else
+    echo "cbsession: refused: the brief has no checkable 'Done when:' line (1 to 5 numbered lines, each checkable by something other than the session: a fact the harness holds, a command or URL with pass / fail, an artefact). Add them to the handover / prompt file, or pass -D \"<line>\" (repeatable). -A accepts an automation prompt with an auto line." >&2; exit 2
+  fi
+  DWOUT="1. The goal is reached, and the result carries evidence another party can open (a merged commit or integration id, a run id, a report link, a frame)."$'\n'
+fi
+[ -n "$DWOUT" ] && printf '\nDone when:\n%s' "$DWOUT" >> "$P"
+# the Time box: -T, else the brief's `Time box:` line, else 2 h for a fix (bug* / fix* name or branch), 6 h for a feature
+TB=$TIMEBOX
+[ -n "$TB" ] || TB=$(grep -m1 -iE '^[*_#> -]*time[ -]?box ?[:=]' "$SRCF" 2>/dev/null | sed -E 's/^[^:=]*[:=][*_ ]*//' || true)
+if [ -z "$TB" ] && ! grep -qiE '^[*_#> -]*time[ -]?box ?[:=]' "$P"; then
+  case "$(tr '[:upper:]' '[:lower:]' <<<"$NAME $WTB")" in bug*|fix*|*" fix/"*|*" bug"*) TB="2 h";; *) TB="6 h";; esac
+fi
+[ -n "$TB" ] && printf '\nTime box: %s\n' "$TB" >> "$P"
+if [ "$HAVE_GOAL" = 0 ] && ! grep -qiE '^[*_#> ]*goal ?:' "$P"; then
+  echo "cbsession: warning: the brief has no 'Goal:' line (or -g); the goal check will use the first task line. Add 'Goal: <one line>'." >&2
+  printf '\n%s\n' 'No `Goal:` line came with this brief: write it yourself as the first thing you say (`Goal: <one sentence>`, then `Done when:` and `Time box:`), then work.' >> "$P"
+fi
+# the rule text (docs/GOAL-RULE.md), verbatim, for every prompt and provider
+{ printf '\n'; cat <<'GOAL_RULE'
+**Goal first, verification last (owner 2026-11-11).** A task opens and closes with the same list.
+
+- **First**: before any work, the task has `Goal: <one sentence>` and `Done when:` with 1 to 5 numbered lines, each checkable by something other than you: a fact the harness holds (merged, deployed, bug resolved), a command or URL with a pass / fail result, or an observation with an artefact (run id, report link, frame). The brief did not give them: write them yourself as the first thing you say, then work. A line you cannot check is rewritten, not dropped.
+- **Time box** (owner 2026-11-11): the opening also carries `Time box: <max duration>` (the brief's, else your own estimate; default 2 h for a fix, 6 h for a feature). At 50% with no `Done when` line passed, say so and change approach. At 100% **stop**: write the `Verification:` block as it stands and end `failed` (or `needs-manager` with what would unblock it); never extend your own time box, the manager or the owner does. The same check failing 3 times with the same error is the same stop, whatever the clock says: a retry loop is not progress.
+- **Last**: the final message ends with `Verification:` and one row per `Done when` line, in the same order and numbering: `<n>. pass | fail | not checked — <evidence that resolves, or why>`, then the STATUS line. All `pass` = `done`. Any `fail` or `not checked` = not `done` (`running`, `waiting` or `failed`). Never change the `Done when` list at the end to fit what you did; a line the owner dropped is marked "dropped by owner", not deleted.
+GOAL_RULE
+} >> "$P"
 # -g GOAL: the explicit goal right under the first line (the done-check reads it: status-honesty.js goalOf)
 if [ -n "$GOAL" ]; then { head -n 1 "$P"; printf '\nGoal: %s\n' "$(printf '%s' "$GOAL" | tr '\n' ' ')"; tail -n +2 "$P"; } > "$P.tmp" && mv "$P.tmp" "$P"; fi
 

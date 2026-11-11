@@ -100,7 +100,7 @@ test('tick: dry starts and claims nothing, writes journal, scorecard and one man
     assert.equal(f.claims.length, 2); assert.match(f.claims[0].session, /^bugdrain-/);
     const calls = readFileSync(log, 'utf8').trim().split('\n');
     assert.equal(calls.length, 2, JSON.stringify([calls, live.line.started]));
-    assert.match(calls.find((c) => c.includes('-p minimax')), /-n bugdrain-\w+ -d \/x -p minimax -g fix bug-\d+ -f /);
+    assert.match(calls.find((c) => c.includes('-p minimax')), /-n bugdrain-\w+ -d \/x -p minimax -g fix bug-\d+ -A -f /);
     assert.match(calls.find((c) => c.includes('-p claude')), /-m sonnet/);
     assert.ok(live.line.started.every((s) => !s.error));
     const briefFile = calls[0].split('-f ')[1];
