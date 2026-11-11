@@ -2024,8 +2024,8 @@ bug-2f32e7a7, bug-8fc8fc0d, bug-03ccc6a7, bug-80bdcdc1 · unverified: none · bu
   makes a blocked / failed / done / no-status stop WAITING; needs-owner / needs-manager / waiting stay as written. The stall row carries `said`,
   `computed`, `stateReasons` (and `stateWould: "waiting"` in dry), so the mismatch is a number. `manager.json` `stopState`: `dry` (default: journal only),
   `live` (a computed wait becomes `background_wait`: not escalated as a block, parked through the parked wake when it names an integration / ticket /
-  time), `off`. Mac stops are not covered yet (no facts on this side of the hook). A done line while a fact holds is journalled as `said done / computed
-  waiting`; the goal check still asks its question (not yet suppressed). Replay: `node scripts/stop-state-replay.js [since] [--list]` (a floor: worker
+  time), `off`. Mac stops get the facts their line names (a lane request still open, a ticket, a time; `server.js` `stopFacts`) and journal `stop-state.jsonl`; in `live` a done / blocked / failed Mac line that is really running / waiting is answered once through the hook and not asked the goal question. A codebox done line while a fact holds (done-check (J)) is journalled in dry; in `live` it is told once ("that is waiting, not done") and the goal question is not asked of it.
+  Replay: `node scripts/stop-state-replay.js [since] [--list]` (a floor: worker
   sessions and live child processes are not journalled).
 - **The seven words and `running` (owner, 2026-11-11, third follow-up)**: [docs/STATUS-TABLE.md](STATUS-TABLE.md) is the one table (done / running /
   waiting / needs-manager / needs-owner / blocked / failed; use when, never when, who acts next), verbatim in AGENTS.md, the cbsession preamble, the

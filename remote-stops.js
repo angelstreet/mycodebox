@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import { join, isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createHash } from 'node:crypto';
+import { computeStopState, doneWhileMessage } from './stop-state.js';
 import { blockedHonestyOf, blockedHonestyMessage, doneButFailedOf, doneButFailedMessage, doneWithoutGoalOf, doneWithoutGoalMessage, lastStatus } from './status-honesty.js';
 import { DEFAULT_CIDRS, parseCidrs, addrAllowed, readClients, clientOf, callerIdentity, readBody } from './lease-routes.js';
 
@@ -79,7 +80,7 @@ export function stopText(v) {
 // manager: { observe, sessionOn, setRemoteHooks, cancelAuto, forget, stallOf, triageOf, autoOf, REMOTE_PREFIX }
 // goalGate / goals: goal-check.js createGoalGate / createGoalStore (optional). A done stop the gate questions or bounces is answered with the
 // gate's text at once (no countdown); the manager journals the stop but schedules no answer of its own for it.
-export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goals = null, blockedMode = () => 'dry', cidrs = process.env.LEASE_ALLOW_CIDRS, viaServe = () => false, now = Date.now, graceMs = GRACE_MS, pollWaitMs = POLL_WAIT_MS } = {}) {
+export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goals = null, blockedMode = () => 'dry', stopFacts = null, stateMode = () => 'dry', cidrs = process.env.LEASE_ALLOW_CIDRS, viaServe = () => false, now = Date.now, graceMs = GRACE_MS, pollWaitMs = POLL_WAIT_MS } = {}) {
   const allow = parseCidrs([...DEFAULT_CIDRS, ...String(cidrs || '').split(',')].join(','));
   const clientsFile = join(dir, 'clients.json');
   const configFile = join(stateDir, 'remote.json');   // { waitS, checkouts: { "<project>": "/abs/path/of/the/local/checkout" } }
@@ -193,8 +194,24 @@ export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goa
         else if (bm === 'dry') { try { fs.appendFileSync(join(stateDir, 'blocked-check.jsonl'), JSON.stringify({ at: new Date(t).toISOString(), dry: true, session: name, running: bf.running, missing: bf.missing, text: bf.text }) + '\n'); } catch {} }
       }
     }
+    // Stop state from facts for a Mac stop (stop-state.js): the facts a Mac session has on this side are the lane requests / lease tickets / time its line names
+    // (server.js stopFacts). Journal said / computed to stop-state.jsonl; live: a done / blocked / failed line that is really running / waiting is answered
+    // through the hook with the restate message (once per line) and the goal question is not asked of it.
+    let stateWaiting = false;
+    if (stopFacts && stateMode() !== 'off' && !v.stop_hook_active && manager.sessionOn(name)) {
+      try {
+        const stx = stopText(v), ls = lastStatus(stx), said = ls?.kind || '';
+        const c = computeStopState({ said, facts: await stopFacts(name, { text: ls?.text || '' }) });
+        const sig = createHash('sha1').update(ls?.line || stx.slice(-200)).digest('hex').slice(0, 12);
+        try { fs.appendFileSync(join(stateDir, 'stop-state.jsonl'), JSON.stringify({ at: new Date(t).toISOString(), session: name, said: c.said, computed: c.computed, reasons: c.reasons, mode: stateMode() }) + '\n'); } catch {}
+        if (c.mismatch && stateMode() === 'live') {
+          stateWaiting = true;
+          if (!refusal && s.stateSig !== sig) { s.stateSig = sig; refusal = { kind: 'state-' + c.computed, message: doneWhileMessage(c) }; }
+        }
+      } catch (e) { console.error('[remote] stop state', e.message); }
+    }
     let gate = null;
-    if (goalGate && !refusal && manager.sessionOn(name)) { try { gate = await goalGate.evaluate({ name, text: stopText(v), doneAt: t, remote: true, canAnswer: !v.stop_hook_active }); } catch (e) { console.error('[remote] goal gate', e.message); } }
+    if (goalGate && !refusal && !stateWaiting && manager.sessionOn(name)) { try { gate = await goalGate.evaluate({ name, text: stopText(v), doneAt: t, remote: true, canAnswer: !v.stop_hook_active }); } catch (e) { console.error('[remote] goal gate', e.message); } }
     // the goal check had nothing to say (not wired, or this done turn was already handled): a done line without `goal: achieved` + evidence is still refused, once per line
     if (!refusal && !gate && !v.stop_hook_active && manager.sessionOn(name)) {
       const stx = stopText(v), g = doneWithoutGoalOf(stx), sig = createHash('sha1').update(lastStatus(stx)?.line || '').digest('hex').slice(0, 12);

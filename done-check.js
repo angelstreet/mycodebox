@@ -5,7 +5,8 @@
 // is idle and the host is not busy), once per finding. Switch: manager.json `doneCheck` "live" (default) | "dry" | "off".
 // Journal: done-check.jsonl.
 import { pushableItems } from './done-leftovers.js';
-import { doneButFailedOf, doneButFailedMessage, proofWithoutEvidenceOf, proofWithoutEvidenceMessage, blockedHonestyOf, blockedHonestyMessage, unknownStatusWordOf, unknownStatusWordMessage } from './status-honesty.js';
+import { computeStopState, doneWhileMessage } from './stop-state.js';
+import { doneButFailedOf, doneButFailedMessage, proofWithoutEvidenceOf, proofWithoutEvidenceMessage, blockedHonestyOf, blockedHonestyMessage, unknownStatusWordOf, unknownStatusWordMessage, lastStatus as lastStatusOf } from './status-honesty.js';
 import { readFile, writeFile, appendFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -190,6 +191,7 @@ export function createDoneCheck({
   stateDir, git, listDone, send: sendRaw, record = async () => {}, equivalentOf = async () => null, goalOf = async () => '', mode = () => 'live', home = process.env.HOME || '',
   pressure = () => ({ loadPerCore: 0, ramAvailPct: 100 }), now = Date.now, pollMs = POLL_MS, log = console, ignoreBranches = () => DEFAULT_IGNORE_BRANCHES,
   goalGate = null,   // goal-check.js createGoalGate: (H) below
+  stopFacts = null, stateMode = () => 'dry',   // (J) a done line while the harness sees a running / waiting fact: not accepted as done (stop-state.js); dry until manager.json stopState is live
   listBlocked = async () => [], blockedMode = () => 'dry',   // (I) blocked is not a wait: dry (journal only) until the owner switches manager.json blockedCheck to live
 } = {}) {
   const stFile = join(stateDir, 'done-check.json');
@@ -450,11 +452,28 @@ export function createDoneCheck({
       // (H) goal check (owner 2026-11-11, goal-check.js): a done line that passed every check above is asked the owner's question once
       // ("Goal as given: ... Did you reach it?"); the next done turn is the reply, accepted only with the goal restated and evidence. 2+ filed
       // leftovers in the touched area are sent back first (fix-first). Max 2 bounces per session per day, then the manager is told.
+      // (J) first: a done line while a fact says running / waiting is not done; the goal question is not asked of it (live), the session is told once.
+      const stateWait = new Set();
+      if (stopFacts && stateMode() !== 'off') {
+        st.toldState ||= {};
+        for (const s of sessions) {
+          if (lastStatusOf(s.text)?.kind !== 'done') continue;
+          let c = null; try { c = computeStopState({ said: 'done', facts: await stopFacts(s.name, { text: lastStatusOf(s.text)?.text || '' }) }); } catch { continue; }
+          if (!c.mismatch) continue;
+          const sig = createHash('sha1').update(lastStatusLine(s.text)).digest('hex').slice(0, 12);
+          if (stateMode() === 'live') stateWait.add(s.name);
+          if (st.toldState[s.name]?.sig === sig) continue;
+          if (stateMode() === 'dry') { await note({ dry: true, session: s.name, doneWhile: c.computed, reasons: c.reasons }); st.toldState[s.name] = { sig, dry: true }; continue; }
+          if (s.working || s.draft || touched.has(s.name) || !quiet || nudged >= MAX_NUDGES_PER_TICK) continue;
+          try { await send(s.name, doneWhileMessage(c)); st.toldState[s.name] = { sig }; nudged++; await note({ session: s.name, doneWhile: c.computed, reasons: c.reasons }); }
+          catch (e) { log.error?.('[done-check] send done-while', s.name, e.message); }
+        }
+      }
       const goalCheck = { asked: [], bounced: [], accepted: [], capped: [] };
       if (goalGate) {
         await goalGate.forget(live).catch(() => {});
         for (const s of sessions) {
-          if (s.working || s.draft || touched.has(s.name) || findings.some((f) => f.name === s.name)) continue;
+          if (s.working || s.draft || touched.has(s.name) || stateWait.has(s.name) || findings.some((f) => f.name === s.name)) continue;
           if (s.doneAt && now() - s.doneAt > REVIEW_MAX_AGE_MS) continue;   // an old done turn is not reopened by the rollout
           if (leftoverItemsOf(s.text).length || closingReviewOf(s.text)?.missing || doneButFailedOf(s.text) || proofWithoutEvidenceOf(s.text)) continue;   // (B)/(C)/(F)/(G) first
           if (m === 'dry') continue;

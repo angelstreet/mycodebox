@@ -26,3 +26,10 @@ export function computeStopState({ said = '', facts = {}, now = Date.now() } = {
 export function waitingText(reasons) {
   return `waiting: ${reasons.map((r) => (r.kind === 'integration' ? `integration ${r.id}` : r.kind === 'lease ticket' ? `lease ticket ${r.id}` : r.kind === 'time' ? `until ${r.id}` : r.kind === 'worker session' ? `worker ${r.id}` : 'background job')).join(', ')}`;
 }
+// a done line while the harness sees running / waiting facts: not accepted as done
+export function doneWhileMessage(c) {
+  const what = c.reasons.map((r) => `${r.kind}${r.id && r.kind !== 'background job' ? ` ${r.id}` : ''}`).join(', ');
+  return `Status check: your STATUS says ${c.said === 'none' ? 'nothing' : c.said}, but the harness sees ${what}: that is ${c.computed}, not ${c.said === 'none' ? 'a stop' : c.said}. Restate it as `
+    + (c.computed === 'running' ? '`STATUS: running: <job id / worker names> — <what is left>` (work of yours still goes)' : '`STATUS: waiting: <integration / deploy id, lease ticket, session, or a time>` (something not yours that ends by itself)')
+    + '. `done` only when nothing of yours runs and nothing you depend on is open; the goal check is asked after that. One push only.';
+}
