@@ -1299,8 +1299,11 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
         // Per host (owner 2026-11-11): a host request blocked on only SOME of its hosts starts on the free ones; the blocked hosts
         // go back to the queue as their own strict request (same age and ref), so one busy host never holds the others.
         let splitOff = null;
-        if (blockers.length && d.scope === 'host' && d.hosts?.length > 1) {
-          const bh = new Set(); let all = false;
+        // a catch-up also yields per host to a ticket that waited over catchUpYieldMs: only the hosts that ticket touches stay queued
+        const yh = new Set(); let yAll = false;
+        if (isCatchUp(d) && d.hosts?.length > 1) for (const tk of waitingTickets(d.env).filter((x) => t - x.created >= cfg.catchUpYieldMs && deployTouches(d, x))) { const hs = hostsOfRes(tk.resources); if (hs === null) yAll = true; else for (const h of hs) yh.add(h); }
+        if ((blockers.length || (yh.size && !yAll)) && d.scope === 'host' && d.hosts?.length > 1) {
+          const bh = new Set(yh); let all = false;
           for (const l of blockers) { const hs = hostsOfRes(l.resources); if (hs === null) all = true; else for (const h of hs) bh.add(h); }
           const free = d.hosts.filter((h) => !bh.has(h)), busy = d.hosts.filter((h) => bh.has(h));
           if (!all && free.length && busy.length) {
