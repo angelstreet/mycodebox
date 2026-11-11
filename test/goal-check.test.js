@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmp } from './helpers-tmp.js';
-import { createGoalGate, createGoalStore, goalReplyOf, leftoverIdsOf, touchedLeftovers, evidenceOf, goalQuestion, BOUNCES_PER_DAY } from '../goal-check.js';
+import { createGoalGate, createGoalStore, goalReplyOf, taskPartsOf, partsWithoutEvidence, leftoverIdsOf, touchedLeftovers, evidenceOf, goalQuestion, BOUNCES_PER_DAY } from '../goal-check.js';
 import { createDoneCheck } from '../done-check.js';
 
 // the owner's example (2026-11-11): it passed the closing-review and STATUS-vocabulary checks
@@ -157,4 +157,43 @@ test('done-check (H): the example line on a codebox pane gets the fix-first push
   assert.deepEqual(r2.goalCheck.asked, []);
   assert.equal((await g.snapshot()).sessions['lease-fix'].bouncedToday, 1);
   assert.ok(JSON.parse(readFileSync(join(dir, 'done-check.json'), 'utf8')));
+});
+
+// bug-15b77282: evidence per numbered part of the task, not one reference for the whole reply
+const TASK = `Ship rule (owner 2026-11-11): after a change run the touched tests.
+Owner (2026-11-11): agents say done too early.
+Build (mycodebox repo):
+1. Goal-check gate in the done-check: before a done line is accepted, ask the owner's question.
+2. Capture the goal at session start so the question quotes it.
+3. Works for codebox sessions and the Mac hook; count of bounced dones shown in manager-status-scan.
+Report with evidence.
+Your worktree is ready: /w
+
+0. First command: git worktree list
+1. Read the handover: x
+2. Write a short summary of the current state
+3. Then do the work`;
+
+test('task parts: the first numbered list of the task, not the cbsession preamble steps; labels before a colon', () => {
+  assert.deepEqual(taskPartsOf(TASK), ['Goal-check gate in the done-check', 'Capture the goal at session start so the question quotes it.', 'Works for codebox sessions and the Mac hook; count of bounced dones shown in manager-status-scan.']);
+  assert.deepEqual(taskPartsOf('Fix the menu edge. 1. only one item'), []);
+  assert.equal(createGoalStore({ stateDir: tmp('goals-p-') }).capture('s', TASK).parts.length, 3);
+});
+
+test('per-part evidence: one reference for the whole reply is not enough when the task has numbered parts; the question lists the parts', async () => {
+  const parts = taskPartsOf(TASK);
+  const goal = 'agents say done too early';
+  const one = 'Goal: agents say done too early is fixed.\n1. gate: goal-check.js:150\n2. goal captured at start\n3. Mac hook works\nSTATUS: done';
+  const r = goalReplyOf(one, goal, parts);
+  assert.equal(r.ok, false);
+  assert.deepEqual(r.partsMissing, [2, 3]);
+  assert.match(r.missing.join(' '), /evidence for part 2 \(Capture the goal at session start/);
+  const all = 'Goal: agents say done too early is fixed.\n1. gate: goal-check.js:150\n2. goal captured at session start: server.js:1040, test/goal-check.test.js\n- Mac hook and manager-status-scan count: int-1a1cc3a35a24de13d\nSTATUS: done';
+  assert.deepEqual(partsWithoutEvidence(all, parts), [], 'by number or by two of the part\'s words');
+  assert.equal(goalReplyOf(all, goal, parts).ok, true);
+  const g2 = createGoalGate({ stateDir: tmp('goal-p-'), goalOf: async () => goal, partsOf: async () => parts });
+  const q = await g2.evaluate({ name: 'p', text: CLEAN, doneAt: day0 });
+  assert.match(q.message, /Parts: 1\. Goal-check gate in the done-check 2\. Capture the goal/);
+  await g2.sent('p', q);
+  assert.equal((await g2.evaluate({ name: 'p', text: one, doneAt: day0 + 60e3 })).kind, 'reply-rejected');
 });
