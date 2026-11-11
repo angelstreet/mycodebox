@@ -145,7 +145,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
   const now = () => { const t = nowIn(); if (!Number.isFinite(t)) throw new Error('wall clock is not finite'); return t; };   // wall clock: TTL and display only
   const mono = config.mono || (() => performance.now());       // heartbeat-miss, idle and ticket-poll clocks never follow the wall clock
   const cfg = {
-    envs: [], ttlDefaultMin: 120, ttlMaxMin: 480, ttlCapMin: 24 * 60, reserveMs: 60 * 1000, passMax: 3, strictAgeMs: 15 * MIN, catchUpYieldMs: 10 * MIN, catchUpBlockMs: 30 * MIN, deployGateMaxMs: 10 * MIN,catchUpCooldownMs: 10 * MIN, requestKeepMs: 24 * 60 * MIN, missFactor: 3, holderCheckMs: 30 * 1000, holderDeadChecks: 2, ticketIdleMs: 90 * 1000, goneGraceMs: 2 * MIN,
+    envs: [], ttlDefaultMin: 120, ttlMaxMin: 480, ttlCapMin: 24 * 60, reserveMs: 60 * 1000, passMax: 3, strictAgeMs: 15 * MIN, catchUpYieldMs: 10 * MIN, catchUpBlockMs: 30 * MIN, deployGateMaxMs: 10 * MIN, deployStarveMs: 30 * MIN,catchUpCooldownMs: 10 * MIN, requestKeepMs: 24 * 60 * MIN, missFactor: 3, holderCheckMs: 30 * 1000, holderDeadChecks: 2, ticketIdleMs: 90 * 1000, goneGraceMs: 2 * MIN,
     snapshotEvery: 200, runningMaxMin: 90, deployLeaseMin: 12, deployCeilingMin: 45,
     // Priority (owner 2026-10-20): every lease and ticket carries its holder's P0..P2 (P0 highest). A lease of priority `lowPriority` or lower is capped at
     // `lowPriorityMaxTtlMin` per claim/renew and cannot be renewed while a ticket of strictly higher priority waits on a resource it blocks (`yield`).
@@ -488,7 +488,8 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     const t = now();
     const from = Math.max(d.approvedAt || d.created || t, d.notBefore || 0);
     if (t < from) return null;                                                   // cooldown
-    if (waitingTickets(d.env).some((tk) => t - tk.created >= cfg.catchUpYieldMs && deployTouches(d, tk))) return null;
+    const starving = t - from >= cfg.deployStarveMs;                              // waited 30 min: it must eventually win (below)
+    if (!starving && waitingTickets(d.env).some((tk) => t - tk.created >= cfg.catchUpYieldMs && deployTouches(d, tk))) return null;
     const bl = deployBlockers(d, { skipLeased: true }).blockers;
     const blockedAll = bl.some((l) => hostsOfRes(l.resources) === null);
     const blockedHosts = new Set(); for (const l of bl) for (const h of hostsOfRes(l.resources) || []) blockedHosts.add(h);
@@ -505,7 +506,10 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
       if (!readySeen.has(k)) { readySeen.set(k, t); if (readySeen.size > 2000) readySeen.delete(readySeen.keys().next().value); }
       return t < readySeen.get(k) + cfg.deployGateMaxMs ? 'ready' : null;
     }
-    return t < from + cfg.deployGateMaxMs && prioRank(prioOf(req)) > 0 ? 'blocked-lower-priority' : null;
+    // starvation guard: after deployStarveMs the gate closes on every new P1..P3 claim of the blocked host until the deploy starts
+    // (the holders there finish within their own cap, then the deploy takes the gap instead of the next P1 in a chain)
+    if (prioRank(prioOf(req)) <= 0) return null;
+    return starving ? 'starving' : t < from + cfg.deployGateMaxMs ? 'blocked-lower-priority' : null;
   }
   const pendingFor = (env, req, joinId) => S.deploys.filter((d) => d.id !== joinId && d.env === env && deployTouches(d, req) && gateWhy(d, req));
   const ownServerHosts = (env) => new Set(((cfg.ownServers || {})[env] || []).map((h) => String(h).toLowerCase()));
