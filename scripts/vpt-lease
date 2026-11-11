@@ -462,10 +462,11 @@ def claim_body(a, wait=None):
 def granted(a, r, wanted, kind):
     lease = r["lease"]
     print(lease["id"], flush=True)
-    if picks_any(a):      # which of the equivalent options was granted: a second stdout line, only for --any / --alt claims
+    if picks_any(a) or getattr(a, "switched_from", None):      # which resource was granted: a second stdout line, for --any / --alt claims and after an auto-equivalent switch
         got = ",".join(lease.get("legacy") or [legacy_res(x, a.env.lower()) for x in lease.get("resources") or []])
         print("resource=%s" % got, flush=True)
-        eprint("granted %s/%s%s" % (a.env.lower(), got, " (any %s)" % a.any if getattr(a, "any", None) else ""))
+        eprint("granted %s/%s%s" % (a.env.lower(), got, " (any %s)" % a.any if getattr(a, "any", None) else
+               " (switched from %s)" % a.switched_from if getattr(a, "switched_from", None) else ""))
     for w in claim_warnings(a.env.lower(), wanted, kind, a.ttl, bool(lease.get("long"))):
         eprint(w)
     if lease.get("ttl_clamped_from"):
@@ -708,6 +709,7 @@ def claim_wait(a):
     tid = None
     state = {}
     guard = WaitGuard(a)
+    a.switched_from = getattr(a, "switched_from", None)
     try:
         while True:
             guard.check()
@@ -734,6 +736,7 @@ def claim_wait(a):
                     with contextlib.suppress(Exception):
                         api("DELETE", "/tickets/" + urllib.parse.quote(tid), timeout=5)
                     eprint("auto-equivalent: %s is busy and %s is free and healthy: took %s at once (--no-auto-equivalent to wait)" % (a.resources[0], eq, eq))
+                    a.switched_from = a.switched_from or a.resources[0]
                     a.resources, a.auto_equivalent, tid = [eq], False, None
                     continue
             res, val = poll_ticket(tid, True, (getattr(a, "verify_profile", None) or "") if auto_equiv_on(a) else None, guard)
@@ -742,6 +745,7 @@ def claim_wait(a):
                     api("DELETE", "/tickets/" + urllib.parse.quote(tid), timeout=5)
                 eprint("auto-equivalent: %s is busy and %s freed up (healthy): took %s instead (--no-auto-equivalent to wait)"
                        % (a.resources[0], val, val))
+                a.switched_from = a.switched_from or a.resources[0]
                 a.resources, a.auto_equivalent, tid = [val], False, None
                 continue
             if res == "requeue":
@@ -1548,6 +1552,10 @@ def remote_claim_args(a):
         args += ["--any", a.any]
     for alt in getattr(a, "alt", None) or []:
         args += ["--alt", alt]
+    if not getattr(a, "auto_equivalent", True):
+        args += ["--no-auto-equivalent"]      # bug (2026-11-11): not forwarded, so the registry host still switched a `run` to an equivalent
+    if getattr(a, "verify_profile", None):
+        args += ["--verify-profile", a.verify_profile]
     prio = resolve_priority(a)
     if prio:
         args += ["--priority", prio]
@@ -1559,6 +1567,37 @@ def remote_claim_args(a):
     return args
 
 
+class _Refused(Exception):
+    pass
+
+
+def lit_in(cmdline, res):
+    """True when the command line names this host/device literally (`host/device`, or the host and the device word both)."""
+    parts = [p for p in legacy_res(res).lower().split("/") if p]
+    if len(parts) < 2:
+        return bool(parts) and re.search(r"(?<![\w-])%s(?![\w-])" % re.escape(parts[0]), cmdline) is not None
+    h, d = parts[0], parts[1]
+    return (h + "/" + d) in cmdline or (re.search(r"(?<![\w-])%s(?![\w-])" % re.escape(h), cmdline) is not None
+                                        and re.search(r"(?<![\w-])%s(?![\w-])" % re.escape(d), cmdline) is not None)
+
+
+def switch_refusal(a, command, actual, original):
+    """A claim that moved to another resource must not run a command written for the original one (owner 2026-11-11)."""
+    if getattr(a, "allow_switch", False) or not actual:
+        return None
+    acts = {legacy_res(x.strip().lower()) for x in actual.split(",") if x.strip()}
+    orig = [legacy_res(x.lower()) for x in original if x]
+    if orig and set(orig) == acts:
+        return None
+    line = " ".join(command).lower()
+    hit = [o for o in orig if o not in acts and lit_in(line, o)]
+    if not hit:
+        return None
+    return ("vpt-lease run: the claim for %s was granted on %s, but the command names %s literally: refusing to run it on another resource. "
+            "Use $VPT_LEASE_RESOURCE / $VPT_LEASE_DEVICE in the command, --no-auto-equivalent to get exactly the named resource, or --allow-switch."
+            % (",".join(orig), actual, ",".join(hit)))
+
+
 def cmd_run(a, command):
     if not command:
         eprint("vpt-lease run: nothing to run after --")
@@ -1566,10 +1605,14 @@ def cmd_run(a, command):
     remote = CFG.mode == "ssh"
     central = CFG.mode == "central"
     a.wait, a.ticket, a.ticket_id_out = True, False, []
+    a.auto_equivalent_user = getattr(a, "auto_equivalent", True)      # claim_wait flips auto_equivalent after a switch; keep what the user asked
     a.heartbeat_s = 300 if (central or remote) else None
     lease_id, hb = None, None
     child, got = [None], []
-    granted_res = ""      # --any / --alt: the option that was granted, exported to the command as VPT_LEASE_RESOURCE / VPT_LEASE_HOST
+    granted_res = ""      # the resource that was granted, exported to the command as VPT_LEASE_RESOURCE / VPT_LEASE_HOST / VPT_LEASE_DEVICE
+    requested = [x.lower() for x in a.resources]
+    a.switched_from = None
+    refuse = [None]
 
     def forward(sig, _frm):
         got.append(sig)
@@ -1586,6 +1629,8 @@ def cmd_run(a, command):
         if not lease_id:
             eprint("vpt-lease: the remote claim succeeded but printed no lease id; not running the command")
             return 1
+        if not granted_res and not picks_any(a):
+            granted_res = ",".join(requested)
         every = 0.2 if FAST else 300.0
         eprint("vpt-lease: lease %s held, running %s" % (lease_id, command[0]))
         hb = SshHeartbeat(lease_id, every, (lambda: forward(signal.SIGTERM, None)) if a.on_fence == "kill" else None, renew_ttl=a.ttl)
@@ -1596,7 +1641,7 @@ def cmd_run(a, command):
             return res[1]
         lease = res[1]
         lease_id = lease["id"]
-        granted_res = ",".join(lease.get("legacy") or [])
+        granted_res = ",".join(lease.get("legacy") or []) or ",".join(a.resources)
         every = 0.2 if FAST else float(lease.get("heartbeat_s") or 300)
         eprint("vpt-lease: lease %s held, running %s" % (lease_id, command[0]))
         hb = HeartbeatThread(lease_id, every, (lambda: forward(signal.SIGTERM, None)) if a.on_fence == "kill" else None, renew_ttl=a.ttl)
@@ -1624,12 +1669,28 @@ def cmd_run(a, command):
         try:
             env = None
             if granted_res:
-                env = dict(os.environ, VPT_LEASE_RESOURCE=granted_res, VPT_LEASE_HOST=granted_res.split(",")[0].split("/")[0])
-                eprint("vpt-lease: granted %s (VPT_LEASE_RESOURCE, VPT_LEASE_HOST)" % granted_res)
+                first = granted_res.split(",")[0].split("/")
+                env = dict(os.environ, VPT_LEASE_RESOURCE=granted_res, VPT_LEASE_HOST=first[0], VPT_LEASE_DEVICE=first[1] if len(first) > 1 else "")
+                moved = bool(requested) and {legacy_res(x) for x in granted_res.split(",")} != {legacy_res(x) for x in requested}
+                if moved and not a.switched_from:
+                    a.switched_from = ",".join(requested)
+                if not a.auto_equivalent_user and moved and not picks_any(a):     # --no-auto-equivalent: exactly the named resource, never another
+                    refuse[0] = ("vpt-lease run: --no-auto-equivalent asked for %s but the lease is on %s: not running the command (nothing was switched by this client)"
+                                 % (",".join(requested), granted_res))
+                else:
+                    refuse[0] = switch_refusal(a, command, granted_res, requested)
+                eprint("vpt-lease: granted %s%s (VPT_LEASE_RESOURCE, VPT_LEASE_HOST, VPT_LEASE_DEVICE)"
+                       % (granted_res, " — SWITCHED from %s" % ",".join(requested) if moved else ""))
+            if refuse[0]:
+                eprint(refuse[0])
+                code = 8
+                raise _Refused()
             child[0] = subprocess.Popen(command, env=env)
             if got and child[0].poll() is None:      # a signal / fence that arrived before the child existed
                 with contextlib.suppress(OSError):
                     child[0].send_signal(got[0])
+        except _Refused:
+            pass
         except OSError as e:
             eprint("vpt-lease run: cannot start %s: %s" % (command[0], e))
             code = 127 if isinstance(e, FileNotFoundError) else 126
@@ -1708,6 +1769,7 @@ def build_parser():
     c.add_argument("--ticket", action="store_true", help="queue and print the ticket id and ETA at once")
     c.add_argument("--heartbeat-s", type=int, default=None, help=argparse.SUPPRESS)   # declared by a forwarded `run`
     ru = sub.add_parser("run", help="run <claim args> -- <command...>: claim (waits), heartbeat, run, release"); claim_args(ru)
+    ru.add_argument("--allow-switch", action="store_true", default=False, help="run the command even if the claim moved to an equivalent and the command names the original host/device literally")
     ru.add_argument("--on-fence", choices=("warn", "kill"), default="warn", help="when the lease is lost mid-run: warn (default) or kill the command")
     r = sub.add_parser("release"); r.add_argument("lease_id", nargs="?"); r.add_argument("--agent")
     r.add_argument("--by", default=""); r.add_argument("--reason", default="")
