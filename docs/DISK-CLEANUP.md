@@ -48,7 +48,7 @@ the size and the reason, the total it would free, and what it skipped, and write
 | a worktrees | worktree + merged local branch, through `worktree-prune.js` `plan` + `apply` (`git worktree remove`, never `--force`) | branch merged to `origin/main` (patch-equivalent counts), clean tree, nothing unpushed, no pane/process cwd, no live session, open request or lease, idle > 24 h, no non-cache ignored file (`.env`, keystores) |
 | b caches | `node_modules`, `.vite`, `.playwright` (depth <= 3) of worktrees that stay | worktree idle > 3 days and not busy; the dir is gitignored and holds no tracked file |
 | c logs | the head of listed logs over their cap (keeps the tail, cut at a line) | file is named in the policy and sits directly in the state dir |
-| d lane trees | `<state>/integration/wt/<id>` with `git worktree remove` (no `--force`) | request `merged`/`deployed`/`failed`/... and idle > 24 h |
+| d lane trees (the lane itself now also drops `wt/<id>` at every final transition, 2026-11-11; this step is the safety net) | `<state>/integration/wt/<id>` with `git worktree remove` (no `--force`) | request `merged`/`deployed`/`failed`/... and idle > 24 h |
 
 Never touched: the policy `never` list (live checkouts `~/ghosty-sessions`, `~/virtualpytest`, `~/vpt-private`, `~/vpt-backups`,
 `~/vpt-deliverables`), any path named in `parked-worktrees-review.md`, `parked-sessions.json` or `parked.json` (state dir), `.env` files,

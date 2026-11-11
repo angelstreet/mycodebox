@@ -399,7 +399,7 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
     if (final) { r.endedAt = iso(); live.delete(r.id); if (state === 'returned') stamp(r, 'returnedAt'); if (state === 'deployed') stamp(r, 'deployedAt'); }
     persist(r);
     emit(r, { kind: final ? 'final' : state === 'running' ? 'running' : 'state', state, final, reason: r.reason ?? null, ...event });
-    if (final) wake(r.id);
+    if (final) { wake(r.id); const c = repoCfg(r.repo); if (c) dropWorktree(r, c).catch(() => {}); }   // a crash or restart mid-merge left <state>/integration/wt/<id> behind (9 trees, 1.7 GB on 2026-11-11)
     if (state === 'merged' || state === 'deployed') cleanup(r);
   }
 
