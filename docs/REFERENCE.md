@@ -1525,6 +1525,19 @@ check, and none while the session works or the host is busy (load above 1.5 per 
 `manager.json` `doneCheck`: `"dry"` (journal `done-check.jsonl` only) or `"off"`; default live. `GET /api/done-check`
 shows the last check and its findings.
 
+### Ship without asking (E, owner 2026-11-11)
+
+A closing text with **no STATUS line** that offers or asks permission for a step the rules already authorise ("nothing is
+committed", "not committed", "should I commit/push/open the browser", "want me to", "if you want, I can ...", "I haven't
+run the typecheck") while the session's checkout shows unpushed commits or uncommitted files gets one push, "You are
+authorised: run the checks, verify with headless Playwright, commit, push, `integrate request`; do not ask", instead of the
+generic git message (`shipOfferOf` / `shipOfferMessage` in `done-check.js`). Same gates (idle, no draft, host not busy,
+`doneCheck` mode), once per distinct closing text, at most 2 a day per session. Hard-floor words (deletion, credentials,
+money, sudoers, force-push, publish, tags, production database) in the closing text suppress it. Tmux sessions only: Mac
+sessions are not seen (docs/MAC-HOOK.md "Ship rule for Mac sessions"). The rule itself sits in the first lines of
+`AGENTS.md` and of every `cbsession` prompt, because Claude Code's built-in "commit only when asked" default beats a rule
+that is deep in a long file.
+
 ## Sessions are never auto-closed (owner, 2026-10-30)
 
 A session is closed only by the owner, by the manager (`DELETE /api/sessions/<s>?confirm=<s>`) or by the agent that spawned it.

@@ -149,6 +149,33 @@ export function leftoverItemsOf(text) {
   return items;
 }
 
+// (E) Ship without asking (owner, 2026-11-11): a Haiku session on the Mac ended "Nothing is committed. If you want, I can open the dialog ...
+// then commit" with no STATUS line, no typecheck and no `integrate request`; AGENTS.md already authorises all of it. A closing text
+// with no STATUS line that offers / asks permission for an authorised step (commit, push, merge, deploy, check, typecheck, open the
+// browser) while git shows unpushed work gets ONE push (cap per day). Hard-floor topics are never nudged. Pure.
+export const SHIP_PUSHES_PER_DAY = 2;
+const OFFER_RES = [
+  /\b(?:nothing|none of (?:it|this|that)) (?:is|has been|was|got) (?:yet )?(?:committed|pushed)\b/i,
+  /\bnot (?:yet )?(?:committed|pushed|merged|deployed|visually checked|type-?checked)\b/i,
+  /\b(?:haven'?t|have not|did not|didn'?t) (?:yet )?(?:run|ran|checked|committed|pushed|verified|type-?checked)\b/i,
+  /\b(?:should|shall|can|could|may) I (?:go ahead and |now |also )?(?:commit|push|merge|deploy|open|run|check|verify|type-?check|integrate|proceed|go ahead)\b/i,
+  /\b(?:do you )?want me to\b/i, /\bwould you like me to\b/i,
+  /\bif you(?:'d)? (?:want|like|prefer|wish)\b[^.?!\n]{0,80}\bI (?:can|could|'ll|will)\b/i,
+  /\bI (?:can|could) (?:also )?(?:open|commit|push|run|check|verify|merge|deploy)\b[^.?!\n]{0,80}\bif you\b/i,
+];
+const HARD_FLOOR = /\b(?:delet\w+|credentials?|secrets?|passwords?|tokens?|payments?|money|invoice|sudoers|force[- ]push|history rewrite|publish(?:ing)? (?:a |the )?package|push(?:ing)? tags?|production (?:database|db)|drop table|destructive migration)\b/i;
+export function shipOfferOf(text) {
+  const t = String(text || '');
+  if (lastStatusLine(t)) return null;   // sessions that end with a STATUS line have their own paths
+  const tail = t.slice(-900);
+  if (HARD_FLOOR.test(tail)) return null;
+  for (const re of OFFER_RES) { const m = re.exec(tail); if (m) return m[0].trim().slice(0, 80); }
+  return null;
+}
+export function shipOfferMessage(f) {
+  return `Done check: you ended on an offer or a permission question, and git shows unfinished work (${f.text}). You are authorised (AGENTS.md, autonomy by default): do not ask. Now: run the touched tests / typecheck yourself, verify visually yourself with headless Playwright (skill vpt-headless-verify) instead of asking the owner, commit by explicit path, \`git push -u origin <branch>\`, then \`integrate request <branch> [--deploy frontend|server|host]\`. Never end a turn with "I can ...", "if you want" or "should I" for a step the rules already allow. End with a STATUS line (waiting: integration <id> or done with the closing review). Hard-floor items (data deletion, credentials, money, sudoers, force-push) are the only questions.`;
+}
+
 export function message(f) {
   return `Done check: your STATUS says done, but git disagrees: ${f.text}. Finish it the normal way (commit, merge to main when the merge evaluation passes, push, deploy if needed), or reply with one line saying why it stays as is. End with a STATUS line.`;
 }
@@ -256,7 +283,9 @@ export function createDoneCheck({
       const pr = pressure();
       const quiet = pr.loadPerCore <= MAX_LOAD_PER_CORE && pr.ramAvailPct >= MIN_RAM_AVAIL_PCT;
       let nudged = 0;
+      const offers = new Map(sessions.filter((s) => shipOfferOf(s.text)).map((s) => [s.name, s]));
       for (const f of findings) {
+        if (offers.has(f.name)) continue;   // (E) below words it for a session that ended on an offer
         if (st.told[f.name] === f.sig || f.working || f.draft) continue;
         if (m === 'dry') { await note({ dry: true, session: f.name, finding: f.text }); continue; }
         if (!quiet || nudged >= MAX_NUDGES_PER_TICK) continue;   // a later tick tells it
@@ -328,6 +357,24 @@ export function createDoneCheck({
         try { await send(s.name, leftoversMessage(items)); st.toldLeft[s.name] = sig; st.leftCount[s.name] = { day, n: used + 1, reported: false }; nudged++; await note({ session: s.name, leftovers: items }); }
         catch (e) { log.error?.('[done-check] send leftovers', s.name, e.message); }
       }
+      // (E) an offer / permission question for an authorised step while git shows unfinished work: one push per distinct closing text
+      st.toldShip ||= {};
+      for (const n of Object.keys(st.toldShip)) if (!live.has(n)) delete st.toldShip[n];
+      const shipOffers = [];
+      for (const [name, s] of offers) {
+        const f = findings.find((x) => x.name === name);
+        if (!f || s.working || s.draft) continue;
+        shipOffers.push(name);
+        const sig = createHash('sha1').update(shipOfferOf(s.text) + '\0' + f.sig).digest('hex').slice(0, 12);
+        const t = st.toldShip[name];
+        if (t?.sig === sig) continue;
+        const used = t?.day === day ? t.n : 0;
+        if (used >= SHIP_PUSHES_PER_DAY) continue;
+        if (m === 'dry') { await note({ dry: true, session: name, shipOffer: shipOfferOf(s.text) }); continue; }
+        if (!quiet || nudged >= MAX_NUDGES_PER_TICK) continue;
+        try { await send(name, shipOfferMessage(f)); st.toldShip[name] = { sig, day, n: used + 1 }; nudged++; await note({ session: name, shipOffer: shipOfferOf(s.text), finding: f.text }); }
+        catch (e) { log.error?.('[done-check] send ship offer', name, e.message); }
+      }
       // (D) a lease wait while a healthy equivalent is free: one push; the manager is told on the second distinct stop
       st.toldEq ||= {};
       for (const n of Object.keys(st.toldEq)) if (!live.has(n)) delete st.toldEq[n];
@@ -351,7 +398,7 @@ export function createDoneCheck({
         } catch (e) { log.error?.('[done-check] send equivalent wait', s.name, e.message); }
       }
       await save(st);
-      return (last = { at: now(), mode: m, checked: sessions.length, waitingWhileEquivalentFree: waitEq, missingBugsField: missing, missingClosingReview: missingReview, findings: findings.map(({ name, text }) => ({ name, text })), held: quiet ? null : 'host busy' });
+      return (last = { at: now(), mode: m, checked: sessions.length, shipOffers, waitingWhileEquivalentFree: waitEq, missingBugsField: missing, missingClosingReview: missingReview, findings: findings.map(({ name, text }) => ({ name, text })), held: quiet ? null : 'host busy' });
     } catch (e) {
       log.error?.('[done-check]', e.message);
       return (last = { ...last, at: now(), error: e.message });
