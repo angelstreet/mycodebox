@@ -1065,6 +1065,7 @@ async function goalForSession(name) {
 const goalGate = createGoalGate({
   stateDir: STATE_DIR,
   goalOf: goalForSession,
+  partsOf: async (name) => { await goalForSession(name); return goals.get(name)?.parts || []; },   // the task's numbered parts, captured with the goal
   bugsOf: () => foundBugs.list({ limit: 5000 }),
   // files the session changed: its branch vs origin/main plus uncommitted ones (a Mac session has no local checkout: none)
   touchedOf: async (s) => {

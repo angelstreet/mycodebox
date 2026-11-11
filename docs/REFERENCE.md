@@ -1975,7 +1975,9 @@ bug-2f32e7a7, bug-8fc8fc0d, bug-03ccc6a7, bug-80bdcdc1 · unverified: none · bu
 - **The owner's question**, once per done: "Goal check: Goal as given: "<goal>". Did you reach it? Quote the evidence for each part ... If not,
   continue the work now." The next done turn is the reply (`goalReplyOf`): accepted only when it restates the goal (half of its words, 2..6, or
   a `Goal:` line when none was recorded), cites evidence (file path, run / integration id, commit, URL, screenshot, KPI number with unit, n/N
-  tests) and does not say a part is not reached. Otherwise it is bounced with what is missing.
+  tests) and does not say a part is not reached. When the first prompt has a numbered list (`taskPartsOf`: the first list 1..n, 2 to 8 items,
+  not the cbsession preamble's steps; stored as `parts` with the goal), the question lists the parts and each one needs its own reply line with
+  evidence (named by its number or two of its words, `partsWithoutEvidence`). Otherwise it is bounced with what is missing.
 - **Caps**: a bounce is a fix-first push or a rejected reply (the question itself is not one); at most 2 per session per day (`BOUNCES_PER_DAY`),
   then one manager event `goal-check-cap:<session>` and silence until the next day. Never closes a session.
 - **Mac**: the gate answers the stop itself at once (no countdown; the manager journals the stop but schedules no answer). The reply arrives with

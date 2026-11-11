@@ -63,10 +63,42 @@ const EVIDENCE = [
 ];
 export function evidenceOf(text) { const t = String(text || ''); return EVIDENCE.filter(([, re]) => re.test(t)).map(([k]) => k); }
 
+// Pure. The task's numbered parts ("1. ...", "2) ...") from the first prompt: the first list of 2..8 consecutive items starting at 1 that is
+// not the cbsession preamble's own steps. Each part is its label (text before a colon, when short) or its first 120 characters.
+const PREAMBLE_STEP = /\b(?:first command|read the handover|write a short summary|then do the work|ask the owner only)\b/i;
+export function taskPartsOf(prompt) {
+  const lines = String(prompt || '').split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^\s*\(?1[.)]\s+\S/.test(lines[i])) continue;
+    const items = [];
+    for (let j = i, n = 1; j < lines.length && items.length < 8; j++) {
+      const m = new RegExp(`^\\s*\\(?${n}[.)]\\s+(.+)$`).exec(lines[j]);
+      if (m) { items.push(m[1].trim()); n++; continue; }
+      if (/^\s*\(?\d+[.)]\s/.test(lines[j]) || (!lines[j].trim() && !/^\s+\S|^\s*\(?\d+[.)]\s/.test(lines[j + 1] || ''))) break;   // another list, or the list ended
+    }
+    if (items.length < 2 || items.some((x) => PREAMBLE_STEP.test(x))) continue;
+    return items.map((x) => { const t = unmark(x).replace(/\s+/g, ' '); const c = /^(.{6,60}?):\s/.exec(t); return (c ? c[1] : t).slice(0, 120); });
+  }
+  return [];
+}
+// Pure. For each part, a line of the reply that names it (its number, or 2 of its words) and carries evidence. -> [{ n, part }] without evidence.
+export function partsWithoutEvidence(text, parts = []) {
+  const lines = unmark(text).split(/\n|;\s+/).map((l) => l.trim()).filter(Boolean);
+  const out = [];
+  parts.forEach((part, i) => {
+    const pw = words(part), need = Math.min(2, pw.size);
+    const num = new RegExp(`^(?:[-*•]\\s*)?(?:part\\s*)?\\(?${i + 1}[.):]\\s`, 'i');
+    const ok = lines.some((l) => { if (!evidenceOf(l).length) return false; if (num.test(l)) return true; let h = 0; for (const w of words(l)) if (pw.has(w)) h++; return need > 0 && h >= need; });
+    if (!ok) out.push({ n: i + 1, part });
+  });
+  return out;
+}
+
 const NOT_REACHED = /\b(?:not (?:yet )?(?:achieved|reached|met|done|built|fixed|verified)|partially|only partly|still (?:open|missing|failing)|did(?: not|n'?t) (?:reach|achieve)|goal not\b)/i;
 // Pure. text: the reply turn (closing text), goal: the goal as given ('' when none was recorded) -> { ok, restated, evidence: [kinds], missing: [..] }.
 // Restated: the reply states the goal ("Goal as given: ...", "Goal: ...") or uses at least half of the goal's words (2..6 of them).
-export function goalReplyOf(text, goal = '') {
+// parts: the task's numbered parts (taskPartsOf); each needs its own line with evidence.
+export function goalReplyOf(text, goal = '', parts = []) {
   const t = unmark(text);
   const gw = words(goal), tw = words(t);
   let hit = 0; for (const w of gw) if (tw.has(w)) hit++;
@@ -77,13 +109,15 @@ export function goalReplyOf(text, goal = '') {
   const missing = [];
   if (!restated) missing.push(gw.size ? `a restatement of the goal (it names ${hit} of the goal's words, ${need} needed)` : 'a restatement of the goal ("Goal: ...")');
   if (!evidence.length) missing.push('evidence for each part (a file path, run / integration id, commit, screenshot or KPI number)');
+  const noPart = evidence.length ? partsWithoutEvidence(text, parts) : [];
+  if (noPart.length) missing.push(`evidence for part ${noPart.map((p) => `${p.n} (${p.part.slice(0, 60)})`).join(', ')}: one line per part, with its file / run id / screenshot / KPI number`);
   if (notReached) missing.push(`the goal reached: your reply says "${notReached[0]}"`);
-  return { ok: !missing.length, restated, evidence, missing };
+  return { ok: !missing.length, restated, evidence, missing, partsMissing: noPart.map((p) => p.n) };
 }
 
 // ---- messages ----
-export function goalQuestion(goal) {
-  return `Goal check: ${goal ? `Goal as given: "${goal.slice(0, 240)}".` : 'No goal was recorded for this session: state it from your first prompt or task doc.'} Did you reach it? `
+export function goalQuestion(goal, parts = []) {
+  return `Goal check: ${goal ? `Goal as given: "${goal.slice(0, 240)}".` : 'No goal was recorded for this session: state it from your first prompt or task doc.'}${parts.length ? ` Parts: ${parts.map((p, i) => `${i + 1}. ${p.slice(0, 80)}`).join(' ')}.` : ''} Did you reach it? `
     + 'Quote the evidence for each part (file:line, test run, integration id, commit, report link, screenshot, KPI number). If not, continue the work now. '
     + 'Reply by restating the goal, one line per part with its evidence, then your STATUS line (done only when every part is reached; else failed / blocked / waiting).';
 }
@@ -114,7 +148,7 @@ export function createGoalStore({ stateDir, now = Date.now } = {}) {
       const all = load(), prev = all[name];
       const explicit = /^\s*(?:[*_#>\s]*)goal\s*:/im.test(String(prompt));
       if (prev && !(explicit && !prev.explicit)) return prev;
-      all[name] = { goal, source, explicit, at: new Date(now()).toISOString() };
+      all[name] = { goal, parts: taskPartsOf(prompt), source, explicit, at: new Date(now()).toISOString() };
       const keys = Object.keys(all);
       for (const k of keys.slice(0, Math.max(0, keys.length - 2000))) delete all[k];   // bounded
       try { mkdirSync(stateDir, { recursive: true }); writeFileSync(file, JSON.stringify(all)); } catch { /* best effort */ }
@@ -128,7 +162,7 @@ export function createGoalStore({ stateDir, now = Date.now } = {}) {
 // session: { name, text, doneAt?, remote?, canAnswer? }. goalOf(name) -> goal text; bugsOf() -> found-bug records; touchedOf(session) -> paths.
 // evaluate() -> null (nothing to say) | { kind: 'ask'|'fix-first'|'reply-rejected'|'accepted'|'capped', message?, goal, ... }. It never sends:
 // the caller sends `message` and then calls sent(name, decision) so the state counts it (a failed send is not counted).
-export function createGoalGate({ stateDir, goalOf: goalFor = async () => '', bugsOf = async () => [], touchedOf = async () => [], record = async () => {}, now = Date.now, mode = () => 'live', log = console } = {}) {
+export function createGoalGate({ stateDir, goalOf: goalFor = async () => '', partsOf = async () => [], bugsOf = async () => [], touchedOf = async () => [], record = async () => {}, now = Date.now, mode = () => 'live', log = console } = {}) {
   const stFile = join(stateDir, 'goal-check.json');
   const journal = join(stateDir, 'goal-check.jsonl');
   let st = null;
@@ -150,6 +184,7 @@ export function createGoalGate({ stateDir, goalOf: goalFor = async () => '', bug
     if (e.accepted === sig && !(s.doneAt && e.acceptedAt && s.doneAt > e.acceptedAt + 1000)) return null;
     if (e.sig === sig && !fresh(e.at)) return null;   // already answered this done turn (asked, bounced or accepted)
     let goal = ''; try { goal = String(await goalFor(s.name) || ''); } catch { goal = ''; }
+    let parts = []; try { parts = ((await partsOf(s.name)) || []).map(String).slice(0, 8); } catch { parts = []; }
     const b = e.bounces?.day === day() ? e.bounces : (e.bounces = { day: day(), n: 0, reported: false });
     // 1. fix-first
     const ids = leftoverIdsOf(s.text);
@@ -164,9 +199,9 @@ export function createGoalGate({ stateDir, goalOf: goalFor = async () => '', bug
     if (left.length >= 2) d = { kind: 'fix-first', bounce: true, message: fixFirstMessage(left), leftovers: left.map((x) => x.id) };
     else if (e.asked && !e.accepted) {
       // 2b. the reply to our question
-      const r = goalReplyOf(s.text, goal);
+      const r = goalReplyOf(s.text, goal, parts);
       d = r.ok ? { kind: 'accepted', evidence: r.evidence } : { kind: 'reply-rejected', bounce: true, message: replyBounceMessage(goal, r), missing: r.missing };
-    } else d = { kind: 'ask', message: goalQuestion(goal) };
+    } else d = { kind: 'ask', message: goalQuestion(goal, parts) };
     d.goal = goal; d.sig = sig;
     if (d.kind === 'accepted') {
       Object.assign(e, { sig, at: now(), accepted: sig, acceptedAt: s.doneAt || now(), asked: false });
