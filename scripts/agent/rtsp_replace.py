@@ -76,9 +76,9 @@ def pick_hls(entry, catalog, used_urls, ssh_map, timeout, tries=8):
 
 
 def confirm_down(entry, ssh_map, timeout):
-    """A live TV channel can blink: change nothing unless it fails again 20 s later."""
+    """A live TV channel can blink or answer slowly: re-probe 20 s later with 3x the timeout. -> the confirmed status."""
     time.sleep(int(os.environ.get('RTSP_CONFIRM_SECONDS', '20')))
-    return rc.check_stream(entry['url'], timeout, ssh_map.get(entry['host']))['status'] not in rc.OK_STATES
+    return rc.check_stream(entry['url'], timeout * 3, ssh_map.get(entry['host']))['status']
 
 
 def pick(entry, pool, ssh_map, timeout):
@@ -187,6 +187,7 @@ def run(mode, timeout=10):
     budget = int(pool.get('maxReplacementsPerNight', 3)) - replaced_today()
     rows = []
     catalog = None
+    chosen = {}
     for e, r in zip(entries, results):
         row = rc.public_entry(e, r)
         if r['status'] == 'ok':
@@ -199,15 +200,19 @@ def run(mode, timeout=10):
             row['action'] = 'report: camera down (owner hardware, never replaced)'
         elif budget <= 0:
             row['action'] = 'report: replacement budget used up tonight'
-        elif mode == 'live' and not confirm_down(e, ssh_map, timeout):
-            row['action'] = 'report: failed once, played on the re-probe (flaky), nothing touched'
+        elif (confirmed := confirm_down(e, ssh_map, timeout)) in rc.OK_STATES:
+            row['action'] = f"report: {r['status']} once, played on the re-probe (slow or flaky), nothing touched"
+        elif confirmed == 'frozen':
+            row['action'] = 'report: frozen picture confirmed (could be a still or radio channel), not changed automatically'
         else:
             if e['kind'] == 'hls':
                 if catalog is None:
                     catalog, cat_err = sc.load()
                     errors += cat_err
-                used = [x['url'] for x in entries if x['host'] == e['host']]
+                used = [x['url'] for x in entries if x['host'] == e['host']] + chosen.setdefault(e['host'], [])
                 s = pick_hls(e, catalog, used, ssh_map, timeout)
+                if s:
+                    chosen[e['host']].append(s['url'])  # one channel per host: never give it to a second device tonight
             else:
                 p0 = pick(e, pool, ssh_map, timeout)
                 s = p0 and {'id': p0['id'], 'url': p0['url'], 'how': 'replace', 'label': f"pool {p0['id']}"}

@@ -80,7 +80,16 @@ For a dead channel, in this order, and every candidate is probed from the host b
    `FR Regional 3 — Littoral FM TV` (404, gone from both lists) becomes `FR Regional 3 — P2M TV (720p)`.
 3. Nothing plays: reported.
 
-The channel a device plays is found by its URL in the lists, else by the part of its name after `—`. A device whose channel
+Guards (found on the first real dry run, 2026-11-11):
+
+- **Confirm before acting**: every stream that is not ok is probed again 20 s later with 3x the timeout (30 s), in dry and
+  live mode alike. Pluto channels that played an hour before timed out at 10 s under load; without the re-probe the job would
+  have "replaced" working channels.
+- **Frozen is reported, never changed**: identical frames over ~3 s can be a still, slate or radio channel.
+- **One channel per host**: a channel picked tonight counts as used on that host, so two dead devices never get the same one.
+
+The channel a device plays is found by its URL in the lists, else by a stream id shared with a list URL (Euronews FR's
+`/manifest/<id>/...` became `/master/<id>/playlist.m3u8`), else by the part of its name after `—`, exact or as a prefix. A device whose channel
 is in no list cannot be repaired (no group known) and is reported. The verified copy should be re-probed about monthly
 (`STREAMS.md`); the nightly does not edit it.
 
