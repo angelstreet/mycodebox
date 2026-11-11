@@ -21,4 +21,4 @@ PROMPT=$(mktemp "$STATE/prompt-XXXXXX.md")
 { sed "s/__MODE__/$MODE/g" "$HERE/prompt.md"; } > "$PROMPT"
 # Name with the time: a second run on one day (a retry, a manual trigger) found the morning session still open and cbsession
 # refused to start ("tmux session ... already exists").
-exec cbsession -n "rtsp-nightly-$(date -u +%Y%m%d-%H%M)" -d "$HOME/ghosty-sessions" -p minimax -f "$PROMPT"
+exec cbsession -n "rtsp-nightly-$(date -u +%Y%m%d-%H%M)" -d "$HOME/ghosty-sessions" -p minimax -A -f "$PROMPT"

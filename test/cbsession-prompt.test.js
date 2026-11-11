@@ -13,7 +13,7 @@ import { tmp } from './helpers-tmp.js';
 const SCRIPT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'cbsession');
 const home = tmp('cbp-');
 const work = path.join(home, 'work'); fs.mkdirSync(work);
-const handover = path.join(home, 'handover.md'); fs.writeFileSync(handover, '# handover\n');
+const handover = path.join(home, 'handover.md'); fs.writeFileSync(handover, '# handover\nGoal: do it.\nDone when:\n1. the check passes with a run id\n');
 
 // tmux shim: records every call and fails, so has-session reports "no session" and nothing can be started.
 const bin = path.join(home, 'bin'); fs.mkdirSync(bin);
@@ -52,7 +52,7 @@ test('integrate CLI message says keep working, wait only when nothing else is le
 });
 
 test('every prompt kind (-H, -t, -f) opens with the ship rule in its first lines (owner 2026-11-11)', () => {
-  const pf = path.join(home, 'p.md'); fs.writeFileSync(pf, 'do the thing\n');
+  const pf = path.join(home, 'p.md'); fs.writeFileSync(pf, 'do the thing\nDone when:\n1. the check passes with a run id\n');
   for (const [n, args] of [['cbp-s1', ['-H', handover]], ['cbp-s2', ['-t', 'do the thing']], ['cbp-s3', ['-f', pf]]]) {
     const r = run('-x', '-n', n, '-d', work, ...args);
     assert.equal(r.status, 0, r.stderr);
@@ -69,4 +69,29 @@ test('the handover prompt has one merge rule: ship through integrate request, ne
   assert.match(p, /ship\s+your own tested work \(commit, push your branch, `integrate request`: the lane merges/);
   assert.match(p, /never\s+merge into the target, push the target or run the deploy script yourself/);
   assert.match(p, /force-push or history rewrites/);
+});
+
+// goal first, verification last (owner 2026-11-11, docs/GOAL-RULE.md)
+test('cbsession: a handover / prompt file with no checkable Done-when line is refused (exit 2); -D, -A and a -t one-liner start', () => {
+  const bare = path.join(home, 'bare.md'); fs.writeFileSync(bare, '# bare\nGoal: do it.\n');
+  let r = run('-x', '-n', 'cbg-1', '-d', work, '-H', bare);
+  assert.equal(r.status, 2); assert.match(r.stderr, /refused: the brief has no checkable 'Done when:' line/);
+  r = run('-x', '-n', 'cbg-2', '-d', work, '-f', bare);
+  assert.equal(r.status, 2);
+  r = run('-x', '-n', 'cbg-3', '-d', work, '-H', bare, '-D', 'run 7 passes with a report link', '-D', 'bug-1 is resolved', '-T', '90 min');
+  assert.equal(r.status, 0, r.stderr);
+  const p = promptOf('cbg-3');
+  assert.match(p, /\nDone when:\n1\. run 7 passes with a report link\n2\. bug-1 is resolved\n/); assert.match(p, /\nTime box: 90 min\n/);
+  r = run('-x', '-n', 'cbg-4', '-d', work, '-f', bare, '-A');
+  assert.equal(r.status, 0, r.stderr); assert.match(promptOf('cbg-4'), /1\. The goal is reached, and the result carries evidence another party can open/);
+  r = run('-x', '-n', 'cbg-5', '-d', work, '-t', 'Fix the lease thing');
+  assert.equal(r.status, 0, r.stderr); assert.match(r.stderr, /a -t one-liner has no Done-when line/);
+  assert.match(promptOf('cbg-5'), /Time box: [26] h/);
+});
+test('cbsession: the handover Goal / Done when / Time box lines reach the prompt; a fix name gets 2 h, a feature 6 h; the rule text is in every prompt', () => {
+  const h = path.join(home, 'h2.md'); fs.writeFileSync(h, 'Goal: ship it.\nDone when:\n1. merged, integration id\n2. deployed, live sha\n');
+  run('-x', '-n', 'bug-cbg-fix', '-d', work, '-H', h); run('-x', '-n', 'cbg-feat', '-d', work, '-H', h);
+  assert.match(promptOf('bug-cbg-fix'), /\nTime box: 2 h\n/); assert.match(promptOf('cbg-feat'), /\nTime box: 6 h\n/);
+  for (const n of ['bug-cbg-fix', 'cbg-feat']) { const p = promptOf(n); assert.match(p, /\n2\. deployed, live sha\n/); assert.match(p, /\*\*Goal first, verification last/); }
+  const r = run('-x', '-n', 'cbg-h3', '-d', work, '-H', h, '-T', '3 h'); assert.match(promptOf('cbg-h3'), /\nTime box: 3 h\n/);
 });

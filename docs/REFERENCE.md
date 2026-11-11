@@ -1952,6 +1952,14 @@ Forms: `done — <what> · goal: achieved · evidence: <links / run ids / frames
 
 Before you fix a filed bug, run `found-bug --claim <id>` (exit 3: someone else is fixing it).
 
+Goal first, verification last (owner 2026-11-11; `docs/GOAL-RULE.md`, kept equal by `test/status-honesty.test.js`):
+
+**Goal first, verification last (owner 2026-11-11).** A task opens and closes with the same list.
+
+- **First**: before any work, the task has `Goal: <one sentence>` and `Done when:` with 1 to 5 numbered lines, each checkable by something other than you: a fact the harness holds (merged, deployed, bug resolved), a command or URL with a pass / fail result, or an observation with an artefact (run id, report link, frame). The brief did not give them: write them yourself as the first thing you say, then work. A line you cannot check is rewritten, not dropped.
+- **Time box** (owner 2026-11-11): the opening also carries `Time box: <max duration>` (the brief's, else your own estimate; default 2 h for a fix, 6 h for a feature). At 50% with no `Done when` line passed, say so and change approach. At 100% **stop**: write the `Verification:` block as it stands and end `failed` (or `needs-manager` with what would unblock it); never extend your own time box, the manager or the owner does. The same check failing 3 times with the same error is the same stop, whatever the clock says: a retry loop is not progress.
+- **Last**: the final message ends with `Verification:` and one row per `Done when` line, in the same order and numbering: `<n>. pass | fail | not checked — <evidence that resolves, or why>`, then the STATUS line. All `pass` = `done`. Any `fail` or `not checked` = not `done` (`running`, `waiting` or `failed`). Never change the `Done when` list at the end to fit what you did; a line the owner dropped is marked "dropped by owner", not deleted.
+
 - **`failed`** (`stall.js`): case `needs_manager` with `failed: true` and `managerAsk: goal not achieved: ...`: a manager event and the manager
   LED, never a finished turn, never parked as one (`status-honesty.js` `failedOf` parses why / tried). The Mac Stop hook posts the text and the
   server parses it the same way. `scripts/manager-status-scan.sh` lists `failed` lines.
@@ -2037,6 +2045,18 @@ bug-2f32e7a7, bug-8fc8fc0d, bug-03ccc6a7, bug-80bdcdc1 · unverified: none · bu
   tolerated: guard messages ask an idle session for `STATUS: acknowledged`. An unknown word is sent back once naming the seven (done-check (I), same
   `blockedCheck` switch, dry by default: `unknownStatusWordOf`). In the state-from-facts work an own job or own worker alive computes `running`; a lane
   request, lease ticket or named time computes `waiting`.
+- **Goal first, verification last + time box (owner, 2026-11-11, fourth follow-up)**: [docs/GOAL-RULE.md](GOAL-RULE.md), verbatim in AGENTS.md, the cbsession
+  preamble, the MAC-HOOK snippet and above. `scripts/cbsession` takes `-D "<line>"` (repeatable) and `-T "<box>"`, else reads the brief's `Done when:` numbered
+  lines and `Time box:` line (default 2 h for a bug* / fix* name or branch, 6 h for a feature), writes them into the prompt, and the server stores them with the
+  goal in `goals.json` (`parts`, `timeBoxMs`, outside the worktree). A handover / `-f` prompt with no checkable Done-when line is REFUSED (exit 2). A `-t`
+  one-liner and `-A` (automation: the dashboard's `startSession`, bug-drain, `rtsp-nightly`) get one auto line ("the goal is reached, with evidence another party
+  can open") and a warning. Stop check: done-check (K) and the Mac stop path (`remote-stops.js`) require, on a done line, a `Verification:` block with one row
+  per stored Done-when line, same count and numbering, every row `pass` (a row "dropped by owner" counts): a missing / fail / not-checked / extra row is sent back
+  once (it only refuses a done line, so it is live); `rows passed / total` is journalled (`done-check.jsonl` `verification`, Mac `verification.jsonl`); all pass
+  skips the goal question. Time box (L): at 100% ONE wake ("time box reached: write Verification as it stands and end failed or needs-manager"), 30 min later
+  one manager item `time-box:<session>` when it keeps going; never kills or closes. `manager.json` `timeBox`: `dry` (default: journal `timeBox: reached`), `live`,
+  `off`; a Mac session is told at its next stop. Replay: `node scripts/goal-box-replay.js [day] [--list]`. Not done: the same failing command repeated 3 times in
+  the transcript as the same stop (needs transcript parsing; filed as an idea).
 - Switch `manager.json` `goalCheck`: `live` (default) | `dry` (journal only) | `off`. Journal `goal-check.jsonl`, state `goal-check.json`.
   `GET /api/goal-check` -> bounced dones per session today; `scripts/manager-status-scan.sh` prints `<session>: done-bounced: N today by the goal
   check` (codebox and Mac). Tests: `test/goal-check.test.js` (replays the example line: it bounces), `test/goal-check-remote.test.js`.

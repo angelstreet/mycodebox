@@ -227,3 +227,54 @@ test('done-check (J): done while a lane request is open is told it is waiting (l
   const live = mk('live'); await live.w.tick(); await live.w.tick();
   assert.equal(live.sent.length, 1); assert.match(live.sent[0][1], /your STATUS says done, but the harness sees integration int-1a1cc7e0de12c0e88: that is waiting, not done/);
 });
+
+test('the goal-first / verification-last rule (docs/GOAL-RULE.md) is verbatim in AGENTS.md, the cbsession preamble, the MAC-HOOK snippet and REFERENCE', async () => {
+  const { readFileSync } = await import('node:fs');
+  const ROOT = join(import.meta.dirname, '..');
+  const norm = (x) => x.replace(/\s+/g, ' ').trim();
+  const rule = norm(readFileSync(join(ROOT, 'docs/GOAL-RULE.md'), 'utf8'));
+  assert.match(rule, /Time box/); assert.match(rule, /Verification:/);
+  for (const f of ['AGENTS.md', 'scripts/cbsession', 'docs/MAC-HOOK.md', 'docs/REFERENCE.md']) assert.ok(norm(readFileSync(join(ROOT, f), 'utf8')).includes(rule), f);
+});
+
+// goal first, verification last: Verification block per stored Done-when line, time box (docs/GOAL-RULE.md)
+import { readFileSync } from 'node:fs';
+import { verificationRowsOf, verificationOf, verificationMessage, timeBoxOf, timeBoxWakeMessage } from '../status-honesty.js';
+const PARTS = ['merged and deployed', 'bug-1 resolved', 'replay: 26 caught'];
+const V = (rows, st = 'STATUS: done — x · goal: achieved · evidence: int-1a1cc905977d8c7a9 · closing review: docs none needed · leftovers none · unverified none · bugs: none') => `Done.\n\nVerification:\n${rows.join('\n')}\n\n${st}`;
+test('Verification: one row per stored Done-when line, same count and numbering, all pass; fail / not checked / missing / extra rows are refused; rows are counted', () => {
+  const ok = verificationOf(V(['1. pass — int-1a1cc905977d8c7a9', '2. pass — bug-1 resolved', '3. pass — replay run']), PARTS);
+  assert.deepEqual([ok.ok, ok.passed, ok.total], [true, 3, 3]);
+  const bad = verificationOf(V(['1. pass — x', '2. fail — still open', '3. not checked — no device']), PARTS);
+  assert.equal(bad.ok, false); assert.equal(bad.passed, 1); assert.match(bad.problems.join(' '), /row 2 is fail.*row 3 is not checked/);
+  assert.match(verificationOf(V(['1. pass — x', '2. pass — y']), PARTS).problems.join(' '), /row 3 is missing/);
+  assert.match(verificationOf(V(['1. pass — x', '2. pass — y', '3. pass — z', '4. pass — extra']), PARTS).problems.join(' '), /row 4 has no Done-when line/);
+  assert.match(verificationOf('Done.\nSTATUS: done — x', PARTS).problems[0], /no `Verification:` block/);
+  assert.equal(verificationOf(V(['1. pass — x', '2. dropped by owner — y', '3. pass — z']), PARTS).ok, true, 'a row the owner dropped counts');
+  assert.equal(verificationOf('Done.\nSTATUS: failed — goal not achieved: x · tried: y', PARTS), null, 'only a done line');
+  assert.equal(verificationOf(V(['1. pass']), []), null, 'no stored lines: nothing to check');
+  assert.match(verificationMessage(bad, PARTS), /1 of 3 rows pass/);
+});
+test('time box parse and wake text', () => {
+  assert.equal(timeBoxOf('Goal: x\nTime box: 2 h\n'), 2 * 3600e3); assert.equal(timeBoxOf('Time box: 90 min'), 90 * 60e3); assert.equal(timeBoxOf('time box: 6h'), 6 * 3600e3);
+  assert.equal(timeBoxOf('no box'), null); assert.match(timeBoxWakeMessage(120 * 60e3), /Time box reached \(120 min\).*failed.*needs-manager/);
+});
+test('done-check (K)/(L): done without a complete Verification is sent back once and rows journalled; all pass skips the goal question; the time box wakes once (dry journals), then one manager item', async () => {
+  const entry = { goal: 'ship it', parts: PARTS, timeBoxMs: 3600e3, at: new Date(Date.now() - 2 * 3600e3).toISOString() };
+  const asked = []; const goalGate = { forget: async () => {}, evaluate: async (x) => { asked.push(x.name); return null; }, sent: async () => {} };
+  const mk = (text, boxMode = 'live', sessions = []) => { const sent = [], events = []; const dir = tmp('doneK-'); let t = Date.now();
+    const w = createDoneCheck({ stateDir: dir, git: async () => { throw new Error('x'); }, listDone: async () => [{ name: 'k', cwd: '/nowhere', text }], goalGate, goalEntryOf: () => entry, timeBoxMode: () => boxMode, listSessions: async () => sessions, now: () => t, mode: () => 'live', log: { error() {} },
+      pressure: () => ({ loadPerCore: 0.1, ramAvailPct: 80 }), send: async (n, x) => { sent.push([n, x]); }, record: async (e) => { events.push(e); } }); return { w, sent, events, adv: (ms) => { t += ms; }, dir }; };
+  const bad = mk(V(['1. pass — x', '2. fail — y', '3. pass — z']), 'off'); await bad.w.tick(); await bad.w.tick();
+  assert.equal(bad.sent.length, 1); assert.match(bad.sent[0][1], /needs a `Verification:` block.*row 2 is fail.*2 of 3 rows pass/);
+  assert.match(readFileSync(join(bad.dir, 'done-check.jsonl'), 'utf8'), /"verification":\{"passed":2,"total":3\}/);
+  const good = mk(V(['1. pass — int-1a1cc905977d8c7a9', '2. pass — bug-1 resolved', '3. pass — replay run']), 'off'); const r = await good.w.tick();
+  assert.equal(good.sent.length, 0); assert.ok(r.goalCheck.accepted.includes('k') && !asked.includes('k'), 'verified: the goal question is not asked');
+  const idle = 'STATUS: running: pid 4242 — the suite';
+  const tb = mk(idle, 'live', [{ name: 'k', working: false, text: idle }]); await tb.w.tick(); await tb.w.tick();
+  assert.equal(tb.sent.filter(([, x]) => /Time box reached/.test(x)).length, 1);
+  tb.adv(31 * 60e3); await tb.w.tick();
+  assert.equal(tb.events.filter((e) => e.key === 'time-box:k').length, 1, 'a manager item, never a close');
+  const dry = mk(idle, 'dry', [{ name: 'k', working: false, text: idle }]); await dry.w.tick();
+  assert.equal(dry.sent.filter(([, x]) => /Time box reached/.test(x)).length, 0); assert.match(readFileSync(join(dry.dir, 'done-check.jsonl'), 'utf8'), /"timeBox":"reached"/);
+});
