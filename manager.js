@@ -1277,11 +1277,11 @@ async function partialDecision({ s, w, id, h, final, stall }) {
   let hard = topics?.hard || null;
   // a deploy the manager decided that ships additive lab migrations covers the noun "migration(s)" in the ask (round 9, item 4); "migrate" the verb and every other hard word stay
   const migOk = !!(dec.ok.deploy && dec.evs.deploy?.facts?.migrations?.length);
-  if (hard && migOk) hard = hardMatch(stall.topicsText ?? final.question ?? '', { mergePresent: !!topics.merge, pushPresent: !!topics.push, deployPresent: !!topics.deploy, migrationsOk: true });
+  if (hard && migOk) hard = hardMatch(stall.floorText ?? stall.topicsText ?? final.question ?? '', { mergePresent: !!topics.merge, pushPresent: !!topics.push, deployPresent: !!topics.deploy, migrationsOk: true });
   // the hard word of an answered self-check part ("what version is deployed on env-a?") is the subject of the question, not a request: read the rest
   const selfDone = info.filter((i) => i.kind).map((i) => i.part);
   if (hard && selfDone.length) {
-    let rest = String(stall.topicsText ?? final.question ?? '');
+    let rest = String(stall.floorText ?? stall.topicsText ?? final.question ?? '');
     for (const p of selfDone) rest = rest.split(p).join(' ');
     hard = hardMatch(rest, { mergePresent: !!topics.merge, pushPresent: !!topics.push, deployPresent: !!topics.deploy, migrationsOk: migOk });
   }
@@ -1485,7 +1485,7 @@ export function observe(s) {
       type: 'stall', id, session: s.name, project: s.project || null, agent: s.agent, state: s.state,
       at: new Date(s.now).toISOString(), case: final.case, source: final.source, textSource: stall.textSource || 'pane', question: final.question,
       ...(final.case === 'background_wait' ? { backgroundWork: final.backgroundWork } : {}),
-      forbidden: final.forbidden, draft: final.draft, suggestion: final.suggestion,
+      forbidden: final.forbidden, ...(final.floorOwner || final.topics?.hard ? { floor: final.floorOwner || final.topics.hard } : {}), draft: final.draft, suggestion: final.suggestion,
       no_status: !!final.no_status, ...(final.status ? { status: final.status } : {}), ...(final.deployHint ? { deployHint: final.deployHint } : {}), ...(final.action ? { action: final.action } : {}),
       jev: jevOut, wouldSend: ws.send, why: ws.why, confidence, excerpt: stall.excerpt,
       ...(final.handoff ? { handoff: final.handoff } : {}),
