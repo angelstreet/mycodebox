@@ -18,6 +18,7 @@ Start here to choose the right guide. Examples use placeholders; replace them lo
 | Install the Mac desktop app | [Desktop app](DESKTOP.md) | Electron wrapper, unsigned .dmg build, first-run address, certificate and notification behaviour |
 | Configure native HTTPS | [Certificates](../certs/README.md) | Certificate files, trust and renewal |
 | Try or upgrade to V2 (opt-in task engine) | [README roadmap](../README.md#current-capabilities--v2-roadmap), [Migration](v2/MIGRATION.md), [Scoring](v2/SCORING.md) | What is shipped vs planned, upgrade and rollback notes, per-model scoring report |
+- [Harness review 2026-11-11](HARNESS-REVIEW-2026-11-11.md): why the owner still steps in (codebox and Mac), ten root causes with evidence, floors too wide or too narrow, ranked plan.
 - [Harness review 2026-10-14](v2/reviews/HARNESS-REVIEW-2026-10-14.md): where the owner was stopped, how long sessions waited, ranked fixes (input to V2 rounds 8 and 9).
 | Leases (who may deploy or drive a device) | [Lease rules](LEASE-RULES.md), [lease inventory](LEASE-INVENTORY.md), [central lease service](v2/LEASES-CENTRAL.md) | What to claim, waiting instead of asking, the service design and its cut-over |
 | Disk growth: merged worktrees, pokemon run videos | [REFERENCE, Integration lane](REFERENCE.md), [Pokemon retention](POKEMON-RETENTION.md) | Lane removes merged worktrees by itself (switch `worktreeCleanup`); the pokemon retention rule is a proposal with a dry run |
