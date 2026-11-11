@@ -147,7 +147,7 @@ export function g8Summary(days) {
   return { ...t, autonomyPct: p(t.autonomous, t.decisions), regretPct: p(t.regretLabelled, t.autonomous), guessPct: p(t.regretGuess, t.autonomous) };
 }
 
-export function managerBlockHtml(score, days, { fmtTok, fmtUsd, costOrNull } = {}) {
+export function managerBlockHtml(score, days, { fmtTok, fmtUsd, costOrNull, bugs } = {}) {
   if (!score) return '';
   const tok = fmtTok || ((n) => `${Math.round(n || 0)}`);
   const totalTok = (b) => b ? tok((b.tokens?.input || 0) + (b.tokens?.output || 0) + (b.tokens?.cache_read || 0) + (b.tokens?.cache_write || 0)) : '—';
@@ -185,6 +185,7 @@ export function managerBlockHtml(score, days, { fmtTok, fmtUsd, costOrNull } = {
     <div class="urow jev"><div class="u1"><b>Jev</b><span class="grow"></span><b class="tk">${pct(consulted.share)} consulted</b></div><div class="u2">consulted ${consulted.count || 0} of ${perf.stops || 0} stops${consulted.ambiguousShare != null ? ` · ${pct(consulted.ambiguousShare)} of ambiguous` : ''} · errors ${pct(jev.errorRate)} · agreement ${pct(jev.agreement)} · p50 ${jev.p50ms != null ? jev.p50ms + 'ms' : '—'}${Number.isFinite(jev.overridden) && jev.overridden ? ` · ${jev.overridden} overridden by forbidden` : ''}</div></div>
     ${(() => { const g = g8Summary(days); if (!g) return ''; const f = (n) => (n == null ? '—' : `${n} %`);
       return `<div class="urow g8"><div class="u1"><b>Autonomy</b><span class="grow"></span><b class="tk">${f(g.autonomyPct)}</b></div><div class="u2">${g.autonomous} of ${g.decisions} stops handled without you (target &ge; 80 %) &middot; regret ${f(g.regretPct)} (${g.regretLabelled} marked wrong, target &le; 5 %) &middot; guess ${f(g.guessPct)} (pause / &ldquo;no, stop&rdquo; heuristic)</div></div>`; })()}
+    ${bugs ? `<div class="urow bugs"><div class="u1"><b>Bugs (${bugs.days} d)</b><span class="grow"></span><b class="tk">${bugs.filed} filed</b></div><div class="u2">${bugs.fixedByFinder} fixed by the finder &middot; ${bugs.fixedByWorker} by a worker &middot; ${bugs.open} open${bugs.whyMissing ? ` &middot; ${bugs.whyMissing} filed without a reason` : ''}</div></div>` : ''}
     <div class="urow"><div class="u1"><b>Performance</b><span class="grow"></span><b class="tk">${perf.stops || 0} stops</b></div><div class="u2">${perf.stops ? `${perf.resolved || 0} resolved (${pct(perf.resolvedFast != null && perf.stops ? perf.resolvedFast / perf.stops : null)} &le;5min) · ${perf.auto || 0} auto · ${perf.escalated || 0} escalated · median ${perf.medianTtrSec != null ? perf.medianTtrSec + 's' : '—'} · p90 ${perf.p90TtrSec != null ? perf.p90TtrSec + 's' : '—'}${perf.judgeMean != null ? ` · judge mean ${(perf.judgeMean).toFixed(2)}` : ''}${perf.agreement != null ? ` · agreement ${pct(perf.agreement)}` : ''}` : 'no stops today'}</div></div>
   </div></div>`;
 }

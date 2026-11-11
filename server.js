@@ -120,7 +120,7 @@ import { createRulesWatch } from './rules-watch.js';
 import { createOverlapGuard, DEFAULT_IGNORE } from './overlap-guard.js';
 import { createProgressWatch } from './progress-watch.js';
 import { createSharedCheckoutGuard, expandHome } from './shared-checkout-guard.js';
-import { createFoundBugs, unreportedBugOf, sendBackOf, sendBackText } from './found-bugs.js';
+import { createFoundBugs, unreportedBugOf, sendBackOf, sendBackText, sweepGroups } from './found-bugs.js';
 import { createDoneCheck, DEFAULT_IGNORE_BRANCHES, shipOfferOf, unconfirmedStatusOf, waitingOnLeaseStatus } from './done-check.js';
 import { createLeftovers, pushableItems } from './done-leftovers.js';
 import { scanTaskDocs, withHomeDirs, computeUnfinished, docLeftoversFor, createUnfinished } from './unfinished.js';
@@ -2762,6 +2762,12 @@ async function handleHttp(req, res) {
       }
       if (req.method === 'POST' && p === '/api/bugs') { const b = await readJsonBody(req); if (remoteClient && b && typeof b === 'object' && !String(b.session || '').replace(/^unknown$/, '')) b.session = `mac-${remoteClient}`;   // a remote report with no session is named after its client
       const r = await foundBugs.add(b); return json(res, r.ok ? 200 : 400, r); }
+      if (req.method === 'POST' && p === '/api/bugs/send-back-sweep' && loop) {   // one kept wake per live filer listing its open, small-looking bugs (idempotent per session per day)
+        const day = new Date().toISOString().slice(0, 10), groups = sweepGroups(await foundBugs.list({ limit: 5000, unresolved: true }), new Set([...(await listPanes()).keys()]));
+        const queued = groups.filter((g) => pendingWakes.add({ session: g.session, key: `bugsweep:${g.session}:${day}`, text: g.text, by: 'found-bugs' }).queued).map((g) => ({ session: g.session, count: g.count }));
+        logEvent({ type: 'bug-send-back-sweep', sessions: queued.length });
+        return json(res, 200, { ok: true, queued });
+      }
       const fm = p.match(/^\/api\/bugs\/([^/]+)\/fixed$/);
       if (fm && req.method === 'POST') { const r = await foundBugs.fixed(decodeURIComponent(fm[1]), (await readJsonBody(req)).note); return json(res, r.ok ? 200 : 404, r); }
       const rm = p.match(/^\/api\/bugs\/([^/]+)\/resolve$/);
