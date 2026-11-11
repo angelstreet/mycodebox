@@ -1,0 +1,10 @@
+{
+  "clone": "/home/jndoye/integration-lane/website",
+  "remote": "origin",
+  "target": "master",
+  "test": "python3 -m pytest tests -q",
+  "testTimeoutMin": 8,
+  "ci": null,
+  "deploy": null,
+  "conventions": []
+}
