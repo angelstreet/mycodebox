@@ -284,6 +284,9 @@ test('deploy: request, list (text/json), approve, cancel, start, finish, wait, r
   assert.equal(r.out, 'DEPLOY dep1  env-a  state=queued  scope=host  ref=main  by=a  purpose=x hosts=host-1\n'.replace('purpose=x hosts', 'purpose=x hosts'));
   const j = JSON.parse((await run(['deploy', 'list', '--json'])).out);
   assert.equal(j.deploys[0].id, 'dep1'); assert.equal(j.leases[0].resource, 'host-1');
+  assert.equal(calls.at(-1).query.all, undefined);
+  await run(['deploy', 'list', '--all', '--json']);
+  assert.equal(calls.at(-1).query.all, '1'); // finished and cancelled deploys too (bug-e1428ba7)
   assert.equal((await run(['deploy', 'approve', 'dep1'])).out, 'approved\n');
   assert.equal((await run(['deploy', 'cancel', 'dep1'])).out, 'cancelled\n');
   r = await run(['deploy', 'start', 'dep1', '--skip-leased']);

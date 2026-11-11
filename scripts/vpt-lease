@@ -1156,7 +1156,7 @@ def cmd_deploy(a):
         print(first_id(r))
         return 0
     if c == "list":
-        r = api("GET", "/deploy/list", query={"env": a.env.lower() if a.env else ""})
+        r = api("GET", "/deploy/list", query={"env": a.env.lower() if a.env else "", **({"all": "1"} if getattr(a, "all", False) else {})})
         if not r.get("ok"):
             return deploy_fail(r, a)
         ds = r.get("deploys") or []
@@ -1717,6 +1717,7 @@ def build_parser():
     q.add_argument("--approved", action="store_true"); q.add_argument("--ttl", type=int, default=360)
     q.add_argument("--hosts", default="")
     dl = dsub.add_parser("list"); dl.add_argument("env", nargs="?"); dl.add_argument("--json", action="store_true")
+    dl.add_argument("--all", action="store_true", help="also finished and cancelled deploys (catch-up audit: skippedHosts)")
     for name in ("approve", "cancel"):
         x = dsub.add_parser(name); x.add_argument("deploy_id")
     st = dsub.add_parser("start"); st.add_argument("deploy_id"); st.add_argument("--agent", default="manager:deploy")
