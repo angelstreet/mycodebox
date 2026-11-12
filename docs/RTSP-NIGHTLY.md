@@ -48,6 +48,13 @@ The journal keeps the per-stream check events, not the inventory errors, so a ni
   lease blocked is **retried at the end of the night** with the long wait (`RTSP_LEASE_RETRY_MAX_WAIT`, 20 min), when the other
   work is done and the host is more likely free. Without that retry a busy lease cost the night a stream (2026-11-11: the dead
   Euronews FR channel on `vpt-nipogi/DEVICE2` was repaired on the second pass, bug-241e5753).
+  The three ways a replacement can fail are **not** the same thing, and the journal keeps them apart:
+  - `lease_not_granted`: the claim was refused (BUSY, fenced, `E_NOT_AUTHORITY`): the command never ran, nothing was touched.
+    Only this one is retried at the end of the night.
+  - `lease_not_available`: the `vpt-lease` CLI itself is missing (nothing ran).
+  - `apply_failed`: the lease **was** granted but the apply step died (the host may be half-changed: the payload backup is in
+    `backups/`). The apply step always leaves a result behind, and the run also reads the lease CLI's own "lease … held,
+    running …" line, so a failed apply is never reported as a refused lease.
   1. GET the full current host-config; refuse unless the device exists and is an rtsp source.
   2. Payload backup `<state>/rtsp-nightly/backups/<host>-<device>-<ts>.json` (mode 0600: it holds camera credentials, never the journal). The
      host also writes its own `.env.backup.<ts>` on every save.
@@ -209,6 +216,17 @@ rolled back or a camera is down, and files `found-bug` for a camera down or a ro
 - The pool was not touched: re-probed from `vpt-pi4` (the host that runs `vpt-rtsp`), `smoke` plays (h264 640x360), and the three
   public candidates still time out on port 554 from `vpt-pi4` and from codebox, so nothing new is vetted (bug-c7c2bb0e,
   bug-6b79b048).
+
+Two things the night of 2026-11-11 left open were closed on 2026-11-12 (both with tests):
+
+- The **end-of-night retry** of a repair the first lease wait did not get was verified for real: the real `vpt-lease` CLI against
+  the real registry (a short host claim on `vpt-pi4`), the host busy for the first wait, then the retry took the lease and replaced
+  the stream. The journal shows `lease_not_granted` and then `replaced`.
+- A **refused lease** and a **failed apply step** are now two different outcomes in the report and the journal
+  (`lease_not_granted` / `apply_failed`): before, both said "host lease not granted", which sent the reader (and the end-of-night
+  retry) after the wrong cause. The apply step always leaves a result behind, and the run also reads the lease CLI's own
+  "lease … held, running …" line, so a failed apply is never reported as a refused lease. The lease CLI prints that line **before**
+  the command runs, so the run reads its whole output, not the tail of it.
 
 ## Private config (not in the repo)
 
