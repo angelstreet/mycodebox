@@ -132,7 +132,8 @@ device page is the only proof for that layer (`vpt-headless-verify` skill, secti
 report 05:15), clear of the 00:30 host cron windows and of the CoC hourly tail (`:00` to about `:38`), 45 min before the Pokemon
 review (06:30) and the CoC review (07:30). Mode comes from `<state>/rtsp-nightly/mode` (`dry` unless it holds `live`). The first live
 night is the manager's switch after reading one dry report: `echo live > ~/.local/state/ghosty/rtsp-nightly/mode`; back with `echo dry >`.
-The mode file held `live` on 2026-11-11 (first live night, done by hand from the `feat/rtsp-nightly-*` worktree).
+The mode file held `live` on 2026-11-11 (first live night, done by hand from the `feat/rtsp-nightly-*` worktree) and again on
+2026-11-12, the first night the session ran the job end to end (99 checked, 90 ok, 0 replaced).
 
 ### Night of 2026-11-11 (the first live one)
 
@@ -164,6 +165,26 @@ after the apply step (test asserts the state dir holds no `apply-*` file).
 The session is MiniMax started by `cbsession` from the `~/ghosty-sessions` checkout (it makes its own worktree). It runs
 `rtsp_replace.py`, reads the report, writes one line to the manager as the first line of its STATUS when a stream was replaced,
 rolled back or a camera is down, and files `found-bug` for a camera down or a rollback.
+
+### Night of 2026-11-12 (live, run by the nightly session)
+
+99 streams checked, **90 ok, 9 down**, **0 replaced**, 0 rolled back, 0 cameras down, 0 unverified. 15 hosts walked, 15 read,
+**no inventory error** (every server and every host answered the host-config GET).
+
+- The 9 down: 8 devices with an empty source (`vpt-nipogi` DEVICE4, 5, 6, 17, 22, 23, 24 and `vpt-pi4` DEVICE2; reported by
+  name, never changed) and `vpt-lenovo5/DEVICE1`, frozen on the first probe and playing on the confirming re-probe (a slow
+  channel, nothing touched). No stream was really down, so nothing had to be replaced and the pool was never used.
+- What the app shows (tile snapshots): 79 ok, 3 black, 10 multi_audio, 6 unknown, 1 missing.
+  - The 10 `multi_audio` tiles are the known host-side bug (bug-ea31641c): the host stream carries every audio track of a
+    multi-rendition HLS master, so the browser's live player shows a black tile while the source plays. Host fix still pending.
+  - `vpt-nipogi/DEVICE31` is black for good: the channel's own picture is black (host snapshot and source frame, luma 16 under
+    32; still black on a re-check after the run). With `capture-mode` still `dry` the nightly reports it and changes nothing;
+    the manager can switch `capture-mode` to `live` (tonight was a clean night) and the channel is then replaced from the free
+    lists (bug-de449145).
+  - `lenovo-local-low/DEVICE23` and `DEVICE36` were black at 05:48 and fresh and bright (luma 113 and 85) on a re-check 17 min
+    later: a transient dark frame on the host capture side, not a dead channel (idea filed, bug-9b0cd7b5).
+- The pool was not touched: re-probed from `vpt-pi4` (the host that runs `vpt-rtsp`), `smoke` plays (h264 640x360) and the three
+  public candidates still time out on port 554, so nothing new is vetted (bug-c7c2bb0e, bug-6b79b048).
 
 ## Private config (not in the repo)
 
