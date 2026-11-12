@@ -5,7 +5,7 @@
 
 import { icon, hydrateIcons } from '/icons.js';
 import { byPriority, PRIORITIES, DEFAULT_PRIORITY } from '/prio.js';
-import { suggestAgent, limitStopNote } from '/policy.js';
+import { limitStopNote } from '/policy.js';
 import { needsOwner } from '/buttons.js';
 import { diskBannerView, diskDetailNote } from '/disk-banner.js';
 import { platformsBlocks } from '/platforms-view.js';
@@ -4568,54 +4568,74 @@ function recentDirs() { try { return JSON.parse(lsGet(LS_RECENT, '[]')) || []; }
 function addRecentDir(d) { lsSet(LS_RECENT, JSON.stringify([d, ...recentDirs().filter((x) => x !== d)].slice(0, 12))); }
 function baseName(p) { return String(p || '').replace(/\/+$/, '').split('/').pop() || ''; }
 function safeName(s) { return String(s).replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32); }
-const NEW_AGENTS = ['claude', 'codex', 'minimax', 'bash'];
+const NEW_AGENTS = ['claude', 'codex', 'minimax'];   // bash left out of the dialog (owner 2026-11-12); the API still takes it
+const NEW_MODELS = { claude: { models: ['opus', 'sonnet', 'haiku', 'fable'], default: 'opus' }, codex: { models: [], default: null }, minimax: { models: ['MiniMax-M3'], default: 'MiniMax-M3' } };
+const LS_NEW_LAST = 'ghosty.newLast';
+// Projects the picker offers: repos and worktrees under the home folder, no tmp / scratchpad / hidden-folder ones (same rule as the server).
+function pickableDir(p) {
+  const m = /^(\/home\/[^/]+|\/Users\/[^/]+|\/root)\/(.+)$/.exec(String(p || ''));
+  return !!m && !m[2].split('/').some((x) => x.startsWith('.') || /^te?mp(?:$|[-_.])/i.test(x));
+}
 
+// Two clicks (owner 2026-11-12): every choice of the last create is preselected, so "+" then "create" starts the same kind of session.
 function openNewSession() {
-  let agent = lsGet('ghosty.newAgent', 'claude');
-  if (!NEW_AGENTS.includes(agent)) agent = 'claude';
-  let dirs, nameTouched = false, agentTouched = false;   // dirs: undefined = loading, null = unavailable
-  let priority = DEFAULT_PRIORITY, mcfg = null;
+  let last = {};
+  try { last = JSON.parse(lsGet(LS_NEW_LAST, '{}')) || {}; } catch { /* none */ }
+  let agent = NEW_AGENTS.includes(last.agent) ? last.agent : (NEW_AGENTS.includes(lsGet('ghosty.newAgent', '')) ? lsGet('ghosty.newAgent', '') : 'claude');
+  const models = { ...(last.models || {}) };
+  let catalog = state.newModels || NEW_MODELS;
+  let dirs, nameTouched = false;   // dirs: undefined = loading, null = unavailable
+  let priority = PRIORITIES.includes(last.priority) ? last.priority : DEFAULT_PRIORITY;
   openSheet('New session', ({ body, foot, close }) => {
     body.closest('.sheet').classList.add('newsess');
+    body.closest('.sheet-back').classList.add('center');
     body.innerHTML = `
-      <div class="seg" id="nsPrio">${PRIORITIES.map((p) => `<button data-p="${p}" class="${p === priority ? 'on' : ''}">${p}</button>`).join('')}</div>
-      <div class="mnote" id="nsSug"></div>
-      <div class="seg" id="nsAgent">${NEW_AGENTS.map((a) => `<button data-a="${a}" class="${a === agent ? 'on' : ''} ${a}">${a}</button>`).join('')}</div>
-      <label class="flab">name</label>
-      <input class="sheet-in" id="nsName" maxlength="32" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="session name">
-      <label class="flab">project <span class="dim" id="nsHint">git repos &amp; worktrees</span></label>
+      <div class="nsrow"><div class="seg" id="nsAgent">${NEW_AGENTS.map((a) => `<button data-a="${a}" class="${a === agent ? 'on' : ''} ${a}">${a}</button>`).join('')}</div>
+        <div class="seg" id="nsPrio">${PRIORITIES.map((p) => `<button data-p="${p}" class="${p === priority ? 'on' : ''}">${p}</button>`).join('')}</div></div>
+      <div class="seg nsmodel" id="nsModel"></div>
       <div class="ucombo nsproj"><button type="button" class="ucb" id="nsProj" aria-label="Choose a project"><span class="ucl">choose a project…</span></button>
         <div class="ucpanel hidden" id="nsPanel"><input class="ucs" id="nsSearch" type="search" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="search projects or type a path…"><div class="uclist" id="nsDirs"><div class="sheet-empty">loading…</div></div></div></div>
+      <div class="nsprompt" id="nsDrop"><textarea class="sheet-in" id="nsPrompt" rows="4" placeholder="first message (optional) — drop or paste images / .md here"></textarea>
+        <button type="button" class="icon-btn nsclip" id="nsAttach" aria-label="Attach a file" title="Attach a file">${icon('paperclip', 16)}</button>
+        <input type="file" id="nsFile" accept="image/png,image/jpeg,image/gif,image/webp,.md,text/markdown" multiple hidden></div>
+      <div class="nsname"><label class="flab" for="nsName">name</label><input class="sheet-in" id="nsName" maxlength="32" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="session name"></div>
       <input type="hidden" id="nsCwd">`;
     foot.classList.remove('hidden');
     foot.innerHTML = `<button class="sbtn" data-a="cancel">cancel</button><span class="grow"></span><button class="sbtn primary" id="nsGo" data-a="go">create</button>`;
     const nameIn = body.querySelector('#nsName'), cwdIn = body.querySelector('#nsCwd'), list = body.querySelector('#nsDirs');
     const panel = body.querySelector('#nsPanel'), search = body.querySelector('#nsSearch'), projBtn = body.querySelector('#nsProj');
+    const promptIn = body.querySelector('#nsPrompt'), modelSeg = body.querySelector('#nsModel'), clip = body.querySelector('#nsAttach');
     const taken = (n) => state.sessions.some((s) => s.name === n);
     const suggest = () => {
       if (nameTouched) return;
-      let b = safeName(baseName(cwdIn.value)) || agent;
-      if (agent === 'bash' && !baseName(cwdIn.value)) b = 'sh';
+      const b = safeName(baseName(cwdIn.value)) || agent;
       let n = b, i = 2;
       while (taken(n)) n = `${b}-${i++}`;
       nameIn.value = n;
     };
-    const projects = () => (dirs || []).filter((d) => d.git !== false);   // repos / worktrees only (a .git inside)
+    const modelOf = (a) => { const c = catalog[a] || { models: [] }; return c.models.includes(models[a]) ? models[a] : (c.default || c.models[0] || null); };
+    const drawModels = () => {
+      const c = catalog[agent] || { models: [] }, cur = modelOf(agent);
+      modelSeg.innerHTML = c.models.map((m) => `<button data-m="${escapeHtml(m)}" title="${escapeHtml(m)}" class="${m === cur ? 'on' : ''}">${escapeHtml(m)}</button>`).join('');
+      modelSeg.classList.toggle('hidden', !c.models.length);
+    };
+    const projects = () => (dirs || []).filter((d) => d.git !== false && pickableDir(d.path));
     const drawDirs = () => {
-      if (!dirs) { list.innerHTML = `<div class="sheet-empty">${dirs === null ? 'project list unavailable \u2014 type a path' : 'loading\u2026'}</div>`; return; }
+      if (!dirs) { list.innerHTML = `<div class="sheet-empty">${dirs === null ? 'project list unavailable — type a path' : 'loading…'}</div>`; return; }
       const q = search.value.trim().toLowerCase();
       const rec = recentDirs();
       const rank = (d) => { const i = rec.indexOf(d.path); return i < 0 ? 99 : i; };
       const items = projects().filter((d) => !q || d.path.toLowerCase().includes(q) || (d.name || '').toLowerCase().includes(q))
-        .sort((x, y) => rank(x) - rank(y) || (x.name || '').localeCompare(y.name || '')).slice(0, 80);
+        .sort((x, y) => rank(x) - rank(y) || (x.name || '').localeCompare(y.name || ''));
       const typed = /^\//.test(q) && !items.some((d) => d.path.toLowerCase() === q) ? `<button type="button" class="uci" data-p="${escapeHtml(search.value.trim())}"><b>use path</b> <span class="dim">${escapeHtml(search.value.trim())}</span></button>` : '';
-      list.innerHTML = typed + (items.map((d) => `<button type="button" class="uci${d.path === cwdIn.value ? ' on' : ''}" data-p="${escapeHtml(d.path)}">${rank(d) < 99 ? '<i class="rec">\u25CF</i> ' : ''}<b>${escapeHtml(d.name || baseName(d.path))}</b>${d.branch ? ` <em>${escapeHtml(d.branch)}</em>` : ''}<small>${escapeHtml(d.path)}</small></button>`).join('')
+      list.innerHTML = typed + (items.map((d) => `<button type="button" class="uci${d.path === cwdIn.value ? ' on' : ''}" data-p="${escapeHtml(d.path)}">${rank(d) < 99 ? '<i class="rec">●</i> ' : ''}<b>${escapeHtml(d.name || baseName(d.path))}</b>${d.branch ? ` <em>${escapeHtml(d.branch)}</em>` : ''}<small>${escapeHtml(d.path)}</small></button>`).join('')
         || (typed ? '' : '<div class="sheet-empty">no project matches</div>'));
     };
     const pick = (p) => {
       cwdIn.value = p;
-      const d = projects().find((x) => x.path === p);
-      projBtn.querySelector('.ucl').textContent = d ? `${d.name || baseName(p)}${d.branch ? ` \u00b7 ${d.branch}` : ''}` : p;
+      const d = (dirs || []).find((x) => x.path === p);
+      projBtn.querySelector('.ucl').textContent = d ? `${d.name || baseName(p)}${d.branch ? ` · ${d.branch}` : ''}` : baseName(p) || p;
+      projBtn.title = p;
       projBtn.classList.add('sel');
       panel.classList.add('hidden');
       suggest();
@@ -4625,65 +4645,85 @@ function openNewSession() {
     search.oninput = drawDirs;
     body.addEventListener('click', (e) => { if (!e.target.closest('.nsproj')) panel.classList.add('hidden'); });
     nameIn.oninput = () => { nameTouched = true; };
-    // Suggestion only: preselect the agent with the most headroom for this priority until the owner picks one.
-    const showAgent = () => { for (const x of body.querySelectorAll('#nsAgent button')) x.classList.toggle('on', x.dataset.a === agent); };
-    const sug = body.querySelector('#nsSug');
-    const applySuggestion = () => {
-      if (!state.quota) { sug.textContent = ''; return; }
-      const sg = suggestAgent(priority, state.quota, mcfg);
-      for (const x of body.querySelectorAll('#nsAgent button')) x.classList.toggle('sug', x.dataset.a === sg.agent);
-      sug.textContent = `suggested: ${sg.agent} (${sg.reason})`;
-      if (!agentTouched) { agent = sg.agent; showAgent(); suggest(); }
-    };
-    fetch('/api/manager').then((r) => r.json()).then((c) => { mcfg = c; applySuggestion(); }).catch(() => {});
     body.querySelector('#nsPrio').onclick = (e) => {
       const b = e.target.closest('button');
       if (!b) return;
       priority = b.dataset.p;
       for (const x of body.querySelectorAll('#nsPrio button')) x.classList.toggle('on', x === b);
-      applySuggestion();
     };
     body.querySelector('#nsAgent').onclick = (e) => {
       const b = e.target.closest('button');
       if (!b) return;
-      agentTouched = true;
-      agent = b.dataset.a; lsSet('ghosty.newAgent', agent);
+      agent = b.dataset.a;
       for (const x of body.querySelectorAll('#nsAgent button')) x.classList.toggle('on', x === b);
-      suggest();
+      drawModels(); suggest();
     };
+    modelSeg.onclick = (e) => { const b = e.target.closest('button'); if (b) { models[agent] = b.dataset.m; drawModels(); } };
+    // attachments: picked, pasted or dropped files are uploaded to the codebox and added to the prompt as @path
+    const attach = async (files) => {
+      const fs = Array.from(files || []).filter((f) => /^image\/(png|jpeg|gif|webp)$/.test(f.type) || /^text\/(markdown|x-markdown|plain)$/.test(f.type) || f.name?.toLowerCase().endsWith('.md'));
+      if (!fs.length) { toast('png, jpeg, gif, webp images or .md files only'); return; }
+      clip.classList.add('busy');
+      try {
+        const paths = [];
+        for (const f of fs) paths.push(`@${(await uploadOne(f)).path}`);
+        const cur = promptIn.value;
+        promptIn.value = (cur && !/\s$/.test(cur) ? `${cur} ` : cur) + paths.join(' ') + ' ';
+        promptIn.focus();
+      } catch (err) { toast(`upload failed: ${err.message || 'network error'}`, 4000); }
+      finally { clip.classList.remove('busy'); }
+    };
+    clip.onclick = () => body.querySelector('#nsFile').click();
+    body.querySelector('#nsFile').onchange = (e) => { attach(e.target.files); e.target.value = ''; };
+    promptIn.addEventListener('paste', (e) => { const fs = Array.from(e.clipboardData?.files || []); if (fs.length) { e.preventDefault(); attach(fs); } });
+    const drop = body.querySelector('#nsDrop');
+    for (const t of ['dragover', 'dragleave', 'drop']) drop.addEventListener(t, (e) => {
+      if (!Array.from(e.dataTransfer?.types || []).includes('Files')) return;
+      e.preventDefault(); e.stopPropagation();   // the dock's page-wide drop handler must not take it
+      drop.classList.toggle('over', t === 'dragover');
+      if (t === 'drop') attach(e.dataTransfer.files);
+    });
+    promptIn.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); foot.querySelector('#nsGo').click(); } });
     foot.onclick = async (e) => {
       const a = e.target.closest('button')?.dataset.a;
       if (a === 'cancel') return close();
       if (a !== 'go') return;
-      const name = safeName(nameIn.value), cwd = cwdIn.value.trim();
+      const name = safeName(nameIn.value), cwd = cwdIn.value.trim(), model = modelOf(agent), prompt = promptIn.value.trim();
       if (!name) { toast('name required'); return; }
       if (!cwd) { toast('pick a project'); return; }
       const go = foot.querySelector('#nsGo');
       go.disabled = true; go.textContent = 'creating…';
       try {
-        const r = await fetch('/api/sessions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, agent, cwd, priority }) });
+        const r = await fetch('/api/sessions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, agent, cwd, priority, ...(model ? { model } : {}), ...(prompt ? { prompt } : {}) }) });
         if (r.status === 404 || r.status === 405) { toast("server doesn't support this yet"); return; }
         if (r.status === 409) { toast(`"${name}" already exists`); return; }
         const j = await r.json().catch(() => ({}));
         if (!r.ok || j.ok === false) { toast(`create failed: ${j.error || 'HTTP ' + r.status}`, 3000); return; }
         addRecentDir(cwd);
+        if (model) models[agent] = model;
+        lsSet(LS_NEW_LAST, JSON.stringify({ agent, models, cwd, priority }));
+        lsSet('ghosty.newAgent', agent);
         close(); closeSide();
         const real = j.name || name;
         state.pendingNew = { name: real, at: Date.now() };
         await fetchInitial();
         openCard(real);
-        toast(`started ${real} \u2014 type your prompt below`);
-        setTimeout(() => els.sendInput.focus(), 250);
+        toast(prompt ? `started ${real} with your prompt` : `started ${real} — type your prompt below`);
+        if (!prompt) setTimeout(() => els.sendInput.focus(), 250);
       } catch (err) {
         toast(`create failed: ${err.message}`);
       } finally {
         go.disabled = false; go.textContent = 'create';
       }
     };
+    drawModels();
+    if (last.cwd) pick(last.cwd);
     suggest();
-    applySuggestion();
+    fetch('/api/new-session/models').then((r) => (r.ok ? r.json() : null)).then((c) => { if (c) { catalog = state.newModels = { ...NEW_MODELS, ...c }; drawModels(); } }).catch(() => {});
     dirs = cachedDirs();                        // instant when this browser has seen the list before
-    fetchDirs().then((d) => { if (d) dirs = d; else if (!dirs) dirs = null; drawDirs(); if (!dirs) list.innerHTML = '<div class="sheet-empty">project list unavailable \u2014 type a path</div>'; });
+    if (last.cwd) pick(last.cwd);               // relabel with the cached branch
+    fetchDirs().then((d) => { if (d) dirs = d; else if (!dirs) dirs = null; drawDirs(); if (!dirs) list.innerHTML = '<div class="sheet-empty">project list unavailable — type a path</div>'; });
+    if (!matchMedia('(pointer: coarse)').matches) setTimeout(() => promptIn.focus(), 120);   // no keyboard pop on a phone
   });
 }
 

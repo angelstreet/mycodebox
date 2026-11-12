@@ -978,10 +978,14 @@ countdown and cancel). The owner's Resume (play button, also shown on a held car
 sends `continue`. A held session that moves on by itself loses the hold. Cards, rows and the sidebar show
 "held: quota" (tooltip = reason); the manager panel lists held sessions. The manager never switches an agent.
 
-**New session.** The dialog has a priority picker (default P2, sent as `priority` to `POST /api/sessions`) and
-preselects the agent with the most headroom, shown as "suggested: ...": P2 prefers MiniMax unless it is known
-to be under pressure; P0 prefers Claude unless Claude is at 95 % or more; P1 takes the most headroom among
-known plans (Claude on ties). It is a suggestion only: picking an agent yourself wins.
+**New session** (owner 2026-11-12: two clicks). A centred dialog: agent (claude, codex, minimax; bash is API only), priority,
+model (claude opus / sonnet / haiku / fable; codex the models its CLI lists in `~/.codex/models_cache.json`, the configured
+one first; minimax MiniMax-M3; `GET /api/new-session/models`), project, an optional first message (images / .md picked, pasted or
+dropped are uploaded and added as `@path`) and the name. Every choice of the last create (agent, model per agent, project,
+priority) is preselected, so "+" then "create" repeats it. `POST /api/sessions {name, agent, cwd, priority, model?, prompt?}`
+starts the CLI with the model flag and the prompt as its first message (read from `<state>/prompts/<name>-<ms>.txt`, so the
+text never meets the shell). The project list (`GET /api/dirs`) offers git repos and worktrees under `$HOME` only, without
+tmp*, scratchpad or hidden-folder ones (`new-session.js` `pickableProject`). The old headroom suggestion is gone.
 
 ```bash
 npm run stall-report -- --days 3 --list      # precision per case vs. what the owner answered, owner labels

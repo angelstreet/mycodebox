@@ -2065,9 +2065,28 @@ body.res-hidden .health.inbar, body.res-hidden .quota.inbar{ display:none !impor
 @media (max-width: 720px){ .res-toggle, .wsel{ display:none !important; } }
 #sideByProjectBtn.on{ color:var(--accent); }
 /* New session: taller, so name / project / folder are all in view; the project list opens inline */
-.sheet.newsess{ height:min(94dvh, 900px); max-height:94dvh; }
+/* New session: a centred dialog sized to its content (owner 2026-11-12), not a full-height bottom sheet */
+.sheet-back.center{ align-items:center; padding:16px; }
+.sheet-back.center .sheet{ border-bottom:1px solid var(--frame, var(--line-2)); border-radius:16px; max-height:min(86dvh, 640px); padding-bottom:0; }
+.sheet-back.center .sheet-grab{ display:none; }
+.newsess .sheet-body{ display:flex; flex-direction:column; gap:10px; }
+.newsess .nsrow{ display:flex; gap:8px; flex-wrap:wrap; }
+.newsess .nsrow #nsAgent{ flex:1 1 auto; }
+.newsess .nsrow #nsPrio{ flex:0 0 auto; }
+.newsess #nsAgent{ grid-template-columns:repeat(3,1fr); }
+.newsess #nsPrio{ grid-template-columns:repeat(3,auto); }
+.newsess .nsmodel{ grid-template-columns:repeat(auto-fill, minmax(96px, 1fr)); }
+.newsess .nsmodel button{ text-transform:none; white-space:nowrap; font-size:12px; padding:0 6px; overflow:hidden; text-overflow:ellipsis; }
 .newsess .nsproj .ucpanel{ position:static; margin-top:6px; box-shadow:none; }
-.newsess .nsproj .uclist{ max-height:min(40dvh, 380px); }
+.newsess .nsproj .uclist{ max-height:min(32dvh, 300px); }
+.newsess .nsprompt{ position:relative; }
+.newsess .nsprompt textarea{ width:100%; min-height:88px; resize:vertical; padding-right:40px; font:inherit; }
+.newsess .nsprompt.over textarea{ border-color:var(--accent); }
+.newsess .nsclip{ position:absolute; right:6px; bottom:8px; }
+.newsess .nsclip.busy{ opacity:.5; pointer-events:none; }
+.newsess .nsname{ display:flex; align-items:center; gap:8px; }
+.newsess .nsname .flab{ margin:0; }
+.newsess .nsname input{ flex:1; }
 .title:has(+ .res-toggle){ flex:0 0 auto; }
 .deployban .dblk{ margin-left:auto; flex-shrink:0; display:inline-flex; align-items:center; gap:5px; font-size:12px; color:var(--muted); white-space:nowrap; padding-left:10px; }
 .deployban .dblk b{ color:var(--accent); font-weight:600; }
