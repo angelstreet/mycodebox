@@ -1020,9 +1020,13 @@ async function onLeaseEvent(ev) {
 function onStopStatus(session, status, text = '') {
   if (leaseSource.authority() === 'central') { leaseSource.sessionStatus(session, status, text).catch(() => {}); return; }
   const names = Object.keys(latest?.status || {});
-  const rows = (leaseSource.peek()?.leases || []).filter((l) => agentSession(l.agent, names, MACHINES) === session);
-  const ev = idleHoldEvent({ session, status, rows });
-  if (ev) managerEvents.record(ev).catch((err) => console.error('[lease] flag', err.message));
+  // fresh read, not the cache: a holder that released at the end of its run (run-finished) is still in the cached view for a few seconds and was
+  // flagged as holding (2026-11-12 16:38, lease b53be2de released 2 s before the flag)
+  Promise.resolve(leaseSource.view(true)).catch(() => leaseSource.peek()).then((v) => {
+    const rows = (v?.leases || leaseSource.peek()?.leases || []).filter((l) => agentSession(l.agent, names, MACHINES) === session);
+    const ev = idleHoldEvent({ session, status, rows });
+    if (ev) return managerEvents.record(ev);
+  }).catch((err) => console.error('[lease] flag', err.message));
 }
 // CI watch (ci-watch.js): main red -> a fixer session (scripts/cbsession), nudged while idle, owner asked when stuck.
 // manager.json key `ciWatch`: "live" (default) | "dry" | "off". Needs <stateDir>/ci-watch.json, else it stays idle.
