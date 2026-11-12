@@ -43,3 +43,34 @@ test('the lane installs the registry after a change to its files', () => {
   assert.match(lane, /registry-install\.sh/);
   assert.match(lane, /REGISTRY_FILES = \[[^\]]*'lease-service\.js'/);
 });
+
+// the first real lane run (int-1a1cf2811c80e4cd2) rolled back because the registry was still starting: the round trip retries
+function installable(failFirst) {
+  const h = fakeHost();
+  const dir = path.join(h.home, 'mycodebox-lease');
+  fs.mkdirSync(path.join(h.home, 'bin'), { recursive: true });
+  fs.writeFileSync(path.join(h.home, 'bin/mycodebox-lease-serve.sh'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(dir, 'lease-service.js'), '// old\n');
+  for (const f of ['lease-routes.js', 'catchup-supersede.js', 'lease-equivalence.js', 'scripts/lease-serve.js']) fs.copyFileSync(path.join(ROOT, f), path.join(dir, f));
+  const cnt = path.join(h.home, 'claims');
+  fs.writeFileSync(path.join(h.bin, 'vpt-lease'), `#!/bin/sh
+case "$1" in deploy) exit 0;; check|release) exit 0;;
+claim) n=$(cat ${cnt} 2>/dev/null || echo 0); n=$((n+1)); echo $n > ${cnt}; [ $n -le ${failFirst} ] && exit 1; echo abc12345; exit 0;; esac
+exit 0
+`, { mode: 0o755 });
+  return { h, dir };
+}
+test('install: the round trip retries while the registry starts, then keeps the new file', () => {
+  const { h, dir } = installable(2);
+  const r = run(h, [], { REGISTRY_RETRY_SLEEP: '0' });
+  assert.equal(r.status, 0, r.stderr + r.stdout);
+  assert.equal(fs.readFileSync(path.join(dir, 'lease-service.js'), 'utf8'), fs.readFileSync(path.join(ROOT, 'lease-service.js'), 'utf8'));
+  assert.equal(fs.readdirSync(dir).filter((f) => f.includes('.bak-')).length, 1);
+});
+test('install: a round trip that never works rolls the files back (exit 1)', () => {
+  const { h, dir } = installable(1e6);
+  const r = run(h, [], { REGISTRY_RETRY_SLEEP: '0' });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /rolled back/);
+  assert.equal(fs.readFileSync(path.join(dir, 'lease-service.js'), 'utf8'), '// old\n');
+});

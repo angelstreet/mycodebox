@@ -38,11 +38,16 @@ restart() {
   rssh "pid=\$(pgrep -u \$(id -u) -f 'node scripts/lease-serve.js' | head -1); [ -n \"\$pid\" ] && kill \$pid; i=0; while [ \$i -lt 30 ] && kill -0 \$pid 2>/dev/null; do sleep 1; i=\$((i+1)); done; sh ~/bin/mycodebox-lease-serve.sh; sleep 4"
 }
 restart
-OK=0
-for p in $PROBES ${REGISTRY_PROBE:-}; do
-  vpt-lease check "$ENVN" "$p" >/dev/null 2>&1 || continue
-  id=$(vpt-lease claim "$ENVN" "$p" --agent codebox:registry-install --ttl 5 --purpose "registry install round trip" 2>/dev/null | head -1)
-  case "$id" in [0-9a-f]*) vpt-lease release "$id" >/dev/null 2>&1 && OK=1; break ;; esac
+OK=0; tries=0
+# the registry needs a few seconds to load its journal after the restart (the first lane run rolled back on exactly this): retry ~45 s
+while [ "$OK" = 0 ] && [ $tries -lt 15 ]; do
+  tries=$((tries+1))
+  for p in $PROBES ${REGISTRY_PROBE:-}; do
+    vpt-lease check "$ENVN" "$p" >/dev/null 2>&1 || continue
+    id=$(vpt-lease claim "$ENVN" "$p" --agent codebox:registry-install --ttl 5 --purpose "registry install round trip" 2>/dev/null | head -1)
+    case "$id" in [0-9a-f]*) vpt-lease release "$id" >/dev/null 2>&1 && OK=1; break ;; esac
+  done
+  [ "$OK" = 1 ] || sleep ${REGISTRY_RETRY_SLEEP:-3}
 done
 [ "$OK" = 1 ] || { rollback; exit 1; }
 echo "registry-install: installed$CHANGED (round trip ok, backups *.bak-$TS-pre-install)"
