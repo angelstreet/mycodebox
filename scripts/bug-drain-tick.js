@@ -36,7 +36,7 @@ const text = (b) => [b.title, b.endpoint, b.repro, b.error].filter(Boolean).join
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
 
 // Hard floor by subject (manager, 2026-11-11: a worker must never start on sudo / cron / units / hypervisor hosts / host config / secrets / DNS / firewall / data deletion / DB work).
-const FLOOR = /\b(sudo|sudoers|cron|crontab|cron ?jobs?|systemd|systemctl|units?\s+(?:file|on)|proxmox\d*|hypervisor|docker\s+(?:daemon|socket)|dockerd|nginx|host[- ]?config|\.env|secrets?|dns|firewall|iptables|ufw|credentials?|delet\w+\s+(?:of\s+)?(?:the\s+)?(?:data|database|db)|(?:db|database)\s+(?:migration|repair)s?|migrations?\s+(?:of|on)\s+(?:the\s+)?(?:db|database))\b/i;
+const FLOOR = /\b(sudo|sudoers|cron|crontab|cron ?jobs?|systemd|systemctl|units?\s+(?:file|on)|proxmox\d*|hypervisor|docker\s+(?:daemon|socket)|dockerd|nginx|host[- ]?config|\.env|secrets?|dns|firewall|iptables|ufw|credentials?|delet\w+\s+(?:of\s+)?(?:the\s+)?(?:data|database|db)|(?:db|database)\s+(?:migration|repair)s?|corrupt\w*\s+(?:heap|pages?|table|index|database|db)|(?:heap|index)\s+pages?|pg_\w+|vacuum|reindex|postgres(?:ql)?|sqlite|wal\s+(?:file|corrupt\w*)|migrations?\s+(?:of|on)\s+(?:the\s+)?(?:db|database))\b/i;
 export const fullText = (b) => [b.title, b.endpoint, b.repro, b.error, b.workaround, b.reason].filter(Boolean).join(' ');
 // Hosts a bug is about; a worker needs a lease/inventory entry to reach one.
 const HOST = /\b(vpt-(?:pi|mf|lenovo|wise|nipogi|windows)\d*|host-clone-\d+|labox-(?:web|backend|dongle|mobile|tablet)|runner-\d+)\b/gi;

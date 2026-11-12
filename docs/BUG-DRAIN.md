@@ -16,7 +16,7 @@ the manager counted bugs at the hourly sweep and started workers ad hoc. Now `sc
    physical replug, credentials / login, money), bugs with a live fix claim (`found-bug --claim`, 2 h), bugs filed by a **live** session in the last 2 h
    (the send-back wake handles those) or marked `live-session-task`, and bugs whose area a live session owns (every distinctive word of that session's name occurs in the report).
    **Floor filter** (manager, 2026-11-11): a bug whose title, endpoint, repro, error, workaround or reason mentions sudo / sudoers, cron / crontab, systemd / systemctl / unit files, proxmox, a hypervisor,
-   the docker daemon, nginx, host config, `.env`, secrets, DNS, firewall, credentials, deletion of data or a DB migration / repair is owner-only and never auto-started; the ids go under `ownerOnly` in the
+   the docker daemon, nginx, host config, `.env`, secrets, DNS, firewall, credentials, deletion of data, a DB migration / repair, a corrupt table or index, postgres, sqlite, vacuum or reindex is owner-only and never auto-started; the ids go under `ownerOnly` in the
    journal line. A bug about a host a worker cannot reach (named `vpt-pi*` / `vpt-mf*` / `vpt-lenovo*` / `host-clone-*` / `labox-*` / `runner-*` with no healthy entry in `vpt-lease inventory node1-vpt`, or the
    inventory unreadable) is skipped too (`unreachable` ids in the journal).
 2. Ranks: blocking first, then age (older first), then impact (deploy / lease / CI / data > other > UI > idea). Takes at most 3, never more than 2 drain workers alive (`bugdrain-*`).

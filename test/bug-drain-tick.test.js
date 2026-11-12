@@ -132,7 +132,7 @@ const B79A8 = { id: 'bug-79a8e46a', title: "Virtual script row renamed to Play_C
 test('floor filter: sudo / cron / units / hypervisor / nginx / host config / secrets / DNS / firewall / data deletion / DB work are owner-only', () => {
   assert.ok(isOwnerOnly(bug(B1490)));
   assert.ok(!isOwnerOnly(bug(B79A8)) && isSmall(bug(B79A8)));
-  for (const t of ['needs sudo to read the log', 'sudoers entry missing', 'crontab of the worker', 'systemd unit file wrong', 'systemctl restart fails', 'docker daemon down', 'host-config payload wrong', 'secret in .env leaks', 'DNS record wrong', 'firewall blocks port', 'deletion of data on the lane', 'DB migration fails', 'database repair needed']) assert.ok(isOwnerOnly(bug({ title: t })), t);
+  for (const t of ['needs sudo to read the log', 'sudoers entry missing', 'crontab of the worker', 'systemd unit file wrong', 'systemctl restart fails', 'docker daemon down', 'host-config payload wrong', 'secret in .env leaks', 'DNS record wrong', 'firewall blocks port', 'deletion of data on the lane', 'DB migration fails', 'database repair needed', 'match_runs table has corrupt heap pages: any scan fails', 'REINDEX needed on runs index', 'postgres connection pool leak']) assert.ok(isOwnerOnly(bug({ title: t })), t);
   for (const t of ['ui tab label cut off', 'ci status badge wrong', 'secretary view empty']) assert.ok(!isOwnerOnly(bug({ title: t })), t);
   // the floor words may sit in the repro or error only
   assert.ok(isOwnerOnly(bug({ title: 'watchdog flaps', repro: 'run it under sudo' })));
