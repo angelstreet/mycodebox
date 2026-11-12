@@ -16,7 +16,7 @@ isw=lambda r: r.get("trigger")=="task_done" and "manager-wait" in (r.get("trigge
 wk=sorted([r for r in allw if isw(r)],key=lambda r:r["start"]); starts=[w["start"] for w in wk]
 bg=[r for r in allw if r.get("trigger")=="task_done" and not isw(r)]; rest=[r for r in allw if r.get("trigger")!="task_done"]
 seen={}
-HANDLED=re.compile(r"said done, git disagrees|done not accepted by the goal check|session closed: |orphaned, \d|bug mentioned, not reported")
+HANDLED=re.compile(r"said done, git disagrees|done not accepted by the goal check|session closed: |orphaned, \d")
 def rule(e):
     l=e["l"]; key=str(l.get("key") or ""); kind=str(l.get("kind") or ""); title=str(l.get("title") or ""); body=str(l.get("body") or "")
     if key.endswith(":manager-item") and re.match(r"^\S+ waits for a deploy:",body): return "drop:R1 waiting stop"

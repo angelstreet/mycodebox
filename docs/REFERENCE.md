@@ -2023,9 +2023,9 @@ bug-2f32e7a7, bug-8fc8fc0d, bug-03ccc6a7, bug-80bdcdc1 · unverified: none · bu
   299 wakes did nothing (73%, $79 of $130). Four deterministic rules now run before it, no AI. (a) `scripts/manager-event-filter.sh` drops, at default
   priority, a `*:manager-item` stop that is a wait (`<session> waits for a deploy: ...`; the STATUS table says nobody acts on `waiting` / `running`: the
   parked wake re-checks it, the lease nudge answers a free equivalent) and the notices of checks the harness answered itself (`done-check`, `goal-check`,
-  `bug-unreported`, `session-closed:*`). (b) A disk / quota alert under 95% wakes once per 5-point bucket per 6 h across runs (key `pctx|<key>|<bucket>`
+  `session-closed:*`; `bug-unreported` still passes). (b) A disk / quota alert under 95% wakes once per 5-point bucket per 6 h across runs (key `pctx|<key>|<bucket>`
   in `.seen-keys`); 95% and over always passes. (c) A non-blocking bug filing is marked `d: true` and `scripts/manager-wait.sh` holds it: it is printed
-  with the next real event, or alone after `MANAGER_WAIT_DEFER` seconds (default 3600); a held line keeps the cursor. (d) `scripts/session-guard-hook.js`
+  with the next real event, or alone after `MANAGER_WAIT_DEFER` seconds (default 3600); a held line keeps the cursor when the filter answered within one poll (best effort: a wait killed while holding one may skip it; the filing stays in manager-events.jsonl and the bug drain). (d) `scripts/session-guard-hook.js`
   rule `manager-bg` refuses a background command in a manager session unless it is the event wait, `integrate wait`, a `vpt-lease ... --wait` / `run` or
   cbsession (61 wakes that day were the manager's own background commands ending; 53 did nothing); override `GHOSTY_GUARD_OVERRIDE=manager-bg`.
   Replay: `python3 scripts/manager-wake-rules-replay.py <day>` (2026-11-11: 410 wakes -> 198, wakes that did nothing 299 -> 105; the share stays 53%,

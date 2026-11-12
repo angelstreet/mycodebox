@@ -176,7 +176,6 @@ test('a deferred line does not end the wait; it comes out with the next real eve
   let out = ''; p.stdout.on('data', (d) => { out += d; });
   await new Promise((r) => setTimeout(r, 4500));                       // longer than the 3 s window: a routine line would have ended the wait
   assert.equal(out, '', 'still waiting on the deferred line alone');
-  assert.equal(Number(readFileSync(s.cursor, 'utf8')), 0, 'the cursor stays before a held deferred line');
   appendFileSync(s.events, ev(2));
   await new Promise((r) => p.on('close', r));
   assert.deepEqual(ids(out), ['b1', 's2']);

@@ -33,7 +33,7 @@
 # - a `*:manager-item` stop that is a wait ("<session> waits for a deploy: ...", case waiting_deploy): the parked wake re-checks it and the lease
 #   nudge answers a free equivalent;
 # - notices of a check the harness already answered itself: done-check ("said done, git disagrees"), goal-check ("done not accepted"),
-#   bug-unreported, session-closed:*;
+#   session-closed:* (bug-unreported still passes: a test pins it);
 # - disk / quota alerts under 95%: once per 5-point bucket per 6 h across runs (key `pctx|<key>|<bucket>`); 95% and over always passes.
 # Deferred (`d: true`): a non-blocking bug filing is delivered with the next wake or after MANAGER_WAIT_DEFER (manager-wait.sh, 1 h), never a wake
 # of its own. Replay: scripts/manager-wake-rules-replay.py <day>.
@@ -70,7 +70,7 @@ jq -c --unbuffered --argjson policy "$POLICY" '
     or (((.kind//"")|tostring|test("^share:")) and ((.priority//"default")=="default"))
     or ((.kind=="bug") and ((.priority//"")=="low") and ((.bug.blocking//false)==false) and ((.title//"")|test("bug found: idea:")))
     or (((.key//"")|tostring|test(":manager-item$")) and ((.body//"")|test("^\\S+ waits for a deploy:")))
-    or ((((.session//"")=="done-check") or ((.session//"")=="goal-check") or (.kind=="bug-unreported") or ((.kind//"")|tostring|test("^session-closed:"))) and ((.priority//"default")=="default"))
+    or ((((.session//"")=="done-check") or ((.session//"")=="goal-check") or ((.kind//"")|tostring|test("^session-closed:"))) and ((.priority//"default")=="default"))
     or (((.kind//"")|tostring|test("^(kpi-|pokestall-|pokemon-daily-|mobile-orchtnet-owner$|opus-openexit$|content-|mi-bugs-|pi1-load-|task208-)")) and ((.priority//"default")=="default"));
   select(pol != "ignore") | select(pol == "pass" or (routine|not))
   | {k:(if ((.kind=="disk" or .kind=="quota") and (pct != null) and (pct < 95)) then ("pctx|"+((.key//.kind)|tostring|gsub("\\s";""))+"|"+((pct/5|floor)|tostring)) else (.session//"")+"|"+.kind+"|"+(if .kind=="health" then (.key//"") else ((.body//"") as $b | (if ($b|test("needs-owner:")) then ($b|capture("needs-owner:(?<q>[^\\[]*)").q) else $b end) | gsub("·\\s*[0-9][0-9hms ]*·\\s*[0-9.]+[kM]?\\s*tok\\s*";"")|gsub("\\s";"")|.[0:80]) end) end),

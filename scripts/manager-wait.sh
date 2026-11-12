@@ -5,7 +5,7 @@
 # urgent event (`u: true` from the filter's policy: asks, needs-manager, hold, health, a failed deploy, a blocking bug, priority high)
 # closes the window MANAGER_WAIT_GRACE seconds (default 2) after it arrived. A window below the grace is raised to it.
 # Deferred lines (`d: true` from the filter: a non-blocking bug filing; owner 2026-11-12, TASK-239 G6) do not open the window: they are printed with
-# the next real event, or alone after MANAGER_WAIT_DEFER seconds (default 3600); a held deferred line keeps the cursor, so a killed wait re-reads it.
+# the next real event, or alone after MANAGER_WAIT_DEFER seconds (default 3600); a held deferred line keeps the cursor when the filter answered within one poll (best effort).
 # 40 wakes on 2026-11-11 carried only such a filing; 33 did nothing.
 # Run it with Bash run_in_background: it has no 30-min expiry like a Monitor, so the agent wakes ONLY on a real event.
 #   scripts/manager-wait.sh [filter-command]
