@@ -6,7 +6,7 @@
 // Journal: done-check.jsonl.
 import { pushableItems } from './done-leftovers.js';
 import { computeStopState, doneWhileMessage } from './stop-state.js';
-import { doneButFailedOf, doneButFailedMessage, proofWithoutEvidenceOf, proofWithoutEvidenceMessage, blockedHonestyOf, blockedHonestyMessage, verificationOf, verificationMessage, timeBoxWakeMessage, unknownStatusWordOf, unknownStatusWordMessage, lastStatus as lastStatusOf } from './status-honesty.js';
+import { doneButFailedOf, doneButFailedMessage, proofWithoutEvidenceOf, proofWithoutEvidenceMessage, blockedHonestyOf, blockedHonestyMessage, failedHonestyOf, failedHonestyMessage, verificationOf, verificationMessage, timeBoxWakeMessage, unknownStatusWordOf, unknownStatusWordMessage, lastStatus as lastStatusOf } from './status-honesty.js';
 import { readFile, writeFile, appendFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -353,6 +353,7 @@ export function createDoneCheck({
       for (const n of Object.keys(st.toldLeft)) if (!live.has(n)) delete st.toldLeft[n];
       for (const s of sessions) {
         if (s.working || s.draft) continue;   // never type over an owner's draft
+        if (s.doneAt && now() - s.doneAt > REVIEW_MAX_AGE_MS) continue;   // an old done turn is not reopened (sessions in a removed worktree are checked since 2026-11-12)
         const items = leftoverItemsOf(s.text);
         if (!items.length) continue;
         const sig = createHash('sha1').update(items.join('\0')).digest('hex').slice(0, 12);
@@ -418,16 +419,18 @@ export function createDoneCheck({
       for (const n of Object.keys(st.toldBlocked)) if (!live.has(n) && !(await listBlocked().catch(() => [])).some((b) => b.name === n)) delete st.toldBlocked[n];
       for (const s of await listBlocked().catch(() => [])) {
         const uw = unknownStatusWordOf(s.text);   // a word outside the seven: sent back naming them
-        const bf = uw ? { running: [], missing: [], text: `unknown word: ${uw.word}`, unknown: uw } : blockedHonestyOf(s.text);
+        const ff = uw ? null : failedHonestyOf(s.text);   // a failed line without cause: / plan: (owner 2026-11-12): same switch, same once-per-line
+        const bf = uw ? { running: [], missing: [], text: `unknown word: ${uw.word}`, unknown: uw } : ff ? { running: [], missing: ff.missing, text: ff.text, failed: ff } : blockedHonestyOf(s.text);
+        const jk = bf?.failed ? 'failedHonesty' : 'blockedHonesty';
         if (!bf) continue;
         const sig = createHash('sha1').update(lastStatusLine(s.text)).digest('hex').slice(0, 12);
         if (st.toldBlocked[s.name]?.sig === sig) continue;
         const detail = `${bf.running.join('+') || `lacks ${bf.missing.join(' ')}`}: ${bf.text}`.slice(0, 300);
         const bm = blockedMode();
         if (bm === 'off') continue;
-        if (bm === 'dry') { await note({ dry: true, session: s.name, blockedHonesty: detail }); st.toldBlocked[s.name] = { sig, dry: true }; continue; }
+        if (bm === 'dry') { await note({ dry: true, session: s.name, [jk]: detail }); st.toldBlocked[s.name] = { sig, dry: true }; continue; }
         if (s.working || s.draft || touched.has(s.name) || !quiet || nudged >= MAX_NUDGES_PER_TICK) continue;
-        try { await send(s.name, bf.unknown ? unknownStatusWordMessage(bf.unknown) : blockedHonestyMessage(bf)); st.toldBlocked[s.name] = { sig }; nudged++; await note({ session: s.name, blockedHonesty: detail }); }
+        try { await send(s.name, bf.unknown ? unknownStatusWordMessage(bf.unknown) : bf.failed ? failedHonestyMessage(bf.failed) : blockedHonestyMessage(bf)); st.toldBlocked[s.name] = { sig }; nudged++; await note({ session: s.name, [jk]: detail }); }
         catch (e) { log.error?.('[done-check] send blocked honesty', s.name, e.message); }
       }
       // (D) a lease wait while a healthy equivalent is free: one push; the manager is told on the second distinct stop

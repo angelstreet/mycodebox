@@ -101,3 +101,9 @@ test('Mac: a done line needs a Verification block per stored Done-when line (ans
   assert.ok(!/Verification/.test(b.body.answer || ''), 'verified: no verification refusal and no goal question');
   assert.match(fs.readFileSync(path.join(stateDir, 'verification.jsonl'), 'utf8'), /"passed":2,"total":2/);
 });
+
+test('Mac: a failed line without cause: / plan: is journalled while blockedCheck is dry (default)', async () => {
+  const r = await call('POST', '/stops', { machine: 'mac-test', project: 'demo', session_id: 'sid-failed-5eeee', session_name: 'fld', text: 'STATUS: failed — goal not achieved: empty wakes 54% against 25% · tried: four wake rules' });
+  assert.equal(r.status, 200);
+  assert.match(fs.readFileSync(path.join(stateDir, 'blocked-check.jsonl'), 'utf8'), /"missing":\["cause:","plan:"\]/);
+});

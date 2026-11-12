@@ -278,3 +278,26 @@ test('done-check (K)/(L): done without a complete Verification is sent back once
   const dry = mk(idle, 'dry', [{ name: 'k', working: false, text: idle }]); await dry.w.tick();
   assert.equal(dry.sent.filter(([, x]) => /Time box reached/.test(x)).length, 0); assert.match(readFileSync(join(dry.dir, 'done-check.jsonl'), 'utf8'), /"timeBox":"reached"/);
 });
+
+// failed is not an ending (owner 2026-11-12): a failed line carries cause: and plan:
+import { failedHonestyOf, failedHonestyMessage } from '../status-honesty.js';
+test('failedHonestyOf: a failed line without cause: / plan: is caught; a complete one and other words are not', () => {
+  const bare = failedHonestyOf('STATUS: failed — goal not achieved: empty wakes 54% against 25% · tried: four wake rules · closing review: docs none · plan: nothing');
+  assert.deepEqual(bare.missing, ['cause:', 'plan:'], 'a plan: after the closing review does not count');
+  assert.match(failedHonestyMessage(bare), /lacks cause: and plan:/);
+  assert.match(failedHonestyMessage(bare), /Failing is not an ending/);
+  assert.deepEqual(failedHonestyOf('STATUS: failed — goal not achieved: x').missing, ['tried:', 'cause:', 'plan:']);
+  assert.equal(failedHonestyOf('STATUS: failed — goal not achieved: 54% against 25% · tried: four rules · cause: 60 of 109 empty wakes are asks stops the manager reads and leaves (replay 2026-11-11) · plan: a rules table per stop class, built by me, replay first'), null);
+  assert.equal(failedHonestyOf('STATUS: blocked: x · tried: y · need: z'), null);
+  assert.equal(failedHonestyOf('STATUS: done — x · goal: achieved · evidence: int-1a1cc61deccbb0995'), null);
+});
+test('done-check (I): a failed line without cause: / plan: is sent back once when blockedCheck is live, journalled when dry', async () => {
+  const line = 'STATUS: failed — goal not achieved: anchor not valid on stb4 · tried: 5 goto runs';
+  const mk = (blockedMode, text = line) => { const dir = tmp('failed-'), sent = []; const w = createDoneCheck({ stateDir: dir, git: async () => { throw new Error('x'); }, listDone: async () => [], listBlocked: async () => [{ name: 'content-stb', text }], blockedMode: () => blockedMode, mode: () => 'live', log: { error() {} }, pressure: () => ({ loadPerCore: 0.1, ramAvailPct: 80 }), send: async (n, x) => { sent.push([n, x]); } }); return { w, sent, dir }; };
+  const dry = mk('dry'); await dry.w.tick(); assert.equal(dry.sent.length, 0);
+  assert.match(readFileSync(join(dry.dir, 'done-check.jsonl'), 'utf8'), /"failedHonesty":"lacks cause: plan:/);
+  const live = mk('live'); await live.w.tick(); await live.w.tick();
+  assert.equal(live.sent.length, 1); assert.match(live.sent[0][1], /your STATUS is failed, but it lacks cause: and plan:/);
+  const good = mk('live', line + ' · cause: the stb4 anchor frame predates the firmware update (frame 2026-11-02 vs build 11-09) · plan: recapture the anchor under lease, then rerun'); await good.w.tick();
+  assert.equal(good.sent.length, 0);
+});

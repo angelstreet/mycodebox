@@ -11,7 +11,7 @@ import { join, isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createHash } from 'node:crypto';
 import { computeStopState, doneWhileMessage } from './stop-state.js';
-import { verificationOf, verificationMessage, timeBoxWakeMessage, blockedHonestyOf, blockedHonestyMessage, doneButFailedOf, doneButFailedMessage, doneWithoutGoalOf, doneWithoutGoalMessage, lastStatus } from './status-honesty.js';
+import { verificationOf, verificationMessage, timeBoxWakeMessage, blockedHonestyOf, blockedHonestyMessage, failedHonestyOf, failedHonestyMessage, doneButFailedOf, doneButFailedMessage, doneWithoutGoalOf, doneWithoutGoalMessage, lastStatus } from './status-honesty.js';
 import { DEFAULT_CIDRS, parseCidrs, addrAllowed, readClients, clientOf, callerIdentity, readBody } from './lease-routes.js';
 
 export const PREFIX = '/api/remote/v1';
@@ -186,11 +186,11 @@ export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goa
     }
     // blocked is not a wait (owner 2026-11-11 evening): once per line; dry (journal only) until manager.json blockedCheck is live
     if (!refusal && !v.stop_hook_active && manager.sessionOn(name)) {
-      const stx = stopText(v), bf = blockedHonestyOf(stx), sig = createHash('sha1').update(lastStatus(stx)?.line || '').digest('hex').slice(0, 12);
+      const stx = stopText(v), ff = failedHonestyOf(stx), bf = ff ? { running: [], missing: ff.missing, text: ff.text } : blockedHonestyOf(stx), sig = createHash('sha1').update(lastStatus(stx)?.line || '').digest('hex').slice(0, 12);
       if (bf && s.blockedSig !== sig) {
         s.blockedSig = sig;
         const bm = blockedMode();
-        if (bm === 'live') refusal = { kind: 'blocked-not-a-wait', message: blockedHonestyMessage(bf) };
+        if (bm === 'live') refusal = ff ? { kind: 'failed-without-plan', message: failedHonestyMessage(ff) } : { kind: 'blocked-not-a-wait', message: blockedHonestyMessage(bf) };
         else if (bm === 'dry') { try { fs.appendFileSync(join(stateDir, 'blocked-check.jsonl'), JSON.stringify({ at: new Date(t).toISOString(), dry: true, session: name, running: bf.running, missing: bf.missing, text: bf.text }) + '\n'); } catch {} }
       }
     }

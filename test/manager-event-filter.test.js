@@ -48,7 +48,7 @@ test('seen-keys file: only cross-run kinds (asks / waiting / lease) are appended
   assert.equal(lines.length, 3, 'asks + waiting + lease are persisted');
   const keys = lines.map((l) => l.split(' ').slice(1).join(' ')).sort();
   assert.deepEqual(keys, [
-    'web|asks|ShouldIdeploynow?',
+    'stop|web|shouldideploynow?',
     'web|waiting|Needapproval',
     '|lease|shrunk',
   ]);
@@ -58,7 +58,7 @@ test('seen-keys: entries older than 6 h are pruned on startup, so the same asks 
   const dir = tmp('ghosty-filt-');
   mkdirSync(join(dir, 'manager-reports'), { recursive: true });
   const seven_h_ago = Math.floor(Date.now() / 1000) - 7 * 3600;
-  writeFileSync(seenPath(dir), `${seven_h_ago} web|asks|ShouldIdeploynow?\n`);
+  writeFileSync(seenPath(dir), `${seven_h_ago} stop|web|shouldideploynow?\n`);
   const env = { ...process.env, GHOSTY_STATE_DIR: dir };
   const r = run(env, asksLine);
   assert.equal(r.status, 0, r.stderr);
@@ -69,7 +69,7 @@ test('seen-keys: an entry within the 6 h window is kept and suppresses the same 
   const dir = tmp('ghosty-filt-');
   mkdirSync(join(dir, 'manager-reports'), { recursive: true });
   const one_h_ago = Math.floor(Date.now() / 1000) - 3600;
-  writeFileSync(seenPath(dir), `${one_h_ago} web|asks|ShouldIdeploynow?\n`);
+  writeFileSync(seenPath(dir), `${one_h_ago} stop|web|shouldideploynow?\n`);
   const env = { ...process.env, GHOSTY_STATE_DIR: dir };
   const r = run(env, asksLine);
   assert.equal(r.status, 0, r.stderr);
@@ -244,4 +244,31 @@ test('a non-blocking bug filing is marked deferred (d); a blocking or high-prior
     + ev({ key: 'web:asks', kind: 'asks', session: 'web', body: 'Which one?' }));
   const o = r.stdout.split('\n').filter(Boolean).map((l) => JSON.parse(l));
   assert.deepEqual(o.map((x) => [x.l.key, x.d, x.u]), [['a:bug', true, false], ['b:bug', false, true], ['c:bug', false, true], ['web:asks', false, true]]);
+});
+
+// one stop = one event; a blocked stop that is a wait and the low-action notices are deferred (2026-11-12, TASK-239 G6)
+test('one stop is one event: asks, lease stop and deploy stop of the same text share a key; a wait and a notice are deferred', () => {
+  const dir = tmp('mef-stop-');
+  const env = { ...process.env, GHOSTY_STATE_DIR: dir };
+  const lines = (out) => out.stdout.trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  const a1 = ev({ key: 'content-androidtv:asks', kind: 'asks', session: 'content-androidtv', priority: 'high', title: 'content-androidtv asks you', body: 'STATUS: blocked · 2s · 88k tok · P1 CI claims on `vpt-mf1/device5` stopped my P3 sweep, no missed-slot run completed' });
+  const a2 = ev({ key: 'content-androidtv:asks', kind: 'asks', session: 'content-androidtv', priority: 'high', title: 'content-androidtv asks you', body: 'STATUS: blocked · P1 CI claims on vpt-mf1/device5 stopped my P3 sweep, no missed-slot run completed · closing review: docs unchanged' });
+  const a3 = ev({ key: 'lease:manager-item', kind: 'lease', session: 'content-androidtv', title: 'content-androidtv: lease stop for the manager', body: 'content-androidtv asks: P1 CI claims on `vpt-mf1/device5` stopped my P3 sweep, no missed-slot run completed' });
+  const a4 = ev({ key: 'deploy:3716bf25:manager-item', kind: 'deploy', session: 'content-androidtv', title: 'content-androidtv: deploy stop for the manager', body: 'content-androidtv asks: P1 CI claims on vpt-mf1/device5 stopped my P3 sweep, no missed-slot run completed' });
+  const other = ev({ key: 'kpi-stb:asks', kind: 'asks', session: 'kpi-stb', priority: 'high', title: 'kpi-stb asks you', body: 'STATUS: blocked · stb3 has no IR transmitter · tried: hub reset · need: the owner replugs the dongle' });
+  const r = lines(run(env, a1 + a2 + a3 + a4 + other));
+  assert.equal(r.length, 2, JSON.stringify(r.map((x) => x.k)));
+  assert.match(r[0].k, /^stop\|content-androidtv\|p1ciclaimsonvpt-mf1\/device5/);
+  assert.equal(r[0].d, false); assert.equal(r[1].d, false, 'a real block wakes the manager now');
+  // the same stop does not wake again in a later run (cross-run, like asks before)
+  assert.equal(lines(run(env, a3)).length, 0);
+  const dir2 = tmp('mef-stop2-');
+  const env2 = { ...process.env, GHOSTY_STATE_DIR: dir2 };
+  const wait = ev({ key: 'kpi-androidtv:asks', kind: 'asks', session: 'kpi-androidtv', priority: 'high', title: 'kpi-androidtv asks you', body: 'STATUS: blocked · 22s · 1.1M tok · Mi device5 is kept free for content-androidtv until 04:50 UTC; after that I re-claim' });
+  const owner = ev({ key: 'x:asks', kind: 'asks', session: 'x', priority: 'high', title: 'x asks you', body: 'STATUS: needs-owner · the box is held by the owner until 09:00, replug it? [1 yes / 2 no]' });
+  const note = ev({ key: 'w:leftovers', kind: 'leftovers', session: 'w', title: 'w: leftovers', body: 'row 3 left' });
+  const nudge = ev({ key: 'lease:nudge', kind: 'lease', state: 'nudge', title: 'ask a to release', body: 'Your lease blocks b' });
+  const quota = ev({ key: 'quota:claude:week', kind: 'quota', title: 'claude default at 80% of the week', body: 'resets 2026-11-14' });
+  const r2 = lines(run(env2, wait + owner + note + nudge + quota));
+  assert.deepEqual(r2.map((x) => [x.l.kind, x.d]), [['asks', true], ['asks', false], ['leftovers', true], ['lease', true], ['quota', false]], 'quota is urgent in the default policy: not deferred');
 });

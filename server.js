@@ -1105,7 +1105,9 @@ const doneCheck = createDoneCheck({
   listDone: async () => {
     const panes = await listPanes(), mgrs = new Set(loadManagerSessions()), out = [];
     for (const [name, p] of panes) {
-      if (mgrs.has(name) || sessionMeta.isPaused(name) || p.dead || / \(deleted\)$/.test(p.cwd)) continue;
+      // A pane whose directory was removed is still checked (bug-ceb8ffff, 2026-11-12): AGENTS.md tells a session to remove its worktree once its work landed, and
+      // 21 of 52 sessions were in that state, invisible to every done check (leftovers, honesty, Verification, the goal question). The git check finds no repo there and says nothing.
+      if (mgrs.has(name) || sessionMeta.isPaused(name) || p.dead) continue;
       const st = latest?.status?.[name];
       const ex = st?.stall?.excerpt;
       if (!ex || st.state === 'working' || (statusLine(String(ex).split('\n'))?.kind !== 'done' && unconfirmedStatusOf(String(ex)) === null && !waitingOnLeaseStatus(String(ex)) && !shipOfferOf(String(ex)))) continue;

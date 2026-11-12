@@ -3,10 +3,13 @@
 # Read-only: the filter runs against a temp state dir. Prints wakes and wakes that did nothing before / after, what removed them, and every removed wake that had acted.
 import json,sys,collections,bisect,re,subprocess,os,tempfile
 day=sys.argv[1]; st=os.path.expanduser("~/.local/state/ghosty")
-tmp=tempfile.mkdtemp(prefix="wakeev-an"); os.makedirs(tmp+"/manager-reports")
 evs=subprocess.run(f"cat {st}/manager-events.jsonl.1 {st}/manager-events.jsonl 2>/dev/null | grep \"^{{\\\"at\\\":\\\"{day}\"",shell=True,capture_output=True,text=True).stdout
-out=subprocess.run(["bash",os.path.join(os.path.dirname(os.path.abspath(__file__)),"manager-event-filter.sh")],input=evs,capture_output=True,text=True,env={**os.environ,"GHOSTY_STATE_DIR":tmp}).stdout
-ev=[json.loads(l) for l in out.splitlines() if l]
+flt=os.path.join(os.path.dirname(os.path.abspath(__file__)),"manager-event-filter.sh"); ev=[]
+for q in range(4):   # the cross-run dedupe lasts 6 h: one fresh state per 6-hour slice
+    part="".join(l+"\n" for l in evs.splitlines() if q*6<=int(l[18:20])<q*6+6)
+    tmp=tempfile.mkdtemp(prefix="wakeev-an"); os.makedirs(tmp+"/manager-reports")
+    out=subprocess.run(["bash",flt],input=part,capture_output=True,text=True,env={**os.environ,"GHOSTY_STATE_DIR":tmp}).stdout
+    ev+=[json.loads(l) for l in out.splitlines() if l]
 allw=[]
 for l in open(st+"/manager-wakes.jsonl"):
     try: r=json.loads(l)
@@ -15,19 +18,8 @@ for l in open(st+"/manager-wakes.jsonl"):
 isw=lambda r: r.get("trigger")=="task_done" and "manager-wait" in (r.get("triggerSummary") or "")
 wk=sorted([r for r in allw if isw(r)],key=lambda r:r["start"]); starts=[w["start"] for w in wk]
 bg=[r for r in allw if r.get("trigger")=="task_done" and not isw(r)]; rest=[r for r in allw if r.get("trigger")!="task_done"]
-seen={}
-HANDLED=re.compile(r"said done, git disagrees|done not accepted by the goal check|session closed: |orphaned, \d")
-def rule(e):
-    l=e["l"]; key=str(l.get("key") or ""); kind=str(l.get("kind") or ""); title=str(l.get("title") or ""); body=str(l.get("body") or "")
-    if key.endswith(":manager-item") and re.match(r"^\S+ waits for a deploy:",body): return "drop:R1 waiting stop"
-    if HANDLED.search(title) or (kind=="lease" and l.get("state")=="idle-hold"): return "drop:R5 harness handled"
-    m=re.search(r"(\d+)%",title+" "+body[:80])
-    if (kind in("disk","quota") or key.startswith(("disk","quota","health:disk"))) and m:
-        pct=int(m.group(1)); b=(key.split(":")[0],l.get("session"),pct//5)
-        if pct<95 and b in seen: return "drop:R2 repeat"
-        seen[b]=1; return None
-    if kind=="bug" and not (l.get("bug") or {}).get("blocking") and l.get("priority") not in ("high","urgent"): return "defer:bug"
-    return None
+def rule(e):   # the filter already dropped and deduped; what it marks `d` rides with the next wake
+    return "defer:rides with the next wake" if e.get("d") else None
 per=collections.defaultdict(list)
 for e in ev:
     i=bisect.bisect_left(starts,e["l"]["at"])
@@ -46,7 +38,7 @@ for i,w in enumerate(wk):
         if not w.get("nothing"): lost.append((sorted(set(L)),w["start"][11:16],(w.get("decision") or "")[:140].replace("\n"," ")))
         continue
     if all(r for r in L):   # only deferred (+dropped)
-        deferred.append(dict(acted=not w.get("nothing"),t=w["start"])); why["defer:bug"]+=1; continue
+        deferred.append(dict(acted=not w.get("nothing"),t=w["start"])); why["defer:rides with the next wake"]+=1; continue
     surv.append(dict(acted=not w.get("nothing"),t=w["start"]))
 # deferred wakes merge into the next surviving wake within 60 min, else one flush wake per hour bucket
 import datetime

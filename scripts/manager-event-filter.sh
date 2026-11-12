@@ -37,6 +37,8 @@
 # - disk / quota alerts under 95%: once per 5-point bucket per 6 h across runs (key `pctx|<key>|<bucket>`); 95% and over always passes.
 # Deferred (`d: true`): a non-blocking bug filing is delivered with the next wake or after MANAGER_WAIT_DEFER (manager-wait.sh, 1 h), never a wake
 # of its own. Replay: scripts/manager-wake-rules-replay.py <day>.
+# 2026-11-12, second set: one stop = one event (key `stop|<session>|<text>`, deduped across runs like asks); deferred too: a stop that is a wait,
+# and the notices bug-unreported / leftovers / bug-drain / orphaned-task / int-*:cancelled / lease nudge, unless the policy makes the kind urgent or pass.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STATE_DIR="${GHOSTY_STATE_DIR:-$HOME/.local/state/ghosty}"
 POLICY_DEFAULT="$HERE/manager-event-policy.json"
@@ -56,6 +58,19 @@ fi
 jq -c --unbuffered --argjson policy "$POLICY" '
   def pol: ($policy[((.kind//"")|tostring)+":"+((.state//"")|tostring)] // $policy[((.kind//"")|tostring)] // "default");
   def pct: ([(.title//"")|match("([0-9]+)%").captures[0].string|tonumber][0] // null);
+  # One stop = one event (2026-11-12): a session stop reached the manager as `<s>:asks` AND `lease|deploy:...:manager-item` ("<s> asks: ..."), each again with / without
+  # the "· 22s · 1.1M tok ·" segment or backticks: up to 4 wakes for one stop. The stop key is the session + the first 40 characters of the text without those.
+  def stopish: (((.kind//"")|tostring|test("(^|:)asks$")) or ((((.key//"")|tostring)|test(":manager-item$")) and (((.body//"")|tostring)|test("^\\S+ asks:"))));
+  def stopsess: (if (((.key//"")|tostring)|test(":asks$")) then (((.key//"")|tostring)|sub(":asks$";"")) else ((((.body//"")|tostring)|capture("^(?<s>\\S+) asks:").s) // ((.session//"")|tostring)) end);
+  def stopnorm: (((.body//"")|tostring)
+    | gsub("·\\s*[0-9][0-9hms ]*·\\s*[0-9.]+[kM]?\\s*tok\\s*";"")
+    | sub("^\\S+ asks:\\s*";"") | sub("^STATUS:\\s*[a-z-]+\\s*[·:—-]?\\s*";"")
+    | sub("^(decision for you|the topic is \"[^\"]*\")\\s*—\\s*needs you\\s*(\\[hard: [a-z ]+\\]\\s*)?";"") | sub("^lease reason:\\s*";"")
+    | gsub("[`*]";"") | gsub("\\s";"") | ascii_downcase | .[0:40]);
+  # A stop that is a wait (a time, a lease held by someone, a queue, "waiting on"): the blocked check sends it back to the session; the manager reads it with its next wake.
+  def waitish: (((.body//"")|tostring)|test("\\b(kept free|held|reserved|free)\\b[^.;]{0,40}\\buntil [0-9]{1,2}:[0-9]{2}|\\b(held|leased) by\\b|\\bis (held|leased)\\b|\\bwaiting on\\b|\\bwaits? (on|for)\\b|\\byielded\\b|\\bqueued (claims?|next|behind)";"i"));
+  # Notices the manager left alone on 2026-11-11: they ride with the next wake, unless the policy file makes the kind urgent or pass (waiting, hold, no-progress, quota are urgent by default).
+  def notice: ((((.kind//"")|tostring)|test("^(waiting|bug-unreported|leftovers|no-progress|hold|bug-drain|orphaned-task)$|^int-[0-9a-f]+:cancelled$")) or ((.kind=="lease") and (.state=="nudge")));
   def routine:
     ((.kind=="deploy") and (.state=="start" or .state=="done") and ((.blockedBy//[])|length)==0)
     or ((.jev.pick=="ignore") and ((.jev.confidence//0) >= 0.9) and (.kind=="deploy") and (.state!="failed") and (.state!="orphan"))
@@ -73,9 +88,12 @@ jq -c --unbuffered --argjson policy "$POLICY" '
     or ((((.session//"")=="done-check") or ((.session//"")=="goal-check") or ((.kind//"")|tostring|test("^session-closed:"))) and ((.priority//"default")=="default"))
     or (((.kind//"")|tostring|test("^(kpi-|pokestall-|pokemon-daily-|mobile-orchtnet-owner$|opus-openexit$|content-|mi-bugs-|pi1-load-|task208-)")) and ((.priority//"default")=="default"));
   select(pol != "ignore") | select(pol == "pass" or (routine|not))
-  | {k:(if ((.kind=="disk" or .kind=="quota") and (pct != null) and (pct < 95)) then ("pctx|"+((.key//.kind)|tostring|gsub("\\s";""))+"|"+((pct/5|floor)|tostring)) else (.session//"")+"|"+.kind+"|"+(if .kind=="health" then (.key//"") else ((.body//"") as $b | (if ($b|test("needs-owner:")) then ($b|capture("needs-owner:(?<q>[^\\[]*)").q) else $b end) | gsub("·\\s*[0-9][0-9hms ]*·\\s*[0-9.]+[kM]?\\s*tok\\s*";"")|gsub("\\s";"")|.[0:80]) end) end),
+  | {k:(if stopish then ("stop|"+stopsess+"|"+stopnorm) elif ((.kind=="disk" or .kind=="quota") and (pct != null) and (pct < 95)) then ("pctx|"+((.key//.kind)|tostring|gsub("\\s";""))+"|"+((pct/5|floor)|tostring)) else (.session//"")+"|"+.kind+"|"+(if .kind=="health" then (.key//"") else ((.body//"") as $b | (if ($b|test("needs-owner:")) then ($b|capture("needs-owner:(?<q>[^\\[]*)").q) else $b end) | gsub("·\\s*[0-9][0-9hms ]*·\\s*[0-9.]+[kM]?\\s*tok\\s*";"")|gsub("\\s";"")|.[0:80]) end) end),
      u:(pol=="urgent" or ((.priority//"")=="high") or ((.priority//"")=="urgent") or ((.kind=="bug") and ((.bug.blocking//false)==true))),
-     d:((.kind=="bug") and ((.bug.blocking//false)==false) and ((.priority//"")!="high") and ((.priority//"")!="urgent") and (pol!="urgent") and (pol!="pass")), l:.}' \
+     d:(((.kind=="bug") and ((.bug.blocking//false)==false) and ((.priority//"")!="high") and ((.priority//"")!="urgent") and (pol!="urgent") and (pol!="pass"))
+        or (stopish and waitish and ((((.body//"")|tostring)|test("needs-owner"))|not) and (pol!="pass"))
+        or (notice and ((.priority//"default")=="default") and (pol!="urgent") and (pol!="pass"))
+        or ((.kind=="disk" or .kind=="quota") and (pct != null) and (pct < 95) and (pol!="urgent") and (pol!="pass"))), l:.}' \
 | awk -W interactive -v now="$NOW" -v seen="$SEEN_FILE" '
     function persist(k) { printf "%d %s\n", now, k >> seen; fflush(seen) }
     BEGIN {
@@ -90,7 +108,7 @@ jq -c --unbuffered --argjson policy "$POLICY" '
       k = substr($0, RSTART+6, RLENGTH-7)
       match($0, /"kind":"[^"]*"/)
       ks = substr($0, RSTART+8, RLENGTH-9)
-      cross = (ks == "asks" || ks == "orphaned-task" || ks == "waiting" || ks == "lease" || ks == "health" || k ~ /^pctx\|/)
+      cross = (ks == "asks" || ks == "orphaned-task" || ks == "waiting" || ks == "lease" || ks == "health" || k ~ /^pctx\|/ || k ~ /^stop\|/)
       if (cross && (k in seenmap)) next
       if (!(k in runmap)) {
         runmap[k] = 1

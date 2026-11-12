@@ -98,7 +98,7 @@ export function doneButFailedOf(text, goal = '') {
 export function doneButFailedMessage(f, goal = '') {
   const said = f.hits.slice(0, 2).map((h) => `"${h.clause}"`).join(' and ');
   return `Status check: your STATUS says done, but your own text says the goal was not achieved: ${said}.${goal ? ` The goal of this session: "${goal.slice(0, 160)}".` : ''} `
-    + 'Done is only for an achieved goal. Restate the line: `STATUS: failed — goal not achieved: <why> · tried: <what you tried>` (the manager looks at it and helps), '
+    + 'Done is only for an achieved goal. Restate the line: `STATUS: failed — goal not achieved: <why> · tried: <what you tried> · cause: <what your investigation found> · plan: <next approach, who does it>` (the manager looks at it and helps), '
     + 'or `STATUS: blocked: <what stops you> · tried: <list> · need: <what the manager must do>`, or `STATUS: waiting: <what is running>`. If the goal WAS achieved, rewrite the done line with '
     + '`goal: achieved · evidence: <report links / run ids / frames>` and the closing review. Do not ask; pick the true one.';
 }
@@ -141,13 +141,13 @@ export function unknownStatusWordOf(text) {
   return st && !TOLERATED.has(st.kind) ? { word: st.kind, line: st.line.slice(0, 160) } : null;
 }
 // blocked lines and unknown words are what done-check (I) looks at
-export const blockedOrUnknownStatus = (text) => { const st = lastStatus(text); return !!st && (st.kind === 'blocked' || !TOLERATED.has(st.kind)); };
+export const blockedOrUnknownStatus = (text) => { const st = lastStatus(text); return !!st && (st.kind === 'blocked' || st.kind === 'failed' || !TOLERATED.has(st.kind)); };
 export function unknownStatusWordMessage(f) {
   return `Status check: \`STATUS: ${f.word}\` is not a STATUS word. The seven: done (goal reached, proof in hand, nothing of yours running) · running (work of yours still goes: your background job, a worker you started) · `
     + 'waiting (you depend on something not yours that ends by itself: lane, deploy, lease ticket, another session, a time) · needs-manager (you need a decision or an answer) · needs-owner (money, customers, deleting shared data, an owner-only credential, a physical action) · '
-    + 'blocked (you cannot work and nothing running will fix it: `blocked: <what stops you> · tried: <list> · need: <who must do what>`) · failed (`failed — goal not achieved: <why> · tried: <list>`). Rewrite your STATUS line with the true one of the seven. One push only.';
+    + 'blocked (you cannot work and nothing running will fix it: `blocked: <what stops you> · tried: <list> · need: <who must do what>`) · failed (`failed — goal not achieved: <why> · tried: <list> · cause: <what your investigation found> · plan: <next approach, who does it>`). Rewrite your STATUS line with the true one of the seven. One push only.';
 }
-// Pure. `STATUS: failed — goal not achieved: <why> · tried: <list>` -> { why, tried } | null.
+// Pure. `STATUS: failed — goal not achieved: <why> · tried: <list> · cause: <what your investigation found> · plan: <next approach, who does it>` -> { why, tried } | null.
 export function failedOf(text) {
   const st = lastStatus(text);
   if (!st || st.kind !== 'failed') return null;
@@ -170,7 +170,7 @@ export function doneWithoutGoalOf(text) {
 export function doneWithoutGoalMessage(f) {
   return `Status check: your done line lacks ${f.missing.join(' and ')}. Done is only for an achieved goal: rewrite it as `
     + '`STATUS: done — <what> · goal: achieved · evidence: <report links / run ids / commits / frames> · closing review: ...`, '
-    + 'or, if the goal was not reached, `STATUS: failed — goal not achieved: <why> · tried: <list>` / `blocked: <reason + what you tried>` / `waiting: <system id>`. Do not ask; pick the true one.';
+    + 'or, if the goal was not reached, `STATUS: failed — goal not achieved: <why> · tried: <list> · cause: <what your investigation found> · plan: <next approach, who does it>` / `blocked: <reason + what you tried>` / `waiting: <system id>`. Do not ask; pick the true one.';
 }
 
 // ---- (4) blocked is not a wait (owner, 2026-11-11 evening) ----
@@ -207,6 +207,26 @@ export function blockedHonestyMessage(f) {
   if (f.missing.length && !f.running.length) parts.push(`it lacks ${f.missing.join(' and ')}`);
   return `Status check: your STATUS is blocked, but ${parts.join('; ')}. \`blocked\` is only for an agent that cannot work and needs the manager: `
     + '`STATUS: blocked: <what stops you> · tried: <what you tried> · need: <what the manager must do>`. If your part is done while workers you started still run, end on `STATUS: running: <worker names>`. One push only.';
+}
+
+// ---- (5) failed is not an ending (owner, 2026-11-12: "if we are failing you need to plan a solution and investigate, just failing is not an option") ----
+// `STATUS: failed — goal not achieved: <why> · tried: <list> · cause: <what the investigation found> · plan: <next approach, who does it>`.
+// Pure. -> null (not a failed line, or a complete one) | { missing: ['tried:', 'cause:', 'plan:'], text }.
+export function failedHonestyOf(text) {
+  const st = lastStatus(text);
+  if (!st || st.kind !== 'failed') return null;
+  const head = unmark(st.text).split(/\s[·|;]\s*closing[ -]review\b/i)[0];
+  const missing = [];
+  if (!/\btried\s*[:=]/i.test(head)) missing.push('tried:');
+  if (!/\bcause\s*[:=]\s*\S.{2,}/i.test(head)) missing.push('cause:');
+  if (!/\bplan\s*[:=]\s*\S.{2,}/i.test(head)) missing.push('plan:');
+  return missing.length ? { missing, text: head.slice(0, 200) } : null;
+}
+export function failedHonestyMessage(f) {
+  return `Status check: your STATUS is failed, but it lacks ${f.missing.join(' and ')}. Failing is not an ending (owner 2026-11-12): investigate before you stop `
+    + '(open the logs, frames, ledgers or code until you can name what broke; if you cannot, say what you checked and ruled out), then plan the next approach. '
+    + 'If that plan is yours to do and your time box is not over, do it now instead of stopping. Otherwise restate: '
+    + '`STATUS: failed — goal not achieved: <why> · tried: <list> · cause: <what the investigation found, with its evidence> · plan: <next approach, who does it, what it needs>`. One push only.';
 }
 
 // ---- goal first, verification last (owner, 2026-11-11, docs/GOAL-RULE.md) ----
@@ -257,6 +277,6 @@ export function verificationOf(text, parts = []) {
 export function verificationMessage(v, parts = []) {
   return `Status check: your done line needs a \`Verification:\` block with one row per Done-when line, same count and numbering, every row \`pass\`: ${v.problems.slice(0, 4).join('; ')} (${v.passed} of ${v.total} rows pass). `
     + `The Done-when list of this task: ${parts.slice(0, 6).map((p, i) => `${i + 1}. ${String(p).slice(0, 70)}`).join(' ')}. `
-    + 'Write `Verification:` then `<n>. pass | fail | not checked — <evidence that resolves, or why>` for each line, then the STATUS line. All pass = done; any fail or not checked = `running`, `waiting` or `failed`. Never change the Done-when list to fit what you did. One push only.';
+    + 'Write `Verification:` then `<n>. pass | fail | not checked — <evidence that resolves, or why>` for each line, then the STATUS line. All pass = done; any fail or not checked = `running`, `waiting` or `failed`. Never change the Done-when list to fit what you did. A side request you finished on the way is not the task: while a Done-when line is open the status is running or waiting. One push only.';
 }
-export const timeBoxWakeMessage = (box) => `Time box reached (${Math.round(box / 6e4)} min): write \`Verification:\` as it stands (one row per Done-when line) and end \`failed\` or \`needs-manager\` with what would unblock it. You do not extend your own time box: the manager or the owner does.`;
+export const timeBoxWakeMessage = (box) => `Time box reached (${Math.round(box / 6e4)} min): write \`Verification:\` as it stands (one row per Done-when line) and end \`failed\` (with \`cause:\` and \`plan:\`) or \`needs-manager\` with what would unblock it. You do not extend your own time box: the manager or the owner does.`;
