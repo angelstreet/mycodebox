@@ -86,7 +86,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   // LEASE_TUNE="deployGateMaxMs=300,deployStarveMs=700"  numeric config overrides (tests of the deploy gate with a real clock)
   const tune = Object.fromEntries(String(process.env.LEASE_TUNE || '').split(',').map((x) => x.split('=')).filter(([k, v]) => k && Number.isFinite(Number(v))).map(([k, v]) => [k.trim(), Number(v)]));
   const s = startLeaseServer({ dir, port: Number(process.env.LEASE_PORT || 17777), envs, ownServers, tune });
-  s.ready.then((p) => console.log(`[lease] central lease service on 127.0.0.1:${p}, state ${dir}`))
+  s.ready.then((p) => console.log(`[lease] central lease service on 127.0.0.1:${p}, state ${dir}${Object.keys(tune).length ? `, tuned ${JSON.stringify(tune)}` : ''}`))
     .catch((e) => { console.error(`[lease] cannot listen: ${e.message}`); process.exit(1); });
   for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { s.close().finally(() => process.exit(0)); });
 }
