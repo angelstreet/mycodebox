@@ -1959,6 +1959,8 @@ Goal first, verification last (owner 2026-11-11; `docs/GOAL-RULE.md`, kept equal
 - **First**: before any work, the task has `Goal: <one sentence>` and `Done when:` with 1 to 5 numbered lines, each checkable by something other than you: a fact the harness holds (merged, deployed, bug resolved), a command or URL with a pass / fail result, or an observation with an artefact (run id, report link, frame). The brief did not give them: write them yourself as the first thing you say, then work. A line you cannot check is rewritten, not dropped.
 - **Time box** (owner 2026-11-11): the opening also carries `Time box: <max duration>` (the brief's, else your own estimate; default 2 h for a fix, 6 h for a feature). At 50% with no `Done when` line passed, say so and change approach. At 100% **stop**: write the `Verification:` block as it stands and end `failed` (or `needs-manager` with what would unblock it); never extend your own time box, the manager or the owner does. The same check failing 3 times with the same error is the same stop, whatever the clock says: a retry loop is not progress.
 - **Last**: the final message ends with `Verification:` and one row per `Done when` line, in the same order and numbering: `<n>. pass | fail | not checked — <evidence that resolves, or why>`, then the STATUS line. All `pass` = `done`. Any `fail` or `not checked` = not `done` (`running`, `waiting` or `failed`). Never change the `Done when` list at the end to fit what you did; a line the owner dropped is marked "dropped by owner", not deleted.
+- **Failing is not an ending** (owner 2026-11-12): before a `failed` line, investigate until you can name what broke (logs, frames, ledgers, code), or say what you checked and ruled out, and write the next approach. The line carries both: `STATUS: failed — goal not achieved: <why> · tried: <list> · cause: <what the investigation found> · plan: <next approach, who does it>`. A plan that is yours to do inside your time box is done, not written. A `failed` line without `cause:` and `plan:` is sent back once.
+- **Done is about the task's goal, not the last request** (owner 2026-11-12): the `Goal` and the `Done when` list are the ones the task opened with. A side request given on the way (pause these deployments, check this, answer that) is reported in one sentence, and the turn ends on the task's true state: `running`, `waiting` or `needs-...` while a `Done when` line is open, never `done — goal: achieved (<the side request>)`. Only the owner or the manager replaces the goal, in words.
 
 - **`failed`** (`stall.js`): case `needs_manager` with `failed: true` and `managerAsk: goal not achieved: ...`: a manager event and the manager
   LED, never a finished turn, never parked as one (`status-honesty.js` `failedOf` parses why / tried). The Mac Stop hook posts the text and the
@@ -2031,6 +2033,25 @@ bug-2f32e7a7, bug-8fc8fc0d, bug-03ccc6a7, bug-80bdcdc1 · unverified: none · bu
   Replay: `python3 scripts/manager-wake-rules-replay.py <day>` (2026-11-11: 410 wakes -> 198, wakes that did nothing 299 -> 105; the share stays 53%,
   the 25% target is NOT reached: what is left is `asks` / `blocked` stops and owner messages the manager reads and leaves). Tests:
   `test/manager-event-filter.test.js`, `test/manager-wait.test.js`, `test/session-guard-hook.test.js`.
+- **Failed is not an ending (owner, 2026-11-12: "if we are failing you need to plan a solution and investigate, just failing is not an option")**: a failed
+  line reads `STATUS: failed — goal not achieved: <why> · tried: <list> · cause: <what the investigation found> · plan: <next approach, who does it>`.
+  `status-honesty.js` `failedHonestyOf` catches one without `tried:`, `cause:` or `plan:` (before the closing review); done-check (I) sends it back once per
+  line on codebox and `remote-stops.js` refuses the Mac stop (`failed-without-plan`), both under the `blockedCheck` switch of manager.json (live since
+  2026-11-12; dry journals `failedHonesty` in done-check.jsonl / blocked-check.jsonl). The message tells the session to do the plan itself when its time box
+  is not over. Every message that names the failed form carries the two fields. Tests: `test/status-honesty.test.js`, `test/goal-check-remote.test.js`.
+- **Done checks see a session whose worktree was removed (2026-11-12, bug-ceb8ffff)**: `listDone` in server.js skipped a pane whose directory ends in
+  ` (deleted)`. AGENTS.md tells a session to remove its worktree once its work landed, so 21 of 52 sessions were invisible to every done check (leftovers,
+  honesty, Verification, the goal question): `zap-nodes-restore` wrote three done lines with open leftovers and was never asked. The skip is gone; the git
+  check finds no repository there and says nothing. Check (B) leftovers now also keeps to done turns under 6 h, like (C) / (F) / (H).
+- **One stop = one manager event (2026-11-12, TASK-239 G6)**: one session stop reached the manager as `<s>:asks` and as a `lease|deploy:...:manager-item`
+  ("<s> asks: ..."), each again with or without the `· 22s · 1.1M tok ·` segment or backticks: up to four wakes. `scripts/manager-event-filter.sh` keys a stop
+  as `stop|<session>|<first 40 characters of the text without those>`, deduped across runs for 6 h. Deferred (`d: true`, delivered with the next wake or after
+  `MANAGER_WAIT_DEFER`): a stop whose text is a wait (a time, a lease held by someone, a queue, "waiting on"; never a needs-owner line), and the notices
+  `bug-unreported`, `leftovers`, `bug-drain`, `orphaned-task`, a cancelled integration and a lease nudge, unless the policy file makes the kind urgent or pass
+  (`waiting`, `hold`, `no-progress`, `quota`, `disk` are urgent in the default policy and are not deferred). Replay 2026-11-11: 410 wakes -> 181, wakes that
+  did nothing 299 -> 87 (48%; before this change 109 of 202, 54%). The 25% target is not reached by filtering: what is left is real stops the manager reads
+  and leaves (blocked 10, stops with no STATUS word 15, blocking bug filings 13), the owner's messages (9), sweeps (6) and the urgent-policy notices (13).
+  Test: `test/manager-event-filter.test.js` "one stop is one event".
 - **Blocked is not a wait (owner, 2026-11-11 evening)**: `blocked: <what stops you> · tried: <list> · need: <what the manager must do>` is for an agent that
   cannot work; a wait on something running or queued is `waiting: <integration / deploy id, lease ticket, own background job, worker names, a time>`.
   `status-honesty.js` `blockedHonestyOf` (deterministic, no AI) flags a blocked line that names something running or queued (background job id,
