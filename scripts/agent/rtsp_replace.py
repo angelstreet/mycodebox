@@ -16,7 +16,9 @@ Replacement: a lease on the host (`vpt-lease run`; BUSY => the command never run
 host-config GET devices merged with the one changed DEVICE<n>_VIDEO (never devices:{}: that deletes every DEVICE<n> key,
 bug-591e8166), a payload backup (0600) in the state dir, POST /server/settings/host-config, read-back diff, restart of
 vpt-stream through /server/system/controlHostService (allowlisted unit), rtsp_check of the new source, rollback to the
-backup when anything fails. Journal: <state>/rtsp-nightly/journal.jsonl, redacted. Default mode is dry: no writes at all.
+backup when anything fails. A lease that was refused (the command never ran, nothing touched) and an apply step that
+died (the host may be half-changed) are two different outcomes in the journal: lease_not_granted / apply_failed.
+Journal: <state>/rtsp-nightly/journal.jsonl, redacted. Default mode is dry: no writes at all.
 """
 import copy, datetime, json, os, subprocess, sys, time
 
@@ -100,6 +102,26 @@ def pick(entry, pool, ssh_map, timeout):
     return None
 
 
+# The lease CLI says on stderr when it got the lease ("lease <id> held, running ..."); when it did not,
+# the command never ran and nothing was touched. The two must not be reported as the same thing: a failed
+# apply step can leave the host half-changed, a refused lease cannot.
+LEASE_GRANTED_MARKERS = ('held, running', 'vpt-lease: granted')
+LEASE_REFUSED_MARKERS = ('busy', 'waiting claim cancelled', 'claim again if you still need it',
+                          'e_not_authority', 'held by', 'lease is fenced')
+
+
+def apply_failure(detail, cli_missing):
+    """Why the apply step produced no result -> 'lease_not_available' | 'lease_not_granted' | 'apply_failed'."""
+    if cli_missing:
+        return 'lease_not_available'
+    low = (detail or '').lower()
+    if any(m in low for m in LEASE_GRANTED_MARKERS):
+        return 'apply_failed'   # the lease was granted: the apply step itself died
+    if any(m in low for m in LEASE_REFUSED_MARKERS):
+        return 'lease_not_granted'
+    return 'lease_not_granted'  # the lease CLI failed before it could say anything: nothing ran
+
+
 # ---------------- the apply step (inside the host lease) ----------------
 def other_fields(devices, device, changed=('DEVICE_VIDEO',)):
     return {(d, k): v for d, f in devices.items() for k, v in f.items() if not (d == device and k in changed)}
@@ -112,7 +134,6 @@ def apply_one(env, host, device, src_file, out):
         src = json.load(f)  # {id, url, how, name?}: chosen and probed by the nightly run just before the lease
     pool_id = src['id']
     ssh = rc.parse_pairs(os.environ.get('RTSP_CHECK_SSH')).get(host)
-    token = rc.server_token()
     base = {'event': 'replace', 'host': host, 'device': device, 'pool': pool_id}
     result = {'outcome': 'refused'}
 
@@ -123,7 +144,13 @@ def apply_one(env, host, device, src_file, out):
             json.dump(result, f)
         return 0 if outcome == 'replaced' else 3
 
-    cfg = rc.host_config(server, token, host)
+    try:
+        token = rc.server_token()
+        cfg = rc.host_config(server, token, host)
+    except Exception as e:
+        # The apply step must always leave a result behind: a silent death reads like a refused lease,
+        # and the two are not the same thing (this one may have left the host half-changed).
+        return done('apply_failed', reason=f'host-config read failed: {type(e).__name__}')
     devices = cfg.get('devices') or {}
     # The guard that matters: a payload without the other devices deletes them on the host.
     if not devices or device not in devices or not (rc.is_rtsp(devices[device].get('DEVICE_VIDEO', '')) or rc.is_http(devices[device].get('DEVICE_VIDEO', ''))):
@@ -190,7 +217,8 @@ def lease_cmd(env, host, device, pool_id, out, max_wait=None):
 
 def apply_with_lease(e, s, max_wait=None):
     """Run the apply step inside the host lease. -> (res, detail, cli_missing). res is None when the lease was not
-    granted (nothing was touched) or the apply step wrote no result."""
+    granted (nothing was touched) or the apply step wrote no result. detail is the whole output (the journal
+    keeps its tail): the "the lease was granted" marker is printed before the command runs, so a tail would lose it."""
     out = os.path.join(STATE, f"apply-{e['host']}-{e['device']}.json")
     src_file = os.path.join(STATE, f"apply-src-{e['host']}-{e['device']}.json")
     os.makedirs(STATE, exist_ok=True)
@@ -205,7 +233,7 @@ def apply_with_lease(e, s, max_wait=None):
         # loop variable `e` at the end of the clause.)
         detail = rc.redact(f'{type(exc).__name__}: {exc}')
     else:
-        detail = rc.redact((p.stderr or '')[-200:])
+        detail = rc.redact((p.stdout or '') + '\n' + (p.stderr or ''))
     try:
         res = json.load(open(out)); os.unlink(out)
     except (OSError, ValueError):
@@ -287,17 +315,22 @@ def run(mode, timeout=10):
                 row['action'] = f"dry: would {s['how']} with '{s['label']}'" + (f" (device renamed '{s['name']}')" if s.get('name') and s['name'] != e.get('name') else '')
             else:
                 res, detail, cli_missing = apply_with_lease(e, s)
-                if res is None:  # BUSY / lease error: vpt-lease never ran the command, nothing was touched
-                    row['action'] = ('report: the lease command could not be run (vpt-lease missing), nothing touched'
-                                     if cli_missing else 'report: host lease not granted (or the apply step stopped before any write), nothing touched')
-                    journal({'event': 'replace', 'host': e['host'], 'device': e['device'],
-                             'outcome': 'lease_not_available' if cli_missing else 'lease_not_granted', 'detail': detail})
-                    if not cli_missing:
+                if res is None:  # the lease was refused or the apply step died: no stream was replaced
+                    why = apply_failure(detail, cli_missing)
+                    if why == 'lease_not_available':
+                        row['action'] = 'report: the lease command could not be run (vpt-lease missing), nothing touched'
+                    elif why == 'apply_failed':
+                        row['action'] = 'report: the lease was granted but the apply step failed (see the journal), the host may be half-changed'
+                    else:
+                        row['action'] = 'report: host lease not granted (busy or refused), nothing touched'
+                    journal({'event': 'replace', 'host': e['host'], 'device': e['device'], 'outcome': why, 'detail': detail[-200:]})
+                    if why == 'lease_not_granted':
                         # The host was busy for the short wait: try again at the end of the night, when the other
                         # work is done and the lease is more likely free. A busy lease must not cost the night a stream.
                         deferred.append((e, s, row))
                 else:
-                    row['action'] = f"{res['outcome']} ({s['how']}: '{s['label']}')"
+                    row['action'] = (f"report: the apply step failed ({res.get('reason', 'see the journal')}), nothing replaced"
+                                     if res['outcome'] == 'apply_failed' else f"{res['outcome']} ({s['how']}: '{s['label']}')")
                     if res['outcome'] in ('replaced', 'rolled_back'):
                         budget -= 1
         rows.append(row)
@@ -309,10 +342,14 @@ def run(mode, timeout=10):
             continue
         res, detail, cli_missing = apply_with_lease(e, s, max_wait=int(os.environ.get('RTSP_LEASE_RETRY_MAX_WAIT', '20')))
         if res is None:
-            row['action'] = 'report: host lease not granted again at the end of the night, nothing touched'
-            journal({'event': 'replace', 'host': e['host'], 'device': e['device'], 'outcome': 'lease_not_granted', 'detail': detail})
+            why = apply_failure(detail, cli_missing)
+            row['action'] = ('report: the lease was granted but the apply step failed at the end of the night (see the journal)'
+                             if why == 'apply_failed' else
+                             'report: host lease not granted again at the end of the night, nothing touched')
+            journal({'event': 'replace', 'host': e['host'], 'device': e['device'], 'outcome': why, 'detail': detail[-200:]})
         else:
-            row['action'] = f"{res['outcome']} ({s['how']}: '{s['label']}')"
+            row['action'] = (f"report: the apply step failed at the end of the night ({res.get('reason', 'see the journal')}), nothing replaced"
+                             if res['outcome'] == 'apply_failed' else f"{res['outcome']} ({s['how']}: '{s['label']}')")
             if res['outcome'] in ('replaced', 'rolled_back'):
                 budget -= 1
         journal({'event': 'check', 'host': row['host'], 'device': row['device'], 'kind': row['kind'], 'status': row['status'], 'capture': row.get('capture'), 'luma': row.get('luma'), 'action': row['action'], 'source': row['source']})

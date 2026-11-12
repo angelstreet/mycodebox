@@ -78,9 +78,9 @@ test('rtsp_check: --host probes a loopback source from that host (alias from RTS
 });
 
 // ---- the replacement run ----
-async function world({ devices, pool, leaseBusy = false, leaseMissing = false, leaseBusyFirst = false, brokenAfterSave = false, flaky502 = null, snapshots = {} }) {
+async function world({ devices, pool, leaseBusy = false, leaseMissing = false, leaseBusyFirst = false, leaseGranted = false, leaseGrantedDead = false, hostConfigFails = false, brokenAfterSave = false, flaky502 = null, snapshots = {} }) {
   const { dir, env } = fakes();
-  const posts = []; const restarts = [];
+  const posts = []; const restarts = []; let reads = 0;
   const server = http.createServer((req, res) => {
     let b = ''; req.on('data', (c) => { b += c; }); req.on('end', () => {
       const u = new URL(req.url, 'http://x'); const send = (o) => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(o)); };
@@ -88,7 +88,13 @@ async function world({ devices, pool, leaseBusy = false, leaseMissing = false, l
         if (flaky502 && !flaky502.seen) { flaky502.seen = true; res.statusCode = 502; return send({}); } // one proxy blip
         return send({ hosts: [{ host_name: 'h1' }] });
       }
-      if (u.pathname === '/server/settings/host-config' && req.method === 'GET') return send({ host: { _stream_profile: 'x' }, devices });
+      if (u.pathname === '/server/settings/host-config' && req.method === 'GET') {
+        // hostConfigFails: the inventory read (1st) succeeds, the apply step's read fails: the lease was granted,
+        // the apply step died before it wrote a result
+        if (hostConfigFails && ++reads > 1) { res.statusCode = 404; return send({ error: 'no such host' }); }
+        reads++;
+        return send({ host: { _stream_profile: 'x' }, devices });
+      }
       if (u.pathname === '/server/settings/host-config') {
         const body = JSON.parse(b); posts.push(body);
         for (const d of Object.keys(devices)) if (!(d in body.devices)) delete devices[d]; // the host deletes what the payload omits
@@ -118,7 +124,10 @@ async function world({ devices, pool, leaseBusy = false, leaseMissing = false, l
   if (!leaseMissing) sh(dir, 'vpt-lease', leaseBusy ? 'echo BUSY >&2; exit 1'
     // leaseBusyFirst: the host is busy for the first (short) wait and free for the end-of-night retry
     : leaseBusyFirst ? `d="${state}/lease-used"; [ -e "$d" ] || { : > "$d"; echo BUSY >&2; exit 1; }; while [ "$1" != "--" ]; do shift; done; shift; exec "$@"`
-    : 'while [ "$1" != "--" ]; do shift; done; shift; exec "$@"');
+    // leaseGrantedDead: the lease CLI got the lease but the command never started (it left no result behind)
+    : leaseGrantedDead ? 'echo "vpt-lease: lease fake-1 held, running $*" >&2; exit 126'
+    // leaseGranted: the lease CLI says it got the lease, like the real one does
+    : `${leaseGranted ? 'echo "vpt-lease: lease fake-1 held, running $*" >&2; ' : ''}while [ "$1" != "--" ]; do shift; done; shift; exec "$@"`);
   sh(dir, 'tok', 'echo tok');
   // leaseMissing: a PATH without any vpt-lease, so the run really cannot find the lease CLI
   const pathV = leaseMissing ? `${dir}:/usr/bin:/bin` : `${dir}:${process.env.PATH}`;
@@ -200,6 +209,31 @@ test('run live: a lease busy for the short wait is retried at the end of the nig
   const j = readFileSync(path.join(w.state, 'rtsp-nightly', 'journal.jsonl'), 'utf8');
   assert.match(j, /"outcome": "lease_not_granted"/);  // the first attempt was refused
   assert.match(j, /"outcome": "replaced"/);           // the end-of-night retry got the lease
+});
+
+test('run live: an apply step that died after the lease was granted is not reported as a missing lease', async () => {
+  const w = await world({ pool: POOL, leaseGranted: true, hostConfigFails: true, devices: { DEVICE1: dev('a', 'rtsp://test.example/dead-pub') } });
+  const r = await py(REPLACE, ['--mode', 'live'], w.E);
+  w.close();
+  assert.match(r.stdout, /the apply step failed \(host-config read failed/, r.stdout + r.stderr);
+  assert.doesNotMatch(r.stdout, /host lease not granted/);
+  assert.equal(w.posts.length, 0, 'nothing was written to the host');
+  const j = readFileSync(path.join(w.state, 'rtsp-nightly', 'journal.jsonl'), 'utf8');
+  assert.match(j, /"outcome": "apply_failed"/);
+  assert.doesNotMatch(j, /"outcome": "lease_not_granted"/, 'the lease was not the problem: no busy-lease retry');
+});
+
+test('run live: an apply step that died without any result is not a refused lease either', async () => {
+  // the lease was granted, the command never ran: the night must say so, not blame the lease
+  const w = await world({ pool: POOL, leaseGrantedDead: true, devices: { DEVICE1: dev('a', 'rtsp://test.example/dead-pub') } });
+  const r = await py(REPLACE, ['--mode', 'live'], w.E);
+  w.close();
+  assert.match(r.stdout, /the lease was granted but the apply step failed/, r.stdout + r.stderr);
+  assert.doesNotMatch(r.stdout, /host lease not granted/);
+  assert.equal(w.posts.length, 0);
+  const j = readFileSync(path.join(w.state, 'rtsp-nightly', 'journal.jsonl'), 'utf8');
+  assert.match(j, /"outcome": "apply_failed"/);
+  assert.doesNotMatch(j, /"outcome": "lease_not_granted"/);
 });
 
 test('run live: a missing lease command is reported, the night does not die on it', async () => {
