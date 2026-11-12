@@ -292,6 +292,12 @@ phone even with the app closed.
 `continue | take_recommended | ask_owner`) for the ambiguous ones. `manager.js` logs every stall
 to `stalls.jsonl` with what it would answer, then the owner's real reply as its outcome.
 
+**Mac / Remote Control sessions can be messaged (owner 2026-11-12).** Read every `mac:<label>` asks / needs-manager / goal-check event and answer
+with `SendMessage` to the session name from `ListAgents` (its "Remote Control" rows; load the tool with `ToolSearch select:SendMessage`). Delivery is
+not a read receipt, and an offline session is not listed: say so instead of waiting. Hard-floor items still go to the owner. Only ghosty's own
+`/api/send` (tmux) route cannot reach a Mac session; the event title says "(Mac: reply with SendMessage to the session name)". On 2026-11-12 the
+manager ignored a dozen Mac asks for a day because an old title said "cannot answer".
+
 **Stops that bother the owner** (finished turns, rules only):
 
 | case | what it is | would answer / escalation |
@@ -1918,7 +1924,7 @@ repository, run by the server in its own clone, one request at a time per repo (
   a codebox session that is stopped (done, no draft, no menu) also gets one line through the guarded send (`by: 'integration'`):
   `Integration <id>: merged <branch> into <target> at <sha12>[, deployed <version> to <env>].` or
   `Integration <id> returned: <reason>. Fix it on your branch and run integrate request again.` plus the first lines of the failing output.
-  A `mac:` session gets the feed notice and the manager event only (the Mac hook channel answers stops).
+  A `mac:` session gets the feed notice and the manager event only (the Mac hook channel answers stops; the manager can still SendMessage the session).
 - **Routine notices stay out of the owner's feed (owner 2026-10-23).** The push feed keeps 50 items and every integration event took one, so ~40
   events in 3 h buried the one alert that mattered. A **merged** or **deployed** request therefore takes **no feed slot**: it waits for the periodic
   digest (one `ghosty-digest` entry, tag `ghosty-digest`). `returned`, `merged_ci_red`, `deploy_failed` and `cancelled` stay individual feed entries

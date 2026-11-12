@@ -103,6 +103,7 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
   Never ask the owner, or end a turn waiting on anyone, for a merge or PR decision: run `integrate request`, then continue, or `STATUS: waiting: integration <id>` if nothing else is left.
   See [docs/REFERENCE.md](docs/REFERENCE.md) "Integration lane".
   A branch from a Mac or cloud session (no live session to wake) is queued with `integrate request <branch> --mac <label>`: the result is written to `<state>/integration/external-results/<id>.txt`, the manager relays it (`external-result` event) and the owner is pushed if it does not within 10 min.
+  Mac / Remote Control sessions can be messaged: the manager answers `mac:<label>` asks / needs-manager / goal-check events with `SendMessage` to the session name from `ListAgents` (hard-floor items still go to the owner; an offline session is not listed: say so). Only ghosty's own tmux `/api/send` cannot reach them.
 - Bugs outside your scope (owner, 2026-10-28; fix-first rule owner, 2026-11-11; `--why-not-fixed` required since the same day): when you hit a bug that is not yours (an endpoint that errors, a pre-existing
   failure, a tool that misbehaves), fix it yourself, in your own worktree, when the fix is small and clear and you already have the
   context (cheapest in tokens and most accurate: the finder knows the repro); ship it with `integrate request` and say so in the

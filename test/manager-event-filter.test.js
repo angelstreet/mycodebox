@@ -216,7 +216,7 @@ test('a waiting stop routed as a lease / deploy item and the notices of checks t
   const input = ev({ key: 'lease:manager-item', kind: 'lease', state: 'manager-item', title: 'kpi: lease stop for the manager', body: 'kpi waits for a deploy: lease ticket t-1 on boxA' })
     + ev({ key: 'deploy:abc:manager-item', kind: 'deploy', state: 'manager-item', title: 'web: deploy stop for the manager', body: 'web asks: the box is dead, which host do I use?' })
     + ev({ key: 'done-check:kpi', kind: 'kpi', session: 'done-check', title: 'kpi said done, git disagrees' })
-    + ev({ key: 'goal-check:mac:a', kind: 'mac:a', session: 'goal-check', title: 'mac:a: done not accepted by the goal check (Mac, cannot answer)' })
+    + ev({ key: 'goal-check:mac:a', kind: 'mac:a', session: 'goal-check', title: 'mac:a: done not accepted by the goal check (Mac: reply with SendMessage to the session name)' })
     + ev({ key: 'health:session-closed:a', kind: 'session-closed:a', session: 'health', title: 'session closed: a' })
     + ev({ key: 'a:needs-manager', kind: 'needs-manager', session: 'a', title: 'a: needs the manager', body: 'a needs the manager: pick one' })
     + ev({ key: 'done-check:b', kind: 'b', session: 'done-check', title: 'b said done, git disagrees', body: 'third time', priority: 'high' });

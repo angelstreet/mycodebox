@@ -52,7 +52,7 @@ test('Mac: the first prompt is the goal; a done stop is answered with the owner\
   const r2 = await call('POST', '/stops', { machine: 'mac-test', project: 'demo', session_id: 'sid-goal-1aaaa', session_name: 'menu', text: 'Yes.\n' + CLEAN, stop_hook_active: true });
   assert.equal(r2.body.answerable, false);
   assert.equal(records.length, 1, 'the rejected reply went to the manager');
-  assert.match(records[0].title, /cannot answer/);
+  assert.match(records[0].title, /SendMessage to the session name/);
 });
 
 test('Mac: the owner\'s example line is bounced by the fix-first rule', async () => {
