@@ -54,16 +54,21 @@ new=$(pgrep -u "$(id -u)" -f "$pat" | head -1)
 EOS
 }
 restart || { echo "registry-install: the registry did not restart onto a new process" >&2; rollback; exit 1; }
-OK=0; tries=0
+OK=0; tries=0; WHY="no probe tried"
 # the registry needs a few seconds to load its journal after the restart (the first lane run rolled back on exactly this): retry ~45 s
+# WHY keeps the last reason so a rollback says what failed (the first lane runs only printed "rolled back")
 while [ "$OK" = 0 ] && [ $tries -lt 15 ]; do
   tries=$((tries+1))
   for p in $PROBES ${REGISTRY_PROBE:-}; do
-    "$VL" check "$ENVN" "$p" >/dev/null 2>&1 || continue
-    id=$("$VL" claim "$ENVN" "$p" --agent codebox:registry-install --ttl 5 --purpose "registry install round trip" 2>/dev/null | head -1)
-    case "$id" in [0-9a-f]*) "$VL" release "$id" >/dev/null 2>&1 && OK=1; break ;; esac
+    CK=$("$VL" check "$ENVN" "$p" 2>&1) || { WHY="check $p not free or failed: $(printf %s "$CK" | head -1 | cut -c1-160)"; continue; }
+    CL=$("$VL" claim "$ENVN" "$p" --agent codebox:registry-install --ttl 5 --purpose "registry install round trip" 2>&1); crc=$?
+    id=$(printf %s "$CL" | head -1)
+    # a lease id is 8 hex chars; an error text such as "denied: ..." starts with a hex letter too, so test the whole word and the exit code
+    case "$id" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) [ $crc = 0 ] || id=x ;; esac
+    case "$id" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) if "$VL" release "$id" >/dev/null 2>&1; then OK=1; else WHY="release $id failed ($p)"; fi; break ;;
+      *) WHY="claim $p denied: $(printf %s "$CL" | head -1 | cut -c1-160)" ;; esac
   done
   [ "$OK" = 1 ] || sleep ${REGISTRY_RETRY_SLEEP:-3}
 done
-[ "$OK" = 1 ] || { rollback; exit 1; }
+[ "$OK" = 1 ] || { echo "registry-install: round trip failed after $tries tries, last: $WHY" >&2; rollback; exit 1; }
 echo "registry-install: installed$CHANGED (round trip ok, backups *.bak-$TS-pre-install)"
