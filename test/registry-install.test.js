@@ -74,3 +74,24 @@ test('install: a round trip that never works rolls the files back (exit 1)', () 
   assert.match(r.stderr, /rolled back/);
   assert.equal(fs.readFileSync(path.join(dir, 'lease-service.js'), 'utf8'), '// old\n');
 });
+
+// the lane's minimal PATH has no ~/.local/bin: the client is found in ~/bin, and without it the install fails closed before touching anything
+function minimalPath(h, where) {
+  const only = tmp('reg-only-ssh-');
+  fs.copyFileSync(path.join(h.bin, 'ssh'), path.join(only, 'ssh')); fs.chmodSync(path.join(only, 'ssh'), 0o755);
+  if (where) { fs.mkdirSync(path.join(h.home, 'bin'), { recursive: true }); fs.copyFileSync(path.join(h.bin, 'vpt-lease'), path.join(h.home, where)); fs.chmodSync(path.join(h.home, where), 0o755); }
+  return { PATH: `${only}:${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: h.home };   // node is for the fake remote side only
+}
+test('install: with a minimal PATH the client is found in ~/bin (first two lane runs rolled back on this)', () => {
+  const { h, dir } = installable(0);
+  const r = run(h, [], { ...minimalPath(h, 'bin/vpt-lease'), REGISTRY_RETRY_SLEEP: '0' });
+  assert.equal(r.status, 0, r.stderr + r.stdout);
+  assert.equal(fs.readFileSync(path.join(dir, 'lease-service.js'), 'utf8'), fs.readFileSync(path.join(ROOT, 'lease-service.js'), 'utf8'));
+});
+test('install: no vpt-lease client at all fails closed and touches nothing', () => {
+  const { h, dir } = installable(0);
+  const r = run(h, [], { ...minimalPath(h, null), REGISTRY_RETRY_SLEEP: '0' });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /client not found/);
+  assert.equal(fs.readFileSync(path.join(dir, 'lease-service.js'), 'utf8'), '// old\n');
+});
