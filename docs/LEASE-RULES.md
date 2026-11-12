@@ -133,7 +133,7 @@ Hours were lost waiting on one web host while the other was free. When the work 
   working; no turn, prompt, heartbeat or grant) for 10 minutes (`GHOSTY_IDLE_RELEASE_MIN`, `0` = off) is released on 2 polls
   (`--reason "idle-release: ..."`, `lease-actions.jsonl` `type: idle-release`) and the session is told how to claim again. Never when the session has a
   background task, a cron, a pane task or a child process of its agent, nor for a lease with a holder pid, a pin, a deploy or a Mac holder. Switch:
-  `manager.json` `leaseIdleRelease` `"dry"` (default: journal `dryRun:true` only) | `"live"` | `"off"`. Replay a day against the session transcripts:
+  `manager.json` `leaseIdleRelease` `"dry"` (code default: journal `dryRun:true` only) | `"live"` | `"off"`; live on codebox since 2026-11-12 00:55 UTC. Replay a day against the session transcripts:
   `node scripts/lease-idle-replay.js --day <date> --min 10` (2026-11-11: 7 idle events, 0 wrong). **A stop on `STATUS: waiting`/`blocked` with a live
   ticket while a healthy equivalent is free** is answered at once (3 s and 25 s after the stop) with the exact claim command (`lease-nudge.js` `answerStop`).
   Reuse is detected by start time: a process that started after the lease was granted is not its holder. The service itself probes only pids
