@@ -119,3 +119,16 @@ test('(d) the manager may run only its event wait and system waits in the backgr
   assert.equal(guardCommand('curl -s http://127.0.0.1:7777/api/alerts -d x', { ...m, session: 'kpi-web' }), null, 'a worker session may run background jobs');
   assert.equal(guardCommand('curl -s http://x', { ...m, override: 'manager-bg' }), null, 'the owner override');
 });
+
+test('(b) real host names are vpt-* too; `ssh -p` / `user@` are read; text that only mentions a restart is not a restart (2026-11-12 replay)', () => {
+  const S = 'systemctl';
+  const none = { leases: [], session: 'kpi-web' };
+  assert.match(restartWithoutLease(`ssh vpt-lab9 sudo ${S} stop vpt-stream1`, none).why, /holds no lease on vpt-lab9/, 'a vpt-* host is a host');
+  assert.match(restartWithoutLease(`ssh -p 2222 -o BatchMode=yes ops@vpt-lab4 sudo ${S} restart vpt-host`, none).why, /holds no lease on vpt-lab4/);
+  assert.match(restartWithoutLease(`ssh vpt-lab1 'sudo ${S} restart vpt-host vpt-monitor-img'`, none).why, /vpt-lab1/);
+  assert.equal(restartWithoutLease(`ssh vpt-lab9 sudo ${S} restart vpt-kpi`, { leases: [lease('L', ['vpt-lab9/device50'], 'kpi-web')], session: 'kpi-web' }), null, 'own device lease on that host');
+  assert.ok(restartWithoutLease(`ssh vpt-lab9 sudo ${S} restart vpt-kpi`, { leases: [lease('L', ['vpt-lab9/device50'], 'zap-restore')], session: 'kpi-web' }), 'another session\'s lease is not mine');
+  assert.equal(restartWithoutLease(`found-bug --title "deploy left vpt-kpi old on vpt-lab9" --reason "ssh vpt-lab9 sudo ${S} restart vpt-kpi fixes it"`, none), null, 'a bug report');
+  assert.equal(restartWithoutLease(`curl -s -X POST http://127.0.0.1:7777/api/send/s -d '{"keys":"then ssh vpt-lab9 sudo ${S} restart vpt-host"}'`, none), null, 'a message');
+  assert.equal(restartWithoutLease(`cat > fix.sh <<'EOF'\nssh vpt-lab9 sudo ${S} restart vpt-host\nEOF\nchmod +x fix.sh`, none), null, 'a script being written');
+});

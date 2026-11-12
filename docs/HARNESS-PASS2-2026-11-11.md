@@ -75,7 +75,12 @@ the Claude transcripts of the day). Sanitised: no host addresses, roles or coden
 - Grant notice: `grantOf` run read-only on the live lease view (6 leases): every lease carries `sinceMs` and resolves to itself. `parkedWake` is
   `live` in `manager.json` since the night; no ticket grant to a parked session has happened since, so no `why: grant` row exists yet.
 
+- Guard, lease-less restart rule: fed to the live hook with the live registry it allowed a stop on a host the session held no lease on. It never
+  fired on a real host: its filter dropped every `vpt-*` name, and lab hosts are named `vpt-*`; `ssh -p 2222` read `2222` as the host. Fixed
+  (nearest `ssh` host, unit names only skipped, text in heredocs / `found-bug` / `/api/send` ignored). Replayed with the registry's events of
+  2026-11-10 to 12 (6,712 events, the leases held at each command's time): 17 remote restart / stop commands, 12 by the holder of the host or
+  device lease (pass), 5 refused and all real (3 with no lease, one during a `manager:deploy` lease, one on a device another session held).
+
 ## Not verified
 
-- The guard's lease-less restart rule was not replayed with the leases of the time (they were not recorded per command).
 - The Mac: nothing is installed there by this pass (scripts and docs only); the guard hook on the Mac is the owner's step, bug-298c8750.
