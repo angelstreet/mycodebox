@@ -1692,7 +1692,7 @@ holders: the holders that are neither a session nor a platform agent).
   frees it when the session closes; and the same reaper releases an unused grant (`unusedGrants`: codebox session idle since before the grant,
   no turn and no heartbeat/renew since, another agent's ticket waits on it, 10 min, 2 polls; `GHOSTY_UNUSED_GRANT_MIN`, 0 = off). Audit:
   `lease-actions.jsonl` (`type: unused-grant`). Tests: `test/lease-abandoned-waiter.test.js`, `test/lease-holder-reaper.test.js`.
-  Idle release (`idleHolders`, `type: idle-release`, `manager.json` `leaseIdleRelease` dry|live|off, default dry; `GHOSTY_IDLE_RELEASE_MIN`) and the immediate
+  Idle release (`idleHolders`, `type: idle-release`, `manager.json` `leaseIdleRelease` dry|live|off, code default dry, live on codebox since 2026-11-12; `GHOSTY_IDLE_RELEASE_MIN`) and the immediate
   free-equivalent answer to a stop (`leaseNudge.answerStop`): see docs/LEASE-RULES.md. Replay: `scripts/lease-idle-replay.js`, test `test/lease-idle-replay.test.js`.
 - **The installed client follows main (bug-fb46a741).** `lease-client-sync.js` runs 30 s after the dashboard starts from the live checkout on `main`
   with `scripts/vpt-lease` unmodified (so after every self-deploy): a `~/bin/vpt-lease` or registry-host copy whose sha256 differs is replaced (backup
