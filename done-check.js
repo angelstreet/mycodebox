@@ -42,6 +42,10 @@ export function namedRefs(text, home = '') {
 }
 
 // (A) Found-bugs enforcement (owner, 2026-10-28): a `STATUS: done` line carries `bugs: none | fixed <what> | reported <id>`.
+// The text the checks read: the long closing text (90 lines) when the stop has one, else the 16-line excerpt. A `Verification:` block of six
+// wrapped rows is longer than the excerpt: harness-pass2-opus was told "no Verification: block" on 2026-11-12 with the block on screen.
+export const closingTextOf = (stall) => String(stall?.closing || stall?.excerpt || '').slice(-6000);
+
 // Pure. text: the closing text. -> { value } when the last STATUS is a literal done (aliases such as "acknowledged" are not
 // checked) and carries the field (value: none | fixed | reported), { missing: true } when it does not, null when the last
 // STATUS is not done. Pane-wrapped continuation lines (indented) belong to the STATUS line.

@@ -357,3 +357,17 @@ test('Verification rows: a row wrapped in the pane is one row; evidenced pass ro
   assert.ok(proofWithoutEvidenceOf('Verification:\n1. pass — looked fine\n\nSTATUS: done — all Done-when lines pass · bugs: none'), 'pass rows with no reference are no evidence');
   assert.equal(verificationRowsOf('Verification:\n1. pass — a\n2. fail — b\nsome prose\n3. pass — c').length, 2, 'an unindented line still ends the block');
 });
+
+test('done-check reads the long closing text: a Verification block longer than the 16-line excerpt is found (harness-pass2-opus, 2026-11-12)', async () => {
+  const { closingTextOf } = await import('../done-check.js');
+  const rows = ['  Verification:'];
+  for (let n = 1; n <= 6; n++) rows.push(`  ${n}. pass — part ${n}: status-honesty.js:${n}0; int-1a1cf632e7f3ccd5${n}; replay with the leases held at the`, '     time, 17 restarts or stops, 5 refused, all of them real by hand against', '     the registry events of the day.');
+  rows.push('', '  STATUS: done — all six parts live · goal: achieved · evidence: int-1a1cf632e7f3ccd57 · closing review: docs REFERENCE.md ·', '  leftovers none · unverified none · bugs: none');
+  const closing = rows.join('\n'), excerpt = rows.slice(-16).join('\n');
+  const parts = ['one', 'two', 'three', 'four', 'five', 'six'];
+  assert.equal(verificationOf(excerpt, parts).ok, false, 'the 16-line excerpt has lost the header');
+  assert.equal(closingTextOf({ excerpt, closing }), closing);
+  assert.equal(verificationOf(closingTextOf({ excerpt, closing }), parts).ok, true);
+  assert.equal(closingTextOf({ excerpt }), excerpt, 'no long text: the excerpt');
+  assert.equal(closingTextOf(null), '');
+});
