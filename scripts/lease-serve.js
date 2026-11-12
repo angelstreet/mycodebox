@@ -5,6 +5,7 @@
 //   LEASE_PORT  listen port on 127.0.0.1 (default 17777)
 //   LEASE_DIR   state dir: journal, snapshot, clients.json, shadow store (default ~/.local/state/mycodebox-lease)
 //   LEASE_ENVS  comma-separated valid environments (empty: any sane name)
+//   LEASE_TUNE  numeric config overrides, e.g. deployGateMaxMs=300,deployStarveMs=700 (tests only; the startup line names them)
 //   <LEASE_DIR>/inventory.json  groups of equivalent resources for `claim --any <group>` (docs/LEASE-INVENTORY.md); re-read when it changes
 //   <LEASE_DIR>/health.json     which hosts answer / devices are present, per env (scripts/lease-health-probe.js writes it); an unhealthy member is
 //                               never offered as a free equivalent nor switched to. Missing or older than 15 min = unknown = healthy.
