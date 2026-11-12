@@ -817,7 +817,8 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
         const w = await deploys.wait(r.deployId);
         stamp(r, 'deployDoneAt');
         r.deployVersion = w?.version ?? null;
-        r.deployed = w?.ok === true ? { id: r.deployId, version: r.deployVersion, env: c.deploy.env, scope: r.deployScope } : null;
+        // sha: the commit this deploy built, so a request that rides it can check that it carries its merge (bug-07b4057a)
+        r.deployed = w?.ok === true ? { id: r.deployId, version: r.deployVersion, env: c.deploy.env, scope: r.deployScope, sha: r.deploySha || r.sha || null } : null;
         return { ok: w?.ok === true, tail: w?.ok === true ? `deployed ${r.deployVersion ?? ''}${w.note ? ` (${w.note})` : ''}` : (w?.error || w?.tail || w?.reason || w?.state || 'deploy failed'), info: { id: r.deployId } };
       } catch (e) { return { ok: false, tail: `deploy error: ${e?.message}` }; }   // the merge is on the target: report, never throw
     });
@@ -1035,7 +1036,12 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
       if (!x) return null;
       await waitFinal(x.id, Math.min(limit - now(), 30_000));
       const y = reqs.get(x.id);
-      if (y && y.state === 'deployed' && y.deployed && y.pushed && scopeCovers(y.deployed.scope, r.deployScope)) return { id: y.id, deployed: y.deployed };
+      // A later request is not a later merge: one that skipped the settle window can merge and deploy BEFORE this merge
+      // landed (bug-07b4057a: a frontend deploy of the previous main was reported as deploying this branch). Its deploy carries
+      // this merge only when the commit it built contains it; unknown (no sha recorded, git error) never counts as carried.
+      const mine = r.deploySha || r.sha;
+      if (y && y.state === 'deployed' && y.deployed && y.pushed && scopeCovers(y.deployed.scope, r.deployScope)
+        && mine && y.deployed.sha && (await G(r, c, ['merge-base', '--is-ancestor', mine, y.deployed.sha])).code === 0) return { id: y.id, deployed: y.deployed };
       // ended without deploying (returned, red, failed): look for another cover, else deploy ourselves
     }
     return null;

@@ -26,6 +26,10 @@ One **integration lane per repository**, run by the mycodebox server, fed by eve
    compare-and-swap (the target moved: re-merge from the new target, never force) -> wait for remote CI on that exact
    commit (when the repo has CI) -> when the request asked for a deploy and CI is green: queue the deploy (approved) and
    wait for it. Same-scope deploys coalesce in the deploy queue.
+   A request may instead ride the deploy of a later request of the same repo with a covering scope, but only when the
+   commit that deploy built contains this request's merge (`deployed.sha`, git ancestry): a later request that skipped
+   the settle window can merge and deploy before this merge lands, and riding it reported a branch deployed that was not
+   (bug-07b4057a). Not contained, or unknown: the request deploys itself.
    A CI run CANCELLED because a newer commit landed on the target is not a red: the lane reports `merged_ci_superseded`
    (the newer tip carries the CI), tells the session "nothing to fix, do not branch again", and holds the deploy until
    the newer tip's CI is green.
