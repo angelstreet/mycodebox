@@ -113,7 +113,7 @@ through the device's own server (the same path the browser uses, the auto-sign t
 | `ok` | fresh (≤ `RTSP_STALE_SECONDS`, 120 s) and not black | nothing; it also turns an `unverified` file device into a checked one |
 | `black` | even the bright part is dark: 90th-percentile luma (ffmpeg `signalstats` YHIGH) under `RTSP_BLACK_LUMA` (32) on **three snapshots 10 s apart**. Not the mean: a dark, letterboxed Sintel scene averaged under 24 and was called black | the source frame is measured too: source bright = the host's capture is wrong, **reported**; source black too = the channel itself is black, **repaired from the lists** like a dead channel (only when `capture-mode` is `live`) |
 | `stale` | older than 120 s | reported: the host stopped writing it (capture side) |
-| `multi_audio` | the host stream's newest segment (`segments/output.m3u8`, what the live player loads) carries more than one audio track | reported: hls.js buffers nothing, the live tile is black while the snapshot is fine (bug-ea31641c: a multi-rendition HLS master, BFM2, gives 4 tracks; the host maps every usable audio track) |
+| `multi_audio` | the host stream's newest segment (`segments/output.m3u8`, what the live player loads) carries more than one audio track | reported: hls.js buffers nothing, the live tile is black while the snapshot is fine. Fixed on the host 2026-11-12 (bug-ea31641c, virtualpytest 0d73213: `run_ffmpeg.sh` maps one usable audio track); a host still showing it runs the old script: restart `vpt-stream` there under the host lease (a host deploy does not restart it) |
 | `missing` / `unreachable` | 404, or the server did not answer after 3 tries | reported |
 
 The capture-driven repair has its own switch, `<state>/rtsp-nightly/capture-mode` (`dry` unless it holds `live`), so it
@@ -123,8 +123,26 @@ runs report-only until one clean night has been read (manager, 2026-11-11). The 
 What this still does not see: a tile that is black only in the browser for a reason outside the host (session cookie, CORS,
 the page itself). The 2026-11-11 BFM2 case had two layers: first, the snapshot was bright and fresh, but the browser could not mint the host-session cookie on the
 other server (CORS refused the new `X-Control-Session` header), virtualpytest BUG-8e34e51d, fixed and deployed the same night (the snapshot now shows); second, its live player stayed black
-because of the 4 audio tracks (`multi_audio` above, bug-ea31641c, host-side fix pending). A browser check of the
+because of the 4 audio tracks (`multi_audio` above, bug-ea31641c), fixed 2026-11-12. A browser check of the
 device page is the only proof for that layer (`vpt-headless-verify` skill, section 2c).
+
+### Proving a tile is fixed (lesson of 2026-11-12)
+
+A tile has **two pictures**, and "fixed" needs both, each with a screenshot looked at:
+
+1. **Snapshot** (`<img>`, `thumbnails/latest.jpg`): what a page with more than 16 tiles shows. Proven by the
+   `capture` column `ok` and by a headless screenshot of the card.
+2. **Live video** (`<video>`, `segments/output.m3u8`): what a page with 16 tiles or fewer shows, and any tile on hover.
+   Proven only by hovering the card (`page.mouse.move` to its centre, 15 s), then `video.readyState` 4 and a screenshot
+   that is not black. `readyState` 1 with nothing buffered is the `multi_audio` signature.
+
+The 2026-11-11 close checked the snapshot only and called BFM2 fixed; the owner's view (a filtered page, live video) was
+still black. Check the view the owner screenshot shows, not the default one.
+
+After a host-side fix: the host deploy installs the script but does **not** restart `vpt-stream`; until it restarts, the
+old ffmpeg command keeps running. Check `journalctl -u vpt-stream` for the new log line (`Audio map for deviceN: -map 0:1?`),
+else restart it under the lease: `vpt-lease run node1-vpt <host> --kind host -- ...` with `systemctl restart vpt-stream`
+over ssh, or the server's `/server/system/controlHostService` (what `rtsp_replace.py` uses) for a host ssh does not reach.
 
 ## Schedule and mode
 
