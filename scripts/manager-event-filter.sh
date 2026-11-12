@@ -29,6 +29,14 @@
 # ignore drops the event before the built-in rules; pass keeps it even where a built-in rule would drop it; urgent marks the output line
 # (`u: true`) so manager-wait.sh closes its batch window at once. An event the lane or a wake already delivered to its session
 # (`handled: "session"`, integration-notify.js) is routine for the manager unless the policy says pass.
+# Rules before the manager (owner 2026-11-12, TASK-239 G6; the STATUS table says nobody acts on `waiting` / `running`). Dropped at default priority:
+# - a `*:manager-item` stop that is a wait ("<session> waits for a deploy: ...", case waiting_deploy): the parked wake re-checks it and the lease
+#   nudge answers a free equivalent;
+# - notices of a check the harness already answered itself: done-check ("said done, git disagrees"), goal-check ("done not accepted"),
+#   bug-unreported, session-closed:*;
+# - disk / quota alerts under 95%: once per 5-point bucket per 6 h across runs (key `pctx|<key>|<bucket>`); 95% and over always passes.
+# Deferred (`d: true`): a non-blocking bug filing is delivered with the next wake or after MANAGER_WAIT_DEFER (manager-wait.sh, 1 h), never a wake
+# of its own. Replay: scripts/manager-wake-rules-replay.py <day>.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STATE_DIR="${GHOSTY_STATE_DIR:-$HOME/.local/state/ghosty}"
 POLICY_DEFAULT="$HERE/manager-event-policy.json"
@@ -47,6 +55,7 @@ fi
 
 jq -c --unbuffered --argjson policy "$POLICY" '
   def pol: ($policy[((.kind//"")|tostring)+":"+((.state//"")|tostring)] // $policy[((.kind//"")|tostring)] // "default");
+  def pct: ([(.title//"")|match("([0-9]+)%").captures[0].string|tonumber][0] // null);
   def routine:
     ((.kind=="deploy") and (.state=="start" or .state=="done") and ((.blockedBy//[])|length)==0)
     or ((.jev.pick=="ignore") and ((.jev.confidence//0) >= 0.9) and (.kind=="deploy") and (.state!="failed") and (.state!="orphan"))
@@ -60,10 +69,13 @@ jq -c --unbuffered --argjson policy "$POLICY" '
     or ((.kind=="external-result") and ((.priority//"default")=="default"))
     or (((.kind//"")|tostring|test("^share:")) and ((.priority//"default")=="default"))
     or ((.kind=="bug") and ((.priority//"")=="low") and ((.bug.blocking//false)==false) and ((.title//"")|test("bug found: idea:")))
+    or (((.key//"")|tostring|test(":manager-item$")) and ((.body//"")|test("^\\S+ waits for a deploy:")))
+    or ((((.session//"")=="done-check") or ((.session//"")=="goal-check") or (.kind=="bug-unreported") or ((.kind//"")|tostring|test("^session-closed:"))) and ((.priority//"default")=="default"))
     or (((.kind//"")|tostring|test("^(kpi-|pokestall-|pokemon-daily-|mobile-orchtnet-owner$|opus-openexit$|content-|mi-bugs-|pi1-load-|task208-)")) and ((.priority//"default")=="default"));
   select(pol != "ignore") | select(pol == "pass" or (routine|not))
-  | {k:((.session//"")+"|"+.kind+"|"+(if .kind=="health" then (.key//"") else ((.body//"") as $b | (if ($b|test("needs-owner:")) then ($b|capture("needs-owner:(?<q>[^\\[]*)").q) else $b end) | gsub("·\\s*[0-9][0-9hms ]*·\\s*[0-9.]+[kM]?\\s*tok\\s*";"")|gsub("\\s";"")|.[0:80]) end)),
-     u:(pol=="urgent" or ((.priority//"")=="high") or ((.priority//"")=="urgent") or ((.kind=="bug") and ((.bug.blocking//false)==true))), l:.}' \
+  | {k:(if ((.kind=="disk" or .kind=="quota") and (pct != null) and (pct < 95)) then ("pctx|"+((.key//.kind)|tostring|gsub("\\s";""))+"|"+((pct/5|floor)|tostring)) else (.session//"")+"|"+.kind+"|"+(if .kind=="health" then (.key//"") else ((.body//"") as $b | (if ($b|test("needs-owner:")) then ($b|capture("needs-owner:(?<q>[^\\[]*)").q) else $b end) | gsub("·\\s*[0-9][0-9hms ]*·\\s*[0-9.]+[kM]?\\s*tok\\s*";"")|gsub("\\s";"")|.[0:80]) end) end),
+     u:(pol=="urgent" or ((.priority//"")=="high") or ((.priority//"")=="urgent") or ((.kind=="bug") and ((.bug.blocking//false)==true))),
+     d:((.kind=="bug") and ((.bug.blocking//false)==false) and ((.priority//"")!="high") and ((.priority//"")!="urgent") and (pol!="urgent") and (pol!="pass")), l:.}' \
 | awk -W interactive -v now="$NOW" -v seen="$SEEN_FILE" '
     function persist(k) { printf "%d %s\n", now, k >> seen; fflush(seen) }
     BEGIN {
@@ -78,7 +90,7 @@ jq -c --unbuffered --argjson policy "$POLICY" '
       k = substr($0, RSTART+6, RLENGTH-7)
       match($0, /"kind":"[^"]*"/)
       ks = substr($0, RSTART+8, RLENGTH-9)
-      cross = (ks == "asks" || ks == "orphaned-task" || ks == "waiting" || ks == "lease" || ks == "health")
+      cross = (ks == "asks" || ks == "orphaned-task" || ks == "waiting" || ks == "lease" || ks == "health" || k ~ /^pctx\|/)
       if (cross && (k in seenmap)) next
       if (!(k in runmap)) {
         runmap[k] = 1

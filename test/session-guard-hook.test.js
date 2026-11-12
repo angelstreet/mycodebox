@@ -105,3 +105,17 @@ test('install-guard-hooks: adds one Bash entry next to kill-guard, idempotent; t
   const r = spawnSync('sh', ['-c', hookCommand('/nonexistent-checkout')], { input: '{"tool_input":{"command":"psql -c \\"DELETE FROM t\\""}}', encoding: 'utf8' });
   assert.equal(r.status, 0); assert.equal(r.stdout, '');
 });
+
+// ---- (d) the manager's own background commands (owner 2026-11-12, TASK-239 G6) ----
+test('(d) the manager may run only its event wait and system waits in the background; other sessions are not concerned', () => {
+  const m = { session: 'manager', managers: ['manager'], background: true };
+  assert.equal(guardCommand('curl -s http://127.0.0.1:7777/api/alerts -d x', m)?.rule, 'manager-bg');
+  assert.equal(guardCommand('echo "Re-arm the wait"; sleep 30', m)?.rule, 'manager-bg');
+  assert.equal(guardCommand('~/ghosty-sessions/scripts/manager-wait.sh', m), null);
+  assert.equal(guardCommand('until ~/ghosty-sessions/scripts/manager-wait.sh; rc=$?; [ $rc -ne 3 ]; do sleep 5; done', m), null);
+  assert.equal(guardCommand('integrate wait int-1a2b', m), null);
+  assert.equal(guardCommand('vpt-lease claim boxA/host --wait 600 --agent codebox:manager', m), null);
+  assert.equal(guardCommand('curl -s http://127.0.0.1:7777/api/alerts -d x', { ...m, background: false }), null, 'a foreground command passes');
+  assert.equal(guardCommand('curl -s http://127.0.0.1:7777/api/alerts -d x', { ...m, session: 'kpi-web' }), null, 'a worker session may run background jobs');
+  assert.equal(guardCommand('curl -s http://x', { ...m, override: 'manager-bg' }), null, 'the owner override');
+});

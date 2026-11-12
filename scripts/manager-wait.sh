@@ -4,6 +4,9 @@
 # delivered event the wait keeps collecting for MANAGER_WAIT_WINDOW seconds (default 60) so one wake carries the whole batch; an
 # urgent event (`u: true` from the filter's policy: asks, needs-manager, hold, health, a failed deploy, a blocking bug, priority high)
 # closes the window MANAGER_WAIT_GRACE seconds (default 2) after it arrived. A window below the grace is raised to it.
+# Deferred lines (`d: true` from the filter: a non-blocking bug filing; owner 2026-11-12, TASK-239 G6) do not open the window: they are printed with
+# the next real event, or alone after MANAGER_WAIT_DEFER seconds (default 3600); a held deferred line keeps the cursor, so a killed wait re-reads it.
+# 40 wakes on 2026-11-11 carried only such a filing; 33 did nothing.
 # Run it with Bash run_in_background: it has no 30-min expiry like a Monitor, so the agent wakes ONLY on a real event.
 #   scripts/manager-wait.sh [filter-command]
 # Default (no argument): reads manager-events.jsonl from a stored byte offset (<state dir>/manager-reports/.cursor), feeds the
@@ -31,6 +34,7 @@ cursor_file = os.path.join(state, 'manager-reports', '.cursor')
 poll = float(os.environ.get('MANAGER_WAIT_POLL', '0.5'))
 grace = float(os.environ.get('MANAGER_WAIT_GRACE', '2'))
 window = max(grace, float(os.environ.get('MANAGER_WAIT_WINDOW', '60')))
+defer_max = float(os.environ.get('MANAGER_WAIT_DEFER', '3600'))   # a deferred line (`d: true`) never opens the window: it rides with the next real event, or goes out alone after this long
 
 def urgent(line):
     # the filter marks urgent lines with `"u":true` (scripts/manager-event-filter.sh); an unparsable line counts as urgent (never delay the unknown)
@@ -39,6 +43,14 @@ def urgent(line):
         return bool(json.loads(line).get('u'))
     except Exception:
         return True
+
+def deferred(line):
+    try:
+        import json
+        o = json.loads(line)
+        return bool(o.get('d')) and not o.get('u')
+    except Exception:
+        return False
 
 def kill(p):
     try: os.killpg(p.pid, signal.SIGTERM)
@@ -108,6 +120,7 @@ def cursored():
         nonlocal last_written
         if n != last_written: write_cursor(n); last_written = n
     first_at = None
+    defer_at = None                                  # the first deferred line held
     urgent_at = None                                 # the first urgent line: the window closes `grace` after it
     alive = True
     prev_off = off                                   # what `off` was at the last pump; if a tick fed nothing, the filter has had a full poll to react
@@ -123,12 +136,16 @@ def cursored():
             line, _, buf = buf.partition(b'\n')
             text = line.decode()
             out.append(text + '\n')
+            if deferred(text):
+                if defer_at is None: defer_at = time.time()
+                continue
             if first_at is None: first_at = time.time()
             if urgent_at is None and urgent(text): urgent_at = time.time()
         if first_at is not None and time.time() - first_at >= window: break
         if urgent_at is not None and time.time() - urgent_at >= grace: break
+        if first_at is None and defer_at is not None and time.time() - defer_at >= defer_max: break
         if p.poll() is not None and not alive: break
-        if first_at is None and off == prev_off:      # quiet tick, nothing new fed: every fed line has been dropped by the filter, move on
+        if first_at is None and defer_at is None and off == prev_off:      # quiet tick, nothing new fed: every fed line has been dropped by the filter, move on
             advance(off)
         prev_off = off
     # flush: stop feeding, let the filter drain what it already has

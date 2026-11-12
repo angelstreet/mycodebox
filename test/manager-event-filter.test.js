@@ -207,3 +207,42 @@ test('the deploy runner\'s per-host narrowing is dropped; narrowed by another ag
   assert.deepEqual(kinds(run(env, other)), ['lease']);
   assert.deepEqual(kinds(run(env, odd)), ['lease']);
 });
+
+// ---- rules before the manager (owner 2026-11-12, TASK-239 G6) ----
+const keysOf = (r) => r.stdout.split('\n').filter(Boolean).map((l) => JSON.parse(l).l.key);
+
+test('a waiting stop routed as a lease / deploy item and the notices of checks the harness answered itself do not wake; an ask and a needs-manager do', () => {
+  const dir = tmp('ghosty-filt-'); const env = { ...process.env, GHOSTY_STATE_DIR: dir };
+  const input = ev({ key: 'lease:manager-item', kind: 'lease', state: 'manager-item', title: 'kpi: lease stop for the manager', body: 'kpi waits for a deploy: lease ticket t-1 on boxA' })
+    + ev({ key: 'deploy:abc:manager-item', kind: 'deploy', state: 'manager-item', title: 'web: deploy stop for the manager', body: 'web asks: the box is dead, which host do I use?' })
+    + ev({ key: 'done-check:kpi', kind: 'kpi', session: 'done-check', title: 'kpi said done, git disagrees' })
+    + ev({ key: 'goal-check:mac:a', kind: 'mac:a', session: 'goal-check', title: 'mac:a: done not accepted by the goal check (Mac, cannot answer)' })
+    + ev({ key: 'a:bug-unreported', kind: 'bug-unreported', session: 'a', title: 'a: bug mentioned, not reported' })
+    + ev({ key: 'health:session-closed:a', kind: 'session-closed:a', session: 'health', title: 'session closed: a' })
+    + ev({ key: 'a:needs-manager', kind: 'needs-manager', session: 'a', title: 'a: needs the manager', body: 'a needs the manager: pick one' })
+    + ev({ key: 'done-check:b', kind: 'b', session: 'done-check', title: 'b said done, git disagrees', body: 'third time', priority: 'high' });
+  assert.deepEqual(keysOf(run(env, input)), ['deploy:abc:manager-item', 'a:needs-manager', 'done-check:b']);
+});
+
+test('disk / quota under 95%: once per 5-point bucket across runs; 95% and over always passes', () => {
+  const dir = tmp('ghosty-filt-'); const env = { ...process.env, GHOSTY_STATE_DIR: dir };
+  const d = (p) => ev({ key: 'disk:/', kind: 'disk', title: `codebox disk / ${p}% full`, priority: 'urgent', body: `at ${p}` });
+  assert.equal(keysOf(run(env, d(90))).length, 1, 'first alert of the 90-94 bucket');
+  assert.equal(keysOf(run(env, d(91))).length, 0, 'same bucket, later run: no wake');
+  assert.equal(keysOf(run(env, d(85))).length, 1, 'another bucket');
+  assert.equal(keysOf(run(env, d(96))).length, 1, '95% and over passes');
+  assert.equal(keysOf(run(env, d(96))).length, 1, '95% and over passes again in a later run');
+  const q = (p) => ev({ key: 'quota:claude:week', kind: 'quota', title: `Claude week quota at ${p}%`, priority: 'high', body: `q ${p}` });
+  assert.equal(keysOf(run(env, q(80) + q(83))).length, 1, 'one quota wake per bucket');
+  assert.equal(keysOf(run(env, q(84))).length, 0);
+});
+
+test('a non-blocking bug filing is marked deferred (d); a blocking or high-priority one is not', () => {
+  const dir = tmp('ghosty-filt-'); const env = { ...process.env, GHOSTY_STATE_DIR: dir };
+  const r = run(env, ev({ key: 'a:bug', kind: 'bug', session: 'a', title: 'a: bug found: x', body: 'b1', priority: 'default', bug: { blocking: false } })
+    + ev({ key: 'b:bug', kind: 'bug', session: 'b', title: 'b: BLOCKING bug found: y', body: 'b2', priority: 'default', bug: { blocking: true } })
+    + ev({ key: 'c:bug', kind: 'bug', session: 'c', title: 'c: bug found: z', body: 'b3', priority: 'high', bug: { blocking: false } })
+    + ev({ key: 'web:asks', kind: 'asks', session: 'web', body: 'Which one?' }));
+  const o = r.stdout.split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  assert.deepEqual(o.map((x) => [x.l.key, x.d, x.u]), [['a:bug', true, false], ['b:bug', false, true], ['c:bug', false, true], ['web:asks', false, true]]);
+});
