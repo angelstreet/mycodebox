@@ -231,9 +231,9 @@ export function createGoalGate({ stateDir, goalOf: goalFor = async () => '', par
       await save();
       return { kind: 'capped', goal, sig, was: d.kind };
     }
-    if (s.canAnswer === false) {   // a Mac stop under the loop guard: nothing can be typed back; a bounce goes to the manager
+    if (s.canAnswer === false) {   // a Mac stop under the loop guard: ghosty cannot type back (tmux route), the manager can SendMessage; a bounce goes to the manager
       Object.assign(e, { sig, at: now() });
-      if (d.bounce) await record({ key: `goal-check:${s.name}`, title: `${s.name}: done not accepted by the goal check (Mac, cannot answer)`, body: (d.missing || d.leftovers || []).join(' | ').slice(0, 300), url: '/', priority: 'default' }).catch(() => {});
+      if (d.bounce) await record({ key: `goal-check:${s.name}`, title: `${s.name}: done not accepted by the goal check (Mac: reply with SendMessage to the session name)`, body: (d.missing || d.leftovers || []).join(' | ').slice(0, 300), url: '/', priority: 'default' }).catch(() => {});
       await note({ session: s.name, kind: d.kind, unanswerable: true }); await save();
       return { ...d, message: null, unanswerable: true };
     }
