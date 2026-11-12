@@ -15,7 +15,7 @@
 // Installed by scripts/install-guard-hooks.js into ~/.claude/settings.json (next to kill-guard.py). Pure logic in guardCommand().
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { hostsNamed, restartBlocker } from '../routine-restart.js';
+import { restartBlocker } from '../routine-restart.js';
 
 const deny = (rule, why) => ({ rule, why: `session-guard (${rule}): ${why}` });
 
@@ -39,9 +39,13 @@ export function sqlWrite(cmd, { readFile = (p) => readFileSync(p, 'utf8') } = {}
 
 // ---- (b) restart / stop of a vpt-* unit ----
 const RESTART = /\bsystemctl\s+(?:-{1,2}[\w=-]+\s+)*(restart|stop)\s+(?:-{1,2}[\w=-]+\s+)*([^;&|\n'"]*?\bvpt-[\w@.*-]+)/i;
+const UNIT_NAME = /^vpt-(?:host|monitor[\w-]*|stream[\w@-]*|grabber[\w@-]*|kpi|avq|archiver|timeline|audio[\w-]*|mediamtx|ble-remote@.*|server|vnc|websockify)(?:\.service)?$/;
 const mineLease = (l, session) => !!session && [l.session, l.agent].some((x) => { const v = String(x || '').toLowerCase(); return v === session || v.endsWith(`:${session}`); });
 const resOf = (l) => [...(l.resources || []), l.resource, ...(l.legacy || [])].filter(Boolean).map((x) => String(x).toLowerCase());
-export function restartWithoutLease(cmd, { leases, session = '' } = {}) {
+const SSH_HOST = /\bssh\s+(?:-[bcDEeFIiJLlmOoPpQRSWw]\s*\S+\s+|-\S+\s+)*(?:[\w.-]+@)?([\w.-]+)/g;
+const TEXT_ARG = /\bfound-bug\b|--(?:title|reason|repro|error|workaround)\b|\/api\/send\b|"keys"/;
+export function restartWithoutLease(raw, { leases, session = '' } = {}) {
+  const cmd = withoutHeredocs(raw);   // a script or doc being written that mentions a restart is not a restart
   const m = RESTART.exec(cmd);
   if (!m) return null;
   const at = m.index, verb = m[1].toLowerCase(), unit = m[2].trim().split(/\s+/).pop();
@@ -55,7 +59,12 @@ export function restartWithoutLease(cmd, { leases, session = '' } = {}) {
       + `Chain it with \`&&\` (\`vpt-lease claim <env>/<host> --kind host --wait && ssh <host> sudo systemctl ${verb} ${unit}\`) or use \`vpt-lease run <env>/<host> --kind host -- ssh <host> sudo systemctl ${verb} ${unit}\`.`);
     return null;   // `claim ... && systemctl ...`: the restart runs only on a granted claim
   }
-  const hosts = hostsNamed(cmd).filter((h) => !/^(?:sudo|systemctl|vpt-[\w-]+)$/.test(h));
+  // lab hosts are named vpt-* too (vpt-mf1, vpt-pi1): drop only unit names (2026-11-12: every real host was dropped, the rule never fired)
+  // the host is the nearest `ssh <host>` before the systemctl, with no bug report / message text in between (2026-11-12 replay: found-bug
+  // reasons and manager messages that mention a restart). Lab hosts are named vpt-* too: only unit names are dropped (every real host was).
+  const ssh = [...before.matchAll(SSH_HOST)].pop();
+  if (!ssh || TEXT_ARG.test(before.slice(ssh.index)) || TEXT_ARG.test(before.slice(0, ssh.index))) return null;
+  const hosts = [ssh[1].toLowerCase()].filter((h) => !UNIT_NAME.test(h) && !/^(?:sudo|systemctl)$/.test(h));
   if (!hosts.length || !Array.isArray(leases)) return null;   // a local unit, or the registry is unreadable: not decidable here
   const s = String(session || '').toLowerCase();
   const own = leases.filter((l) => (l.mode || 'exclusive') === 'exclusive' && mineLease(l, s));

@@ -85,7 +85,7 @@ export function neutralizeRoutineRestart(text, variants) {
 
 // ---- lease-awareness -------------------------------------------------------------------------------------------------
 const mine = (l, session) => !!session && (l.session === session || l.session === `codebox:${session}` || String(l.agent || '').endsWith(`:${session}`) || l.agent === session);
-const HOST_TOKEN = /\b(?:on\s+(?:the\s+)?(?:lab\s+)?(?:host\s+)?)([\w<>.-]+)|\bssh\s+(?:-\S+\s+)*([\w<>@.-]+)/gi;
+const HOST_TOKEN = /\b(?:on\s+(?:the\s+)?(?:lab\s+)?(?:host\s+)?)([\w<>.-]+)|\bssh\s+(?:-[bcDEeFIiJLlmOoPpQRSWw]\s*\S+\s+|-\S+\s+)*([\w<>@.-]+)/gi;   // an option with an argument (`-p 2222`, `-i key`) is not the host
 export const hostsNamed = (text) => {
   const out = new Set();
   for (const m of String(text || '').matchAll(HOST_TOKEN)) { const h = (m[1] || m[2] || '').replace(/^.*@/, '').toLowerCase(); if (h && !/^(?:the|a|it|this|that|now|my|your|vpt-(?:monitor|host|stream|grabber))/.test(h)) out.add(h); }
