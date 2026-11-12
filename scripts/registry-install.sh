@@ -13,6 +13,7 @@ SSH_T=${REGISTRY_SSH:-${VPT_LEASE_SSH_TARGET:-proxmox}}
 DIR=${REGISTRY_DIR:-mycodebox-lease}
 ENVN=${REGISTRY_ENV:-node1-vpt}
 PROBES=${REGISTRY_PROBES:-"vpt-lenovo4/device1 vpt-mf1/device2 vpt-pi1/device5"}
+PROC=${REGISTRY_PROC:-[^ ]*node scripts/lease-serve\.js}   # regexp of the registry command line (tests override it)
 DRY=0; [ "${1:-}" = "--dry-run" ] && DRY=1
 FILES="lease-service.js lease-routes.js catchup-supersede.js lease-equivalence.js scripts/lease-serve.js"
 # the lane runs with a minimal PATH (no ~/.local/bin): find the client, and fail closed without it (the first two lane runs rolled back on this)
@@ -39,10 +40,20 @@ for f in $CHANGED; do
   rssh "cd ~/$DIR && cp -p $f $f.bak-$TS-pre-install && cp $tmp $f && rm -f $tmp" || exit 1
 done
 rollback() { for f in $CHANGED; do rssh "cd ~/$DIR && cp -p $f.bak-$TS-pre-install $f"; done; restart; echo "registry-install: rolled back (backups *.bak-$TS-pre-install)" >&2; }
+# The pattern is anchored so the remote shell that runs this (its own command line contains the words) is never the match: the first
+# version killed itself and the registry kept running the old code. A restart that does not end in a NEW pid fails (-> rollback).
 restart() {
-  rssh "pid=\$(pgrep -u \$(id -u) -f 'node scripts/lease-serve.js' | head -1); [ -n \"\$pid\" ] && kill \$pid; i=0; while [ \$i -lt 30 ] && kill -0 \$pid 2>/dev/null; do sleep 1; i=\$((i+1)); done; sh ~/bin/mycodebox-lease-serve.sh; sleep 4"
+  rssh "sh -s -- '$PROC'" <<'EOS'
+pat="^$1\$"
+old=$(pgrep -u "$(id -u)" -f "$pat" | head -1)
+[ -n "$old" ] && kill "$old"
+i=0; while [ -n "$old" ] && [ $i -lt 30 ] && kill -0 "$old" 2>/dev/null; do sleep 1; i=$((i+1)); done
+sh ~/bin/mycodebox-lease-serve.sh; sleep 4
+new=$(pgrep -u "$(id -u)" -f "$pat" | head -1)
+[ -n "$new" ] && [ "$new" != "$old" ]
+EOS
 }
-restart
+restart || { echo "registry-install: the registry did not restart onto a new process" >&2; rollback; exit 1; }
 OK=0; tries=0
 # the registry needs a few seconds to load its journal after the restart (the first lane run rolled back on exactly this): retry ~45 s
 while [ "$OK" = 0 ] && [ $tries -lt 15 ]; do
