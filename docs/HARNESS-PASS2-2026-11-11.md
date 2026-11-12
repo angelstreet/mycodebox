@@ -66,11 +66,16 @@ the Claude transcripts of the day). Sanitised: no host addresses, roles or coden
 | Guard hook | installed | proposed: `install-guard-hooks.js --checkout <mac checkout>` by the owner |
 | Fix claim | `found-bug --claim` | same script over the token (`found-bug --self-update` brings v3) |
 
+## Checked live (2026-11-12)
+
+- Detectors on live panes: done-but-failed woke mi-bugs-fix at 21:49 UTC ("partly achieved"); the proof warning fired at bugs-fix-first at 10:40
+  wrongly: its done line pointed at a `Verification:` block whose rows carry int- ids and commits, and the block parser read 1 of 5 rows because
+  a row wrapped in the pane ended it. Both fixed (`verificationRowsOf` joins an indented continuation line; evidenced `pass` rows count as
+  evidence), test in `test/status-honesty.test.js`.
+- Grant notice: `grantOf` run read-only on the live lease view (6 leases): every lease carries `sinceMs` and resolves to itself. `parkedWake` is
+  `live` in `manager.json` since the night; no ticket grant to a parked session has happened since, so no `why: grant` row exists yet.
+
 ## Not verified
 
-- The detectors were replayed on stored excerpts (the stall row's tail), not on live panes; a long done line that wrapped differently in a pane
-  may read differently.
-- The grant notice replay used the registry's grant events and the stall ledger, not a live dry night; the lease view's `sinceMs` field on the
-  registry host's answers was not checked live.
 - The guard's lease-less restart rule was not replayed with the leases of the time (they were not recorded per command).
-- Nothing was run on the Mac.
+- The Mac: nothing is installed there by this pass (scripts and docs only); the guard hook on the Mac is the owner's step, bug-298c8750.
