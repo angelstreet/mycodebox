@@ -107,3 +107,14 @@ test('install: a restart that leaves the same registry process running fails and
   assert.match(r.stderr, /did not restart onto a new process/);
   assert.equal(fs.readFileSync(path.join(dir, 'lease-service.js'), 'utf8'), '// old\n');
 });
+test('install: a rollback says why (busy probe, denied claim) and an error text is never taken for a lease id', () => {
+  const { h } = installable(0);
+  fs.writeFileSync(path.join(h.bin, 'vpt-lease'), `#!/bin/sh
+case "$1" in deploy) exit 0;; check) [ "$3" = vpt-mf1/device2 ] && { echo "BUSY: held by x"; exit 1; }; exit 0;; claim) echo "denied: host lease held by deployment"; exit 0;; esac
+exit 0
+`, { mode: 0o755 });   // the claim prints text starting with a hex letter and exits 0 on purpose
+  const r = run(h, [], { REGISTRY_RETRY_SLEEP: '0', REGISTRY_PROC: SLEEP });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /round trip failed after 15 tries, last: claim vpt-pi1\/device5 denied: denied: host lease held/);
+  assert.match(r.stderr, /rolled back/);
+});
