@@ -164,3 +164,30 @@ test('the owner policy file can make a kind urgent or ignored for the wait', () 
   assert.deepEqual(ids(r.stdout), ['q2'], 'asks ignored, leftovers delivered');
   assert.ok(Date.now() - t0 < 2500, `leftovers is urgent now (${Date.now() - t0} ms)`);
 });
+
+// ---- deferred lines (owner 2026-11-12, TASK-239 G6): a non-blocking bug filing never wakes the manager by itself ----
+const bug = (i) => JSON.stringify({ at: new Date(1e12 + i * 1000).toISOString(), key: `b${i}:bug`, kind: 'bug', session: `b${i}`, title: `b${i}: bug found: x`, body: `bug ${i}`, priority: 'default', bug: { blocking: false } }) + '\n';
+
+test('a deferred line does not end the wait; it comes out with the next real event and the cursor moves past both', async () => {
+  const s = setup();
+  writeFileSync(s.cursor, '0\n');
+  writeFileSync(s.events, bug(1));
+  const p = spawn('bash', [SH], { env: s.env });
+  let out = ''; p.stdout.on('data', (d) => { out += d; });
+  await new Promise((r) => setTimeout(r, 4500));                       // longer than the 3 s window: a routine line would have ended the wait
+  assert.equal(out, '', 'still waiting on the deferred line alone');
+  appendFileSync(s.events, ev(2));
+  await new Promise((r) => p.on('close', r));
+  assert.deepEqual(ids(out), ['b1', 's2']);
+  assert.equal(Number(readFileSync(s.cursor, 'utf8')), readFileSync(s.events).length);
+});
+
+test('a deferred line alone is delivered after MANAGER_WAIT_DEFER', async () => {
+  const s = setup(); s.env.MANAGER_WAIT_DEFER = '2';
+  writeFileSync(s.cursor, '0\n');
+  writeFileSync(s.events, bug(1));
+  const t0 = Date.now();
+  const r = run(s);
+  assert.deepEqual(ids(r.stdout), ['b1']);
+  assert.ok(Date.now() - t0 >= 1900 && Date.now() - t0 < 8000, `delivered after the defer time (${Date.now() - t0} ms)`);
+});

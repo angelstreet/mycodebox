@@ -7,6 +7,9 @@
 //                 vpt-host after a BUSY claim, 2026-11-11 ~11:00 UTC); also another session's lease on it (restartBlocker, bug-486f0188)
 //   (c) host-config  POST /host/system/config or /server/settings/host-config with no `devices` object or an empty one (web-kpi-unblock's
 //                 `devices:{}` deleted every DEVICE key of a host .env, 2026-11-11 14:27 UTC, bug-591e8166)
+//   (d) manager-bg  the MANAGER session starting a background command that is not its event wait: every background command wakes the manager
+//                 again when it ends (61 such wakes on 2026-11-11, 53 did nothing; TASK-239 G6). Only manager-wait.sh, `integrate wait`,
+//                 a `vpt-lease ... --wait` / `vpt-lease run` and cbsession may run in the background there.
 // Owner override: GHOSTY_GUARD_OVERRIDE=sql|restart|host-config|all in the SESSION's environment (the owner starts it so). An override typed
 // into the command itself is refused: the agent cannot grant it to itself. Fails open when the lease registry cannot be read.
 // Installed by scripts/install-guard-hooks.js into ~/.claude/settings.json (next to kill-guard.py). Pure logic in guardCommand().
@@ -87,14 +90,25 @@ export function hostConfigWithoutDevices(cmd, { readFile = (p) => readFileSync(p
   return null;
 }
 
+// ---- (d) the manager's own background commands ----
+const MANAGER_BG_OK = /manager-wait\.sh|\bintegrate\s+wait\b|\bvpt-lease\b[^;&|\n]*(?:--wait|\brun\b)|\bcbsession\b/;
+export function managerBackground(cmd, { background = false, session = '', managers = [] } = {}) {
+  if (!background || !session || !managers.map((m) => String(m).toLowerCase()).includes(String(session).toLowerCase())) return null;
+  if (MANAGER_BG_OK.test(String(cmd))) return null;
+  return deny('manager-bg', 'a background command wakes you again when it ends, for nothing (61 such wakes on 2026-11-11, 53 did nothing). Run this command in the '
+    + 'foreground (Bash timeout up to 600000 ms). Only the event wait (scripts/manager-wait.sh), `integrate wait`, a `vpt-lease ... --wait` / `vpt-lease run` and '
+    + 'cbsession run in the background.');
+}
+
 // -> { rule, why } | null. override: the session environment's GHOSTY_GUARD_OVERRIDE (never the command's).
-export function guardCommand(cmd, { leases = undefined, session = '', override = '', readFile } = {}) {
+export function guardCommand(cmd, { leases = undefined, session = '', override = '', readFile, background = false, managers = [] } = {}) {
   const c = String(cmd || '');
   if (!c.trim()) return null;
   if (/\bGHOSTY_GUARD_OVERRIDE\s*=/.test(c)) return deny('override', 'GHOSTY_GUARD_OVERRIDE is the owner\'s switch, read from the session environment; it cannot be set inside a command. Use the route / lease the refusal named, or ask with STATUS: needs-manager.');
   const off = new Set(String(override || '').toLowerCase().split(/[\s,]+/).filter(Boolean));
   const on = (r) => !off.has(r) && !off.has('all');
   const opts = readFile ? { readFile } : {};
+  if (on('manager-bg')) { const r = managerBackground(c, { background, session, managers }); if (r) return r; }
   if (on('sql')) { const r = sqlWrite(c, opts); if (r) return r; }
   if (on('host-config')) { const r = hostConfigWithoutDevices(c, opts); if (r) return r; }
   if (on('restart') && RESTART.test(c)) {
@@ -116,10 +130,12 @@ const liveLeases = () => { try { return JSON.parse(execFileSync('vpt-lease', ['l
 if (import.meta.url === `file://${process.argv[1]}`) {
   let raw = '';
   process.stdin.on('data', (d) => { raw += d; }).on('end', () => {
-    let cmd = '';
-    try { cmd = JSON.parse(raw)?.tool_input?.command || ''; } catch { /* not a hook call */ }
+    let cmd = '', background = false;
+    try { const ti = JSON.parse(raw)?.tool_input; cmd = ti?.command || ''; background = ti?.run_in_background === true; } catch { /* not a hook call */ }
+    let managers = ['manager'];
+    try { const j = JSON.parse(readFileSync(`${process.env.GHOSTY_STATE_DIR || `${process.env.HOME}/.local/state/ghosty`}/manager.json`, 'utf8')); if (Array.isArray(j?.managerSessions) && j.managerSessions.length) managers = j.managerSessions; } catch { /* default */ }
     let r = null;
-    try { r = guardCommand(cmd, { leases: liveLeases, session: sessionName(), override: process.env.GHOSTY_GUARD_OVERRIDE || '' }); } catch { r = null; }   // a guard bug never blocks a session
+    try { r = guardCommand(cmd, { leases: liveLeases, session: sessionName(), override: process.env.GHOSTY_GUARD_OVERRIDE || '', background, managers }); } catch { r = null; }   // a guard bug never blocks a session
     if (r) console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: r.why } }));
   });
 }
