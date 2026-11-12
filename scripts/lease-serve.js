@@ -56,10 +56,10 @@ export const mergedHealth = (health, equiv) => (env) => {
   return { known_broken: e.known_broken || {}, servers: e.servers || {}, hosts: { ...(h.hosts || {}), ...(e.hosts || {}) }, devices: { ...(h.devices || {}), ...(e.devices || {}) } };
 };
 
-export function startLeaseServer({ dir, port = 17777, host = '127.0.0.1', envs = [], ownServers = {}, log = console } = {}) {
+export function startLeaseServer({ dir, port = 17777, host = '127.0.0.1', envs = [], ownServers = {}, tune = {}, log = console } = {}) {
   // No tmux here: liveness is unknown (never releases anything); holders are reclaimed by TTL and declared heartbeats only.
   const service = createLeaseService({ dir, sessions: { isAlive: () => undefined, trackable: () => false },
-    onEvent: (ev) => log.log(`[lease] ${ev.kind || 'event'} ${ev.id || ''} ${ev.agent || ''}`.trim()), config: { envs, ownServers, inventory: inventoryReader(path.join(dir, 'inventory.json'), log), health: mergedHealth(healthReader(path.join(dir, 'health.json'), log), equivalenceReader(path.join(dir, 'equivalence.json'), log)) } });
+    onEvent: (ev) => log.log(`[lease] ${ev.kind || 'event'} ${ev.id || ''} ${ev.agent || ''}`.trim()), config: { ...tune, envs, ownServers, inventory: inventoryReader(path.join(dir, 'inventory.json'), log), health: mergedHealth(healthReader(path.join(dir, 'health.json'), log), equivalenceReader(path.join(dir, 'equivalence.json'), log)) } });
   const routes = createLeaseRoutes({ service, dir });
   const server = http.createServer(async (req, res) => {
     try {
@@ -83,7 +83,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   // LEASE_OWN_SERVERS="node1-vpt:vpt-pi1,vpt-pi4;other-env:host"  hosts that run their own secondary server (TASK-129)
   const ownServers = Object.fromEntries(String(process.env.LEASE_OWN_SERVERS || '').split(';').map((x) => x.trim()).filter(Boolean)
     .map((x) => { const [e, hs] = x.split(':'); return [e.trim().toLowerCase(), String(hs || '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean)]; }));
-  const s = startLeaseServer({ dir, port: Number(process.env.LEASE_PORT || 17777), envs, ownServers });
+  // LEASE_TUNE="deployGateMaxMs=300,deployStarveMs=700"  numeric config overrides (tests of the deploy gate with a real clock)
+  const tune = Object.fromEntries(String(process.env.LEASE_TUNE || '').split(',').map((x) => x.split('=')).filter(([k, v]) => k && Number.isFinite(Number(v))).map(([k, v]) => [k.trim(), Number(v)]));
+  const s = startLeaseServer({ dir, port: Number(process.env.LEASE_PORT || 17777), envs, ownServers, tune });
   s.ready.then((p) => console.log(`[lease] central lease service on 127.0.0.1:${p}, state ${dir}`))
     .catch((e) => { console.error(`[lease] cannot listen: ${e.message}`); process.exit(1); });
   for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { s.close().finally(() => process.exit(0)); });
