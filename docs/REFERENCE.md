@@ -993,6 +993,12 @@ starts the CLI with the model flag and the prompt as its first message (read fro
 text never meets the shell). The project list (`GET /api/dirs`) offers git repos and worktrees under `$HOME` only, without
 tmp*, scratchpad or hidden-folder ones (`new-session.js` `pickableProject`). The old headroom suggestion is gone.
 
+**Project of a session** (owner 2026-11-12). A session is grouped and filtered by the git project of its pane's folder; one in no
+repo shows "no repo" (it used to show its agent name, which read as a fake "claude" project). When the folder was removed under
+a live session (a merged worktree cleaned up), tmux reports `<path> (deleted)`: the project is then read from the main checkout
+the worktree was named after (`~/repo-topic` -> `~/repo`, `cwd-gone.js`). The nav list leaves the Claude account out of the row
+(it ran into the age column); it is in the agent badge's tooltip.
+
 ```bash
 npm run stall-report -- --days 3 --list      # precision per case vs. what the owner answered, owner labels
 npm run stall-report -- --days 3 --reclassify --export ~/labelled-stops.json

@@ -294,10 +294,18 @@ function agentBadgeHtml(name, { model = true } = {}) {
   const a = agentOf(name);
   const m = (state.status[name] || {}).model;
   // the model is the badge's tooltip; the nav list shows no model text (no room), cards and rows show it when they have space
-  return `<span class="agent ${a}"${m ? ` title="${escapeHtml(m)}"` : ''}>${AGENT_LABEL[a] || a}</span>${acctBadgeHtml(name)}${m && model ? `<span class="agent-model"> · ${escapeHtml(m)}</span>` : ''}${reporterMarkHtml(name)}`;
+  // the nav list has no room for the account either (its label ran into the age column, owner 2026-11-12): it goes in the tooltip there
+  const acct = model ? acctBadgeHtml(name) : '', acctTip = model ? '' : acctLabelOf(name);
+  const tip = [m, acctTip && `account: ${acctTip}`].filter(Boolean).join('\n');
+  return `<span class="agent ${a}"${tip ? ` title="${escapeHtml(tip)}"` : ''}>${AGENT_LABEL[a] || a}</span>${acct}${m && model ? `<span class="agent-model"> · ${escapeHtml(m)}</span>` : ''}${reporterMarkHtml(name)}`;
 }
 // Claude account rotation (claude-accounts.js): which account a Claude session runs on, shown once there is more than one.
 const claudeAccountsOf = () => state.quota?.plans?.find((p) => p.plan === 'claude')?.accounts || null;
+function acctLabelOf(name) {
+  const accts = claudeAccountsOf(), id = (state.status[name] || {}).claudeAccount;
+  if (!accts || !id) return '';
+  return accts.find((x) => x.id === id)?.label || id;
+}
 function acctBadgeHtml(name) {
   const accts = claudeAccountsOf(), id = (state.status[name] || {}).claudeAccount;
   if (!accts || !id) return '';
@@ -1001,7 +1009,7 @@ function byUrgency(list) {
 // fTask defaults to ON on ≤720px via state init above; the choice persists in localStorage.
 const LS_FILTERS = 'ghosty.filters';
 const LS_FTASK = 'ghosty.fTask';   // '1' / '0'; absent = use the viewport default
-function projectOf(n) { const st = state.status[n]; return st?.project || st?.repo || (st ? agentOf(n) : ''); }   // not in a git repo: label it by its agent (claude, codex, bash...)
+function projectOf(n) { const st = state.status[n]; return st?.project || st?.repo || ''; }   // not in a git repo: 'no repo' (an agent name read as a fake project, owner 2026-11-12)
 function matchesFilter(n) {
   if (state.layout.hidden.includes(n)) return false;   // hidden by the owner (sidebar eye button); listed under Hidden in the sidebar footer
   // A session shown as 'deploy' (waiting on a deploy) matches the 'deploy' filter,

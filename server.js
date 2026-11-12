@@ -145,6 +145,7 @@ import { trustFolder, trustClaude } from './trust.js';
 import { sessionDirectory } from './session-directory.js';
 import { createLayoutStore } from './layout.js';
 import { createSessionMeta } from './session-meta.js';
+import { goneCwd, projectCandidates } from './cwd-gone.js';
 import { pickableProject, launchArgs, codexModels, CLAUDE_MODELS, MINIMAX_MODELS } from './new-session.js';
 import { createSessionHistory } from './session-history.js';
 import { createHistoryView } from './history-view.js';
@@ -683,7 +684,20 @@ const META_TTL_MS = 10000;
 const metaCache = new Map(); // session -> { at, cwd, repo, branch, dirty, busy }
 const digestCache = new Map();  // since -> { at, body } for GET /api/manager/score-digest
 
+// A removed folder (merged worktree cleaned up under a live session) keeps its project: it is read from the main checkout the
+// worktree was named after, so the session is not regrouped under its agent name (owner 2026-11-12).
 async function gitInfo(cwd) {
+  const gone = goneCwd(cwd);
+  if (!gone) return gitInfoAt(cwd);
+  for (const c of projectCandidates(gone, HOME)) {
+    if (!existsSync(c)) continue;
+    const g = await gitInfoAt(c);
+    if (g.project) return { ...g, repo: basename(gone), worktree: basename(gone), branch: null, dirty: null, gone: true };
+  }
+  return { repo: null, project: null, github: false, worktree: null, branch: null, dirty: null, gone: true };
+}
+
+async function gitInfoAt(cwd) {
   try {
     const run = (args) => exec('git', ['-C', cwd, ...args], { timeout: 4000, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } }).then((r) => r.stdout.trim());
     const [top, gitDir, commonDir, branch] = (await run(['rev-parse', '--path-format=absolute',
