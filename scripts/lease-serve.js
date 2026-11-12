@@ -2,6 +2,7 @@
 // Standalone central lease service, for the registry host (LEASES-CENTRAL §2; manager decision 2026-10-18: the service runs
 // next to the legacy registry, loopback only, and every machine keeps reaching it through `ssh <registry> vpt-lease ...`).
 // Same lease-service.js and lease-routes.js as the dashboard; nothing else from mycodebox is needed.
+// This file is NOT part of the ghosty deploy: a merged change is installed on the registry host by scripts/registry-install.sh (the lane runs it).
 //   LEASE_PORT  listen port on 127.0.0.1 (default 17777)
 //   LEASE_DIR   state dir: journal, snapshot, clients.json, shadow store (default ~/.local/state/mycodebox-lease)
 //   LEASE_ENVS  comma-separated valid environments (empty: any sane name)
