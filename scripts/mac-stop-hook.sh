@@ -91,7 +91,7 @@ if [ -n "$TP" ] && [ -r "$TP" ]; then
     s = $0; t = ""
     if (match(s, /"content": *"([^"\\]|\\.)*"/)) { t = substr(s, RSTART, RLENGTH); sub(/^"content": *"/, "", t); sub(/"$/, "", t) }
     else if (match(s, /"type": *"text", *"text": *"([^"\\]|\\.)*"/)) { t = substr(s, RSTART, RLENGTH); sub(/^"type": *"text", *"text": *"/, "", t); sub(/"$/, "", t) }
-    if (t == "" || t ~ /^(<|\\u003c|Caveat:)/) next
+    if (t == "" || t ~ /^(<|\\u003c|Caveat:|Stop hook feedback|\[Image|\[SYSTEM NOTIFICATION|\[Request interrupted|This session is being continued)/) next
     print t; exit
   }' | cut -c1-2000 | sed 's/\\*$//')
 fi

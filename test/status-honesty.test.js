@@ -301,3 +301,16 @@ test('done-check (I): a failed line without cause: / plan: is sent back once whe
   const good = mk('live', line + ' · cause: the stb4 anchor frame predates the firmware update (frame 2026-11-02 vs build 11-09) · plan: recapture the anchor under lease, then rerun'); await good.w.tick();
   assert.equal(good.sent.length, 0);
 });
+
+// a machine message is never a goal (2026-11-12)
+import { createGoalStore } from '../goal-check.js';
+import { writeFileSync } from 'node:fs';
+test('goal store: hook feedback, a notification or an image marker is not a goal; a stored one is replaced by the first real prompt', () => {
+  for (const junk of ['Stop hook feedback:\nStatus check: your done line lacks goal', '<task-notification>\n<task-id>x</task-id>', '[Image: source: /private/tmp/x.png]', 'This session is being continued from a previous conversation']) assert.equal(goalOf(junk), '', junk);
+  const dir = tmp('goalstore-'), store = createGoalStore({ stateDir: dir });
+  assert.equal(store.capture('mac:t208', 'Stop hook feedback:\nStatus check', 'mac-first-prompt'), null);
+  writeFileSync(join(dir, 'goals.json'), JSON.stringify({ 'mac:t208': { goal: 'Stop hook feedback:', parts: [], source: 'mac-first-prompt' } }));
+  const e = store.capture('mac:t208', 'Build the radio, replay and VOD functional scripts and prove one run of each on stbv1.', 'mac-first-prompt');
+  assert.match(e.goal, /^Build the radio, replay and VOD functional scripts/);
+  assert.match(store.capture('mac:t208', 'pause the 5 nightly deployments until we fix', 'mac-first-prompt').goal, /^Build the radio/, 'a later side request does not replace the goal');
+});
