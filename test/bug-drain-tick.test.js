@@ -121,7 +121,7 @@ test('tick: a refused claim starts no worker; sessions API down starts nothing',
 
 test('brief carries the bug, the claim command and the STATUS vocabulary, no foreign data', () => {
   const t = brief(bug({ title: 'T' }), { provider: 'minimax' });
-  assert.match(t, /Goal: fix bug-/); assert.match(t, /integrate request/); assert.match(t, /failed — goal not achieved/); assert.match(t, /--release/);
+  assert.match(t, /Goal: fix bug-/); assert.match(t, /\nDone when:\n1\. .*found-bug list/); assert.match(t, /\nTime box: /); assert.match(t, /integrate request/); assert.match(t, /failed — goal not achieved/); assert.match(t, /--release/);
   assert.doesNotMatch(brief(bug(), { provider: 'claude' }), /MiniMax/);
 });
 

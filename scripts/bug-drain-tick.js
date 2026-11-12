@@ -147,6 +147,12 @@ export function plan({ bugs, live, quota, diskPct, now, reachable = null }) {
 export function brief(b, { provider }) {
   return `Goal: fix ${b.id} (${String(b.title).slice(0, 120)}) and ship it, or say why it cannot be fixed.
 
+Done when:
+1. \`found-bug list\` shows ${b.id} resolved: state fixed with a commit or integration id, or wontfix / duplicate with the reason in the note.
+2. For a fix: the integration request of your branch is merged (the lane's result names the merge commit).
+3. The tests your change touches pass (\`npm test\` output, last lines in your closing message).
+Time box: 2 h.
+
 You are a bug-drain worker (scripts/bug-drain-tick.js, docs/BUG-DRAIN.md), 1 bug, started by the scheduled drain. Your worktree is already made.
 Bug ${b.id}, filed by ${b.session} at ${b.at}${b.blocking ? ' (BLOCKING)' : ''}:
 - title: ${b.title}
