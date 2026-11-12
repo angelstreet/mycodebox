@@ -11,12 +11,15 @@
 // cbsession writes the prompt to ~/handovers/<name>.prompt.md behind its own preamble (Ship rule, worktree line, found-bug and closing review
 // rules). The goal is an explicit `Goal:` line when there is one, else the first line of the task text (a `# Task: ...` heading or the first sentence).
 const PREAMBLE_RE = /^(?:you are picking up work|ship rule\b|ship rule \(|your worktree is ready|first command|a bug you find|closing review before|bug outside your scope|public repos?\b)/i;
+// A machine message is never a goal (2026-11-12): hook feedback, a task notification, an image marker, a continuation summary. The goal check quoted
+// "Goal as given: Stop hook feedback:" to a Mac session and accepted a done line about a side request (pause 5 deployments) while its real task was open.
+export const MACHINE_TEXT_RE = /^(?:stop hook feedback\b|<|\[image\b|\[system notification\b|\[request interrupted\b|this session is being continued\b|caveat:)/i;
 export function goalOf(prompt) {
   const lines = String(prompt || '').split('\n').map((l) => l.trim());
   const g = lines.find((l) => /^(?:[*_#>\s]*)goal\s*:/i.test(l));
   if (g) return clip(g.replace(/^(?:[*_#>\s]*)goal\s*:\s*/i, ''));
   const first = lines.find((l) => l && !PREAMBLE_RE.test(l.replace(/^[#*_>\s]+/, '')));
-  if (!first) return '';
+  if (!first || MACHINE_TEXT_RE.test(first)) return '';
   const t = first.replace(/^#+\s*/, '').replace(/^(?:task|job)\s*:\s*/i, '');
   return clip((/^(.{20,}?[.!?])(?=\s+[A-Z"'(\[]|$)/.exec(t) || [, t])[1]);
 }

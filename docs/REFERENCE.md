@@ -2052,6 +2052,10 @@ bug-2f32e7a7, bug-8fc8fc0d, bug-03ccc6a7, bug-80bdcdc1 · unverified: none · bu
   did nothing 299 -> 87 (48%; before this change 109 of 202, 54%). The 25% target is not reached by filtering: what is left is real stops the manager reads
   and leaves (blocked 10, stops with no STATUS word 15, blocking bug filings 13), the owner's messages (9), sweeps (6) and the urgent-policy notices (13).
   Test: `test/manager-event-filter.test.js` "one stop is one event".
+- **A machine message is never a goal (2026-11-12)**: the goal store kept `Stop hook feedback:`, `<task-notification>` or `[Image: source: ...` as the goal of 4 of 9 Mac
+  sessions (the first user line of the transcript), so the goal question quoted nothing real and a done line about a side request passed while the task was open.
+  `goalOf` returns no goal for such text (`MACHINE_TEXT_RE`), `createGoalStore.capture` replaces a stored one with the first real prompt, and
+  `scripts/mac-stop-hook.sh` skips those lines when it reads the first prompt. Test: `test/status-honesty.test.js` "goal store".
 - **Blocked is not a wait (owner, 2026-11-11 evening)**: `blocked: <what stops you> · tried: <list> · need: <what the manager must do>` is for an agent that
   cannot work; a wait on something running or queued is `waiting: <integration / deploy id, lease ticket, own background job, worker names, a time>`.
   `status-honesty.js` `blockedHonestyOf` (deterministic, no AI) flags a blocked line that names something running or queued (background job id,
