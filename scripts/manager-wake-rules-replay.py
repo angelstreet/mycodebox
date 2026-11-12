@@ -1,8 +1,11 @@
+#!/usr/bin/env python3
+# Replay one day of manager wakes through the rules before the manager (TASK-239 G6): python3 scripts/manager-wake-rules-replay.py <YYYY-MM-DD>.
+# Read-only: the filter runs against a temp state dir. Prints wakes and wakes that did nothing before / after, what removed them, and every removed wake that had acted.
 import json,sys,collections,bisect,re,subprocess,os,tempfile
 day=sys.argv[1]; st=os.path.expanduser("~/.local/state/ghosty")
 tmp=tempfile.mkdtemp(prefix="wakeev-an"); os.makedirs(tmp+"/manager-reports")
 evs=subprocess.run(f"cat {st}/manager-events.jsonl.1 {st}/manager-events.jsonl 2>/dev/null | grep \"^{{\\\"at\\\":\\\"{day}\"",shell=True,capture_output=True,text=True).stdout
-out=subprocess.run(["bash",os.path.expanduser("~/mycodebox-wake-rules/scripts/manager-event-filter.sh")],input=evs,capture_output=True,text=True,env={**os.environ,"GHOSTY_STATE_DIR":tmp}).stdout
+out=subprocess.run(["bash",os.path.join(os.path.dirname(os.path.abspath(__file__)),"manager-event-filter.sh")],input=evs,capture_output=True,text=True,env={**os.environ,"GHOSTY_STATE_DIR":tmp}).stdout
 ev=[json.loads(l) for l in out.splitlines() if l]
 allw=[]
 for l in open(st+"/manager-wakes.jsonl"):
