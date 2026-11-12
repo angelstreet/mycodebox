@@ -124,7 +124,7 @@ import { createSharedCheckoutGuard, expandHome } from './shared-checkout-guard.j
 import { createFoundBugs, unreportedBugOf, sendBackOf, sendBackText, sweepGroups } from './found-bugs.js';
 import { goalOf as goalOfPrompt, blockedOrUnknownStatus } from './status-honesty.js';
 import { createGoalGate, createGoalStore } from './goal-check.js';
-import { createDoneCheck, DEFAULT_IGNORE_BRANCHES, shipOfferOf, unconfirmedStatusOf, waitingOnLeaseStatus } from './done-check.js';
+import { createDoneCheck, closingTextOf, DEFAULT_IGNORE_BRANCHES, shipOfferOf, unconfirmedStatusOf, waitingOnLeaseStatus } from './done-check.js';
 import { createLeftovers, pushableItems } from './done-leftovers.js';
 import { scanTaskDocs, withHomeDirs, computeUnfinished, docLeftoversFor, createUnfinished, taskRe } from './unfinished.js';
 import { pushOf, replyFor } from './owner-push.js';
@@ -1098,7 +1098,7 @@ const stopStateMode = () => { try { const m = JSON.parse(readFileSync(managerCon
 const doneCheck = createDoneCheck({
   stopFacts: (n, o) => stopFactsImpl(n, o), stateMode: stopStateMode,
   goalEntryOf: (n) => goals.get(n), timeBoxMode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).timeBox; return m === 'live' || m === 'off' ? m : 'dry'; } catch { return 'dry'; } },
-  listSessions: async () => { const out = []; for (const [name, st] of Object.entries(latest?.status || {})) { if (loadManagerSessions().includes(name) || sessionMeta.isPaused(name)) continue; out.push({ name, working: st?.state === 'working', draft: !!st?.stall?.draft, text: String(st?.stall?.excerpt || '').slice(-3000) }); } return out; },
+  listSessions: async () => { const out = []; for (const [name, st] of Object.entries(latest?.status || {})) { if (loadManagerSessions().includes(name) || sessionMeta.isPaused(name)) continue; out.push({ name, working: st?.state === 'working', draft: !!st?.stall?.draft, text: closingTextOf(st?.stall) }); } return out; },
   stateDir: STATE_DIR,
   ignoreBranches: () => { try { const l = JSON.parse(readFileSync(managerConfigFile, 'utf8')).doneCheckIgnoreBranches; return Array.isArray(l) ? l.map(String) : DEFAULT_IGNORE_BRANCHES; } catch { return DEFAULT_IGNORE_BRANCHES; } },
   git: async (cwd, args) => (await exec('git', ['-C', cwd, ...args], { timeout: 60000, maxBuffer: 8 * 1024 * 1024 })).stdout,
@@ -1111,7 +1111,7 @@ const doneCheck = createDoneCheck({
       const st = latest?.status?.[name];
       const ex = st?.stall?.excerpt;
       if (!ex || st.state === 'working' || (statusLine(String(ex).split('\n'))?.kind !== 'done' && unconfirmedStatusOf(String(ex)) === null && !waitingOnLeaseStatus(String(ex)) && !shipOfferOf(String(ex)))) continue;
-      out.push({ name, cwd: p.cwd, text: String(ex).slice(-3000), working: !!reporter.activityOf(name)?.working, draft: !!st?.stall?.draft, doneAt: st?.doneAt ? Date.parse(st.doneAt) || +st.doneAt || null : null });
+      out.push({ name, cwd: p.cwd, text: closingTextOf(st?.stall), working: !!reporter.activityOf(name)?.working, draft: !!st?.stall?.draft, doneAt: st?.doneAt ? Date.parse(st.doneAt) || +st.doneAt || null : null });
     }
     return out;
   },
@@ -1122,7 +1122,7 @@ const doneCheck = createDoneCheck({
       if (mgrs.has(name) || sessionMeta.isPaused(name) || p.dead) continue;
       const st = latest?.status?.[name], ex = st?.stall?.excerpt;
       if (!ex || st.state === 'working' || !blockedOrUnknownStatus(String(ex))) continue;
-      out.push({ name, text: String(ex).slice(-3000), working: !!reporter.activityOf(name)?.working, draft: !!st?.stall?.draft });
+      out.push({ name, text: closingTextOf(st?.stall), working: !!reporter.activityOf(name)?.working, draft: !!st?.stall?.draft });
     }
     return out;
   },
@@ -1162,7 +1162,7 @@ const leftovers = createLeftovers({
       const st = latest?.status?.[name], ex = st?.stall?.excerpt;
       const kind = ex && statusLine(String(ex).split('\n'))?.kind;
       if (!kind || !(kind === 'done' || (PUSH_STATUSES.has(kind) && ownerPushOn()))) continue;
-      out.push({ name, text: String(ex).slice(-3000), manager: mgrs.has(name), paused: sessionMeta.isPaused(name), held: !!heldOf(name),
+      out.push({ name, text: closingTextOf(st?.stall), manager: mgrs.has(name), paused: sessionMeta.isPaused(name), held: !!heldOf(name),
         draft: !!st?.stall?.draft, working: st.state === 'working' || !!reporter.activityOf(name)?.working,
         idleMs: Date.now() - (st?.changeAt || st?.doneAt || Date.now()), turnAt: st?.doneAt || null });
     }
