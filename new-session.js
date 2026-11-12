@@ -13,14 +13,18 @@ export function pickableProject(path, home) {
 const MODEL_RE = /^[\w.\-[\]/]{1,64}$/;
 export const CLAUDE_MODELS = ['opus', 'sonnet', 'haiku', 'fable'];
 export const MINIMAX_MODELS = ['MiniMax-M3'];
+// Preselected until the owner picks another one (owner 2026-11-12); at most 4 models per provider.
+export const DEFAULT_MODELS = { claude: 'sonnet', codex: 'gpt-6-luna', minimax: 'MiniMax-M3' };
+export const MAX_MODELS = 4;
 
 // Codex models as the CLI lists them (~/.codex/models_cache.json, visibility "list"), the configured default first.
 export function codexModels(cache, configToml = '') {
   const list = (Array.isArray(cache) ? cache : cache?.models || [])
     .filter((m) => m && (m.visibility == null || m.visibility === 'list'))
     .map((m) => m.slug || m.id).filter((s) => typeof s === 'string' && MODEL_RE.test(s));
-  const def = /^\s*model\s*=\s*"([^"]+)"/m.exec(configToml)?.[1];
-  const out = [...new Set([...(def && MODEL_RE.test(def) ? [def] : []), ...list])];
+  const conf = /^\s*model\s*=\s*"([^"]+)"/m.exec(configToml)?.[1];
+  const def = list.includes(DEFAULT_MODELS.codex) ? DEFAULT_MODELS.codex : (conf && MODEL_RE.test(conf) ? conf : list[0]);
+  const out = [...new Set([...(def ? [def] : []), ...list])].slice(0, MAX_MODELS);
   return { models: out, default: out[0] || null };
 }
 
@@ -28,6 +32,13 @@ const q = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 
 // The agent command line with the chosen model and, when given, the first prompt read from a file (so no quoting of the text
 // itself reaches the shell). An invalid model is refused rather than dropped.
+// Mac sessions report the basename of their git toplevel; for a Claude worktree (<repo>/.claude/worktrees/<name>) that is the
+// worktree's name, which made a sidebar group per task. The repo folder is the project.
+export function projectFromCwd(cwd) {
+  const m = /^(.*?)\/\.claude\/worktrees\/[^/]+/.exec(String(cwd || ''));
+  return m ? m[1].split('/').filter(Boolean).pop() || null : null;
+}
+
 export function launchArgs(agent, { model, promptFile } = {}) {
   if (model != null && model !== '' && !MODEL_RE.test(model)) throw Object.assign(new Error('invalid model'), { status: 400 });
   let extra = '';

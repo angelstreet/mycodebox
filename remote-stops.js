@@ -6,6 +6,7 @@
 //   GET  /api/remote/v1/stops/<id>/answer?wait=<s>   long-poll -> { ok, state: pending|answered|none, answer?, reason? }
 // Answer channel (justified in docs/MAC-HOOK.md): the hook's own long-poll, returning {"decision":"block","reason":<answer>} to Claude Code.
 // The session shows on the dashboard as `mac:<session_name>`; manager.js treats it like any other session (s.remote = true, no tmux).
+import { projectFromCwd } from './new-session.js';
 import fs from 'node:fs';
 import { join, isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -48,6 +49,8 @@ export function validateStop(b, now = Date.now()) {
     if (v !== undefined) out[k] = v;
   }
   out.machine = slugName(out.machine, 'unknown-machine');
+  const fromCwd = projectFromCwd(out.cwd);   // a Claude worktree on the Mac: the repo, not the worktree name
+  if (fromCwd) out.project = fromCwd;
   if (out.project) out.project = slugName(out.project, 'unknown');
   if (out.session_name) { out.session_name = slugName(out.session_name, ''); if (!out.session_name) delete out.session_name; }
   if (typeof b.text !== 'string' || !b.text.trim()) return { ok: false, error: 'text is required' };

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { pickableProject, launchArgs, codexModels } from '../new-session.js';
+import { pickableProject, launchArgs, codexModels, projectFromCwd } from '../new-session.js';
 
 const H = '/home/u';
 
@@ -24,5 +24,14 @@ test('launch args carry the model per CLI and read the prompt from a file', () =
 test('codex models: listed ones only, configured default first', () => {
   const cache = { models: [{ slug: 'gpt-6-sol', visibility: 'list' }, { slug: 'gpt-reserve', visibility: 'hide' }, { slug: 'gpt-5.6-luna', visibility: 'list' }] };
   assert.deepEqual(codexModels(cache, 'model = "gpt-5.6-luna"\n'), { models: ['gpt-5.6-luna', 'gpt-6-sol'], default: 'gpt-5.6-luna' });
+  // gpt-6-luna is the preselected one when the CLI lists it, and at most 4 models are offered
+  const many = { models: ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6.1-terra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol'].map((slug) => ({ slug, visibility: 'list' })) };
+  assert.deepEqual(codexModels(many, 'model = "gpt-5.6-luna"\n'), { models: ['gpt-6-luna', 'gpt-6.1-sol', 'gpt-6-astra', 'gpt-6.1-terra'], default: 'gpt-6-luna' });
   assert.deepEqual(codexModels(null, ''), { models: [], default: null });
+});
+
+test('a Mac Claude worktree reports its repo as the project', () => {
+  assert.equal(projectFromCwd('/Users/x/virtualpytest/.claude/worktrees/vpt-mf1-agent-investigation-1ebf0f'), 'virtualpytest');
+  assert.equal(projectFromCwd('/Users/x/virtualpytest/.claude/worktrees/a/sub'), 'virtualpytest');
+  assert.equal(projectFromCwd('/Users/x/virtualpytest'), null);
 });

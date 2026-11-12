@@ -146,7 +146,7 @@ import { sessionDirectory } from './session-directory.js';
 import { createLayoutStore } from './layout.js';
 import { createSessionMeta } from './session-meta.js';
 import { goneCwd, projectCandidates } from './cwd-gone.js';
-import { pickableProject, launchArgs, codexModels, CLAUDE_MODELS, MINIMAX_MODELS } from './new-session.js';
+import { pickableProject, launchArgs, codexModels, CLAUDE_MODELS, MINIMAX_MODELS, DEFAULT_MODELS } from './new-session.js';
 import { createSessionHistory } from './session-history.js';
 import { createHistoryView } from './history-view.js';
 import { createQuota, defaults as quotaDefaults } from './quota.js';
@@ -2232,10 +2232,12 @@ async function scanDirs() {
     }
     if (!mtime) return;   // vanished
     const g = await gitInfo(path);
-    list.push({ path, name: basename(path), branch: g.branch, mtime, git: existsSync(join(path, '.git')) });
+    let wt = false;   // a linked worktree has a .git file, a main checkout a .git folder
+    try { wt = (await stat(join(path, '.git'))).isFile(); } catch { /* no .git */ }
+    list.push({ path, name: basename(path), branch: g.branch, mtime, git: existsSync(join(path, '.git')), worktree: wt });
   });
   list.sort((a, b) => b.mtime - a.mtime);
-  const value = list.map(({ path, name, branch, git }) => ({ path, name, branch, git }));
+  const value = list.map(({ path, name, branch, git, worktree }) => ({ path, name, branch, git, worktree }));
   return value;
 }
 function refreshDirs() {
@@ -2710,7 +2712,7 @@ async function handleHttp(req, res) {
     try { cache = JSON.parse(await readFile(join(HOME, '.codex', 'models_cache.json'), 'utf8')); } catch { /* no codex cache */ }
     try { toml = await readFile(join(HOME, '.codex', 'config.toml'), 'utf8'); } catch { /* no codex config */ }
     const cx = codexModels(cache, toml);
-    return json(res, 200, { claude: { models: CLAUDE_MODELS, default: 'opus' }, codex: cx, minimax: { models: MINIMAX_MODELS, default: MINIMAX_MODELS[0] } });
+    return json(res, 200, { claude: { models: CLAUDE_MODELS, default: DEFAULT_MODELS.claude }, codex: cx, minimax: { models: MINIMAX_MODELS, default: DEFAULT_MODELS.minimax } });
   }
   if (req.method === 'GET' && p === '/api/dirs') {
     try { return json(res, 200, await collectDirs()); }
