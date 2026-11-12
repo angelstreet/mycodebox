@@ -1,5 +1,5 @@
 // bug-73b62192: scripts/registry-install.sh against a fake registry host (a local dir behind a fake ssh).
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -7,6 +7,9 @@ import { spawnSync } from 'node:child_process';
 import { tmp } from './helpers-tmp.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
+// the fake registry is a process with a command line no other test run shares (the lane runs several as the same user)
+const SLEEP = `sleep ${3_000_000 + Math.floor(Math.random() * 900_000)}`;
+after(() => { spawnSync('pkill', ['-f', `^${SLEEP}$`]); });
 function fakeHost() {
   const home = tmp('reg-home-'), bin = tmp('reg-bin-');
   fs.mkdirSync(path.join(home, 'mycodebox-lease/scripts'), { recursive: true });
@@ -49,7 +52,7 @@ function installable(failFirst) {
   const h = fakeHost();
   const dir = path.join(h.home, 'mycodebox-lease');
   fs.mkdirSync(path.join(h.home, 'bin'), { recursive: true });
-  fs.writeFileSync(path.join(h.home, 'bin/mycodebox-lease-serve.sh'), '#!/bin/sh\nsleep 3123 >/dev/null 2>&1 </dev/null &\nexit 0\n', { mode: 0o755 });   // the fake registry: a process whose command line the installer looks for
+  fs.writeFileSync(path.join(h.home, 'bin/mycodebox-lease-serve.sh'), `#!/bin/sh\n${SLEEP} >/dev/null 2>&1 </dev/null &\nexit 0\n`, { mode: 0o755 });   // the fake registry: a process whose command line the installer looks for
   fs.writeFileSync(path.join(dir, 'lease-service.js'), '// old\n');
   for (const f of ['lease-routes.js', 'catchup-supersede.js', 'lease-equivalence.js', 'scripts/lease-serve.js']) fs.copyFileSync(path.join(ROOT, f), path.join(dir, f));
   const cnt = path.join(h.home, 'claims');
@@ -62,14 +65,14 @@ exit 0
 }
 test('install: the round trip retries while the registry starts, then keeps the new file', () => {
   const { h, dir } = installable(2);
-  const r = run(h, [], { REGISTRY_RETRY_SLEEP: '0', REGISTRY_PROC: 'sleep 3123' });
+  const r = run(h, [], { REGISTRY_RETRY_SLEEP: '0', REGISTRY_PROC: SLEEP });
   assert.equal(r.status, 0, r.stderr + r.stdout);
   assert.equal(fs.readFileSync(path.join(dir, 'lease-service.js'), 'utf8'), fs.readFileSync(path.join(ROOT, 'lease-service.js'), 'utf8'));
   assert.equal(fs.readdirSync(dir).filter((f) => f.includes('.bak-')).length, 1);
 });
 test('install: a round trip that never works rolls the files back (exit 1)', () => {
   const { h, dir } = installable(1e6);
-  const r = run(h, [], { REGISTRY_RETRY_SLEEP: '0', REGISTRY_PROC: 'sleep 3123' });
+  const r = run(h, [], { REGISTRY_RETRY_SLEEP: '0', REGISTRY_PROC: SLEEP });
   assert.equal(r.status, 1);
   assert.match(r.stderr, /rolled back/);
   assert.equal(fs.readFileSync(path.join(dir, 'lease-service.js'), 'utf8'), '// old\n');
@@ -84,13 +87,13 @@ function minimalPath(h, where) {
 }
 test('install: with a minimal PATH the client is found in ~/bin (first two lane runs rolled back on this)', () => {
   const { h, dir } = installable(0);
-  const r = run(h, [], { ...minimalPath(h, 'bin/vpt-lease'), REGISTRY_RETRY_SLEEP: '0', REGISTRY_PROC: 'sleep 3123' });
+  const r = run(h, [], { ...minimalPath(h, 'bin/vpt-lease'), REGISTRY_RETRY_SLEEP: '0', REGISTRY_PROC: SLEEP });
   assert.equal(r.status, 0, r.stderr + r.stdout);
   assert.equal(fs.readFileSync(path.join(dir, 'lease-service.js'), 'utf8'), fs.readFileSync(path.join(ROOT, 'lease-service.js'), 'utf8'));
 });
 test('install: no vpt-lease client at all fails closed and touches nothing', () => {
   const { h, dir } = installable(0);
-  const r = run(h, [], { ...minimalPath(h, null), REGISTRY_RETRY_SLEEP: '0', REGISTRY_PROC: 'sleep 3123' });
+  const r = run(h, [], { ...minimalPath(h, null), REGISTRY_RETRY_SLEEP: '0', REGISTRY_PROC: SLEEP });
   assert.equal(r.status, 1);
   assert.match(r.stderr, /client not found/);
   assert.equal(fs.readFileSync(path.join(dir, 'lease-service.js'), 'utf8'), '// old\n');
@@ -99,9 +102,8 @@ test('install: no vpt-lease client at all fails closed and touches nothing', () 
 test('install: a restart that leaves the same registry process running fails and rolls back (the first version killed its own shell and kept the old code)', () => {
   const { h, dir } = installable(0);
   fs.writeFileSync(path.join(h.home, 'bin/mycodebox-lease-serve.sh'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });   // the launcher starts nothing
-  const r = run(h, [], { REGISTRY_RETRY_SLEEP: '0', REGISTRY_PROC: 'sleep 3123' });
+  const r = run(h, [], { REGISTRY_RETRY_SLEEP: '0', REGISTRY_PROC: SLEEP });
   assert.equal(r.status, 1);
   assert.match(r.stderr, /did not restart onto a new process/);
   assert.equal(fs.readFileSync(path.join(dir, 'lease-service.js'), 'utf8'), '// old\n');
 });
-test('cleanup of the fake registry processes', () => { spawnSync('pkill', ['-f', '^sleep 3123$']); });
