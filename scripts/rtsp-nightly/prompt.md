@@ -11,6 +11,7 @@ Then:
 1. Read `~/.local/state/ghosty/rtsp-nightly/report-<today UTC>.json` and the tail of `journal.jsonl`; say plainly in your answer: streams checked, ok, down, replaced, rolled back, cameras down.
 2. A stream replaced or rolled back, or a camera down: write ONE line to the manager as the first line of your final STATUS (host, device, what happened; no credentials) and also `found-bug --title "rtsp: <host>/<device> <status>" --blocking no` for a camera down or a rollback.
 3. `no stream devices found` is a valid night: say so (and whether the inventory had errors). Inventory errors (a server or host not answering) are reported, not retried in a loop.
-4. If a public source you know is good is missing from config/rtsp-pool.json, or a pool source failed its probe, do not edit the pool tonight: report it.
+4. Tile rows (`capture` column): `multi_audio` on a host means its `vpt-stream` still runs the old script: restart `vpt-stream` there under the host lease (docs/RTSP-NIGHTLY.md "Proving a tile is fixed"), once per host, live mode only. Never call a tile fixed from its snapshot alone: a fixed tile also plays live on hover (`readyState` 4, screenshot not black).
+5. If a public source you know is good is missing from config/rtsp-pool.json, or a pool source failed its probe, do not edit the pool tonight: report it.
 
 Stop with `STATUS: done — rtsp-nightly <mode>: <n> checked, <n> ok, <n> down, <n> replaced · bugs: none | reported <id>` (the full `closing review:` clause is not needed for this report session). Do not close your own session, do not ask the owner anything.

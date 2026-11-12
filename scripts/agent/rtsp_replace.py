@@ -242,7 +242,8 @@ def run(mode, timeout=10):
             black_src = y is not None and y < rc.BLACK_LUMA
         if src_ok and not black_src and cap['capture'] not in ('ok', 'unknown'):
             row['action'] = (f"report: the source plays but the host stream has {cap.get('audio')} audio tracks: the browser's"
-                             " live player cannot play it (bug-ea31641c, host capture), not changed") if cap['capture'] == 'multi_audio' else (
+                             " live player cannot play it: the host's vpt-stream runs a run_ffmpeg.sh from before the one-track"
+                             " fix (bug-ea31641c): restart vpt-stream on that host under its lease, not changed") if cap['capture'] == 'multi_audio' else (
                              f"report: the source plays but the tile's snapshot is {cap['capture']}"
                              + (f" ({cap['age']} s old)" if cap['capture'] == 'stale' and cap.get('age') is not None else '')
                              + ": host capture side (vpt-stream / thumbnails), not changed")
