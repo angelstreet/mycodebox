@@ -15,7 +15,7 @@
 //   GET  /api/sessions?full=1   → same, plus `reply` text per session
 //   GET  /api/reply/:session    → {reply, replyHash}: agent's last reply block, plain text
 //   POST /api/resize/:session   → {cols, rows} resize a detached session's window
-//   POST /api/sessions          → {name, agent, cwd, priority?} create a tmux session + start the agent
+//   POST /api/sessions          → {name, agent, cwd, priority?, model?, prompt?} create a tmux session + start the agent
 //   DELETE /api/sessions/:name?confirm=<name> → kill session
 //   POST /api/sessions/:name/park   → record the conversation (Claude id / Codex id / MiniMax cwd), quit the agent (/exit, /quit), kill the tmux session (refuses when not idle / lease held / job running)
 //   (auto) a Claude session archived in the Claude app (Remote Control code 4090 in its transcript, no bridge) is parked every 30 s when done and lease-free; manager.json autoParkArchived:false turns it off
@@ -89,6 +89,7 @@
 //   GET  /api/disk              → the disk-space policy: level, thresholds and the top consumers (also pushed on /ws/status)
 //                                 at 90 % used, starting new work is refused with 409 and the reason code `disk_low`
 //   GET  /api/dirs              → candidate working dirs (repos / worktrees / pane cwds)
+//   GET  /api/new-session/models → model choices per agent for the New session dialog
 //   GET|PUT /api/layout         → the session list's order / pins / groups ({order,pins,groups,groupNames,collapsed}); PUT merges the keys it carries
 //   POST /api/send-many         → {sessions:[...], keys|key} fan-out send
 //   GET  /api/v2/tasks, /api/v2/tasks/:id → V2 task board (orchestration/http.js); GHOSTY_V2=1 only, else 404 and nothing is built
@@ -144,6 +145,7 @@ import { trustFolder, trustClaude } from './trust.js';
 import { sessionDirectory } from './session-directory.js';
 import { createLayoutStore } from './layout.js';
 import { createSessionMeta } from './session-meta.js';
+import { pickableProject, launchArgs, codexModels, CLAUDE_MODELS, MINIMAX_MODELS } from './new-session.js';
 import { createSessionHistory } from './session-history.js';
 import { createHistoryView } from './history-view.js';
 import { createQuota, defaults as quotaDefaults } from './quota.js';
@@ -1830,6 +1832,8 @@ async function createSession({ name, agent, cwd, priority, model, prompt, handov
   if (typeof name !== 'string' || !NAME_RE.test(name)) throw httpError(400, 'invalid name (A-Z a-z 0-9 _ . -, max 40)');
   if (!Object.hasOwn(AGENT_CMDS, agent)) throw httpError(400, 'agent must be claude|codex|minimax|bash');
   if (claudeAccount != null && (agent !== 'claude' || !claudeAccounts.byId(claudeAccount))) throw httpError(400, 'unknown claude account');
+  if (prompt != null && typeof prompt !== 'string') throw httpError(400, 'prompt must be text');
+  launchArgs(agent, { model });   // refuses an invalid model before anything starts
   const acct = agent === 'claude' ? (claudeAccount || claudeAccounts.config().active) : null;
   const dir = await sessionDirectory(cwd || HOME, HOME);
   // tmux silently rewrites '.' and ':' in session names to '_'.
@@ -1849,11 +1853,20 @@ async function createSession({ name, agent, cwd, priority, model, prompt, handov
   let cmd = agent === 'claude' && AGENT_CMDS.claude && !/--remote-control\b/.test(AGENT_CMDS.claude)
     ? `${AGENT_CMDS.claude} --remote-control '${real}' -n '${real}'` : AGENT_CMDS[agent];
   if (acct && cmd) cmd = claudeAccounts.commandFor(cmd, acct);   // CLAUDE_CONFIG_DIR=<dir> GHOSTY_CLAUDE_ACCOUNT=<id> claude ...
+  // The dialog's model and first prompt go on the command line; the prompt is read from a file so its text never meets the shell.
+  let promptFile = null;
+  if (cmd && prompt && prompt.trim()) {
+    const pdir = join(STATE_DIR, 'prompts');
+    await mkdir(pdir, { recursive: true });
+    promptFile = join(pdir, `${real}-${Date.now()}.txt`);
+    await writeFile(promptFile, prompt, { mode: 0o600 });
+  }
+  if (cmd) cmd += launchArgs(agent, { model, promptFile });
   if (cmd) {
     await exec(TMUX, ['send-keys', '-t', `=${real}:`, '-l', '--', cmd]);
     await exec(TMUX, ['send-keys', '-t', `=${real}:`, 'Enter']);
   }
-  await historyLog({ kind: 'session.started', name: real, provider: agent, model: model ?? null, cwd: dir, started_by: 'dashboard', prompt_ref: prompt ?? null, handover_ref: handover ?? null, tmux_created: await tmuxCreated(real) });
+  await historyLog({ kind: 'session.started', name: real, provider: agent, model: model ?? null, cwd: dir, started_by: 'dashboard', prompt_ref: promptFile ?? prompt ?? null, handover_ref: handover ?? null, tmux_created: await tmuxCreated(real) });
   goals.forget(real); if (prompt || handover) captureGoal(real, prompt || handover, 'dashboard');   // goal check: the goal as given at start
   sessionMeta.reset(real);
   sessionMeta.sync([real]);   // a new session starts at P2 (or the chosen priority), not paused
@@ -2179,7 +2192,6 @@ async function scanDirs() {
   // depth counted from $HOME: ~/a (1), ~/a/b (2), ~/a/b/c (3)
   let top = [];
   try { top = await readdir(HOME, { withFileTypes: true }); } catch {}
-  if (existsSync(join(HOME, '.git'))) repos.push(HOME);
   await pool(top.filter((e) => e.isDirectory() && !e.name.startsWith('.') && !SKIP_DIRS.has(e.name)), 6, (e) => walkRepos(join(HOME, e.name), 1, repos));
   const paths = new Set(repos);
   await pool(repos, 6, async (repo) => {
@@ -2191,7 +2203,8 @@ async function scanDirs() {
       }
     } catch {}
   });
-  for (const p of (await listPanes()).values()) if (p.cwd && (p.cwd === HOME || p.cwd.startsWith(HOME + sep))) paths.add(p.cwd);
+  for (const p of (await listPanes()).values()) if (p.cwd) paths.add(p.cwd);
+  for (const p of [...paths]) if (!pickableProject(p, HOME)) paths.delete(p);   // no tmp, scratchpad, lane or hidden-folder repos
   const list = [];
   await pool([...paths], 8, async (path) => {
     let mtime = 0;
@@ -2673,6 +2686,13 @@ async function handleHttp(req, res) {
       if (req.method === 'GET') return json(res, 200, await layoutStore.get());
       return json(res, 200, await layoutStore.set(await readJsonBody(req)));
     } catch (err) { return json(res, err instanceof SyntaxError ? 400 : 500, { ok: false, error: err.message }); }
+  }
+  if (req.method === 'GET' && p === '/api/new-session/models') {   // the New session dialog's model picker
+    let cache = null, toml = '';
+    try { cache = JSON.parse(await readFile(join(HOME, '.codex', 'models_cache.json'), 'utf8')); } catch { /* no codex cache */ }
+    try { toml = await readFile(join(HOME, '.codex', 'config.toml'), 'utf8'); } catch { /* no codex config */ }
+    const cx = codexModels(cache, toml);
+    return json(res, 200, { claude: { models: CLAUDE_MODELS, default: 'opus' }, codex: cx, minimax: { models: MINIMAX_MODELS, default: MINIMAX_MODELS[0] } });
   }
   if (req.method === 'GET' && p === '/api/dirs') {
     try { return json(res, 200, await collectDirs()); }
