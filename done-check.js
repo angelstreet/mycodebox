@@ -6,7 +6,7 @@
 // Journal: done-check.jsonl.
 import { pushableItems } from './done-leftovers.js';
 import { computeStopState, doneWhileMessage } from './stop-state.js';
-import { doneButFailedOf, doneButFailedMessage, proofWithoutEvidenceOf, proofWithoutEvidenceMessage, blockedHonestyOf, blockedHonestyMessage, failedHonestyOf, failedHonestyMessage, verificationOf, verificationMessage, timeBoxWakeMessage, unknownStatusWordOf, unknownStatusWordMessage, lastStatus as lastStatusOf } from './status-honesty.js';
+import { doneButFailedOf, doneButFailedMessage, proofWithoutEvidenceOf, proofWithoutEvidenceMessage, blockedHonestyOf, blockedHonestyMessage, failedHonestyOf, failedHonestyMessage, doneWithOpenOf, doneWithOpenMessage, verificationOf, verificationMessage, timeBoxWakeMessage, unknownStatusWordOf, unknownStatusWordMessage, lastStatus as lastStatusOf } from './status-honesty.js';
 import { readFile, writeFile, appendFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -515,11 +515,31 @@ export function createDoneCheck({
           if (!tb.dry) await record({ key: `time-box:${s.name}`, title: `${s.name} is past its time box (${Math.round(box / 6e4)} min) and keeps going`, body: `woken once ${Math.round((now() - tb.woke) / 6e4)} min ago; the manager or the owner extends or stops it${e?.goal ? ` · goal: ${String(e.goal).slice(0, 160)}` : ''}`, url: '/', priority: 'default' }).catch(() => {});
         }
       }
+      // (N) done only with nothing open (owner 2026-11-12): a done line whose closing review lists leftovers (filed ids too) or anything unverified is sent back
+      // once per line. It comes after (B) / (C) / (F) / (G) / (K) (one push per session per tick) and before the goal question, which is not asked of such a line.
+      // Two or more filed ids are left to the fix-first push of the goal check, which names each bug's reason.
+      st.toldOpen ||= {};
+      for (const n of Object.keys(st.toldOpen)) if (!live.has(n)) delete st.toldOpen[n];
+      const openDone = new Set();
+      for (const s of sessions) {
+        const od = doneWithOpenOf(s.text);
+        if (!od || (od.ids >= 2 && od.open.length === 1)) continue;
+        openDone.add(s.name);
+        if (s.working || s.draft || touched.has(s.name) || stateWait.has(s.name) || verifyBounced.has(s.name) || findings.some((f) => f.name === s.name)) continue;
+        if (s.doneAt && now() - s.doneAt > REVIEW_MAX_AGE_MS) continue;
+        if (leftoverItemsOf(s.text).length || closingReviewOf(s.text)?.missing || doneButFailedOf(s.text) || proofWithoutEvidenceOf(s.text)) continue;   // they spoke about this line
+        const sig = createHash('sha1').update(lastStatusLine(s.text)).digest('hex').slice(0, 12);
+        if (st.toldOpen[s.name]?.sig === sig) continue;
+        if (m === 'dry') { await note({ dry: true, session: s.name, doneWithOpen: od.open }); st.toldOpen[s.name] = { sig, dry: true }; continue; }
+        if (!quiet || nudged >= MAX_NUDGES_PER_TICK) continue;
+        try { await send(s.name, doneWithOpenMessage(od)); st.toldOpen[s.name] = { sig }; nudged++; await note({ session: s.name, doneWithOpen: od.open }); }
+        catch (e) { log.error?.('[done-check] send done-with-open', s.name, e.message); }
+      }
       const goalCheck = { asked: [], bounced: [], accepted: [], capped: [] };
       if (goalGate) {
         await goalGate.forget(live).catch(() => {});
         for (const s of sessions) {
-          if (s.working || s.draft || touched.has(s.name) || stateWait.has(s.name) || verifyBounced.has(s.name) || findings.some((f) => f.name === s.name)) continue;
+          if (s.working || s.draft || touched.has(s.name) || stateWait.has(s.name) || verifyBounced.has(s.name) || openDone.has(s.name) || findings.some((f) => f.name === s.name)) continue;
           if (verified.has(s.name)) { goalCheck.accepted.push(s.name); continue; }   // every Done-when row passes with its evidence: the Verification block is the owner's question answered
           if (s.doneAt && now() - s.doneAt > REVIEW_MAX_AGE_MS) continue;   // an old done turn is not reopened by the rollout
           if (leftoverItemsOf(s.text).length || closingReviewOf(s.text)?.missing || doneButFailedOf(s.text) || proofWithoutEvidenceOf(s.text)) continue;   // (B)/(C)/(F)/(G) first

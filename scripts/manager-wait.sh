@@ -5,7 +5,7 @@
 # urgent event (`u: true` from the filter's policy: asks, needs-manager, hold, health, a failed deploy, a blocking bug, priority high)
 # closes the window MANAGER_WAIT_GRACE seconds (default 2) after it arrived. A window below the grace is raised to it.
 # Deferred lines (`d: true` from the filter: a non-blocking bug filing; owner 2026-11-12, TASK-239 G6) do not open the window: they are printed with
-# the next real event, or alone after MANAGER_WAIT_DEFER seconds (default 3600); a held deferred line keeps the cursor when the filter answered within one poll (best effort).
+# the next real event, or alone after MANAGER_WAIT_DEFER seconds (default 3600); a held deferred line is also written to `.deferred-held` beside the cursor, so a killed wait does not lose it.
 # 40 wakes on 2026-11-11 carried only such a filing; 33 did nothing.
 # Run it with Bash run_in_background: it has no 30-min expiry like a Monitor, so the agent wakes ONLY on a real event.
 #   scripts/manager-wait.sh [filter-command]
@@ -121,6 +121,14 @@ def cursored():
         if n != last_written: write_cursor(n); last_written = n
     first_at = None
     defer_at = None                                  # the first deferred line held
+    # Held deferred lines are written to a file as they arrive (bug-04d3f3c9): a waiter killed while holding one used to lose it when a quiet tick had
+    # already moved the cursor past its event. The next waiter starts with the file's lines as already held; the file goes when they are printed.
+    held_file = os.path.join(os.path.dirname(cursor_file), '.deferred-held')
+    try:
+        with open(held_file) as f: prior = [l for l in f.read().split('\n') if l.strip()]
+        if prior: out.extend(l + '\n' for l in prior); defer_at = os.path.getmtime(held_file)
+    except OSError: prior = []
+    seen_held = set(prior)
     urgent_at = None                                 # the first urgent line: the window closes `grace` after it
     alive = True
     prev_off = off                                   # what `off` was at the last pump; if a tick fed nothing, the filter has had a full poll to react
@@ -135,10 +143,15 @@ def cursored():
         while b'\n' in buf:
             line, _, buf = buf.partition(b'\n')
             text = line.decode()
-            out.append(text + '\n')
             if deferred(text):
+                if text in seen_held: continue            # re-read after a restart: already held
+                seen_held.add(text); out.append(text + '\n')
+                try:
+                    with open(held_file, 'a') as f: f.write(text + '\n')
+                except OSError: pass
                 if defer_at is None: defer_at = time.time()
                 continue
+            out.append(text + '\n')
             if first_at is None: first_at = time.time()
             if urgent_at is None and urgent(text): urgent_at = time.time()
         if first_at is not None and time.time() - first_at >= window: break
@@ -158,6 +171,10 @@ def cursored():
     kill(p)
     if out: advance(off)                             # delivered: cursor moves; quiet ticks may already have
     sys.stdout.write(''.join(out))
+    sys.stdout.flush()
+    if out:
+        try: os.remove(held_file)
+        except OSError: pass
 
 if filt and os.path.realpath(filt) != os.path.realpath(os.environ['MANAGER_WAIT_DEFAULT_FILTER']): legacy()
 else: cursored()

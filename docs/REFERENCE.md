@@ -1961,6 +1961,7 @@ Goal first, verification last (owner 2026-11-11; `docs/GOAL-RULE.md`, kept equal
 - **Last**: the final message ends with `Verification:` and one row per `Done when` line, in the same order and numbering: `<n>. pass | fail | not checked — <evidence that resolves, or why>`, then the STATUS line. All `pass` = `done`. Any `fail` or `not checked` = not `done` (`running`, `waiting` or `failed`). Never change the `Done when` list at the end to fit what you did; a line the owner dropped is marked "dropped by owner", not deleted.
 - **Failing is not an ending** (owner 2026-11-12): before a `failed` line, investigate until you can name what broke (logs, frames, ledgers, code), or say what you checked and ruled out, and write the next approach. The line carries both: `STATUS: failed — goal not achieved: <why> · tried: <list> · cause: <what the investigation found> · plan: <next approach, who does it>`. A plan that is yours to do inside your time box is done, not written. A `failed` line without `cause:` and `plan:` is sent back once.
 - **Done is about the task's goal, not the last request** (owner 2026-11-12): the `Goal` and the `Done when` list are the ones the task opened with. A side request given on the way (pause these deployments, check this, answer that) is reported in one sentence, and the turn ends on the task's true state: `running`, `waiting` or `needs-...` while a `Done when` line is open, never `done — goal: achieved (<the side request>)`. Only the owner or the manager replaces the goal, in words.
+- **Done only with nothing open** (owner 2026-11-12): `done` needs `leftovers none` and `unverified none` in its closing review. A filed bug is not a finished task and an unverified item is a check not made: finish it, verify it, or end on the word that is true (`running`, `waiting`, `needs-manager`, `blocked`, `failed` with cause and plan). A bug outside the task goes in `bugs: reported <id>` and does not hold the line. A `done` line with anything open is sent back.
 
 - **`failed`** (`stall.js`): case `needs_manager` with `failed: true` and `managerAsk: goal not achieved: ...`: a manager event and the manager
   LED, never a finished turn, never parked as one (`status-honesty.js` `failedOf` parses why / tried). The Mac Stop hook posts the text and the
@@ -2027,7 +2028,7 @@ bug-2f32e7a7, bug-8fc8fc0d, bug-03ccc6a7, bug-80bdcdc1 · unverified: none · bu
   parked wake re-checks it, the lease nudge answers a free equivalent) and the notices of checks the harness answered itself (`done-check`, `goal-check`,
   `session-closed:*`; `bug-unreported` still passes). (b) A disk / quota alert under 95% wakes once per 5-point bucket per 6 h across runs (key `pctx|<key>|<bucket>`
   in `.seen-keys`); 95% and over always passes. (c) A non-blocking bug filing is marked `d: true` and `scripts/manager-wait.sh` holds it: it is printed
-  with the next real event, or alone after `MANAGER_WAIT_DEFER` seconds (default 3600); a held line keeps the cursor when the filter answered within one poll (best effort: a wait killed while holding one may skip it; the filing stays in manager-events.jsonl and the bug drain). (d) `scripts/session-guard-hook.js`
+  with the next real event, or alone after `MANAGER_WAIT_DEFER` seconds (default 3600); a held line is written to `manager-reports/.deferred-held` as it arrives, so a wait killed while holding one hands it to the next wait (bug-04d3f3c9, 2026-11-12). (d) `scripts/session-guard-hook.js`
   rule `manager-bg` refuses a background command in a manager session unless it is the event wait, `integrate wait`, a `vpt-lease ... --wait` / `run` or
   cbsession (61 wakes that day were the manager's own background commands ending; 53 did nothing); override `GHOSTY_GUARD_OVERRIDE=manager-bg`.
   Replay: `python3 scripts/manager-wake-rules-replay.py <day>` (2026-11-11: 410 wakes -> 198, wakes that did nothing 299 -> 105; the share stays 53%,
@@ -2056,6 +2057,11 @@ bug-2f32e7a7, bug-8fc8fc0d, bug-03ccc6a7, bug-80bdcdc1 · unverified: none · bu
   sessions (the first user line of the transcript), so the goal question quoted nothing real and a done line about a side request passed while the task was open.
   `goalOf` returns no goal for such text (`MACHINE_TEXT_RE`), `createGoalStore.capture` replaces a stored one with the first real prompt, and
   `scripts/mac-stop-hook.sh` skips those lines when it reads the first prompt. Test: `test/status-honesty.test.js` "goal store".
+- **Done only with nothing open (owner, 2026-11-12: "done is only if all is done; if bugs or anything, we cannot say done")**: a done line's closing review
+  says `leftovers none · unverified none`. `status-honesty.js` `doneWithOpenOf` catches a line that lists leftovers (filed ids too) or anything unverified;
+  done-check (N) sends it back once per line on codebox and `remote-stops.js` refuses the Mac stop (`done-with-open`), before the goal question. Two or
+  more filed ids alone stay with the fix-first push, which names each bug's reason. A bug outside the task goes in `bugs: reported <id>` and does not hold
+  the line. Live with `doneCheck` (journal `doneWithOpen`). Tests: `test/status-honesty.test.js`, `test/goal-check-remote.test.js`.
 - **Blocked is not a wait (owner, 2026-11-11 evening)**: `blocked: <what stops you> · tried: <list> · need: <what the manager must do>` is for an agent that
   cannot work; a wait on something running or queued is `waiting: <integration / deploy id, lease ticket, own background job, worker names, a time>`.
   `status-honesty.js` `blockedHonestyOf` (deterministic, no AI) flags a blocked line that names something running or queued (background job id,
