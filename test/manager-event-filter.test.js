@@ -272,3 +272,16 @@ test('one stop is one event: asks, lease stop and deploy stop of the same text s
   const r2 = lines(run(env2, wait + owner + note + nudge + quota));
   assert.deepEqual(r2.map((x) => [x.l.kind, x.d]), [['asks', true], ['asks', false], ['leftovers', true], ['lease', true], ['quota', false]], 'quota is urgent in the default policy: not deferred');
 });
+
+// 2026-11-12, third set: the manager's field list of wakes it did nothing on
+test('a needs-manager stop re-sent with other words after its first 40 characters wakes once per 6 h; a new question wakes; a low-priority bug-drain notice is deferred', () => {
+  const dir = tmp('ghosty-filt-nm-'); const env = { ...process.env, GHOSTY_STATE_DIR: dir };
+  const nm = (body) => ev({ key: 'mac:T208:needs-manager', kind: 'T208:needs-manager', title: 'mac:T208: needs the manager', body: 'mac:T208 needs the manager: ' + body });
+  const out = (r) => r.stdout.split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  const a = out(run(env, nm('goal not achieved: radio_play_station has no run that proves a station plays · tried: sound only')));
+  assert.equal(a.length, 1); assert.equal(a[0].k, 'stop|mac:T208|nm|goalnotachieved:radio_play_stationhasnor'); assert.ok(!a[0].d);
+  assert.equal(out(run(env, nm('goal not achieved: radio_play_station has no run proving a station plays · tried: silence check'))).length, 0, 'same question, second run');
+  assert.equal(out(run(env, nm('which box do I use for the BLE run? [1 stb4 / 2 stbv1]'))).length, 1, 'a new question still wakes');
+  const d = out(run(env, ev({ key: 'bug-drain:tick', kind: 'bug-drain', title: 'bug drain dry: 0 started', body: 'dry: disk 93% >= 90%.', priority: 'low' })));
+  assert.equal(d.length, 1); assert.equal(d[0].d, true);
+});
