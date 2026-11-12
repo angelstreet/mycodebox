@@ -130,3 +130,35 @@ test('host after server, host only, full after host: each scope deploys what it 
   assert.equal(lane.get(c.id).deployed.scope, 'full');
   await lane.idle(); lane.stop();
 });
+
+// bug-07b4057a: a later request that skipped the settle window merged and deployed BEFORE an earlier request's merge landed;
+// the earlier request rode that deploy and was reported deployed although the deployed commit did not contain it.
+test('a later request whose deploy built an older main does not carry an earlier request merged after it', async () => {
+  const w = makeWorld(); w.branch('a', { 'a.js': '1\n' }); w.branch('b', { 'b.js': '2\n' });
+  let release; const gate = new Promise((r) => { release = r; });
+  const asked = [];
+  const deploys = {
+    request: async (o) => { asked.push(o); return { id: `d${asked.length}` }; },
+    wait: async (id) => { if (id === 'd1') await gate; return { ok: true, version: `v-${id}` }; },
+  };
+  const lane = createIntegrationLane({ stateDir: tmp('lane-tp-'), config: { repos: { 'env-a': w.cfg({ deploy: { env: 'env-a', defaultScope: 'frontend' }, settleMs: 1500 }) } },
+    deploys, pollMs: 5, sleep: () => tick(1) });
+  lane.start();
+  const a0 = lane.enqueue({ repo: 'env-a', branch: 'a' });                    // branch a has a recent request: the next one settles
+  await until(() => lane.get(a0.id).state === 'merged', 20000);
+  w.branch('a', { 'a.js': '1\n', 'a2.js': '3\n' });
+  const a = lane.enqueue({ repo: 'env-a', branch: 'a', deploy: 'frontend' });
+  assert.ok(lane.get(a.id).settleUntil, 'a waits out its settle window');
+  await tick(50);                                                              // as in production: b arrives a moment later
+  const b = lane.enqueue({ repo: 'env-a', branch: 'b', deploy: 'frontend' });   // quiet branch: picked at once, merges first
+  await until(() => lane.get(b.id).step === 'deploy' && asked.length === 1, 20000);
+  await until(() => lane.get(a.id).sha, 20000);                                // a merges after b, while b's deploy runs
+  await tick(300);                                                             // a now waits for b's deploy to carry it
+  release();
+  await until(() => lane.get(a.id).state === 'deployed' && lane.get(b.id).state === 'deployed', 20000);
+  assert.equal(asked[0].sha, lane.get(b.id).sha, "b's deploy built b's merge, which does not contain a");
+  assert.equal(lane.get(a.id).coveredBy, undefined, "a does not ride b's deploy");
+  assert.ok(asked.some((o) => o.sha === lane.get(a.id).sha), 'a deploys its own merge');
+  assert.equal(lane.get(b.id).deployed.sha, lane.get(b.id).sha, 'the deployed record names the commit it built');
+  await lane.idle(); lane.stop();
+});
