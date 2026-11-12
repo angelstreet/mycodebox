@@ -107,3 +107,11 @@ test('Mac: a failed line without cause: / plan: is journalled while blockedCheck
   assert.equal(r.status, 200);
   assert.match(fs.readFileSync(path.join(stateDir, 'blocked-check.jsonl'), 'utf8'), /"missing":\["cause:","plan:"\]/);
 });
+
+test('Mac: a done line with leftovers or an unverified list is refused once (done only with nothing open)', async () => {
+  const text = 'All merged.\n\nSTATUS: done — rules merged · goal: achieved · evidence: int-1a1ceef9ed9027539 · closing review: docs none needed · leftovers bug-67c65223 · unverified: live wake share · bugs: none';
+  const r = await call('POST', '/stops', { machine: 'mac-test', project: 'demo', session_id: 'sid-open-6ffff', session_name: 'opn', text });
+  assert.equal(r.status, 200);
+  const w = await call('GET', `/stops/${r.body.id}/answer?wait=2`);
+  assert.match(JSON.stringify(w.body), /done is only for a task with nothing open/);
+});

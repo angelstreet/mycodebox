@@ -125,7 +125,8 @@ test('the cursor is written through a pid-suffixed temp file, never a shared .cu
 
 // Batch window (owner, 2026-11-02): a non-urgent first event keeps the wait open for MANAGER_WAIT_WINDOW so later events ride the same wake;
 // an urgent event (asks, hold, ... per scripts/manager-event-policy.json) closes it after the grace.
-const quiet = (i) => JSON.stringify({ at: new Date(1e12 + i * 1000).toISOString(), key: `q${i}:leftovers`, kind: 'leftovers', session: `q${i}`, title: `l${i}`, body: `left ${i}`, items: ['x'] }) + '\n';
+// a routine kind that is neither urgent nor held for the digest (`leftovers` is held since 2026-11-12)
+const quiet = (i) => JSON.stringify({ at: new Date(1e12 + i * 1000).toISOString(), key: `q${i}:review`, kind: 'review', session: `q${i}`, title: `l${i}`, body: `left ${i}`, items: ['x'] }) + '\n';
 
 test('batch window: three routine events spread over the window come out of ONE wait, which lasts the whole window', async () => {
   const s = setup();
@@ -156,13 +157,13 @@ test('an urgent event closes the window after the grace, even behind a routine o
 
 test('the owner policy file can make a kind urgent or ignored for the wait', () => {
   const s = setup();
-  writeFileSync(join(s.dir, 'manager-event-policy.json'), JSON.stringify({ leftovers: 'urgent', asks: 'ignore' }));
+  writeFileSync(join(s.dir, 'manager-event-policy.json'), JSON.stringify({ review: 'urgent', asks: 'ignore' }));
   writeFileSync(s.cursor, '0\n');
   writeFileSync(s.events, ev(1) + quiet(2));
   const t0 = Date.now();
   const r = run(s);
-  assert.deepEqual(ids(r.stdout), ['q2'], 'asks ignored, leftovers delivered');
-  assert.ok(Date.now() - t0 < 2500, `leftovers is urgent now (${Date.now() - t0} ms)`);
+  assert.deepEqual(ids(r.stdout), ['q2'], 'asks ignored, the routine kind delivered');
+  assert.ok(Date.now() - t0 < 2500, `the routine kind is urgent now (${Date.now() - t0} ms)`);
 });
 
 // ---- deferred lines (owner 2026-11-12, TASK-239 G6): a non-blocking bug filing never wakes the manager by itself ----
@@ -190,4 +191,22 @@ test('a deferred line alone is delivered after MANAGER_WAIT_DEFER', async () => 
   const r = run(s);
   assert.deepEqual(ids(r.stdout), ['b1']);
   assert.ok(Date.now() - t0 >= 1900 && Date.now() - t0 < 8000, `delivered after the defer time (${Date.now() - t0} ms)`);
+});
+
+// bug-04d3f3c9: a held deferred line survives a killed waiter, even when the cursor is already past its event
+test('a waiter killed while holding a deferred line hands it to the next one (.deferred-held)', async () => {
+  const s = setup();
+  const held = join(dirname(s.cursor), '.deferred-held');
+  writeFileSync(s.cursor, '0\n');
+  writeFileSync(s.events, bug(1));
+  const p = spawn('bash', [SH], { env: s.env, detached: true, stdio: 'ignore' });
+  await new Promise((r) => setTimeout(r, 3000));
+  assert.match(readFileSync(held, 'utf8'), /b1: bug found/, 'written as soon as it is held');
+  try { process.kill(-p.pid, 'SIGKILL'); } catch { p.kill('SIGKILL'); }
+  await new Promise((r) => p.on('exit', r));
+  writeFileSync(s.cursor, String(readFileSync(s.events).length) + '\n');   // the worst case: the cursor is past the held event
+  appendFileSync(s.events, ev(2));
+  const r = run(s);
+  assert.deepEqual(ids(r.stdout), ['b1', 's2']);
+  assert.equal(existsSync(held), false, 'the file goes once its lines are printed');
 });

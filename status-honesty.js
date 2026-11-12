@@ -176,6 +176,31 @@ export function doneWithoutGoalMessage(f) {
     + 'or, if the goal was not reached, `STATUS: failed — goal not achieved: <why> · tried: <list> · cause: <what your investigation found> · plan: <next approach, who does it>` / `blocked: <reason + what you tried>` / `waiting: <system id>`. Do not ask; pick the true one.';
 }
 
+// ---- (3b) done only with nothing open (owner, 2026-11-12: "done is only if all is done; if bugs or anything, we cannot say done") ----
+// The closing review of a done line says `leftovers none` and `unverified none`. A filed bug id in leftovers is still work left; an unverified list is
+// a check not made. (A bug outside the task goes in `bugs: reported <id>`, which does not hold the line.) Before this, `leftovers <filed ids>` and any
+// `unverified` list passed: a Mac session wrote done with a hook not installed, two bugs open and three items unverified.
+const NOTHING_RE = /^(?:none|nothing|n\/a|-)(?:\b|$)/i;
+// Pure. -> null (not a done line, no closing review, or nothing open) | { open: ['leftovers: ...', 'unverified: ...'], ids: n }.
+export function doneWithOpenOf(text) {
+  const st = lastStatus(text);
+  if (!st || !DONE_KINDS.has(st.kind)) return null;
+  const seg = /\bclosing[ -]review\s*[:=]\s*(.*)$/i.exec(unmark(st.text));
+  if (!seg) return null;
+  const body = seg[1].replace(/[·;|]\s*bugs\s*[:=].*$/i, '');
+  const part = (k, others) => (new RegExp(`\\b${k}\\s*:?\\s+(.+?)(?=\\s*[·;|]\\s*(?:${others}|bugs)\\b|\\s+(?:${others})\\s*:|$)`, 'i').exec(body) || [])[1]?.trim().replace(/[.,;·\s]+$/, '') || '';
+  const left = part('leftovers', 'docs|unverified'), unv = part('unverified', 'docs|leftovers');
+  const open = [];
+  if (left && !NOTHING_RE.test(left)) open.push(`leftovers: ${left.slice(0, 160)}`);
+  if (unv && !NOTHING_RE.test(unv)) open.push(`unverified: ${unv.slice(0, 160)}`);
+  return open.length ? { open, ids: (left.match(/\b(?:bug|idea)-[0-9a-f]{6,}\b/gi) || []).length } : null;
+}
+export function doneWithOpenMessage(f) {
+  return `Status check: done is only for a task with nothing open, and your done line lists ${f.open.join(' · ')}. A filed bug is not a finished task and an unverified item is a check not made. `
+    + 'Finish or verify each one now (a bug of yours: `found-bug --claim <id>`, fix, ship, `found-bug --resolve <id> --commit <sha|integration id>`), then write the done line with `leftovers none · unverified none`. '
+    + 'If you cannot, the status is not done: `running` / `waiting` (something is going), `needs-manager`, `blocked: ... · tried: ... · need: ...`, or `failed — goal not achieved: <why> · tried: <list> · cause: <what you found> · plan: <next approach, who does it>`. One push only.';
+}
+
 // ---- (4) blocked is not a wait (owner, 2026-11-11 evening) ----
 // "blocked is for an agent that cannot work and requires attention from the manager": `blocked: <what stops you> · tried: <list> · need: <what the manager
 // must do>`. A wait on something running or queued is `waiting: <integration / deploy id, lease ticket, own background job, worker session, a time>`;

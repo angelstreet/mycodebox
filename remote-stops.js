@@ -11,7 +11,7 @@ import { join, isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createHash } from 'node:crypto';
 import { computeStopState, doneWhileMessage } from './stop-state.js';
-import { verificationOf, verificationMessage, timeBoxWakeMessage, blockedHonestyOf, blockedHonestyMessage, failedHonestyOf, failedHonestyMessage, doneButFailedOf, doneButFailedMessage, doneWithoutGoalOf, doneWithoutGoalMessage, lastStatus } from './status-honesty.js';
+import { verificationOf, verificationMessage, timeBoxWakeMessage, blockedHonestyOf, blockedHonestyMessage, failedHonestyOf, failedHonestyMessage, doneWithOpenOf, doneWithOpenMessage, doneButFailedOf, doneButFailedMessage, doneWithoutGoalOf, doneWithoutGoalMessage, lastStatus } from './status-honesty.js';
 import { DEFAULT_CIDRS, parseCidrs, addrAllowed, readClients, clientOf, callerIdentity, readBody } from './lease-routes.js';
 
 export const PREFIX = '/api/remote/v1';
@@ -183,6 +183,12 @@ export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goa
       const f = doneButFailedOf(stx, goal);
       const sig = createHash('sha1').update(line).digest('hex').slice(0, 12);
       if (f && s.honestSig !== sig) { s.honestSig = sig; refusal = { kind: 'done-but-failed', message: doneButFailedMessage(f, goal) }; }
+    }
+    // done only with nothing open (owner 2026-11-12): a done line whose closing review lists leftovers or anything unverified is refused once per line
+    // (two or more filed ids alone are left to the fix-first push of the goal check, which names each bug's reason)
+    if (!refusal && !v.stop_hook_active && manager.sessionOn(name)) {
+      const stx = stopText(v), od = doneWithOpenOf(stx), sig = createHash('sha1').update(lastStatus(stx)?.line || '').digest('hex').slice(0, 12);
+      if (od && !(od.ids >= 2 && od.open.length === 1) && s.openSig !== sig) { s.openSig = sig; refusal = { kind: 'done-with-open', message: doneWithOpenMessage(od) }; }
     }
     // blocked is not a wait (owner 2026-11-11 evening): once per line; dry (journal only) until manager.json blockedCheck is live
     if (!refusal && !v.stop_hook_active && manager.sessionOn(name)) {

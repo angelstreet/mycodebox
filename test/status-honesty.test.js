@@ -314,3 +314,25 @@ test('goal store: hook feedback, a notification or an image marker is not a goal
   assert.match(e.goal, /^Build the radio, replay and VOD functional scripts/);
   assert.match(store.capture('mac:t208', 'pause the 5 nightly deployments until we fix', 'mac-first-prompt').goal, /^Build the radio/, 'a later side request does not replace the goal');
 });
+
+// done only with nothing open (owner 2026-11-12)
+import { doneWithOpenOf, doneWithOpenMessage } from '../status-honesty.js';
+test('doneWithOpenOf: filed leftovers or an unverified list hold a done line; leftovers none + unverified none does not', () => {
+  const head = 'STATUS: done — harness rules merged · goal: achieved · evidence: int-1a1ceef9ed9027539 · closing review: docs TASK-239';
+  assert.equal(doneWithOpenOf(head + ' · leftovers none · unverified none · bugs: none'), null);
+  assert.equal(doneWithOpenOf(head + ' · leftovers none · unverified none new · bugs: reported bug-aaaaaaaa'), null, 'a reported bug outside the task does not hold the line');
+  const a = doneWithOpenOf(head + ' · leftovers bug-67c65223, bug-04d3f3c9 · unverified: Mac guard hook not installed, live wake share · bugs: fixed bug-ceb8ffff');
+  assert.deepEqual(a.open, ['leftovers: bug-67c65223, bug-04d3f3c9', 'unverified: Mac guard hook not installed, live wake share']); assert.equal(a.ids, 2);
+  assert.match(doneWithOpenMessage(a), /done is only for a task with nothing open/);
+  assert.equal(doneWithOpenOf('STATUS: waiting: integration int-1a1cc61deccbb0995'), null);
+  assert.equal(doneWithOpenOf('STATUS: done — x'), null, 'no closing review: check (C) speaks');
+});
+test('done-check (N): a done line with an unverified list is sent back once and is not asked the goal question', async () => {
+  const line = 'STATUS: done — rules merged · goal: achieved · evidence: int-1a1ceef9ed9027539 · closing review: docs none needed · leftovers none · unverified: the live row · bugs: none';
+  const sent = [];
+  const w = createDoneCheck({ stateDir: tmp('doneN-'), git: async () => { throw new Error('x'); }, listDone: async () => [{ name: 'kpi', cwd: '/nowhere', text: line }], mode: () => 'live', log: { error() {} },
+    pressure: () => ({ loadPerCore: 0.1, ramAvailPct: 80 }), send: async (n, x) => { sent.push([n, x]); },
+    goalGate: { forget: async () => {}, evaluate: async () => ({ kind: 'ask', message: 'Goal check: Goal as given: x' }), sent: async () => {} } });
+  await w.tick(); await w.tick();
+  assert.equal(sent.length, 1, JSON.stringify(sent)); assert.match(sent[0][1], /lists unverified: the live row/);
+});
