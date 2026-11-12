@@ -15,6 +15,10 @@ ENVN=${REGISTRY_ENV:-node1-vpt}
 PROBES=${REGISTRY_PROBES:-"vpt-lenovo4/device1 vpt-mf1/device2 vpt-pi1/device5"}
 DRY=0; [ "${1:-}" = "--dry-run" ] && DRY=1
 FILES="lease-service.js lease-routes.js catchup-supersede.js lease-equivalence.js scripts/lease-serve.js"
+# the lane runs with a minimal PATH (no ~/.local/bin): find the client, and fail closed without it (the first two lane runs rolled back on this)
+VL=${VPT_LEASE_BIN:-$(command -v vpt-lease 2>/dev/null)}
+[ -n "$VL" ] || for c in "$HOME/bin/vpt-lease" "$HOME/.local/bin/vpt-lease"; do [ -x "$c" ] && { VL=$c; break; }; done
+[ -n "$VL" ] || { echo "registry-install: vpt-lease client not found" >&2; exit 1; }
 rssh() { ssh -o ControlPath=none -o ConnectTimeout=10 "$SSH_T" "$@"; }
 CHANGED=""
 for f in $FILES; do
@@ -24,7 +28,8 @@ done
 [ -z "$CHANGED" ] && { echo "registry-install: registry files already match the repo"; exit 0; }
 echo "registry-install: changed:$CHANGED"
 [ "$DRY" = 1 ] && exit 0
-if vpt-lease deploy list 2>/dev/null | grep -q "state=running"; then echo "registry-install: a deploy is running; not installing now" >&2; exit 3; fi
+DL=$("$VL" deploy list 2>&1) || { echo "registry-install: cannot read the deploy list: $DL" >&2; exit 1; }
+if printf %s "$DL" | grep -q "state=running"; then echo "registry-install: a deploy is running; not installing now" >&2; exit 3; fi
 TS=$(date -u +%Y%m%d-%H%M)
 for f in $CHANGED; do
   case "$f" in *.js) ext=.js ;; esac
@@ -43,9 +48,9 @@ OK=0; tries=0
 while [ "$OK" = 0 ] && [ $tries -lt 15 ]; do
   tries=$((tries+1))
   for p in $PROBES ${REGISTRY_PROBE:-}; do
-    vpt-lease check "$ENVN" "$p" >/dev/null 2>&1 || continue
-    id=$(vpt-lease claim "$ENVN" "$p" --agent codebox:registry-install --ttl 5 --purpose "registry install round trip" 2>/dev/null | head -1)
-    case "$id" in [0-9a-f]*) vpt-lease release "$id" >/dev/null 2>&1 && OK=1; break ;; esac
+    "$VL" check "$ENVN" "$p" >/dev/null 2>&1 || continue
+    id=$("$VL" claim "$ENVN" "$p" --agent codebox:registry-install --ttl 5 --purpose "registry install round trip" 2>/dev/null | head -1)
+    case "$id" in [0-9a-f]*) "$VL" release "$id" >/dev/null 2>&1 && OK=1; break ;; esac
   done
   [ "$OK" = 1 ] || sleep ${REGISTRY_RETRY_SLEEP:-3}
 done
