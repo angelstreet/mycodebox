@@ -985,16 +985,18 @@ sends `continue`. A held session that moves on by itself loses the hold. Cards, 
 "held: quota" (tooltip = reason); the manager panel lists held sessions. The manager never switches an agent.
 
 **New session** (owner 2026-11-12: two clicks). A centred dialog: agent (claude, codex, minimax; bash is API only), priority,
-model (claude opus / sonnet / haiku / fable; codex the models its CLI lists in `~/.codex/models_cache.json`, the configured
-one first; minimax MiniMax-M3; `GET /api/new-session/models`), project, an optional first message (images / .md picked, pasted or
+model (at most 4 per provider, preselected: claude sonnet of opus / sonnet / haiku / fable; codex gpt-6-luna then the first
+models its CLI lists in `~/.codex/models_cache.json`; minimax MiniMax-M3; `GET /api/new-session/models`), project, an optional first message (images / .md picked, pasted or
 dropped are uploaded and added as `@path`) and the name. Every choice of the last create (agent, model per agent, project,
-priority) is preselected, so "+" then "create" repeats it. `POST /api/sessions {name, agent, cwd, priority, model?, prompt?}`
+priority) is preselected (the project defaults to virtualpytest), so "+" then "create" repeats it. `POST /api/sessions {name, agent, cwd, priority, model?, prompt?}`
 starts the CLI with the model flag and the prompt as its first message (read from `<state>/prompts/<name>-<ms>.txt`, so the
-text never meets the shell). The project list (`GET /api/dirs`) offers git repos and worktrees under `$HOME` only, without
-tmp*, scratchpad or hidden-folder ones (`new-session.js` `pickableProject`). The old headroom suggestion is gone.
+text never meets the shell). The project list (`GET /api/dirs`) offers main checkouts under `$HOME` only (no worktrees: entries
+carry `worktree: true` and the dialog hides them), without tmp*, scratchpad or hidden-folder ones (`new-session.js` `pickableProject`). The old headroom suggestion is gone.
 
 **Project of a session** (owner 2026-11-12). A session is grouped and filtered by the git project of its pane's folder; one in no
-repo shows "no repo" (it used to show its agent name, which read as a fake "claude" project). When the folder was removed under
+repo belongs to virtualpytest (it used to show its agent name, which read as a fake "claude" project), and the GitHub name
+virtualpytest-internal shows as virtualpytest (`PROJECT_ALIAS` in `public/app.js`). A Mac session in a Claude worktree
+(`<repo>/.claude/worktrees/<name>`) takes the repo as its project, not the worktree name (`remote-stops.js`). When the folder was removed under
 a live session (a merged worktree cleaned up), tmux reports `<path> (deleted)`: the project is then read from the main checkout
 the worktree was named after (`~/repo-topic` -> `~/repo`, `cwd-gone.js`). The nav list leaves the Claude account out of the row
 (it ran into the age column); it is in the agent badge's tooltip.

@@ -2076,6 +2076,7 @@ body.res-hidden .health.inbar, body.res-hidden .quota.inbar{ display:none !impor
 .newsess #nsAgent{ grid-template-columns:repeat(3,1fr); }
 .newsess #nsPrio{ grid-template-columns:repeat(3,auto); }
 .newsess .nsmodel{ grid-template-columns:repeat(auto-fill, minmax(96px, 1fr)); }
+.newsess .nsmodel button.on{ color:var(--accent); border-color:var(--accent); background:rgba(232,154,74,.14); }
 .newsess .nsmodel button{ text-transform:none; white-space:nowrap; font-size:12px; padding:0 6px; overflow:hidden; text-overflow:ellipsis; }
 .newsess .nsproj .ucpanel{ position:static; margin-top:6px; box-shadow:none; }
 .newsess .nsproj .uclist{ max-height:min(32dvh, 300px); }
