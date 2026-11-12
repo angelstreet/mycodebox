@@ -194,9 +194,10 @@ rolled back or a camera is down, and files `found-bug` for a camera down or a ro
   channel, nothing touched). No stream was really down, so nothing had to be replaced and the pool was never used.
 - What the app shows (tile snapshots): 79 ok, 3 black, 10 multi_audio, 6 unknown, 1 missing.
   - The 10 `multi_audio` tiles are the known host-side bug (bug-ea31641c): the host stream carries every audio track of a
-    multi-rendition HLS master, so the browser's live player can show a black tile while the source plays. Host fix still
-    pending. It did not reproduce for the one checked in the browser tonight (`FR News 2 — Euronews FR` renders the channel
-    picture, brightest pixel 95/255), so the nightly's `multi_audio` row is the fact about the host stream, not a black tile.
+    multi-rendition HLS master, so the browser's live player can show a black tile while the source plays. All 10 were opened
+    in the browser: 9 render a live picture (tile brightest pixel 66-222, the video advances), and **BFM2** (`vpt-lenovo5/DEVICE1`,
+    4 tracks) is black in the browser (tile brightest pixel 16/255) while its host snapshot is bright (157): the bug reproduces
+    tonight, the browser layer is not fixed.
   - `vpt-nipogi/DEVICE31` (`FR Series — MDL`) is black for good: the channel's own picture is black (host snapshot and source
     frame, luma 16 under 32; still black on a re-check after the run). A headless browser check of the app confirms it: the
     tile renders a black video area (brightest pixel 16/255) while the card chrome is white; the `<video>` inside the tile
@@ -205,8 +206,9 @@ rolled back or a camera is down, and files `found-bug` for a camera down or a ro
     the free lists (bug-de449145).
   - `lenovo-local-low/DEVICE23` and `DEVICE36` were black at 05:48 and fresh and bright (luma 113 and 85) on a re-check 17 min
     later: a transient dark frame on the host capture side, not a dead channel (idea filed, bug-9b0cd7b5).
-- The pool was not touched: re-probed from `vpt-pi4` (the host that runs `vpt-rtsp`), `smoke` plays (h264 640x360) and the three
-  public candidates still time out on port 554, so nothing new is vetted (bug-c7c2bb0e, bug-6b79b048).
+- The pool was not touched: re-probed from `vpt-pi4` (the host that runs `vpt-rtsp`), `smoke` plays (h264 640x360), and the three
+  public candidates still time out on port 554 from `vpt-pi4` and from codebox, so nothing new is vetted (bug-c7c2bb0e,
+  bug-6b79b048).
 
 ## Private config (not in the repo)
 
