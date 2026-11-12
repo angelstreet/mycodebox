@@ -39,6 +39,9 @@
 # of its own. Replay: scripts/manager-wake-rules-replay.py <day>.
 # 2026-11-12, second set: one stop = one event (key `stop|<session>|<text>`, deduped across runs like asks); deferred too: a stop that is a wait,
 # and the notices bug-unreported / leftovers / bug-drain / orphaned-task / int-*:cancelled / lease nudge, unless the policy makes the kind urgent or pass.
+# 2026-11-12, third set (the manager's field list of wakes it did nothing on): a `needs-manager` stop is keyed like an ask (`stop|<session>|nm|<first 40
+# normalised chars>`, deduped across runs for 6 h: one Mac session re-sent the same unanswered question 3 times in 4 h); the low-priority notices
+# (`bug drain dry: 0 started` is priority low) are deferred like the default-priority ones.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STATE_DIR="${GHOSTY_STATE_DIR:-$HOME/.local/state/ghosty}"
 POLICY_DEFAULT="$HERE/manager-event-policy.json"
@@ -67,6 +70,11 @@ jq -c --unbuffered --argjson policy "$POLICY" '
     | sub("^\\S+ asks:\\s*";"") | sub("^STATUS:\\s*[a-z-]+\\s*[·:—-]?\\s*";"")
     | sub("^(decision for you|the topic is \"[^\"]*\")\\s*—\\s*needs you\\s*(\\[hard: [a-z ]+\\]\\s*)?";"") | sub("^lease reason:\\s*";"")
     | gsub("[`*]";"") | gsub("\\s";"") | ascii_downcase | .[0:40]);
+  def nmish: ((.kind//"")|tostring|test("(^|:)needs-manager$"));
+  def nmsess: (((.key//"")|tostring)|sub(":needs-manager$";""));
+  def nmnorm: (((.body//"")|tostring)
+    | gsub("·\\s*[0-9][0-9hms ]*·\\s*[0-9.]+[kM]?\\s*tok\\s*";"") | sub("^\\S+ needs the manager:\\s*";"")
+    | gsub("[`*]";"") | gsub("\\s";"") | ascii_downcase | .[0:40]);
   # A stop that is a wait (a time, a lease held by someone, a queue, "waiting on"): the blocked check sends it back to the session; the manager reads it with its next wake.
   def waitish: (((.body//"")|tostring)|test("\\b(kept free|held|reserved|free)\\b[^.;]{0,40}\\buntil [0-9]{1,2}:[0-9]{2}|\\b(held|leased) by\\b|\\bis (held|leased)\\b|\\bwaiting on\\b|\\bwaits? (on|for)\\b|\\byielded\\b|\\bqueued (claims?|next|behind)";"i"));
   # Notices the manager left alone on 2026-11-11: they ride with the next wake, unless the policy file makes the kind urgent or pass (waiting, hold, no-progress, quota are urgent by default).
@@ -88,11 +96,11 @@ jq -c --unbuffered --argjson policy "$POLICY" '
     or ((((.session//"")=="done-check") or ((.session//"")=="goal-check") or ((.kind//"")|tostring|test("^session-closed:"))) and ((.priority//"default")=="default"))
     or (((.kind//"")|tostring|test("^(kpi-|pokestall-|pokemon-daily-|mobile-orchtnet-owner$|opus-openexit$|content-|mi-bugs-|pi1-load-|task208-)")) and ((.priority//"default")=="default"));
   select(pol != "ignore") | select(pol == "pass" or (routine|not))
-  | {k:(if stopish then ("stop|"+stopsess+"|"+stopnorm) elif ((.kind=="disk" or .kind=="quota") and (pct != null) and (pct < 95)) then ("pctx|"+((.key//.kind)|tostring|gsub("\\s";""))+"|"+((pct/5|floor)|tostring)) else (.session//"")+"|"+.kind+"|"+(if .kind=="health" then (.key//"") else ((.body//"") as $b | (if ($b|test("needs-owner:")) then ($b|capture("needs-owner:(?<q>[^\\[]*)").q) else $b end) | gsub("·\\s*[0-9][0-9hms ]*·\\s*[0-9.]+[kM]?\\s*tok\\s*";"")|gsub("\\s";"")|.[0:80]) end) end),
+  | {k:(if stopish then ("stop|"+stopsess+"|"+stopnorm) elif nmish then ("stop|"+nmsess+"|nm|"+nmnorm) elif ((.kind=="disk" or .kind=="quota") and (pct != null) and (pct < 95)) then ("pctx|"+((.key//.kind)|tostring|gsub("\\s";""))+"|"+((pct/5|floor)|tostring)) else (.session//"")+"|"+.kind+"|"+(if .kind=="health" then (.key//"") else ((.body//"") as $b | (if ($b|test("needs-owner:")) then ($b|capture("needs-owner:(?<q>[^\\[]*)").q) else $b end) | gsub("·\\s*[0-9][0-9hms ]*·\\s*[0-9.]+[kM]?\\s*tok\\s*";"")|gsub("\\s";"")|.[0:80]) end) end),
      u:(pol=="urgent" or ((.priority//"")=="high") or ((.priority//"")=="urgent") or ((.kind=="bug") and ((.bug.blocking//false)==true))),
      d:(((.kind=="bug") and ((.bug.blocking//false)==false) and ((.priority//"")!="high") and ((.priority//"")!="urgent") and (pol!="urgent") and (pol!="pass"))
         or (stopish and waitish and ((((.body//"")|tostring)|test("needs-owner"))|not) and (pol!="pass"))
-        or (notice and ((.priority//"default")=="default") and (pol!="urgent") and (pol!="pass"))
+        or (notice and (((.priority//"default")=="default") or ((.priority//"")=="low")) and (pol!="urgent") and (pol!="pass"))
         or ((.kind=="disk" or .kind=="quota") and (pct != null) and (pct < 95) and (pol!="urgent") and (pol!="pass"))), l:.}' \
 | awk -W interactive -v now="$NOW" -v seen="$SEEN_FILE" '
     function persist(k) { printf "%d %s\n", now, k >> seen; fflush(seen) }
