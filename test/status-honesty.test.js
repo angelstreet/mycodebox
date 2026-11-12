@@ -336,3 +336,24 @@ test('done-check (N): a done line with an unverified list is sent back once and 
   await w.tick(); await w.tick();
   assert.equal(sent.length, 1, JSON.stringify(sent)); assert.match(sent[0][1], /lists unverified: the live row/);
 });
+
+test('Verification rows: a row wrapped in the pane is one row; evidenced pass rows are the evidence of "all Done-when lines pass" (bugs-fix-first, 2026-11-12)', () => {
+  const pane = [
+    'Verification:',
+    '  1. pass — canonical sentence at AGENTS.md:43, scripts/cbsession:114 and docs/MAC-HOOK.md:142, merged',
+    '     (int-1a1cb947d679920d3, ef4eff8af74f); test/found-bugs-enforce.test.js passes.',
+    '  2. pass — scripts/found-bug exits 2 without --why-not-fixed (test/found-bug-cli.test.js asserts it).',
+    '     Merged as int-1a1cb9aefe7683ba4 (44f549ffa5f5).',
+    '  3. pass — reported counts: 206 open real bugs, 94 distinct filers.',
+    '',
+    '  goal: achieved · evidence: these are API reads, commits, integration ids and test runs.',
+    '',
+    '  STATUS: done — all three Done-when lines pass · closing review: docs AGENTS.md · leftovers none · unverified none · bugs: none',
+  ].join('\n');
+  const rows = verificationRowsOf(pane);
+  assert.deepEqual(rows.map((r) => `${r.n}${r.verdict}`), ['1pass', '2pass', '3pass']);
+  assert.match(rows[1].text, /int-1a1cb9aefe7683ba4/);
+  assert.equal(proofWithoutEvidenceOf(pane), null);
+  assert.ok(proofWithoutEvidenceOf('Verification:\n1. pass — looked fine\n\nSTATUS: done — all Done-when lines pass · bugs: none'), 'pass rows with no reference are no evidence');
+  assert.equal(verificationRowsOf('Verification:\n1. pass — a\n2. fail — b\nsome prose\n3. pass — c').length, 2, 'an unindented line still ends the block');
+});

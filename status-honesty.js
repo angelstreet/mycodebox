@@ -111,6 +111,10 @@ export function doneButFailedMessage(f, goal = '') {
 // screenshot file, or an `evidence:` segment that holds one of those.
 const PROOF_RE = /\b(?:green|pass(?:ed|es|ing)?|proven|proved|proof|works|working|validated|verified on)\b/i;
 const EVIDENCE_RE = /https?:\/\/\S+|\b(?:report|run|result|results|execution|script|job|frame|screenshot|capture|recording|video|audio)s?\s*[#:=]?\s*\(?[`"]?[0-9a-f]{6,}\b|\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b|\S+\.(?:png|jpe?g|webp|gif|mp4|webm|mkv|ts|wav|mp3|ogg|m4a|html|json|log)\b|\bevidence\s*[:=]\s*[^·|;]*?(?:\/|\b[0-9a-f]{7,40}\b|\bint-[0-9a-z]{6,}|\bbug-[0-9a-f]{8}|\bt-[0-9a-f]{6,})/i;   // `evidence: merge 082d43609e7b` (fp-audit-opus, 2026-11-11: warned wrongly)
+// A `Verification:` block (goal-first rule) whose `<n>. pass — ...` rows name evidence is the evidence of a done line that points at it ("all
+// five Done-when lines pass"; bugs-fix-first, 2026-11-12: warned wrongly). Whether every row is right is the Verification check's job.
+const ROW_EVIDENCE_RE = /https?:\/\/|[\w.-]+\.\w+:\d+|\b[0-9a-f]{7,40}\b|\bint-[0-9a-z]{6,}|\bbug-[0-9a-f]{8}|\bt-[0-9a-f]{6,}/i;
+const verifiedRows = (text) => (verificationRowsOf(text) || []).some((r) => r.verdict === 'pass' && ROW_EVIDENCE_RE.test(r.text));
 // Pure. -> null, or { claim } when the last STATUS is done, its claim says green / pass / proven, and neither the line nor the closing paragraph
 // above it carries a reference.
 export function proofWithoutEvidenceOf(text) {
@@ -122,7 +126,7 @@ export function proofWithoutEvidenceOf(text) {
   if (/\b(?:tests?|npm test|suite|typecheck|lint|ci|unit)\b[^.;·]{0,40}\b(?:green|pass)/i.test(head) && !/\b(?:device|box|stb|tv|phone|prod|run on|playback|audio|video|frame)\b/i.test(head)) return null;   // a test suite is its own evidence
   const paras = String(text || '').split(/\n\s*\n/);
   const tail = paras.slice(-2).join('\n');
-  if (EVIDENCE_RE.test(st.text) || EVIDENCE_RE.test(tail)) return null;
+  if (EVIDENCE_RE.test(st.text) || EVIDENCE_RE.test(tail) || verifiedRows(text)) return null;
   const i = Math.max(0, m.index - 60);
   return { claim: head.slice(i, m.index + 60).trim() };
 }
@@ -279,6 +283,7 @@ export function verificationRowsOf(text) {
     if (/^\W*STATUS:/i.test(l)) break;
     const m = /^(?:[-*]\s*)?(\d+)\s*[.)]\s*\**\s*(pass(?:ed)?|fail(?:ed)?|not checked|dropped by owner|dropped)\b\**\s*(?:[—–:-]\s*)?(.*)$/i.exec(l);
     if (m) rows.push({ n: Number(m[1]), verdict: /^pass/i.test(m[2]) ? 'pass' : /^fail/i.test(m[2]) ? 'fail' : /^not/i.test(m[2]) ? 'not checked' : 'dropped', text: m[3].slice(0, 200) });
+    else if (rows.length && /^\s/.test(lines[i]) && !/^\d+\s*[.)]/.test(l)) { const r = rows[rows.length - 1]; r.text = `${r.text} ${l}`.slice(0, 400); }   // a row wrapped in the pane (bugs-fix-first 2026-11-12: 1 of 5 rows read)
     else if (rows.length) break;
   }
   return rows;
