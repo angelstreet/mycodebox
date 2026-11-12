@@ -25,7 +25,7 @@ the manager counted bugs at the hourly sweep and started workers ad hoc. Now `sc
    (account rotation handles the rest). A gate that is closed skips the bug for this tick; an unknown quota starts no Sonnet worker.
 4. Live: the tick claims the bug for the worker's session (`POST /api/bugs/<id>/claim`) before starting it; a refused claim starts nothing; a failed start releases the claim.
 5. Never starts anything when the disk is >= 90 % (same threshold as `disk-guard.js`), when two workers are alive, or when `/api/sessions` is unreachable.
-6. The brief: bug fields, `found-bug --claim` first, reproduce, fix in the worktree, tests, `integrate request`, `found-bug --resolve`, public-repo rules, STATUS vocabulary.
+6. The brief (cbsession refuses a brief with no checkable `Done when:` list, GOAL-RULE): `Goal:`, `Done when:` (bug resolved in the ledger, integration merged, touched tests pass), `Time box: 2 h`, bug fields, `found-bug --claim` first, reproduce, fix in the worktree, tests, `integrate request`, `found-bug --resolve`, public-repo rules, STATUS vocabulary.
 
 ## Numbers (journal and scorecard)
 
