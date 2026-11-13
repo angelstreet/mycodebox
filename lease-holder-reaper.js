@@ -163,7 +163,7 @@ export function createHolderReaper({ stateDir, run, listSessionNames = async () 
           line.ok = rr.code === 0; line.out = (rr.stdout || rr.stderr || '').trim().slice(0, 120);
           if (rr.code === 0) {
             idleSeen.delete(u.id); released.push(line); log.log?.(`[lease-holder-reaper] ${reason}`);
-            await notify(u.session, `Lease watchdog: your lease ${u.id} was released: you sat idle at the prompt ${u.idleMin} min with no background job. Claim again when you need it: vpt-lease claim <env> --any <group> --wait (or vpt-lease run <env> <resource> -- <cmd>).`).catch(() => {});
+            await notify(u.session, `Lease watchdog: your lease ${u.id} was released: you sat idle at the prompt ${u.idleMin} min with no background job. Claim again when you need it: vpt-lease claim <env> --any <group> --wait (or vpt-lease run <env> <resource> -- <cmd>).`, u.id).catch(() => {});
           }
         } else if (n === CHECKS) log.log?.(`[lease-holder-reaper] DRY ${reason}`);   // dry: one line when first confirmed
         if (im !== 'live' && n !== CHECKS) continue;

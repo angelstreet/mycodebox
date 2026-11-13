@@ -138,7 +138,7 @@ function idleHarness(mode, hasLiveJob = async () => false) {
   const calls = [], told = [];
   const run = async (a) => { calls.push(a); return a[0] === 'list' ? { code: 0, stdout: JSON.stringify({ leases: [idleRow()] }), stderr: '' } : { code: 0, stdout: 'released 1', stderr: '' }; };
   const dir = tmp('hr-');
-  const r = createHolderReaper({ stateDir: dir, run, listSessionNames: async () => ['sess'], activityOf: () => act(), now: () => NOW_MS, idleReleaseMs: () => 10 * 60000, idleMode: () => mode, hasLiveJob, notify: async (s, t) => { told.push([s, t]); }, log: { log() {}, error() {} } });
+  const r = createHolderReaper({ stateDir: dir, run, listSessionNames: async () => ['sess'], activityOf: () => act(), now: () => NOW_MS, idleReleaseMs: () => 10 * 60000, idleMode: () => mode, hasLiveJob, notify: async (s, t, id) => { told.push([s, t, id]); }, log: { log() {}, error() {} } });
   return { r, calls, told, dir, rel: () => calls.filter((c) => c[0] === 'release') };
 }
 test('idle release live: 2nd poll releases, journals, tells the session how to claim again', async () => {
@@ -147,6 +147,7 @@ test('idle release live: 2nd poll releases, journals, tells the session how to c
   await h.r.poll(); assert.equal(h.rel().length, 1);
   assert.match(h.rel()[0][5], /^idle-release: released lease i1: session sess idle at its prompt 55 min/);
   assert.match(h.told[0][1], /vpt-lease claim <env> --any <group> --wait/);
+  assert.equal(h.told[0][2], 'i1', 'the lease id keys the note: one per released lease');
   const j = readFileSync(join(h.dir, 'lease-actions.jsonl'), 'utf8');
   assert.match(j, /"type":"idle-release"/); assert.match(j, /"dryRun":false/);
 });
