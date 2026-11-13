@@ -80,6 +80,10 @@ if [ "$NOWT" != 1 ] && [ -n "$TOP" ] \
 fi
 
 H="$HOME/handovers"; mkdir -p "$H"; P="$H/$NAME.prompt.md"; L="$H/$NAME.launch.sh"
+# A -f brief that already IS ~/handovers/<NAME>.prompt.md: `cat "$PFILE" > "$P"` truncated it to the preamble and the
+# start died on "input file is output file" (bug-3ac8b59c). Read it from a copy instead.
+PFILE_TMP=
+if [ -n "$PFILE" ] && [ -e "$P" ] && [ "$PFILE" -ef "$P" ]; then PFILE_TMP=$(mktemp); cp "$PFILE" "$PFILE_TMP"; PFILE=$PFILE_TMP; fi
 if [ -n "$HANDOVER" ]; then
   [ -f "$HANDOVER" ] || { echo "cbsession: handover $HANDOVER not found on this host (scp it to ~/handovers/ first)" >&2; exit 2; }
   HANDOVER=$(cd "$(dirname "$HANDOVER")" && pwd)/$(basename "$HANDOVER")
@@ -131,6 +135,7 @@ EOF
 elif [ -n "$PFILE" ]; then { printf '%s\n\n' 'Ship rule (owner 2026-11-11): after a change run the touched tests/typecheck yourself, commit, push your branch, `integrate request <branch> [--deploy ...]`; never ask permission for these and never end a turn with an offer ("I can ...", "if you want", "should I", "nothing is committed") for something the rules already authorise; verify UI yourself with headless Playwright (skill vpt-headless-verify); end with a STATUS line.'; cat "$PFILE"; } > "$P"; BUGRULE=1
 elif [ -n "$TEXT" ]; then { printf '%s\n\n' 'Ship rule (owner 2026-11-11): after a change run the touched tests/typecheck yourself, commit, push your branch, `integrate request <branch> [--deploy ...]`; never ask permission for these and never end a turn with an offer ("I can ...", "if you want", "should I", "nothing is committed") for something the rules already authorise; verify UI yourself with headless Playwright (skill vpt-headless-verify); end with a STATUS line.'; printf '%s\n' "$TEXT"; } > "$P"; BUGRULE=1
 else echo "cbsession: give -H HANDOVER, -f PROMPT_FILE or -t TEXT" >&2; exit 2; fi
+[ -n "$PFILE_TMP" ] && rm -f "$PFILE_TMP"
 
 [ -n "$WTCMD" ] && printf '\nYour worktree is ready: %s (branch %s, made by cbsession from main before this prompt). Work only there; rename the branch if the task needs another name.\n' "$DIR" "$WTB" >> "$P"
 # -f / -t prompts get the found-bugs rule too (every provider launches from this one file; owner 2026-10-28)

@@ -61,6 +61,19 @@ test('every prompt kind (-H, -t, -f) opens with the ship rule in its first lines
   }
 });
 
+// bug-3ac8b59c: a brief written straight to ~/handovers/<NAME>.prompt.md was truncated to the preamble and no session started.
+test('a -f brief that already is ~/handovers/<NAME>.prompt.md keeps its text (bug-3ac8b59c)', () => {
+  fs.mkdirSync(path.join(home, 'handovers'), { recursive: true });
+  const own = path.join(home, 'handovers', 'cbp-own.prompt.md');
+  fs.writeFileSync(own, 'review the thing, read-only\nDone when:\n1. the report exists with a run id\n');
+  const r = run('-x', '-n', 'cbp-own', '-d', work, '-f', own);
+  assert.equal(r.status, 0, r.stderr);
+  assert.doesNotMatch(r.stderr, /input file is output file/);
+  const p = promptOf('cbp-own');
+  assert.match(p.split('\n')[0], /^Ship rule/);
+  assert.match(p, /review the thing, read-only\nDone when:\n1\. the report exists with a run id/);
+});
+
 test('the handover prompt has one merge rule: ship through integrate request, never "merge your own tested work" (2026-11-11)', () => {
   const r = run('-x', '-n', 'cbp-m', '-d', work, '-H', handover);
   assert.equal(r.status, 0, r.stderr);
