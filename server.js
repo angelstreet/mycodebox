@@ -1117,6 +1117,7 @@ let stopFactsImpl = async () => ({});   // set where the manager is initialised 
 const stopStateMode = () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).stopState; return m === 'live' || m === 'off' ? m : 'dry'; } catch { return 'dry'; } };
 const doneCheck = createDoneCheck({
   stopFacts: (n, o) => stopFactsImpl(n, o), stateMode: stopStateMode,
+  draftNow: async (n) => { try { return !!inputBox((await capturePane(n, 30)).split('\n')).draft; } catch { return true; } },
   goalEntryOf: (n) => goals.get(n), timeBoxMode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).timeBox; return m === 'live' || m === 'off' ? m : 'dry'; } catch { return 'dry'; } },
   listSessions: async () => { const out = []; for (const [name, st] of Object.entries(latest?.status || {})) { if (loadManagerSessions().includes(name) || sessionMeta.isPaused(name)) continue; out.push({ name, working: st?.state === 'working', draft: !!st?.stall?.draft, text: closingTextOf(st?.stall) }); } return out; },
   stateDir: STATE_DIR,

@@ -197,7 +197,7 @@ export function createDoneCheck({
   stateDir, git, listDone, send: sendRaw, record = async () => {}, equivalentOf = async () => null, goalOf = async () => '', mode = () => 'live', home = process.env.HOME || '',
   pressure = () => ({ loadPerCore: 0, ramAvailPct: 100 }), now = Date.now, pollMs = POLL_MS, log = console, ignoreBranches = () => DEFAULT_IGNORE_BRANCHES,
   goalGate = null,   // goal-check.js createGoalGate: (H) below
-  goalEntryOf = () => null, listSessions = async () => [], timeBoxMode = () => 'dry',   // (K) Verification block per stored Done-when line; (L) time box wake (dry first)
+  goalEntryOf = () => null, listSessions = async () => [], timeBoxMode = () => 'dry', draftNow = async () => false,   // (K) Verification block per stored Done-when line; (L) time box wake (dry first)
   stopFacts = null, stateMode = () => 'dry',   // (J) a done line while the harness sees a running / waiting fact: not accepted as done (stop-state.js); dry until manager.json stopState is live
   listBlocked = async () => [], blockedMode = () => 'dry',   // (I) blocked is not a wait: dry (journal only) until the owner switches manager.json blockedCheck to live
 } = {}) {
@@ -510,7 +510,11 @@ export function createDoneCheck({
         const ended = /^(?:done|failed|needs-manager|needs-owner)$/i.test(lastStatusOf(s.text || '')?.kind || '');
         if (!tb.woke) {
           if (tbMode === 'dry') { tb.woke = now(); tb.dry = true; await note({ dry: true, session: s.name, timeBox: 'reached', boxMin: Math.round(box / 6e4), elapsedMin: Math.round((now() - startAt) / 6e4) }); continue; }
-          if (s.draft || !quiet || nudged >= MAX_NUDGES_PER_TICK) continue;
+          // never into a finished session (the box only applies while work runs) nor over a draft the owner typed (bug-d84aa71b); the cached stall.draft
+          // can lag, so the pane is read again right before the send (a failed read counts as a draft).
+          if (/^done$/i.test(lastStatusOf(s.text || '')?.kind || '') || s.draft || !quiet || nudged >= MAX_NUDGES_PER_TICK) continue;
+          let live = true; try { live = !!(await draftNow(s.name)); } catch { live = true; }
+          if (live) { await note({ session: s.name, timeBox: 'skipped-draft' }); continue; }
           try { await send(s.name, timeBoxWakeMessage(box)); tb.woke = now(); nudged++; await note({ session: s.name, timeBox: 'wake', boxMin: Math.round(box / 6e4), elapsedMin: Math.round((now() - startAt) / 6e4) }); }
           catch (err) { log.error?.('[done-check] send time box', s.name, err.message); }
         } else if (!tb.mgr && !ended && now() - tb.woke >= TIMEBOX_GRACE_MS) {

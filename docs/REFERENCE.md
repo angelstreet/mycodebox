@@ -2114,7 +2114,7 @@ bug-2f32e7a7, bug-8fc8fc0d, bug-03ccc6a7, bug-80bdcdc1 · unverified: none · bu
   can open") and a warning. Stop check: done-check (K) and the Mac stop path (`remote-stops.js`) require, on a done line, a `Verification:` block with one row
   per stored Done-when line, same count and numbering, every row `pass` (a row "dropped by owner" counts): a missing / fail / not-checked / extra row is sent back
   once (it only refuses a done line, so it is live); `rows passed / total` is journalled (`done-check.jsonl` `verification`, Mac `verification.jsonl`); all pass
-  skips the goal question. Time box (L): at 100% ONE wake ("time box reached: write Verification as it stands and end failed or needs-manager"), 30 min later
+  skips the goal question. Time box (L; never into a `STATUS: done` session nor over a non-empty input box, re-read live from the pane, journal `skipped-draft`, bug-d84aa71b): at 100% ONE wake ("time box reached: write Verification as it stands and end failed or needs-manager"), 30 min later
   one manager item `time-box:<session>` when it keeps going; never kills or closes. `manager.json` `timeBox`: `dry` (default: journal `timeBox: reached`), `live`,
   `off`; a Mac session is told at its next stop. Replay: `node scripts/goal-box-replay.js [day] [--list]`. Not done: the same failing command repeated 3 times in
   the transcript as the same stop (needs transcript parsing; filed as an idea).

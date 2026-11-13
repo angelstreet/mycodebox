@@ -262,8 +262,8 @@ test('time box parse and wake text', () => {
 test('done-check (K)/(L): done without a complete Verification is sent back once and rows journalled; all pass skips the goal question; the time box wakes once (dry journals), then one manager item', async () => {
   const entry = { goal: 'ship it', parts: PARTS, timeBoxMs: 3600e3, at: new Date(Date.now() - 2 * 3600e3).toISOString() };
   const asked = []; const goalGate = { forget: async () => {}, evaluate: async (x) => { asked.push(x.name); return null; }, sent: async () => {} };
-  const mk = (text, boxMode = 'live', sessions = []) => { const sent = [], events = []; const dir = tmp('doneK-'); let t = Date.now();
-    const w = createDoneCheck({ stateDir: dir, git: async () => { throw new Error('x'); }, listDone: async () => [{ name: 'k', cwd: '/nowhere', text }], goalGate, goalEntryOf: () => entry, timeBoxMode: () => boxMode, listSessions: async () => sessions, now: () => t, mode: () => 'live', log: { error() {} },
+  const mk = (text, boxMode = 'live', sessions = [], draftNow = async () => false) => { const sent = [], events = []; const dir = tmp('doneK-'); let t = Date.now();
+    const w = createDoneCheck({ stateDir: dir, git: async () => { throw new Error('x'); }, listDone: async () => [{ name: 'k', cwd: '/nowhere', text }], goalGate, goalEntryOf: () => entry, timeBoxMode: () => boxMode, draftNow, listSessions: async () => sessions, now: () => t, mode: () => 'live', log: { error() {} },
       pressure: () => ({ loadPerCore: 0.1, ramAvailPct: 80 }), send: async (n, x) => { sent.push([n, x]); }, record: async (e) => { events.push(e); } }); return { w, sent, events, adv: (ms) => { t += ms; }, dir }; };
   const bad = mk(V(['1. pass — x', '2. fail — y', '3. pass — z']), 'off'); await bad.w.tick(); await bad.w.tick();
   assert.equal(bad.sent.length, 1); assert.match(bad.sent[0][1], /needs a `Verification:` block.*row 2 is fail.*2 of 3 rows pass/);
@@ -275,6 +275,12 @@ test('done-check (K)/(L): done without a complete Verification is sent back once
   assert.equal(tb.sent.filter(([, x]) => /Time box reached/.test(x)).length, 1);
   tb.adv(31 * 60e3); await tb.w.tick();
   assert.equal(tb.events.filter((e) => e.key === 'time-box:k').length, 1, 'a manager item, never a close');
+  // bug-d84aa71b: a finished session is never woken, nor is a pane whose input box holds a draft (cached flag false, live pane read says draft)
+  const fin = 'STATUS: done — x'; const dn = mk(fin, 'live', [{ name: 'k', working: false, text: fin }]); await dn.w.tick(); await dn.w.tick();
+  assert.equal(dn.sent.filter(([, x]) => /Time box reached/.test(x)).length, 0, 'done session: no time-box text');
+  const dr = mk(idle, 'live', [{ name: 'k', working: false, text: idle }], async () => true); await dr.w.tick(); await dr.w.tick();
+  assert.equal(dr.sent.filter(([, x]) => /Time box reached/.test(x)).length, 0, 'non-empty input box: nothing typed');
+  assert.match(readFileSync(join(dr.dir, 'done-check.jsonl'), 'utf8'), /skipped-draft/);
   const dry = mk(idle, 'dry', [{ name: 'k', working: false, text: idle }]); await dry.w.tick();
   assert.equal(dry.sent.filter(([, x]) => /Time box reached/.test(x)).length, 0); assert.match(readFileSync(join(dry.dir, 'done-check.jsonl'), 'utf8'), /"timeBox":"reached"/);
 });
