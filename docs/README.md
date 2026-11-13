@@ -19,6 +19,7 @@ Start here to choose the right guide. Examples use placeholders; replace them lo
 | Configure native HTTPS | [Certificates](../certs/README.md) | Certificate files, trust and renewal |
 | Try or upgrade to V2 (opt-in task engine) | [README roadmap](../README.md#current-capabilities--v2-roadmap), [Migration](v2/MIGRATION.md), [Scoring](v2/SCORING.md) | What is shipped vs planned, upgrade and rollback notes, per-model scoring report |
 - [Disk cleanup](DISK-CLEANUP.md): the daily dry-run-first cleanup timer, the disk measurement table and the 90 % disk push.
+- [Review: the stb3 variant hour, 2026-11-13](reviews/2026-11-13-stb3-variant-hour.md): why 3 small frontend edits took an hour (timeline, slices, causes); the unpushed-branch check of `integrate request` and the lane's "nothing new" result.
 - [Harness pass 2, 2026-11-11](HARNESS-PASS2-2026-11-11.md): STATUS honesty (`failed`, done-but-failed, proof evidence), grant notice, session guard hook, fix claims; design, replay numbers, Mac vs codebox.
 - [Harness review 2026-11-11](HARNESS-REVIEW-2026-11-11.md): why the owner still steps in (codebox and Mac), ten root causes with evidence, floors too wide or too narrow, ranked plan.
 - [Harness review 2026-10-14](v2/reviews/HARNESS-REVIEW-2026-10-14.md): where the owner was stopped, how long sessions waited, ranked fixes (input to V2 rounds 8 and 9).

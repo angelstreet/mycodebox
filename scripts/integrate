@@ -5,6 +5,8 @@
 #                                                                                        --migration-applied: accepted and ignored since 2026-10-21 (additive migrations need no flag); it used to attest an ADDITIVE migration's objects already exist in the target DB (Q199)
 #                                                                                        --for SESSION: the wake message, the own-job watch and the pending-wake queue go to that session (a worker you
 #                                                                                        queue for); the requester is told the final state too. An unknown name falls back to the requester and says so.
+#                                                                                        before queueing: a local <branch> with commits origin does not have is refused (push first);
+#                                                                                        --no-push-check (or INTEGRATE_NO_PUSH_CHECK=1) skips it
 #   integrate status [<id>]                                                              one request, or the latest ten
 #   integrate wait <id> [--timeout MIN]                                                  block until the request is final (default 60);
 #                                                                                        an unreachable service is retried until the timeout
@@ -15,7 +17,7 @@
 # `lease-token.js add <name> --integrate`), as for the Mac Stop hook; on the codebox with neither: loopback + the reporter token.
 # Exit: 0 merged / deployed / CI superseded, 1 error, 3 returned (reason printed) or cancelled, 4 merged but CI red / deploy failed, 5 service unreachable.
 
-CLIENT_SCRIPTS_VERSION=3   # bump with every change to scripts/integrate or scripts/found-bug (same number in both); the server compares it
+CLIENT_SCRIPTS_VERSION=4   # bump with every change to scripts/integrate or scripts/found-bug (same number in both); the server compares it
 
 CFG_DIR="${MYCODEBOX_CONFIG_DIR:-$HOME/.config/mycodebox}"
 cfg() { [ -r "$CFG_DIR/config" ] && sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$CFG_DIR/config" | tail -n 1 | sed 's/[[:space:]]*$//; s/^"\(.*\)"$/\1/'; }
@@ -121,15 +123,31 @@ do_wait() {   # do_wait ID MINUTES
 cmd=$1; [ $# -gt 0 ] && shift
 case "$cmd" in
   request)
-    BRANCH=""; REPO=""; DEPLOY=""; NOTE=""; APPROVER=""; MIGAPPLIED=0; WAIT=0; FOR=""; MAC=""
+    BRANCH=""; REPO=""; DEPLOY=""; NOTE=""; APPROVER=""; MIGAPPLIED=0; WAIT=0; FOR=""; MAC=""; PUSHCHECK=${INTEGRATE_NO_PUSH_CHECK:+0}; PUSHCHECK=${PUSHCHECK:-1}
     while [ $# -gt 0 ]; do
       case "$1" in
-        --repo) REPO=$2; shift 2 ;; --deploy) DEPLOY=$2; shift 2 ;; --note) NOTE=$2; shift 2 ;; --approved-by) APPROVER=$2; shift 2 ;; --migration-applied) MIGAPPLIED=1; shift ;; --wait) WAIT=1; shift ;; --for) FOR=$2; shift 2 ;; --mac) MAC=$2; shift 2 ;;
+        --repo) REPO=$2; shift 2 ;; --deploy) DEPLOY=$2; shift 2 ;; --note) NOTE=$2; shift 2 ;; --approved-by) APPROVER=$2; shift 2 ;; --migration-applied) MIGAPPLIED=1; shift ;; --wait) WAIT=1; shift ;; --for) FOR=$2; shift 2 ;; --mac) MAC=$2; shift 2 ;; --no-push-check) PUSHCHECK=0; shift ;;
         -*) die "unknown option $1" ;; *) BRANCH=$1; shift ;;
       esac
     done
     [ -n "$BRANCH" ] || BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
     case "$BRANCH" in ""|HEAD) die "name the branch: integrate request <branch>" ;; esac
+    # The lane merges what origin has. A request sent before its commit was pushed merges nothing new, and the lane still deploys:
+    # twice in one hour on 2026-11-13 (docs/reviews/2026-11-13-stb3-variant-hour.md). Refuse it here, before it costs a lane cycle.
+    _loc=$(git rev-parse --verify -q "refs/heads/$BRANCH" 2>/dev/null)
+    if [ "$PUSHCHECK" = 1 ] && [ -n "$_loc" ]; then
+      if _ls=$(git ls-remote origin "refs/heads/$BRANCH" 2>/dev/null); then
+        _rem=$(printf '%s\n' "$_ls" | sed -n '1s/[[:space:]].*//p')
+        [ -n "$_rem" ] || die "$BRANCH is not on origin: git push -u origin $BRANCH, then request again (--no-push-check to skip)"
+        if [ "$_rem" != "$_loc" ] && git merge-base --is-ancestor "$_rem" "$_loc" 2>/dev/null; then
+          die "$(git rev-list --count "$_rem..$_loc" 2>/dev/null || echo some) commit(s) on $BRANCH are not pushed (local $(printf %.12s "$_loc"), origin $(printf %.12s "$_rem")): git push origin $BRANCH, then request again (--no-push-check to skip)"
+        fi
+        [ "$_rem" = "$_loc" ] || printf 'integrate: note: local %s differs from origin; the lane merges origin %.12s\n' "$BRANCH" "$_rem" >&2
+      else
+        printf 'integrate: note: could not read origin (git ls-remote failed); the push check is skipped\n' >&2
+      fi
+      [ "$(git rev-parse --abbrev-ref HEAD 2>/dev/null)" = "$BRANCH" ] && ! git diff --quiet HEAD -- 2>/dev/null && printf 'integrate: note: uncommitted changes in this worktree are not part of the request\n' >&2
+    fi
     SESSION=${MYCODEBOX_SESSION:-}
     [ -n "$SESSION" ] || { [ -n "$TMUX" ] && SESSION=$(tmux display-message -p '#S' 2>/dev/null); }
     # on the Mac the tmux name is a Mac session: the server only accepts `mac:`-prefixed names from a remote client
@@ -191,5 +209,5 @@ case "$cmd" in
     [ -n "$1" ] || die "usage: integrate ack <id>   (manager: the external result was relayed)"
     api POST "/api/integration/external-results/$(urlenc "$1")/ack?format=kv" "{}"; [ "$CODE" = 200 ] || fail_http
     printf 'Integration %s external result acknowledged.\n' "$1" ;;
-  *) printf 'usage: integrate request [<branch>] [--repo KEY] [--deploy SCOPE] [--note TEXT] [--approved-by WHO] [--migration-applied] [--wait] [--for SESSION] [--mac LABEL] | ack <id> | status [<id>] | wait <id> [--timeout MIN] | cancel <id> | self-update\n' >&2; exit 1 ;;
+  *) printf 'usage: integrate request [<branch>] [--repo KEY] [--deploy SCOPE] [--note TEXT] [--approved-by WHO] [--migration-applied] [--wait] [--for SESSION] [--mac LABEL] [--no-push-check] | ack <id> | status [<id>] | wait <id> [--timeout MIN] | cancel <id> | self-update\n' >&2; exit 1 ;;
 esac

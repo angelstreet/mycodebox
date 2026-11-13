@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { EventEmitter } from 'node:events';
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, chmodSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { createIntegrationLane } from '../integration-lane.js';
@@ -143,6 +143,16 @@ test('describe: the one-line texts', () => {
   assert.equal(describe({ ...r, state: 'returned', reason: 'tests red (exit 1)' }), 'Integration int-1 (feat) returned: tests red (exit 1). Fix it on your branch and run integrate request again.');
 });
 
+test('describe: a branch already on the target says "nothing new", never "merged <branch> at <someone else\'s sha>" (stb3 review 2026-11-13)', () => {
+  const r = { id: 'int-2', branch: 'feat', target: 'main', sha: 'aaaaaaaaaaaaaaaa', branchSha: 'bbbbbbbbbbbbbbbb', alreadyMerged: true, state: 'merged' };
+  assert.match(describe(r), /^Integration int-2: nothing new: feat at bbbbbbbbbbbb is already in main, no commit of yours was merged/);
+  assert.doesNotMatch(describe(r), /merged feat into main/);
+  const d = describe({ ...r, state: 'deployed', deployScope: 'frontend', deployed: { version: 'v9', env: 'env-a', scope: 'frontend' } });
+  assert.match(d, /nothing new: .*; redeployed main as v9 to env-a \(scope frontend\), with no new code of yours\.$/);
+  // a revert is a merge of its own, not "nothing new"
+  assert.match(describe({ ...r, revertOf: 'cccccccccccc' }), /merged feat into main/);
+});
+
 // ---- the CLI ----
 const cli = (args, { cwd, env }) => new Promise((res) => {
   execFile('sh', [join(ROOT, 'scripts/integrate'), ...args], { cwd, env: { PATH: process.env.PATH, HOME: env.HOME, ...env }, timeout: 60000 }, (err, stdout, stderr) => res({ code: err ? err.code : 0, stdout, stderr }));
@@ -170,6 +180,29 @@ test('CLI: request --wait -> merged exits 0; status and cancel work', async () =
     const wt = await cli(['wait', id], c); assert.equal(wt.code, 0);
     assert.notEqual((await cli(['cancel', id], c)).code, 0);
     assert.match((await cli(['cancel', id], c)).stderr, /only a queued/);
+  } finally { b.close(); }
+});
+
+test('CLI: a branch with unpushed commits, or not on origin, is refused before it is queued; --no-push-check skips (stb3 review 2026-11-13)', async () => {
+  const w = makeWorld(); w.branch('feat', { 'new.js': 'x\n' });
+  const b = await boot(w);
+  try {
+    const c = await cliWorld(w, b);
+    const g = (...a) => execFileSync('git', a, { cwd: w.dev, stdio: 'pipe' }).toString();
+    g('checkout', '-q', 'feat'); writeFileSync(join(w.dev, 'later.js'), 'y\n'); g('add', 'later.js'); g('-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-q', '-m', 'not pushed');
+    const r = await cli(['request', 'feat'], c);
+    assert.equal(r.code, 1, r.stdout + r.stderr); assert.match(r.stderr, /1 commit\(s\) on feat are not pushed/); assert.match(r.stderr, /git push origin feat/);
+    assert.equal(b.lane.list().length, 0, 'nothing was queued');
+    g('checkout', '-q', '-b', 'local-only');
+    const n = await cli(['request', 'local-only'], c);
+    assert.equal(n.code, 1); assert.match(n.stderr, /local-only is not on origin: git push -u origin local-only/);
+    const skip = await cli(['request', 'feat', '--no-push-check'], c);
+    assert.equal(skip.code, 0, skip.stdout + skip.stderr); assert.match(skip.stdout, /queued/);
+    g('push', '-q', 'origin', 'feat');
+    writeFileSync(join(w.dev, 'later.js'), 'dirty\n');
+    g('checkout', '-q', 'feat');
+    const ok = await cli(['request', 'feat'], c);
+    assert.equal(ok.code, 0, ok.stdout + ok.stderr); assert.match(ok.stderr, /uncommitted changes in this worktree are not part of the request/);
   } finally { b.close(); }
 });
 

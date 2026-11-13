@@ -81,9 +81,14 @@ export function integrationText(r) {
   const sd = n.selfDeploy && typeof n.selfDeploy === 'object' ? n.selfDeploy : null;
   // a merge whose CI run was cancelled by a newer commit on the target: the session must not chase it again
   const sup = n.supersededBy ? ` Your commit was superseded by ${sha12(n.supersededBy)}; CI runs on the newer tip, nothing to fix, do not branch again.` : '';
+  // the branch tip was already on the target (a request sent before its commit was pushed, or a re-request): nothing of the session's
+  // was merged. Said first and plainly: "merged <branch> at <someone else's sha>" read as "my fix shipped" (stb3 review 2026-11-13)
+  const none = n.alreadyMerged && !n.revertOf ? `nothing new: ${one(n.branch) || '?'}${n.branchSha ? ` at ${sha12(n.branchSha)}` : ''} is already in ${one(n.target) || 'the target'}, no commit of yours was merged (just committed? push the branch, check git status, request again)` : '';
   switch (n.state) {
-    case 'merged': return `Integration ${id}: merged ${where(n)}.${sup}`;
+    case 'merged': if (none) return `Integration ${id}: ${none}.${sup}`;
+      return `Integration ${id}: merged ${where(n)}.${sup}`;
     case 'deployed': if (sd) return `Integration ${id}: merged ${where(n)}, deployed live ghosty at ${sha12(sd.newSha)} (was ${sha12(sd.prevSha)})${sd.note ? `, ${one(sd.note)}` : ''}.${rollback}${sup}`;
+      if (none) return `Integration ${id}: ${none}; redeployed ${one(n.target) || 'the target'} as ${one(n.version) || 'the same version'} to ${one(n.env) || 'the environment'}${scopeOf(n) ? ` (scope ${scopeOf(n)})` : ''}, with no new code of yours.${sup}`;
       return `Integration ${id}: merged ${where(n)}, deployed ${one(n.version) || 'the new version'} to ${one(n.env) || 'the environment'}${scopeOf(n) ? ` (scope ${scopeOf(n)})` : ''}.${sup}`;
     case 'returned': {
       const t = tailLines(n.tail);

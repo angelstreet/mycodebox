@@ -20,7 +20,7 @@
 # Session defaults to the tmux session, else FOUND_BUG_SESSION, else `mac` on a Mac, else `unknown`. Secrets are redacted server-side.
 # Exit: 0 filed; 5 manager unreachable (report queued, not lost); 1 error.
 
-CLIENT_SCRIPTS_VERSION=3   # bump with every change to scripts/integrate or scripts/found-bug (same number in both); the server compares it
+CLIENT_SCRIPTS_VERSION=4   # bump with every change to scripts/integrate or scripts/found-bug (same number in both); the server compares it
 
 CFG_DIR="${MYCODEBOX_CONFIG_DIR:-$HOME/.config/mycodebox}"
 STATE_DIR="${GHOSTY_STATE_DIR:-$HOME/.local/state/ghosty}"
