@@ -6,6 +6,7 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A stop the manager left unanswered is sent back to it once, and blocking bugs reach it only when the drain cannot start them** — a session stop with no message and no decision line after 10 min is typed to the manager (`stop-answer.js`); chained `manager-wait.sh` wakes are named as wait wakes, not own jobs; a blocking bug filing goes to the bug drain first and wakes the manager only as `bug-drain-cannot`: fewer wakes that do nothing (S7) · area: manager-wakes
 - **A refused lease and a failed apply step are no longer the same thing** — the nightly report and the journal tell them apart
   (`lease_not_granted` / `apply_failed`): a claim the lease CLI refused touched nothing and is retried at the end of the night, while
   an apply step that died after the lease was granted is reported as such (the host may be half-changed), so the reader and the retry
