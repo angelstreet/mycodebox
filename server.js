@@ -984,7 +984,8 @@ const holderReaper = createHolderReaper({
     const ap = p?.pid ? agentPidFromTree(p.pid, await processTable()) : null;
     return !ap || jobPids(ap, await processTable()).length > 0;   // no agent pid = cannot tell
   },
-  notify: async (session, text, id) => { if (!noteAllowed(latest?.status?.[session])) return pendingWakes.add({ session, key: `lease-idle:${id || session}`, text, by: 'lease-watchdog' });   // one key per released lease: the queue sends each key once, ever await assertAgentPane(session, 'lease-nudge'); await sendKeys(session, text, true); logSend(session, 'lease-nudge', { keys: text }); },
+  // one pending-wake key per released lease: the queue sends each key once, ever
+  notify: async (session, text, id) => { if (!noteAllowed(latest?.status?.[session])) return pendingWakes.add({ session, key: `lease-idle:${id || session}`, text, by: 'lease-watchdog' }); await assertAgentPane(session, 'lease-nudge'); await sendKeys(session, text, true); logSend(session, 'lease-nudge', { keys: text }); },
 });
 // The orchestrator asks a holder to release or narrow (lease-nudge.js): every 2 min, for a queued deploy or ticket that waits > 10 min.
 // manager.json key `leaseNudge`: "live" (default) | "dry" | "off". Never releases or narrows by itself.
