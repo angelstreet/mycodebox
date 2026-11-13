@@ -115,3 +115,10 @@ test('the canonical fix-first sentence is in AGENTS.md, the cbsession preamble a
   for (const f of ['AGENTS.md', 'scripts/cbsession', 'docs/MAC-HOOK.md', 'docs/REFERENCE.md']) assert.ok(norm(fs.readFileSync(path.join(ROOT, f), 'utf8')).includes(RULE), f);
   assert.match(fs.readFileSync(path.join(ROOT, 'AGENTS.md'), 'utf8'), /I filed X so someone will fix it/);
 });
+
+test('the release-note and bug-record sentence is identical in AGENTS.md, the cbsession preamble and the MAC-HOOK snippet (and carried by VirtualPyTest AGENTS.md)', () => {
+  const RULE = '**Release note and bug record for shipped code** (owner 2026-11-13): after you merge code (not docs-only), the closing review\'s `docs` names the release-note entry you added (VirtualPyTest `docs/release_note/README.md`, mycodebox `docs/RELEASE-NOTES.md`; the done-check reads the merged diff, words alone do not count) or says `release note none needed: <reason>`. If the work fixed something, `bugs:` names the bug id (file it with `found-bug`, resolve it with `found-bug --resolve <id> --commit <integration id>`, then `bugs: fixed <id>`); `bugs: none` after a fix needs a reason. A done line without them is sent back once.';
+  const norm = (x) => x.replace(/\\047/g, "'").replace(/\s+/g, ' ');
+  for (const f of ['AGENTS.md', 'scripts/cbsession', 'docs/MAC-HOOK.md']) assert.ok(norm(fs.readFileSync(path.join(ROOT, f), 'utf8')).includes(RULE), f);
+  assert.ok(fs.existsSync(path.join(ROOT, 'docs/RELEASE-NOTES.md')));
+});

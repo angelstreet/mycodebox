@@ -106,6 +106,53 @@ export function closingReviewMessage({ bugsMissing = false } = {}) {
     + (bugsMissing ? ' · bugs: none | fixed <what> | reported <id>`.' : '` (keep the bugs: field).');
 }
 
+// (O) Release note and bug record after a code fix (owner, 2026-11-13): a session shipped token-cap / cache / device-name fixes through 3 integrations and
+// ended `closing review: docs updated (...) · bugs: none` with no release-note entry and no bug record; the owner had to ask. `integrations` are the session's
+// merged lane requests ({ id, repo, branch, files, subjects }, from integration-lane.js `mergedFor`). Pure.
+export const RELEASE_NOTE_FILES = { virtualpytest: /(^|\/)docs\/release_note\/README\.md$/, mycodebox: /^docs\/RELEASE-NOTES\.md$/ };
+const NOT_CODE = /(^|\/)docs\/|\.md$|^VERSION\.txt$|(^|\/)package-lock\.json$/;
+const FIX_RE = /\b(?:fix(?:e[sd])?|bug(?:fix)?|hotfix|regression)\b/i;
+const BUG_ID = /\bbug-[0-9a-f]{6,}\b/i;
+const doneLineOf = (text) => {
+  const lines = String(text || '').split('\n');
+  let at = -1;
+  lines.forEach((l, i) => { if (/^\W*STATUS:/i.test(l.trim())) at = i; });
+  if (at < 0) return '';
+  let line = lines[at].trim();
+  for (let j = at + 1; j < lines.length && /^\s{2,}\S/.test(lines[j]) && !/^\W*STATUS:/i.test(lines[j].trim()); j++) line += ' ' + lines[j].trim();
+  return /^\W*STATUS:[*_`]*\s*done\b/i.test(line) ? line.replace(/[*_`]+/g, '') : '';
+};
+// -> { releaseNote: [repo...], bug: { fixIds, why } | null } (both empty = nothing to ask)
+export function evidenceGapOf(text, integrations, goal = '') {
+  const line = doneLineOf(text);
+  const ints = (integrations || []).filter((i) => i && Array.isArray(i.files));
+  if (!line || !ints.length) return null;
+  const docs = closingReviewOf(text)?.docs || '';
+  const reasoned = /\brelease[ -_]?notes?\s+(?:none needed|not needed|n\/a)\s*[:(\-—]\s*\S.{5,}/i.test(docs);
+  const releaseNote = [];
+  for (const repo of Object.keys(RELEASE_NOTE_FILES)) {
+    const mine = ints.filter((i) => i.repo === repo);
+    if (!mine.some((i) => i.files.some((f) => !NOT_CODE.test(f)))) continue;   // docs-only or no integration of this repo: no note owed
+    if (reasoned || mine.some((i) => i.files.some((f) => RELEASE_NOTE_FILES[repo].test(f)))) continue;   // the merged diff carries an entry, or a stated reason
+    releaseNote.push(repo);
+  }
+  const fixes = ints.filter((i) => i.files.some((f) => !NOT_CODE.test(f)) && FIX_RE.test([i.branch, ...(i.subjects || [])].join(' ')));
+  let bug = null;
+  if (fixes.length || (ints.some((i) => i.files.some((f) => !NOT_CODE.test(f))) && (BUG_ID.test(goal) || /\bfix\b/i.test(goal)))) {
+    const seg = /\bbugs\s*[:=]\s*(.*)$/i.exec(line)?.[1] || '';
+    const named = BUG_ID.test(seg);
+    const none = /^none\b[\s:;,(—-]*(.{8,})/i.exec(seg);   // `bugs: none` needs a reason after a fix
+    if (!named && !none) bug = { ids: (fixes.length ? fixes : ints).map((i) => i.id).slice(0, 3) };
+  }
+  return releaseNote.length || bug ? { releaseNote, bug } : null;
+}
+export function evidenceGapMessage(g) {
+  const parts = [];
+  if (g.releaseNote.length) parts.push(`(1) Release note: you merged code (${g.releaseNote.join(', ')}) and no integration of yours touches the release note (virtualpytest docs/release_note/README.md, mycodebox docs/RELEASE-NOTES.md), and your closing review names none. Add the entry now on your branch and \`integrate request\` it, or write \`docs ... release note none needed: <reason>\`.`);
+  if (g.bug) parts.push(`(2) Bug record: your work fixed something (integration ${g.bug.ids.join(', ')}) but the bugs field names no bug id. File the bug you fixed (\`found-bug --title ... --blocking no\`) and resolve it with \`found-bug --resolve <id> --commit <integration id>\`, then write \`bugs: fixed <id>\`; \`bugs: none\` is only accepted with a reason after it (for example \`bugs: none — a feature, nothing was broken\`).`);
+  return `Done check: your STATUS: done line is missing evidence for a change you shipped. ${parts.join(' ')} Then rewrite the done line (keep the closing review and bugs fields) and end with a STATUS line.`;
+}
+
 // Owner rule 2026-11-03: a session ends only when everything is finished. `STATUS: done` with leftovers, `STATUS: not fully confirmed`
 // and `STATUS: partial` are not end states: the session is sent back to finish. Real stops are waiting: / blocked: / needs-owner: / needs-manager:.
 export const LEFT_PUSHES_PER_DAY = 3;
@@ -196,6 +243,7 @@ export function uncommittedOf(porcelain) {
 export function createDoneCheck({
   stateDir, git, listDone, send: sendRaw, record = async () => {}, equivalentOf = async () => null, goalOf = async () => '', mode = () => 'live', home = process.env.HOME || '',
   pressure = () => ({ loadPerCore: 0, ramAvailPct: 100 }), now = Date.now, pollMs = POLL_MS, log = console, ignoreBranches = () => DEFAULT_IGNORE_BRANCHES,
+  integrationsOf = async () => [],   // (O) the session's merged lane requests: [{ id, repo, branch, files, subjects }]
   goalGate = null,   // goal-check.js createGoalGate: (H) below
   goalEntryOf = () => null, listSessions = async () => [], timeBoxMode = () => 'dry', draftNow = async () => false,   // (K) Verification block per stored Done-when line; (L) time box wake (dry first)
   stopFacts = null, stateMode = () => 'dry',   // (J) a done line while the harness sees a running / waiting fact: not accepted as done (stop-state.js); dry until manager.json stopState is live
@@ -543,11 +591,30 @@ export function createDoneCheck({
         try { await send(s.name, doneWithOpenMessage(od)); st.toldOpen[s.name] = { sig }; nudged++; await note({ session: s.name, doneWithOpen: od.open }); }
         catch (e) { log.error?.('[done-check] send done-with-open', s.name, e.message); }
       }
+      // (O) release note and bug record after a code fix: one push per done line (see evidenceGapOf); runs after (N), before the goal question.
+      st.toldEvidence ||= {};
+      for (const n of Object.keys(st.toldEvidence)) if (!live.has(n)) delete st.toldEvidence[n];
+      const evidenceOpen = new Set();
+      for (const s of sessions) {
+        if (!closingReviewOf(s.text) || closingReviewOf(s.text).missing || s.working || s.draft || touched.has(s.name) || stateWait.has(s.name) || verifyBounced.has(s.name) || openDone.has(s.name) || findings.some((f) => f.name === s.name)) continue;
+        if (s.doneAt && now() - s.doneAt > REVIEW_MAX_AGE_MS) continue;
+        if (leftoverItemsOf(s.text).length || doneButFailedOf(s.text) || proofWithoutEvidenceOf(s.text)) continue;
+        let g = null;
+        try { g = evidenceGapOf(s.text, await integrationsOf(s.name), await goalOf(s.name).catch(() => '')); } catch (e) { log.error?.('[done-check] evidence', s.name, e.message); }
+        if (!g) continue;
+        evidenceOpen.add(s.name);
+        const sig = createHash('sha1').update(JSON.stringify(g)).digest('hex').slice(0, 12);   // once per gap, not per rewritten line
+        if (st.toldEvidence[s.name]?.sig === sig) continue;
+        if (m === 'dry') { await note({ dry: true, session: s.name, evidenceGap: g }); st.toldEvidence[s.name] = { sig, dry: true }; continue; }
+        if (!quiet || nudged >= MAX_NUDGES_PER_TICK) continue;
+        try { await send(s.name, evidenceGapMessage(g)); st.toldEvidence[s.name] = { sig }; nudged++; await note({ session: s.name, evidenceGap: g }); }
+        catch (e) { log.error?.('[done-check] send evidence gap', s.name, e.message); }
+      }
       const goalCheck = { asked: [], bounced: [], accepted: [], capped: [] };
       if (goalGate) {
         await goalGate.forget(live).catch(() => {});
         for (const s of sessions) {
-          if (s.working || s.draft || touched.has(s.name) || stateWait.has(s.name) || verifyBounced.has(s.name) || openDone.has(s.name) || findings.some((f) => f.name === s.name)) continue;
+          if (s.working || s.draft || touched.has(s.name) || stateWait.has(s.name) || verifyBounced.has(s.name) || openDone.has(s.name) || evidenceOpen.has(s.name) || findings.some((f) => f.name === s.name)) continue;
           if (verified.has(s.name)) { goalCheck.accepted.push(s.name); continue; }   // every Done-when row passes with its evidence: the Verification block is the owner's question answered
           if (s.doneAt && now() - s.doneAt > REVIEW_MAX_AGE_MS) continue;   // an old done turn is not reopened by the rollout
           if (leftoverItemsOf(s.text).length || closingReviewOf(s.text)?.missing || doneButFailedOf(s.text) || proofWithoutEvidenceOf(s.text)) continue;   // (B)/(C)/(F)/(G) first

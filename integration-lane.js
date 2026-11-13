@@ -1207,6 +1207,24 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
     stop() { stopped = true; for (const t of settleTimers.values()) clearTimeout(t); settleTimers.clear(); },
     // Resolves when every worker has gone idle (tests, graceful shutdown).
     async idle() { while (workers.size || tailJobs.size || cleanups.size) await Promise.allSettled([...workers.values(), ...tailJobs, ...cleanups]); },
+    // (done-check O) the session's merged requests since `sinceMs`: [{ id, repo, branch, files, subjects }] (files of the merge vs the target it joined).
+    async mergedFor(session, sinceMs = 12 * 3600e3) {
+      const out = [];
+      for (const r of reqs.values()) {
+        if (r.session !== session || !r.mergeSha || !r.targetBase || (r.state !== 'merged' && r.state !== 'deployed')) continue;
+        const at = Date.parse(r.times?.mergedAt || r.endedAt || '') || 0;
+        if (now() - at > sinceMs) continue;
+        const c = repoCfg(r.repo); let files = [], subjects = [];
+        if (c) {
+          const d = await git(['diff', '--name-only', r.targetBase, r.mergeSha], { cwd: c.clone });
+          if (d.code === 0) files = d.out.split('\n').filter(Boolean);
+          const g = await git(['log', '--format=%s', '-n', '30', `${r.targetBase}..${r.mergeSha}`], { cwd: c.clone });
+          if (g.code === 0) subjects = g.out.split('\n').filter(Boolean);
+        }
+        out.push({ id: r.id, repo: r.repo, branch: r.branch, files, subjects });
+      }
+      return out;
+    },
     config: () => cfgAll(),
     repoKeys: () => Object.keys(cfgAll().repos),
 
