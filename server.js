@@ -1187,6 +1187,7 @@ const doneCheck = createDoneCheck({
   // (F) the task goal: `Goal:` line or first task line of the prompt cbsession wrote (~/handovers/<name>.prompt.md); '' when there is none
   goalOf: async (name) => { try { return goalOfPrompt(readFileSync(join(homedir(), 'handovers', `${String(name).replace(/[^\w.-]/g, '')}.prompt.md`), 'utf8')); } catch { return ''; } },
   goalGate,   // (H) goal check
+  integrationsOf: (name) => integrationLane.mergedFor(name),   // (O) release note / bug record evidence
   send: (name, text) => sendKeys(name, text),
   pressure: hostPressure,
   record: (e) => managerEvents.record(e),

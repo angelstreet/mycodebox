@@ -2195,6 +2195,22 @@ leftovers push only fired on leftovers the closing text already admitted. Now a 
   `scripts/manager-status-scan.sh` prints `<session>: done-without-closing-review`.
 - Reach: AGENTS.md of this repo and of VirtualPyTest, and `scripts/cbsession` prompts (`-H`, `-f`, `-t`).
 
+### Release note and bug record after a code fix (owner, 2026-11-13)
+
+A session ended `closing review: docs updated (...) · bugs: none` after three fix integrations with no release-note entry and no bug record; the
+owner had to ask. Done-check (O) (`evidenceGapOf`, `done-check.js`) now reads the session's merged lane requests (`integrationLane.mergedFor(session)`:
+id, repo, branch, files of the merge, commit subjects; last 12 h) and sends a done line back once (per distinct gap, not per rewritten line) when:
+
+- **Release note**: an integration of `virtualpytest` (`docs/release_note/README.md`) or `mycodebox` (`docs/RELEASE-NOTES.md`) changed code (anything but `docs/`, `*.md`,
+  `VERSION.txt`, lockfile) and no integration of that repo touched its release-note file, unless the closing review's `docs` says
+  `release note none needed: <reason>`. The words "release note updated" without a diff do not pass.
+- **Bug record**: an integration's branch or commit subject says fix / bug / hotfix / regression (or the task goal does), and the `bugs:` field names no `bug-<hex>` id
+  and is not `none` with a reason after it. The push says: file the bug you fixed and resolve it with `found-bug --resolve <id> --commit <integration id>`.
+- Same gates as (N): idle, no draft, done turn under 6 h, after the git / leftovers / closing-review / honesty pushes; dry mode journals `evidenceGap` only;
+  journal `done-check.jsonl` `evidenceGap`. The goal question waits for it.
+- The rule text is one bullet, "Release note and bug record for shipped code", identical in AGENTS.md, the `scripts/cbsession` preamble, the
+  [MAC-HOOK](MAC-HOOK.md) snippet and VirtualPyTest's AGENTS.md; `test/found-bugs-enforce.test.js` keeps the first three equal, `test/done-evidence.test.js` covers the check.
+
 ### Done-check ignores long-lived branches (owner, 2026-10-28)
 
 `manager.json` `doneCheckIgnoreBranches` (default `["task44-ai-manager"]`; `[]` judges every branch) lists branches the done-check never counts as "not on main": a session sitting on one of them (or on a detached HEAD that belongs to it) is not judged on it, and a closing text that names one does not pull it in. The session's own branch and worktree are still checked.
