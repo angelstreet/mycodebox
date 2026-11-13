@@ -92,13 +92,16 @@ main slice. "(est.)" means the session's own estimate.
 | 6 | `vpt-lease`: a free equivalent in one call. This already exists (`vpt-lease claim <env> --any <group> --wait`, groups from `vpt-lease inventory`) and is now named in the same skill section. The Mac hook that blocked `--help` is not mycodebox's `lease-guard-hook.js`, which acts only on `systemctl restart`, and it could not be reproduced from codebox | bug-0103d12e (resolved, doc-only) |
 | 3 | Not changed: the lane's 60 s settle and the frontend deploy time. The settle is what coalesces a burst of requests from one branch. The cure for this hour is fewer requests (cause 2 and the idea above), not a faster lane | — |
 
-## Unverified
+## Checks made after the first merge, and what cannot be checked
 
-- Every "(est.)" line comes from the session's own account, with no harness clock: start ~10:45, the 25 min of verification set-up, the
-  10 min of code finding, the ~15 min of real edit work, and the ~5 min lease search.
-- The session places its stb3 chip check at 11:34–11:38. The manager's answer that told it to check is stamped 11:36:19, so it may have
-  started before the answer. Not resolved.
-- The final height after int-1a1d4c35 (deployed 11:58:51, main-2026.11.08-93446) is the session's own check, reported after this review
-  was first merged: 24/24/24/24 px on vpt-pi3 stb4, lease claimed and released. No frame of it is held here. The session also confirmed that
-  both empty requests had one cause: the pipe-guard hook cut off the commit/push, so it requested before the commit existed.
-- The new client check runs on a Mac only after `integrate self-update`. Which Macs have updated was not checked.
+- **Final height:** verified by the session's headless Playwright probe on vpt-pi3 stb4 (lease claimed and released), against build
+  `main-2026.11.08-93446`, which carries `69e45f9` (the build is read from the screenshot footer). The probe printed
+  "dialog field heights [ 24, 24, 24, 24 ]" for app_tile, app_node, exit_key and exception_presses, measured on each field's
+  `.MuiInputBase-root`. Screenshots are in the Mac session's scratchpad, not in this repo.
+- **Client check rollout:** the Mac ran `integrate self-update`, and the installed `integrate` prints `CLIENT_SCRIPTS_VERSION=4`. The server
+  serves version 4 (`/api/integration/client-scripts`, checked on codebox).
+- **Minutes marked "(est.)":** these come from the session's own account, and no clock exists to check them. Codebox holds no record of this
+  session before 11:08:03 (its first integration request); the Mac transcript is not readable from codebox. The review does not rest on them:
+  every cause above is backed by a harness fact (journal, git, stalls).
+- **Ask 1 timing:** the session places its stb3 chip check at 11:34–11:38; the manager's answer is stamped 11:36:19. The session may have
+  started before the answer arrived. This changes no conclusion.
