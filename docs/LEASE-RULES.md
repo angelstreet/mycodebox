@@ -134,7 +134,11 @@ Hours were lost waiting on one web host while the other was free. When the work 
   (`--reason "idle-release: ..."`, `lease-actions.jsonl` `type: idle-release`) and the session is told how to claim again. Never when the session has a
   background task, a cron, a pane task or a child process of its agent, nor for a lease whose holder pid is on another host, a pin, a deploy or a Mac holder (a CLI claim carries a holder pid on this host and does qualify). Switch:
   `manager.json` `leaseIdleRelease` `"dry"` (code default: journal `dryRun:true` only) | `"live"` | `"off"`; live on codebox since 2026-11-12 00:55 UTC. Replay a day against the session transcripts:
-  `node scripts/lease-idle-replay.js --day <date> --min 10` (2026-11-11: 7 idle events, 0 wrong). **A stop on `STATUS: waiting`/`blocked` with a live
+  `node scripts/lease-idle-replay.js --day <date> --min 10` (2026-11-11: 7 idle events, 0 wrong). **Idle Mac holder (manager decision 2026-11-13, bug-87be6e11):** a `mac:*` exclusive lease nobody renewed for 20 minutes (`GHOSTY_MAC_IDLE_RELEASE_MIN`,
+  `0` = off), with another agent waiting and no run attached (no holder pid, no deploy, not system), is released on 2 polls
+  (`lease-actions.jsonl` `type: idle-release-mac`, lease id and reason in the line and in the registry release reason). `lease-nudge` tells the manager at
+  10 minutes without renewal. Switch: `manager.json` `leaseMacIdleRelease` `"live"` (default) | `"dry"` | `"off"`. A waiter whose chat could not take the
+  watchdog line is journaled once as `flag: chat-cannot-take-note` in `lease-nudges.jsonl` (bug-988c4f48). **A stop on `STATUS: waiting`/`blocked` with a live
   ticket while a healthy equivalent is free** is answered at once (3 s and 25 s after the stop) with the exact claim command (`lease-nudge.js` `answerStop`).
   Reuse is detected by start time: a process that started after the lease was granted is not its holder. The service itself probes only pids
   on its own host. `GHOSTY_HOLDER_REAPER=off` disables the reaper. A dispatcher that exits between ticks (game_dispatch, pokemon_dispatch) must not

@@ -974,6 +974,8 @@ const leaseWatch = createLeaseWatch({
 const holderReaper = createHolderReaper({
   stateDir: STATE_DIR, run: leaseRun, listSessionNames: async () => (await listSessions()).map((x) => x.name), activityOf: (name) => reporter.activityOf(name),
   // idle release (lease-holder-reaper.js): manager.json `leaseIdleRelease` "dry" (default) | "live" | "off"
+  // idle Mac holder (bug-87be6e11): manager.json `leaseMacIdleRelease` "live" (default) | "dry" | "off"
+  macMode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).leaseMacIdleRelease; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
   idleMode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).leaseIdleRelease; return m === 'live' || m === 'off' ? m : 'dry'; } catch { return 'dry'; } },
   // never release for a session with a background task, a cron, a pane task or a child process of its agent
   hasLiveJob: async (name) => {

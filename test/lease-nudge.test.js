@@ -160,3 +160,19 @@ test('answerStop: a stop is answered at once (no 30 s age) with the free-equival
   await n.answerStop('worker');
   assert.equal(sent.length, 1, 'cooldown: not twice');
 });
+
+test('a holder with no session (Mac) is nudged at 10 min without renewal, a codebox session still at 20', () => {
+  const mac = lease({ id: 'LM', agent: 'mac:laptop', kind: 'host', resources: ['host-1'], purpose: 'run on host-1', sinceMs: NOW - 12 * MIN, lastHeartbeatMs: NOW - 12 * MIN });
+  const t = { id: 'T9', env: 'env-a', resources: ['host-1'], agent: 'codebox:w', holders: ['mac:laptop'], holderIds: ['LM'], createdMs: NOW - 12 * MIN };
+  const plan = planNudges(base({ deploys: [], view: view([mac], [t]), sessionOf: () => null, idleMinOf: () => 12 }));
+  assert.deepEqual(plan[0].reasons, ['idle 12 min']);
+  assert.deepEqual(reasonsOf(lease(), { now: NOW, idleMin: 12, minIdle: 20 }), []);
+});
+test('a waiter whose chat cannot take the note is journaled once as chat-cannot-take-note (bug-988c4f48)', async () => {
+  const dir = tmp('ln-');
+  const t = { id: 'T1', env: 'env-a', resources: ['host-1/device1'], agent: 'codebox:worker', holders: [], createdMs: NOW - 60000, equivalents: ['host-1/device2'], groups: ['stb'] };
+  const n = createLeaseNudge({ stateDir: dir, getInputs: async () => ({ deploys: [], view: view([], [t]) }), sessionOf: (a) => a.replace('codebox:', ''), canSend: () => false, now: () => NOW, log: { log() {}, error() {} } });
+  await n.tick(); await n.tick();
+  const lines = readFileSync(join(dir, 'lease-nudges.jsonl'), 'utf8').trim().split('\n');
+  assert.equal(lines.length, 1); assert.match(lines[0], /"flag":"chat-cannot-take-note"/); assert.match(lines[0], /"ticketId":"T1"/);
+});

@@ -34,10 +34,11 @@ const resText = (l) => (l.resources?.length ? l.resources.join(',') : '*');
 export const narrowlyScoped = (l) => l.kind === 'host' && (l.resources || []).length > 0 && l.resources.every((r) => r && !['*', 'server', 'frontend'].includes(r));
 
 // Why a lease is nudgeable: [] when it is not. lease: rich record (lease-source normLease); idleMin: minutes without a finished turn (null unknown).
-export function reasonsOf(l, { now, idleMin = null }) {
+export const MAC_IDLE_NUDGE_MIN = 10;      // a holder with no session (Mac, script): told at 10 min without a renewal (the reaper releases at 20)
+export function reasonsOf(l, { now, idleMin = null, minIdle = IDLE_MIN }) {
   const out = [];
   if (l.expectMin != null && l.sinceMs && now - l.sinceMs > l.expectMin * 60000) out.push(`past its expected ${l.expectMin} min`);
-  if (idleMin != null && idleMin >= IDLE_MIN) out.push(`idle ${idleMin} min`);
+  if (idleMin != null && idleMin >= minIdle) out.push(`idle ${idleMin} min`);
   const wide = (l.resources || []).includes('*') || l.kind === 'server';
   if (wide && SINGLE_RE.test(l.purpose || '') && !WIDE_RE.test(l.purpose || '')) out.push('broader than its purpose');
   return out;
@@ -94,7 +95,7 @@ export function planNudges({ now, deploys = [], view = null, sessionOf = () => n
       // A holder with no session cannot be observed: the registry then reports the time since the claim as "idle". A lease
       // renewed after the claim proves its holder is alive, so the time since the last renewal is the honest idle number.
       const honest = session ? null : renewalIdleMin(l, now);
-      const reasons = reasonsOf(l, { now, idleMin: honest ?? idleMinOf(l, session) });
+      const reasons = reasonsOf(l, { now, idleMin: honest ?? idleMinOf(l, session), minIdle: session ? IDLE_MIN : MAC_IDLE_NUDGE_MIN });
       if (!reasons.length) continue;
       const waitedMin = mins(w.waitedMs);
       const text = `Your lease ${l.id} on ${clean(l.env, 20)}/${resText(l)} blocks ${w.what} (waiting ${waitedMin} min). Release it if you are done (vpt-lease release ${l.id}), or narrow it to what you use (vpt-lease narrow ${l.id} --resource <host/device> --kind host).`;
@@ -147,6 +148,12 @@ export function createLeaseNudge({ stateDir, getInputs, sessionOf = () => null, 
         if (m === 'live') {
           if (n.session) {
             if (!canSend(n.session)) {   // working, a draft, a menu: try again on the next tick
+              // bug-988c4f48: say why a waiter's line was late: the chat could not take it (journaled once per cooldown, audit only)
+              const dk = `${n.key}|deferred`;
+              if (t - (last.get(dk) || 0) >= COOLDOWN_MS) {
+                last.set(dk, t);
+                try { await appendFile(actionsFile, JSON.stringify({ ...rec, via: 'deferred', flag: 'chat-cannot-take-note' }) + '\n'); } catch { /* audit only */ }
+              }
               // owner 2026-11-11: an idle holder the chat guard cannot reach was skipped silently while others queued for hours (the Mi, ~11 h):
               // the manager is told, once per cooldown; the chat line is still retried every tick
               const fk = `${n.key}|flag`;
