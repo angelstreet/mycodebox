@@ -6,6 +6,14 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A night that finds nothing now says how much it looked at** — the nightly report carries `hosts` (`walked`: the hosts the
+  servers listed, `read`: the hosts whose config answered), so "no rtsp devices found" can no longer be read as an empty inventory:
+  15 hosts walked and 15 read is a fleet without an RTSP source, while 15 walked and 14 read is a host that did not answer ·
+  area: rtsp-nightly
+- **A loopback pool source can be vetted from the host that runs it, and a missing lease CLI no longer kills the night** —
+  `rtsp_check.py --host <host>` (its ssh alias from `RTSP_CHECK_SSH`) and `--ssh <alias>` play a loopback source where the host
+  plays it instead of always answering "unverified", and in live mode a `vpt-lease` that is not on the PATH is reported as "the
+  lease command could not be run, nothing touched" and the night goes on instead of dying on the first down stream · area: rtsp-nightly
 - **A black tile now needs both of its pictures dark** — the nightly reads the tile's thumbnail *and* the live video the browser
   plays (the newest HLS segment, the brightest picture it holds), so a dark moment of a moving clip is reported as a note instead of
   a dead stream, and a looping clip is never blamed on the capture side: the capture-driven repair now replaces a channel only when
