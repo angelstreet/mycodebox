@@ -117,11 +117,20 @@ through the device's own server (the same path the browser uses, the auto-sign t
 
 | capture | Meaning | What the job does |
 |---|---|---|
-| `ok` | fresh (≤ `RTSP_STALE_SECONDS`, 120 s) and not black | nothing; it also turns an `unverified` file device into a checked one |
-| `black` | even the bright part is dark: 90th-percentile luma (ffmpeg `signalstats` YHIGH) under `RTSP_BLACK_LUMA` (32) on **three snapshots 10 s apart**. Not the mean: a dark, letterboxed Sintel scene averaged under 24 and was called black | the source frame is measured too, **for an HLS channel** (the first frame of a file says nothing about the frame the tile shows): source bright = the host's capture is wrong, **reported**; source black too = the channel itself is black, **repaired from the lists** like a dead channel (only when `capture-mode` is `live`). A **file** is only reported, never blamed on the capture side: a dark frame of a looping clip is not a dead stream (2026-11-13) |
+| `ok` | fresh (≤ `RTSP_STALE_SECONDS`, 120 s) and **not** black (at least one of the two pictures is bright) | nothing; it also turns an `unverified` file device into a checked one |
+| `black` | **both** pictures are dark: the thumbnail (90th-percentile luma, ffmpeg `signalstats` YHIGH, under `RTSP_BLACK_LUMA` 32, on **three snapshots 10 s apart**) **and** the live video (the newest HLS segment, what the browser plays). Not the mean: a dark, letterboxed Sintel scene averaged under 24 and was called black | the source frame is measured too, **for an HLS channel** (the first frame of a file says nothing about the frame the tile shows): source bright = the host's capture is wrong, **reported**; source black too = the channel itself is black, **repaired from the lists** like a dead channel (only when `capture-mode` is `live`). A **file** is only reported, never blamed on the capture side: a dark frame of a looping clip is not a dead stream (2026-11-13) |
 | `stale` | older than 120 s | reported: the host stopped writing it (capture side) |
 | `multi_audio` | the host stream's newest segment (`segments/output.m3u8`, what the live player loads) carries more than one audio track | reported: hls.js buffers nothing, the live tile is black while the snapshot is fine. Fixed on the host 2026-11-12 (bug-ea31641c, virtualpytest 0d73213: `run_ffmpeg.sh` maps one usable audio track); a host still showing it runs the old script: restart `vpt-stream` there under the host lease (a host deploy does not restart it) |
 | `missing` / `unreachable` | 404, or the server did not answer after 3 tries | reported |
+
+The `capture` column reads **both** pictures of a tile (2026-11-13, bug-6b227d92): the thumbnail and the live video. The
+thumbnail alone cannot judge a tile, because a looping clip moves: the thumbnail is one moment of the clip and the live video
+another. So a dark thumbnail alone is reported as a **note** ("the tile's snapshot was dark but the live video plays"), not as a
+broken tile; `black` means both are dark. The live layer is read from the host's newest HLS segment (`segments/output.m3u8`),
+the same bytes the browser's player loads; they are fetched once per device and the audio-track count comes from them too.
+Its luma is the **brightest** picture that segment holds (the 90th percentile over its frames), not its first frame: a
+segment's first frame can be a transition frame and read black while the tile plays. The report carries both luma's per
+device (`luma` = the thumbnail, `live_luma` = the live video).
 
 The capture-driven repair has its own switch, `<state>/rtsp-nightly/capture-mode` (`dry` unless it holds `live`), so it
 runs report-only until one clean night has been read (manager, 2026-11-11). The report ends with a
@@ -137,11 +146,13 @@ device page is the only proof for that layer (`vpt-headless-verify` skill, secti
 
 A tile has **two pictures**, and "fixed" needs both, each with a screenshot looked at:
 
-1. **Snapshot** (`<img>`, `thumbnails/latest.jpg`): what a page with more than 16 tiles shows. Proven by the
-   `capture` column `ok` and by a headless screenshot of the card.
+1. **Snapshot** (`<img>`, `thumbnails/latest.jpg`): what a page with more than 16 tiles shows. Proven by the report's
+   `luma` per device and by a headless screenshot of the card (the `capture` column reads both pictures, so `ok` alone
+   does not say the snapshot is bright).
 2. **Live video** (`<video>`, `segments/output.m3u8`): what a page with 16 tiles or fewer shows, and any tile on hover.
    Proven only by hovering the card (`page.mouse.move` to its centre, 15 s), then `video.readyState` 4 and a screenshot
-   that is not black. `readyState` 1 with nothing buffered is the `multi_audio` signature.
+   that is not black. `readyState` 1 with nothing buffered is the `multi_audio` signature. The nightly reads this layer
+   too (`live_luma`), but a segment's first frame can be a transition frame: the browser proof is the one that counts.
 
 The 2026-11-11 close checked the snapshot only and called BFM2 fixed; the owner's view (a filtered page, live video) was
 still black. Check the view the owner screenshot shows, not the default one.
@@ -243,6 +254,11 @@ rolled back or a camera is down, and files `found-bug` for a camera down or a ro
     - `BFM2` (`vpt-lenovo5/DEVICE1`) plays its source and its snapshot is bright, but its live tile is still black in the
       browser (`readyState` 1, the clock runs): the known audio/video drift of bug-c54ea30f, not the multi_audio of
       bug-ea31641c (the host segment now carries one audio track).
+- The nightly now reads **both** pictures of a tile before calling one black (bug-6b227d92, fixed and merged the same
+  night): a dry validation run against the fleet turned `lenovo-local-hd/DEVICE9` (thumbnail luma 19, live video 33) into a
+  note instead of a false alarm, while `lenovo-local-low/DEVICE36` (12 / 19) and `vpt-nipogi/DEVICE31` (0 / 16) stayed black,
+  which is what they are. A black verdict now needs three signals to agree (dark thumbnail, dark live video, black source
+  frame), so the capture-driven repair is more conservative than before, never less.
 - The pool was not touched: re-probed from `vpt-pi4` (the host that runs `vpt-rtsp`), `smoke` still plays (h264 640x360) and the
   three public candidates still time out on port 554, so nothing new is vetted (bug-c7c2bb0e, still `wontfix`).
 

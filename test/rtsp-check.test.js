@@ -111,9 +111,11 @@ async function world({ devices, pool, leaseBusy = false, leaseMissing = false, l
         return res.end(kind === 'STALE' ? 'PICTURE' : kind);
       }
       const sg = u.pathname.match(/^\/host\/([^/]+)\/stream\/([^/]+)\/segments\/(.+)$/);
-      if (sg) { // the stream the live player loads: MULTI4 = 4 audio tracks in its segments, else 1
-        const n = (snapshots[sg[2]] || '').startsWith('MULTI') ? snapshots[sg[2]].slice(5) : '1';
-        return res.end(sg[3] === 'output.m3u8' ? '#EXTM3U\n#EXTINF:0.4,\nsegment_1.ts\n' : `TS${n}`);
+      if (sg) { // the stream the live player loads: MULTI4 = 4 audio tracks in its segments, BLACKLIVE = a black live layer, else 1
+        const kind = snapshots[sg[2]] || '';
+        const n = kind.startsWith('MULTI') ? kind.slice(5) : '1';
+        if (sg[3] === 'output.m3u8') return res.end('#EXTM3U\n#EXTINF:0.4,\nsegment_1.ts\n');
+        return res.end(kind === 'BLACKLIVE' ? 'BLACKTS' : `TS${n}`);
       }
       res.statusCode = 404; send({});
     });
@@ -334,30 +336,53 @@ test('a 502 blip from the server is retried: the night still reads its hosts', a
 });
 
 test('the tile snapshot is checked too: a black or stale host capture of a playing source is reported, never changed', async () => {
-  const w = await world({ pool: POOL, snapshots: { 'cap-BFM2': 'BLACK', 'cap-Old': 'STALE', 'cap-Gone': 'MISSING' }, devices: {
+  const w = await world({ pool: POOL, snapshots: { 'cap-BFM2': 'BLACKLIVE', 'cap-Old': 'STALE', 'cap-Gone': 'MISSING', 'cap-Dark': 'BLACK' }, devices: {
     DEVICE1: { ...dev('BFM2', 'https://cdn.example/good/bfm2.m3u8'), DEVICE_MODEL: 'rtsp_video' },
     DEVICE2: { ...dev('Old', 'https://cdn.example/good/old.m3u8'), DEVICE_MODEL: 'rtsp_video' },
     DEVICE3: { ...dev('Gone', 'https://cdn.example/good/gone.m3u8'), DEVICE_MODEL: 'rtsp_video' },
-    DEVICE4: { ...dev('Fine', 'https://cdn.example/good/fine.m3u8'), DEVICE_MODEL: 'rtsp_video' } } });
+    DEVICE4: { ...dev('Fine', 'https://cdn.example/good/fine.m3u8'), DEVICE_MODEL: 'rtsp_video' },
+    DEVICE5: { ...dev('Dark', 'https://cdn.example/good/dark.m3u8'), DEVICE_MODEL: 'rtsp_video' } } });
   const r = await py(REPLACE, ['--mode', 'live'], w.E);
   w.close();
-  assert.match(r.stdout, /DEVICE1\s+hls\s+ok -> report: the source plays but the tile's snapshot is black: host capture side/, r.stdout);
+  assert.match(r.stdout, /DEVICE1\s+hls\s+ok -> report: the source plays but the tile's snapshot and its live video are black: host capture side/, r.stdout);
   assert.match(r.stdout, /DEVICE2\s+hls\s+ok -> report: the source plays but the tile's snapshot is stale \(\d+ s old\)/);
   assert.match(r.stdout, /DEVICE3\s+hls\s+ok -> report: the source plays but the tile's snapshot is missing/);
   assert.match(r.stdout, /DEVICE4\s+hls\s+ok -> none\s+ok/);
-  assert.match(r.stdout, /tile snapshots \(what the app shows\): \{"black": 1, "stale": 1, "missing": 1, "ok": 1\}; capture repairs: dry/);
+  assert.match(r.stdout, /DEVICE5\s+hls\s+ok -> note: the tile's snapshot was dark but the live video plays/, r.stdout);
+  assert.match(r.stdout, /tile snapshots \(what the app shows\): \{"black": 1, "stale": 1, "missing": 1, "ok": 2\}/);
+  assert.equal(w.posts.length, 0);
+});
+
+test('a black tile needs both layers dark: a dark thumbnail with a live tile that plays is not a broken tile (bug-6b227d92)', async () => {
+  const w = await world({ pool: POOL, snapshots: { 'cap-Dark': 'BLACK', 'cap-Black': 'BLACKLIVE' }, devices: {
+    DEVICE1: { ...dev('Dark', 'https://cdn.example/good/dark.m3u8'), DEVICE_MODEL: 'rtsp_video' },
+    DEVICE2: { ...dev('Black', 'https://cdn.example/good/black.m3u8'), DEVICE_MODEL: 'rtsp_video' } } });
+  const r = await py(REPLACE, ['--mode', 'live'], w.E);
+  const day = new Date().toISOString().slice(0, 10);
+  const rep = JSON.parse(readFileSync(path.join(w.state, 'rtsp-nightly', `report-${day}.json`), 'utf8'));
+  w.close();
+  assert.match(r.stdout, /DEVICE1\s+hls\s+ok -> note: the tile's snapshot was dark but the live video plays/, r.stdout);
+  assert.match(r.stdout, /DEVICE2\s+hls\s+ok -> report: the source plays but the tile's snapshot and its live video are black: host capture side/, r.stdout);
+  assert.match(r.stdout, /tile snapshots \(what the app shows\): \{"ok": 1, "black": 1\}/);
+  const one = rep.streams.find((s) => s.device === 'DEVICE1');
+  assert.equal(one.capture, 'ok');
+  assert.ok(one.luma < 32, 'the thumbnail was dark');
+  assert.ok(one.live_luma > 32, 'the live layer was measured and is bright');
+  const two = rep.streams.find((s) => s.device === 'DEVICE2');
+  assert.equal(two.capture, 'black');
+  assert.ok(two.live_luma < 32, 'the live layer is black too');
   assert.equal(w.posts.length, 0);
 });
 
 test('a file whose tile snapshot is black is not blamed on the capture side (the source frame is only compared for HLS channels)', async () => {
-  const w = await world({ pool: POOL, snapshots: { 'cap-Clip36': 'BLACK', 'cap-BFM2': 'BLACK' }, devices: {
+  const w = await world({ pool: POOL, snapshots: { 'cap-Clip36': 'BLACKLIVE', 'cap-BFM2': 'BLACKLIVE' }, devices: {
     DEVICE1: { ...dev('Clip 36', '/var/lib/vpt-movies/36_elephants_12.mp4'), DEVICE_MODEL: 'rtsp_video' },
     DEVICE2: { ...dev('BFM2', 'https://cdn.example/good/bfm2.m3u8'), DEVICE_MODEL: 'rtsp_video' } } });
   const r = await py(REPLACE, ['--mode', 'live'], w.E);
   w.close();
-  assert.match(r.stdout, /DEVICE1\s+file\s+ok -> report: the tile's snapshot is black: a dark frame of the looping clip itself, not a dead stream/, r.stdout);
+  assert.match(r.stdout, /DEVICE1\s+file\s+ok -> report: the tile's snapshot and its live video are black: a dark frame of the looping clip itself, not a dead stream/, r.stdout);
   assert.doesNotMatch(r.stdout, /DEVICE1[^\n]*host capture side/, 'a file must not be blamed on the capture side: no source frame was compared');
-  assert.match(r.stdout, /DEVICE2\s+hls\s+ok -> report: the source plays but the tile's snapshot is black: host capture side/, r.stdout);
+  assert.match(r.stdout, /DEVICE2\s+hls\s+ok -> report: the source plays but the tile's snapshot and its live video are black: host capture side/, r.stdout);
   assert.equal(w.posts.length, 0);
 });
 
@@ -366,12 +391,12 @@ test('a channel whose own picture is black: reported while capture checks are dr
   const lists = (w) => { const d = path.dirname(w.E.RTSP_POOL_FILE); writeFileSync(path.join(d, 'l.m3u'),
     '#EXTM3U\n#EXTINF:-1 group-title="News",Dark News (720p)\nhttps://cdn.example/good/blacksrc.m3u8\n#EXTINF:-1 group-title="News",Bright News (720p)\nhttps://cdn.example/good/bright.m3u8\n');
     w.E.RTSP_CHANNEL_LISTS = path.join(d, 'l.m3u'); };
-  let w = await world({ pool: POOL, snapshots: { 'cap-FRNews1DarkNews': 'BLACK' }, devices: devices() }); lists(w);
+  let w = await world({ pool: POOL, snapshots: { 'cap-FRNews1DarkNews': 'BLACKLIVE' }, devices: devices() }); lists(w);
   let r = await py(REPLACE, ['--mode', 'live'], w.E);
   w.close();
   assert.match(r.stdout, /DEVICE1\s+hls\s+ok -> report: the channel's own picture is black .*capture checks are dry, nothing changed/, r.stdout);
   assert.equal(w.posts.length, 0);
-  w = await world({ pool: POOL, snapshots: { 'cap-FRNews1DarkNews': 'BLACK' }, devices: devices() }); lists(w);
+  w = await world({ pool: POOL, snapshots: { 'cap-FRNews1DarkNews': 'BLACKLIVE' }, devices: devices() }); lists(w);
   mkdirSync(path.join(w.state, 'rtsp-nightly'), { recursive: true });
   writeFileSync(path.join(w.state, 'rtsp-nightly', 'capture-mode'), 'live\n');
   r = await py(REPLACE, ['--mode', 'live'], w.E);

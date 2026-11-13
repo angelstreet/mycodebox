@@ -289,17 +289,22 @@ BLACK_LUMA = float(os.environ.get('RTSP_BLACK_LUMA', '32'))
 STALE_SECONDS = int(os.environ.get('RTSP_STALE_SECONDS', '120'))  # latest.jpg is rewritten about once a second
 
 
-def luma(path_or_url, timeout=20, ssh=None):
-    """Brightness of the bright part (signalstats YHIGH, 90th percentile) of the first frame of a picture or stream, or None."""
+def luma(path_or_url, timeout=20, ssh=None, all_frames=False):
+    """Brightness of the bright part (signalstats YHIGH, 90th percentile) of the first frame of a picture or stream, or None.
+    all_frames: every frame of the file (a live segment): the brightest picture it holds."""
     v = clean_value(path_or_url)
     opts = (['-rtsp_transport', 'tcp'] if is_rtsp(v) else ['-rw_timeout', str(int(timeout * 1e6))] if is_http(v) else [])
+    frames = [] if all_frames else ['-frames:v', '1']
     try:
-        p = _run([FFMPEG, '-v', 'info', *opts, '-i', v, '-frames:v', '1', '-vf',
+        p = _run([FFMPEG, '-v', 'info', *opts, '-i', v, *frames, '-vf',
                   'signalstats,metadata=print:key=lavfi.signalstats.YHIGH', '-f', 'null', '-'], timeout, ssh)
     except (subprocess.TimeoutExpired, OSError):
         return None
     m = re.findall(r'YHIGH=([0-9.]+)', (p.stderr or '') + (p.stdout or ''))
-    return float(m[-1]) if m else None
+    if not m:
+        return None
+    # A segment's first frame can be a transition frame: the live layer is judged on the brightest picture it holds.
+    return max(float(x) for x in m) if all_frames else float(m[-1])
 
 
 def _fetch(url, timeout=20):
@@ -329,42 +334,47 @@ def _bytes_luma(body, timeout=20):
         return luma(f.name, timeout)
 
 
-def stream_audio_tracks(base, timeout=20):
-    """Audio tracks in the host's newest HLS segment (what the browser player gets), or None.
-    hls.js does not play a TS with several audio tracks (bug-ea31641c): the live tile stays black."""
+def stream_media(base, timeout=20):
+    """What the browser player loads: the host's newest HLS segment.
+    -> (audio_tracks, luma) of that segment, (None, None) when it cannot be read.
+    audio: hls.js does not play a TS with several audio tracks (bug-ea31641c): the live tile stays black.
+    luma: the live layer's brightness (the tile's video, not its thumbnail)."""
     import tempfile
     st, pl, _ = _fetch(f'{base}/segments/output.m3u8', timeout)
     if st != 'ok':
-        return None
+        return None, None
     segs = [x.strip() for x in pl.decode('utf-8', 'replace').splitlines() if x.strip() and not x.startswith('#')]
     if not segs:
-        return None
+        return None, None
     st, body, _ = _fetch(f'{base}/segments/{segs[-1]}', timeout)
     if st != 'ok':
-        return None
+        return None, None
     with tempfile.NamedTemporaryFile(suffix='.ts') as f:
-        f.write(body); f.flush()
+        f.write(body or b''); f.flush()
         try:
             p = subprocess.run([FFPROBE, '-v', 'error', '-show_entries', 'stream=index,codec_type', '-of', 'csv=p=0', f.name],
                                capture_output=True, text=True, timeout=timeout)
         except (subprocess.TimeoutExpired, OSError):
-            return None
-    # An MPEG-TS lists each stream twice (under its program and on its own): count unique indexes, not lines.
-    audio = {line.split(',')[0] for line in p.stdout.split() if line.strip().endswith(',audio')}
-    return len(audio)
+            p = None
+        # An MPEG-TS lists each stream twice (under its program and on its own): count unique indexes, not lines.
+        audio = None
+        if p is not None:
+            audio = len({line.split(',')[0] for line in p.stdout.split() if line.strip().endswith(',audio')})
+        return audio, luma(f.name, timeout, all_frames=True)
 
 
 def capture_check(e, timeout=20):
-    """-> {capture: ok|black|stale|multi_audio|missing|unreachable|unknown, age, luma, audio}. What the app shows of the
-    device: the tile's snapshot and the stream its live player loads, read through the device's server."""
+    """-> {capture: ok|black|stale|multi_audio|missing|unreachable|unknown, age, luma, live_luma, audio}. What the app
+    shows of the device: the tile's snapshot (thumbnail luma) and the stream its live player loads (live_luma), read
+    through the device's server."""
     import email.utils, time
     cap = e.get('capture')
     if not cap or not e.get('server'):
-        return {'capture': 'unknown', 'age': None, 'luma': None, 'audio': None}
+        return {'capture': 'unknown', 'age': None, 'luma': None, 'live_luma': None, 'audio': None}
     base = f"{e['server'].rstrip('/')}/host/{urllib.parse.quote(e['host'])}/stream/{urllib.parse.quote(cap)}"
     st, body, last = _fetch(f'{base}/thumbnails/latest.jpg', timeout)
     if st != 'ok':
-        return {'capture': st, 'age': None, 'luma': None, 'audio': None}
+        return {'capture': st, 'age': None, 'luma': None, 'live_luma': None, 'audio': None}
     age = None
     if last:
         try:
@@ -382,11 +392,17 @@ def capture_check(e, timeout=20):
                 y = y2 if y2 is not None else y
                 break
             y = max(y, y2)
-    audio = stream_audio_tracks(base, timeout)
+    audio, live = stream_media(base, timeout)
+    live_luma = None if live is None else round(live, 1)
+    dark = y is not None and y < BLACK_LUMA
+    # A tile has two pictures: the thumbnail (what a page with many tiles shows) and the live video (what a page with
+    # few tiles, and every hover, shows). Black only if BOTH are dark (2026-11-13): a looping clip moves, so its
+    # thumbnail can be a dark moment while the live tile shows a picture.
     status = ('stale' if age is not None and age > STALE_SECONDS else
-              'black' if y is not None and y < BLACK_LUMA else
+              'black' if dark and (live_luma is None or live_luma < BLACK_LUMA) else
               'multi_audio' if audio is not None and audio > 1 else 'ok')
-    return {'capture': status, 'age': age, 'luma': None if y is None else round(y, 1), 'audio': audio}
+    return {'capture': status, 'age': age, 'luma': None if y is None else round(y, 1),
+            'live_luma': live_luma, 'audio': audio}
 
 
 def check_captures(entries):
