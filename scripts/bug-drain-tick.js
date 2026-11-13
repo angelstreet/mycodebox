@@ -3,7 +3,9 @@
 // systemd/ghosty-bug-drain.timer (docs/BUG-DRAIN.md): read the bugs ledger, pick up to 3 bugs a worker can fix, start one
 // `cbsession` worker per bug (max 2 drain workers alive), journal one line, tell the manager with one event line.
 //
-//   node scripts/bug-drain-tick.js [--dry | --live] [--json]
+//   node scripts/bug-drain-tick.js [--dry | --live] [--json] [--bug <id>]
+// --bug <id>: only that bug (the server runs it right after a blocking filing). A blocking bug the tick cannot start becomes one urgent
+// `bug-drain-cannot` line for the manager (once per bug); a blocking filing itself no longer wakes the manager (bug-67c65223).
 // Mode: `dry` (prints what it would start, claims and starts nothing) unless <state>/bug-drain/mode says `live` (the manager flips
 // it after reading one dry tick). --dry / --live on the command line win over the file. Never starts anything at disk >= 90 %.
 // Env: GHOSTY_URL (default http://127.0.0.1:$PORT|7777), GHOSTY_STATE_DIR, BUG_DRAIN_CBSESSION (default: cbsession next to this
@@ -80,7 +82,7 @@ export function skipReason(b, { live, now, reachable = null }) {
   if (bad.length) return `host not reachable from a worker (no lease inventory entry): ${bad.join(', ')}`;
   if (b.claim && (!b.claim.until || Date.parse(b.claim.until) > now || now - Date.parse(b.claim.at) < RECENT_MS)) return `claimed by ${b.claim.by}`;
   const filerLive = live.has(b.session);
-  if (filerLive && now - Date.parse(b.at) < RECENT_MS) return 'filed by a live session in the last 2 h (send-back wake)';
+  if (filerLive && !b.blocking && now - Date.parse(b.at) < RECENT_MS) return 'filed by a live session in the last 2 h (send-back wake)';
   if (filerLive && b.why === 'live-session-task') return 'belongs to a live session task';
   const words = new Set(text(b).toLowerCase().split(/[^a-z0-9]+/));
   for (const s of live) {
@@ -186,7 +188,20 @@ async function get(url, path) {
   return r.json();
 }
 
-export async function tick({ reachable = defaultReachable, url, stateDir, mode, now = Date.now(), cbsession, dir, diskPct, fetchJson = get, run = (cmd, args, env) => spawnSync(cmd, args, { encoding: 'utf8', timeout: 240000, env: { ...process.env, ...env } }) }) {
+// Blocking bugs reach the manager only when the drain cannot start them (bug-67c65223, owner 2026-11-12): once per bug, one urgent line.
+// `considered` = the open bugs this tick looked at, p = its plan, startedIds = ids a worker really started (live mode, no error).
+export function cannotStart({ considered, p, startedIds, already = new Set() }) {
+  const why = new Map(p.skipped.map((x) => [x.id, x.why]));
+  const out = [];
+  for (const b of considered) {
+    if (!b.blocking || b.test || startedIds.has(b.id) || already.has(b.id)) continue;
+    const planned = p.start.some((s) => s.bug.id === b.id);
+    out.push({ id: b.id, why: why.get(b.id) || p.halt || (planned ? 'not started (dry mode or the worker did not start)' : 'not picked this tick') });
+  }
+  return out;
+}
+
+export async function tick({ only = null, reachable = defaultReachable, url, stateDir, mode, now = Date.now(), cbsession, dir, diskPct, fetchJson = get, run = (cmd, args, env) => spawnSync(cmd, args, { encoding: 'utf8', timeout: 240000, env: { ...process.env, ...env } }) }) {
   const out = join(stateDir, 'bug-drain');
   mkdirSync(out, { recursive: true });
   const [openRes, allRes, sess, quota] = await Promise.all([
@@ -194,7 +209,7 @@ export async function tick({ reachable = defaultReachable, url, stateDir, mode, 
     fetchJson(url, '/api/sessions').catch(() => null), fetchJson(url, '/api/quota').catch(() => null)]);
   if (!sess) throw new Error('/api/sessions unreachable: cannot tell which sessions are live, starting nothing');
   const live = new Set((sess.sessions || []).map((s) => s.name));
-  const bugs = (openRes.bugs || []).filter((b) => b.title && !b.resolved);
+  const bugs = (openRes.bugs || []).filter((b) => b.title && !b.resolved && (!only || b.id === only));
   const st = stats(allRes.bugs || [], now);
   const p = plan({ bugs, live, quota, diskPct, now, reachable: reachable() });
   const started = [];
@@ -219,8 +234,20 @@ export async function tick({ reachable = defaultReachable, url, stateDir, mode, 
   const what = started.length ? started.map((r) => `${r.id}->${r.provider}${r.error ? ` (${r.error})` : ''}`).join(', ') : (p.halt || 'nothing to start');
   const ev = { at: line.at, key: 'bug-drain:tick', kind: 'bug-drain', title: `bug drain ${mode}: ${started.length} started`.slice(0, 80),
     body: `${mode}: ${what}. open ${st.open} (blocking ${st.blocking}), +${st.opened24h}/-${st.closed24h} in 24 h, median age ${st.medianAgeHours} h, fixed by finder ${st.fixedByFinder} / worker ${st.fixedByWorker} / other ${st.fixedByOther}.`.slice(0, 300), url: '/', priority: 'low' };
+  // the drain's own tick line is routine; a blocking bug it could not start is the manager's (once per bug)
+  const escFile = join(out, 'escalated.txt');
+  let already = new Set();
+  try { already = new Set(readFileSync(escFile, 'utf8').split('\n').filter(Boolean)); } catch { /* none yet */ }
+  const startedIds = new Set(started.filter((r) => !r.error && mode === 'live').map((r) => r.id));
+  const escalate = cannotStart({ considered: bugs, p, startedIds, already });
+  for (const e of escalate) {
+    const b = bugs.find((x) => x.id === e.id);
+    appendFileSync(join(stateDir, 'manager-events.jsonl'), j({ at: line.at, key: `bug-drain-cannot:${e.id}`, kind: 'bug-drain-cannot', session: b.session, title: `blocking ${e.id} not started by the drain: ${e.why}`.slice(0, 160),
+      body: `${b.session}: ${b.title} (${e.id}). The bug drain could not start a worker: ${e.why}. Decide: start a worker yourself, or tell ${b.session}.`.slice(0, 400), url: '/', priority: 'high', bug: { id: e.id, blocking: true } }) + '\n');
+    appendFileSync(escFile, e.id + '\n');
+  }
   appendFileSync(join(stateDir, 'manager-events.jsonl'), j(ev) + '\n');
-  return { line, plan: p, event: ev };
+  return { line, plan: p, event: ev, escalated: escalate.map((e) => e.id) };
 }
 
 const countBy = (xs) => xs.reduce((m, x) => ((m[x] = (m[x] || 0) + 1), m), {});
@@ -247,7 +274,8 @@ if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
   if (!mode) { try { mode = readFileSync(join(stateDir, 'bug-drain', 'mode'), 'utf8').trim() === 'live' ? 'live' : 'dry'; } catch { mode = 'dry'; } }
   const url = (process.env.GHOSTY_URL || `http://127.0.0.1:${process.env.PORT || 7777}`).replace(/\/$/, '');
   try {
-    const r = await tick({ url, stateDir, mode, cbsession: process.env.BUG_DRAIN_CBSESSION || 'cbsession', dir: process.env.BUG_DRAIN_DIR || join(homedir(), 'ghosty-sessions'), diskPct: diskPctOf(stateDir) });
+    const bugArg = process.argv.indexOf('--bug');
+    const r = await tick({ only: bugArg > 0 ? process.argv[bugArg + 1] : null, url, stateDir, mode, cbsession: process.env.BUG_DRAIN_CBSESSION || 'cbsession', dir: process.env.BUG_DRAIN_DIR || join(homedir(), 'ghosty-sessions'), diskPct: diskPctOf(stateDir) });
     console.log(process.argv.includes('--json') ? j(r.line) : printable(r));
   } catch (e) {
     console.error(`bug-drain-tick: ${e.message}`);

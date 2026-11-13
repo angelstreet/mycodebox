@@ -70,12 +70,18 @@ export function classifyTrigger(o, agentToolIds = new Set()) {
 }
 
 // What a task-notification / peer / prompt says, in one short line (the notification's summary or event body, else the text).
+// A background command the manager chains before its wait (`<ledger echo | curl send>; manager-wait.sh`) is a wait wake: its own work was
+// done before the wait started, so the notification only fires on the wait's events. The 160-char summary cut the tail off and the wake
+// looked like the manager's own job finishing (36 "own job" empty wakes of 2026-11-12 were all this).
+export const isWaitChain = (o) => /manager-wait\.sh/.test(userText(o));
 export function summarize(o) {
   const text = userText(o);
   const kind = o?.origin?.kind;
   if (kind === 'peer' && o.origin && typeof o.origin.body === 'string') return squash(o.origin.body, 160);
   const m = text.match(/<event>([\s\S]*?)<\/event>/) || text.match(/<summary>([\s\S]*?)<\/summary>/);
-  return squash(m ? m[1] : text, 160);
+  const body = m ? m[1] : text;
+  const one = squash(body, 160);
+  return isWaitChain(o) && !/manager-wait\.sh/.test(one) ? `${one.slice(0, 140)} … manager-wait.sh` : one;
 }
 
 const FILE_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit', 'MultiEdit']);
@@ -129,7 +135,7 @@ export function splitWakes(records, { prices = null } = {}) {
       const trig = classifyTrigger(o, agentToolIds);
       if (trig && t !== null) {
         close();
-        cur = { _start: t, _end: t, trigger: trig, triggerSummary: summarize(o), tools: {}, alertsSent: 0, sendsToSessions: 0, workersStarted: 0, fileWrites: 0, decision: '' };
+        cur = { _start: t, _end: t, trigger: trig, triggerSummary: summarize(o), ...(trig === 'task_done' && isWaitChain(o) ? { waitChain: true } : {}), tools: {}, alertsSent: 0, sendsToSessions: 0, workersStarted: 0, fileWrites: 0, decision: '' };
         continue;
       }
     }
@@ -169,7 +175,7 @@ export function splitWakes(records, { prices = null } = {}) {
   return wakes.map(order);
 }
 function order(w) {
-  return { start: w.start, end: w.end, durationSec: w.durationSec, trigger: w.trigger, triggerSummary: w.triggerSummary, tools: w.tools, alertsSent: w.alertsSent, sendsToSessions: w.sendsToSessions, workersStarted: w.workersStarted, fileWrites: w.fileWrites, decision: w.decision, tokens: w.tokens, usd: w.usd, nothing: w.nothing };
+  return { start: w.start, end: w.end, durationSec: w.durationSec, trigger: w.trigger, triggerSummary: w.triggerSummary, ...(w.waitChain ? { waitChain: true } : {}), tools: w.tools, alertsSent: w.alertsSent, sendsToSessions: w.sendsToSessions, workersStarted: w.workersStarted, fileWrites: w.fileWrites, decision: w.decision, tokens: w.tokens, usd: w.usd, nothing: w.nothing };
 }
 
 const dayOf = (iso) => String(iso || '').slice(0, 10);   // UTC day, like the usage ledger

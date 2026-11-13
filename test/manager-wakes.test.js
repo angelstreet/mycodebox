@@ -140,3 +140,17 @@ test('a manager relaunched in its own tmux session (manager-restart) is still th
   const got = (await findManagerTranscripts({ stateDir, claudeDir })).map((x) => x.session).sort();
   assert.deepEqual(got, [a, b].sort(), 'manager-<suffix> counts; "managerial" and other sessions do not');
 });
+
+test('a chained `<action>; manager-wait.sh` background command is a wait wake, even when the 160-char summary cut the tail', () => {
+  const cmd = `curl -s -X POST http://127.0.0.1:7777/api/send/x -d '{"keys":"${'a'.repeat(300)}"}'; ~/ghosty-sessions/scripts/manager-wait.sh`;
+  const ws = splitWakes([
+    notif(T(0), `<task-id>b9</task-id>\n<tool-use-id>tq</tool-use-id>\n<status>completed</status>\n<summary>Background command "${cmd}" completed (exit code 0)</summary>`),
+    asst(T(0, 3), 'm1', [text('Nothing.')]),
+    notif(T(5), '<task-id>b8</task-id>\n<tool-use-id>tr</tool-use-id>\n<status>completed</status>\n<summary>Background command "npm test" completed (exit code 0)</summary>'),
+    asst(T(5, 3), 'm2', [text('Tests passed.')]),
+  ]);
+  assert.equal(ws[0].trigger, 'task_done');
+  assert.equal(ws[0].waitChain, true);
+  assert.match(ws[0].triggerSummary, /manager-wait\.sh$/);
+  assert.equal(ws[1].waitChain, undefined);
+});

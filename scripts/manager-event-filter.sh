@@ -35,7 +35,7 @@
 # - notices of a check the harness already answered itself: done-check ("said done, git disagrees"), goal-check ("done not accepted"),
 #   session-closed:* (bug-unreported still passes: a test pins it);
 # - disk / quota alerts under 95%: once per 5-point bucket per 6 h across runs (key `pctx|<key>|<bucket>`); 95% and over always passes.
-# Deferred (`d: true`): a non-blocking bug filing is delivered with the next wake or after MANAGER_WAIT_DEFER (manager-wait.sh, 1 h), never a wake
+# Deferred (`d: true`): a bug filing, blocking or not (a blocking one goes to the bug drain first and reaches the manager as `bug-drain-cannot` only when the drain cannot start it, bug-67c65223), is delivered with the next wake or after MANAGER_WAIT_DEFER (manager-wait.sh, 1 h), never a wake
 # of its own. Replay: scripts/manager-wake-rules-replay.py <day>.
 # 2026-11-12, second set: one stop = one event (key `stop|<session>|<text>`, deduped across runs like asks); deferred too: a stop that is a wait,
 # and the notices bug-unreported / leftovers / bug-drain / orphaned-task / int-*:cancelled / lease nudge, unless the policy makes the kind urgent or pass.
@@ -97,8 +97,8 @@ jq -c --unbuffered --argjson policy "$POLICY" '
     or (((.kind//"")|tostring|test("^(kpi-|pokestall-|pokemon-daily-|mobile-orchtnet-owner$|opus-openexit$|content-|mi-bugs-|pi1-load-|task208-)")) and ((.priority//"default")=="default"));
   select(pol != "ignore") | select(pol == "pass" or (routine|not))
   | {k:(if stopish then ("stop|"+stopsess+"|"+stopnorm) elif nmish then ("stop|"+nmsess+"|nm|"+nmnorm) elif ((.kind=="disk" or .kind=="quota") and (pct != null) and (pct < 95)) then ("pctx|"+((.key//.kind)|tostring|gsub("\\s";""))+"|"+((pct/5|floor)|tostring)) else (.session//"")+"|"+.kind+"|"+(if .kind=="health" then (.key//"") else ((.body//"") as $b | (if ($b|test("needs-owner:")) then ($b|capture("needs-owner:(?<q>[^\\[]*)").q) else $b end) | gsub("·\\s*[0-9][0-9hms ]*·\\s*[0-9.]+[kM]?\\s*tok\\s*";"")|gsub("\\s";"")|.[0:80]) end) end),
-     u:(pol=="urgent" or ((.priority//"")=="high") or ((.priority//"")=="urgent") or ((.kind=="bug") and ((.bug.blocking//false)==true))),
-     d:(((.kind=="bug") and ((.bug.blocking//false)==false) and ((.priority//"")!="high") and ((.priority//"")!="urgent") and (pol!="urgent") and (pol!="pass"))
+     u:((.kind!="bug") and (pol=="urgent" or ((.priority//"")=="high") or ((.priority//"")=="urgent"))),
+     d:(((.kind=="bug") and (pol!="urgent") and (pol!="pass"))
         or (stopish and waitish and ((((.body//"")|tostring)|test("needs-owner"))|not) and (pol!="pass"))
         or (notice and (((.priority//"default")=="default") or ((.priority//"")=="low")) and (pol!="urgent") and (pol!="pass"))
         or ((.kind=="disk" or .kind=="quota") and (pct != null) and (pct < 95) and (pol!="urgent") and (pol!="pass"))), l:.}' \
