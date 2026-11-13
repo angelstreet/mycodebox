@@ -269,12 +269,20 @@ def run(mode, timeout=10):
             row['source_luma'] = None if y is None else round(y, 1)
             black_src = y is not None and y < rc.BLACK_LUMA
         if src_ok and not black_src and cap['capture'] not in ('ok', 'unknown'):
-            row['action'] = (f"report: the source plays but the host stream has {cap.get('audio')} audio tracks: the browser's"
-                             " live player cannot play it: the host's vpt-stream runs a run_ffmpeg.sh from before the one-track"
-                             " fix (bug-ea31641c): restart vpt-stream on that host under its lease, not changed") if cap['capture'] == 'multi_audio' else (
-                             f"report: the source plays but the tile's snapshot is {cap['capture']}"
-                             + (f" ({cap['age']} s old)" if cap['capture'] == 'stale' and cap.get('age') is not None else '')
-                             + ": host capture side (vpt-stream / thumbnails), not changed")
+            if cap['capture'] == 'multi_audio':
+                row['action'] = (f"report: the source plays but the host stream has {cap.get('audio')} audio tracks: the browser's"
+                                 " live player cannot play it: the host's vpt-stream runs a run_ffmpeg.sh from before the one-track"
+                                 " fix (bug-ea31641c): restart vpt-stream on that host under its lease, not changed")
+            elif cap['capture'] == 'black' and e['kind'] == 'file':
+                # A looping clip is not a channel: the source frame is only compared for HLS channels (the first frame of a
+                # file says nothing about the frame the tile shows), so the capture side is not proven (2026-11-13).
+                row['action'] = ("report: the tile's snapshot is black: a dark frame of the looping clip itself, not a dead"
+                                 " stream (the capture side is not proven: the source frame is only compared for HLS channels),"
+                                 " not changed")
+            else:
+                row['action'] = (f"report: the source plays but the tile's snapshot is {cap['capture']}"
+                                 + (f" ({cap['age']} s old)" if cap['capture'] == 'stale' and cap.get('age') is not None else '')
+                                 + ": host capture side (vpt-stream / thumbnails), not changed")
         elif src_ok and not black_src:
             row['action'] = ('none' if r['status'] == 'ok' or cap['capture'] == 'ok'
                              else 'report: cannot verify from codebox (no ssh alias, no host snapshot)')

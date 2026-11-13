@@ -349,6 +349,18 @@ test('the tile snapshot is checked too: a black or stale host capture of a playi
   assert.equal(w.posts.length, 0);
 });
 
+test('a file whose tile snapshot is black is not blamed on the capture side (the source frame is only compared for HLS channels)', async () => {
+  const w = await world({ pool: POOL, snapshots: { 'cap-Clip36': 'BLACK', 'cap-BFM2': 'BLACK' }, devices: {
+    DEVICE1: { ...dev('Clip 36', '/var/lib/vpt-movies/36_elephants_12.mp4'), DEVICE_MODEL: 'rtsp_video' },
+    DEVICE2: { ...dev('BFM2', 'https://cdn.example/good/bfm2.m3u8'), DEVICE_MODEL: 'rtsp_video' } } });
+  const r = await py(REPLACE, ['--mode', 'live'], w.E);
+  w.close();
+  assert.match(r.stdout, /DEVICE1\s+file\s+ok -> report: the tile's snapshot is black: a dark frame of the looping clip itself, not a dead stream/, r.stdout);
+  assert.doesNotMatch(r.stdout, /DEVICE1[^\n]*host capture side/, 'a file must not be blamed on the capture side: no source frame was compared');
+  assert.match(r.stdout, /DEVICE2\s+hls\s+ok -> report: the source plays but the tile's snapshot is black: host capture side/, r.stdout);
+  assert.equal(w.posts.length, 0);
+});
+
 test('a channel whose own picture is black: reported while capture checks are dry, repaired from the lists once live', async () => {
   const devices = () => ({ DEVICE1: { ...dev('FR News 1 — Dark News', 'https://cdn.example/good/blacksrc.m3u8'), DEVICE_MODEL: 'rtsp_video' } });
   const lists = (w) => { const d = path.dirname(w.E.RTSP_POOL_FILE); writeFileSync(path.join(d, 'l.m3u'),
