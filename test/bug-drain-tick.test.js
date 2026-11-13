@@ -6,7 +6,7 @@ import http from 'node:http';
 import { mkdtempSync, readFileSync, writeFileSync, chmodSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { plan, rank, stats, skipReason, isSmall, impactOf, isOwnerOnly, tick, brief, hostsOf, reachableFrom } from '../scripts/bug-drain-tick.js';
+import { cannotStart, plan, rank, stats, skipReason, isSmall, impactOf, isOwnerOnly, tick, brief, hostsOf, reachableFrom } from '../scripts/bug-drain-tick.js';
 
 const NOW = Date.parse('2026-11-11T12:00:00Z');
 const ago = (h) => new Date(NOW - h * 3600e3).toISOString();
@@ -163,4 +163,15 @@ test('tick journal lists owner-only and unreachable ids', async () => {
     assert.deepEqual(r.line.started.map((s) => s.id), ['bug-79a8e46a']);
     assert.deepEqual(JSON.parse(readFileSync(path.join(state, 'bug-drain', 'journal.jsonl'), 'utf8')).ownerOnly, ['bug-1490e2fe']);
   } finally { f.srv.close(); }
+});
+
+test('a blocking bug from a live filer is drainable at once; cannotStart names blocking bugs the drain did not start, once', () => {
+  const live = new Set(['alice-session']);
+  assert.equal(skipReason(bug({ session: 'alice-session', at: ago(0.1), blocking: true }), { live, now: NOW }), '');
+  const a = bug({ blocking: true, why: 'owner-floor' }), b = bug({ blocking: true }), c = bug();
+  const p = P([a, b, c]);
+  const out = cannotStart({ considered: [a, b, c], p, startedIds: new Set() });
+  assert.deepEqual(out.map((x) => x.id).sort(), [a.id, b.id].sort());          // a: owner-only; b: planned but dry mode (nothing started)
+  assert.match(out.find((x) => x.id === a.id).why, /owner-only/);
+  assert.deepEqual(cannotStart({ considered: [a, b], p, startedIds: new Set([b.id]), already: new Set([a.id]) }), []);
 });

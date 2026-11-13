@@ -43,3 +43,10 @@ by a worker (`resolvedBy` bug-drain*), and other.
 
 Rollback: `systemctl --user disable --now ghosty-bug-drain.timer && rm ~/.config/systemd/user/ghosty-bug-drain.{service,timer} && systemctl --user daemon-reload`.
 Dry run by hand: `node scripts/bug-drain-tick.js --dry`.
+
+## Blocking bugs (bug-67c65223, 2026-11-13)
+
+A blocking filing goes to the drain first: the server runs `node scripts/bug-drain-tick.js --bug <id>` 3 s after it (`GHOSTY_BUG_DRAIN_ON_BLOCKING=0` switches it off).
+A blocking bug of a live filer is not held for the 2 h send-back window. The manager is not woken by the filing (the event filter defers every `kind: bug`); it gets one
+urgent `bug-drain-cannot:<id>` line only when the tick could not start a worker (owner-only, host not reachable, claimed, dry mode, quota, disk, cbsession error),
+once per bug (`<state>/bug-drain/escalated.txt`). While `mode` is `dry` every blocking bug therefore still reaches the manager, through that line.

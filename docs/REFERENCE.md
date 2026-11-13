@@ -2065,6 +2065,18 @@ bug-2f32e7a7, bug-8fc8fc0d, bug-03ccc6a7, bug-80bdcdc1 · unverified: none · bu
   ` (deleted)`. AGENTS.md tells a session to remove its worktree once its work landed, so 21 of 52 sessions were invisible to every done check (leftovers,
   honesty, Verification, the goal question): `zap-nodes-restore` wrote three done lines with open leftovers and was never asked. The skip is gone; the git
   check finds no repository there and says nothing. Check (B) leftovers now also keeps to done turns under 6 h, like (C) / (F) / (H).
+- **Wake share to 25% (owner, 2026-11-13, TASK-239 G6, bug-67c65223)**: (1) `stop-answer.js` + `stopAnswerTick` (server.js, every 60 s): a stop event (`asks`,
+  `needs-manager`, a `<session> asks:` manager item) older than 10 min with no `send` by `manager-agent` to that session in `stalls.jsonl` and no
+  `manager-actions.jsonl` line naming it is typed to the manager once (pending-wakes key `stopans:<event key>@<at>`, up to 5 stops per text). (2) The 36
+  "own background job" empty wakes of 2026-11-12 (`task_done`, summary not `manager-wait.sh`) were the manager's `<ledger echo | curl send>; manager-wait.sh`
+  chains: the 160-char summary cut the tail, so they looked like a job of its own finishing. `manager-wakes.js` now marks them `waitChain: true` and keeps
+  `... manager-wait.sh` as the summary tail; they are wait wakes (100 empty of 165 on 2026-11-12) and fall with the filter and with answered stops.
+  (3) Scorecard S7 counts only wakes the harness caused; owner and peer-message wakes are row S7c (virtualpytest `scripts/agent/harness_scorecard.py`).
+  (4) A blocking bug filing no longer wakes the manager (the filter defers every `kind: bug`): the server runs `scripts/bug-drain-tick.js --bug <id>` 3 s
+  after it (a blocking bug of a live filer is drainable at once); a blocking bug the tick cannot start (owner-only, host unreachable, dry mode, quota, no
+  worker started) becomes one urgent `bug-drain-cannot:<id>` line, once per bug (`<state>/bug-drain/escalated.txt`). Off switch `GHOSTY_BUG_DRAIN_ON_BLOCKING=0`.
+  Replay `python3 scripts/manager-wake-rules-replay.py 2026-11-12` after these: harness-caused 73 of 138 empty (53%): 40 after a stop, 33 noise;
+  with every stop answered 33 of 138 (24%). Owner/peer wakes: 18 of 39 empty, own row.
 - **One stop = one manager event (2026-11-12, TASK-239 G6)**: one session stop reached the manager as `<s>:asks` and as a `lease|deploy:...:manager-item`
   ("<s> asks: ..."), each again with or without the `· 22s · 1.1M tok ·` segment or backticks: up to four wakes. `scripts/manager-event-filter.sh` keys a stop
   as `stop|<session>|<first 40 characters of the text without those>`, deduped across runs for 6 h. Deferred (`d: true`, delivered with the next wake or after

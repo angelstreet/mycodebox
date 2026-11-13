@@ -187,6 +187,7 @@ import { createAskFold } from './ask-fold.js';
 import { createAskGuard } from './ask-guard.js';
 import { createOwnJobs, jobPids, parkedDeps } from './own-jobs.js';
 import { createScriptRunSource } from './wait-ids.js';
+import { findUnanswered, reminderText, MAX_PER_PUSH as STOP_ANSWER_MAX } from './stop-answer.js';
 import { createPendingWakes, MAX_ATTEMPTS as MAX_PENDING_ATTEMPTS } from './pending-wakes.js';
 import { createExternalResult } from './external-result.js';
 import { createIntegrationNotify, integrationDigestEnabled, isQuietState } from './integration-notify.js';
@@ -867,6 +868,13 @@ const bugSendBacks = new Map();   // session -> send-back timestamps (cap per ho
 const foundBugs = createFoundBugs({ stateDir: STATE_DIR, onNew: async (b) => {
   alert(`${b.session}:bug`, { title: `${b.session}: ${b.blocking ? 'BLOCKING bug' : 'bug'} found: ${b.title}`, body: [b.endpoint, b.error].filter(Boolean).join(' · ') || b.title,
     url: `/?s=${encodeURIComponent(b.session)}`, priority: b.blocking ? 'high' : 'low', ntfyTags: 'bug', meta: { bug: { id: b.id, title: b.title, endpoint: b.endpoint, blocking: b.blocking, why: b.why, ...(b.test ? { test: true } : {}) } } }, 0);
+  // bug-67c65223: a blocking filing goes to the bug drain first (it claims and starts a worker when it can); the manager hears of it
+  // only through a `bug-drain-cannot` line when the drain cannot start it. Test reports and the GHOSTY_BUG_DRAIN_ON_BLOCKING=0 switch skip it.
+  if (b.blocking && !b.test && process.env.GHOSTY_BUG_DRAIN_ON_BLOCKING !== '0') {
+    setTimeout(() => execFile(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), 'scripts', 'bug-drain-tick.js'), '--bug', b.id, '--json'],
+      { env: { ...process.env, GHOSTY_STATE_DIR: STATE_DIR, GHOSTY_URL: `http://127.0.0.1:${PORT}` }, timeout: 300000 },
+      (err) => { if (err) console.error('[found-bugs] drain for', b.id, String(err.message).slice(0, 200)); }), 3000).unref?.();
+  }
   // fix-first (owner, 2026-11-11): a small-looking bug from a live session goes back to it once (kept for its next stop, <= 4 per session per hour)
   try {
     if (sendBackOf(b) && (await listPanes()).has(b.session)) {
@@ -893,6 +901,26 @@ const askGuard = createAskGuard({
     url: '/', priority: 'high',
   }).catch((e) => console.error('[manager-events]', e.message)),
 });
+// Last 400 KB of a jsonl file, parsed (a tick every minute must not read the whole ledger).
+async function jsonlTail(file, bytes = 400 * 1024) {
+  try {
+    const st = await stat(file), fh = await openFile(file, 'r');
+    try { const len = Math.min(st.size, bytes), buf = Buffer.alloc(len); await fh.read(buf, 0, len, st.size - len);
+      return buf.toString('utf8').split('\n').slice(st.size > len ? 1 : 0).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); } finally { await fh.close(); }
+  } catch { return []; }
+}
+// A session stop the manager was woken for and left with no message and no decision line is sent back to it once (stop-answer.js).
+async function stopAnswerTick() {
+  const mgr = loadManagerSessions()[0];
+  if (!mgr) return;
+  const [events, sends, actions] = await Promise.all([jsonlTail(join(STATE_DIR, 'manager-events.jsonl')), jsonlTail(LOG_FILE), jsonlTail(join(STATE_DIR, 'manager-actions.jsonl'))]);
+  const list = findUnanswered({ events, sends, actions, done: { has: (k) => pendingWakes.seen(`stopans:${k}`) } });
+  if (!list.length) return;
+  const first = list.slice(0, STOP_ANSWER_MAX);
+  const r = pendingWakes.add({ session: mgr, key: `stopans:${first[0].key}`, text: reminderText(first), by: 'stop-answer' });
+  for (const u of first.slice(1)) pendingWakes.markDone(`stopans:${u.key}`);
+  logEvent({ type: 'stop-answer-reminder', session: mgr, stops: first.map((u) => u.session), queued: !!r?.queued });
+}
 const askGuardSeen = new Map();   // manager session -> reply hash already checked
 const sessionMeta = createSessionMeta({ file: join(STATE_DIR, 'sessions.json') });
 const history = createSessionHistory({ file: join(STATE_DIR, 'session-history.jsonl'), missMs: 2 * Number(process.env.TICK_MS || 1000) });   // start/end log of sessions; open instances are rebuilt from the file at boot
@@ -3414,6 +3442,7 @@ server.listen(PORT, HOST, async () => {
   });
   setInterval(jevBreakerTick, 15000).unref?.();
   startWakesLogger({ stateDir: STATE_DIR });   // keeps manager-wakes.jsonl current (it silently stopped 2026-10-04)
+  setInterval(() => stopAnswerTick().catch((e) => console.error('[stop-answer]', e.message)), 60000).unref?.();   // a stop the manager left unanswered is sent back once (stop-answer.js)
   setInterval(() => wakeOutcomeTick().catch((e) => console.error('[wake-outcome]', e.message)), 60000).unref?.();
   setInterval(quotaTick, 60000);
   setInterval(() => {   // tell the owner before the window is gone: one session past sharePct of the window's calls

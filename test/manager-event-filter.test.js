@@ -151,14 +151,14 @@ test('policy: ignore drops before the built-in rules, pass keeps a line a built-
   assert.deepEqual(flags(r), [['lease', false], ['leftovers', true], ['asks', true], ['deploy', true]]);
 });
 
-test('policy: without an owner file the defaults apply (asks urgent, leftovers not); a blocking bug and a high-priority line are urgent by themselves; a malformed owner file is ignored', () => {
+test('policy: without an owner file the defaults apply (asks urgent, leftovers not); a high-priority line is urgent by itself and a bug filing (blocking too: the bug drain gets it first) is only deferred; a malformed owner file is ignored', () => {
   const dir = tmp('ghosty-filt-');
   const env = { ...process.env, GHOSTY_STATE_DIR: dir };
   const left = ev({ key: 'w:leftovers', kind: 'leftovers', session: 'w', body: 'left' });
   const bug = ev({ key: 'w:bug', kind: 'bug', session: 'w', body: 'b', bug: { blocking: true } });
   const bug2 = ev({ key: 'x:bug', kind: 'bug', session: 'x', body: 'b2', bug: { blocking: false } });
   const high = ev({ key: 'integration:int-9:merged', kind: 'int-9:merged', session: 'integration', priority: 'high', body: 'm' });
-  assert.deepEqual(flags(run(env, left + bug + bug2 + high + asksLine)), [['leftovers', false], ['bug', true], ['bug', false], ['int-9:merged', true], ['asks', true]]);
+  assert.deepEqual(flags(run(env, left + bug + bug2 + high + asksLine)), [['leftovers', false], ['bug', false], ['bug', false], ['int-9:merged', true], ['asks', true]]);
   const dir2 = tmp('ghosty-filt-');                       // a fresh state dir: the asks line above is in the first dir's cross-run dedupe
   mkdirSync(dir2, { recursive: true });
   writeFileSync(join(dir2, 'manager-event-policy.json'), '{ not json');
@@ -236,14 +236,15 @@ test('disk / quota under 95%: once per 5-point bucket across runs; 95% and over 
   assert.equal(keysOf(run(env, q(84))).length, 0);
 });
 
-test('a non-blocking bug filing is marked deferred (d); a blocking or high-priority one is not', () => {
+test('every bug filing is marked deferred (d), a blocking one too (bug-67c65223); the drain `bug-drain-cannot` line is urgent', () => {
   const dir = tmp('ghosty-filt-'); const env = { ...process.env, GHOSTY_STATE_DIR: dir };
   const r = run(env, ev({ key: 'a:bug', kind: 'bug', session: 'a', title: 'a: bug found: x', body: 'b1', priority: 'default', bug: { blocking: false } })
     + ev({ key: 'b:bug', kind: 'bug', session: 'b', title: 'b: BLOCKING bug found: y', body: 'b2', priority: 'default', bug: { blocking: true } })
     + ev({ key: 'c:bug', kind: 'bug', session: 'c', title: 'c: bug found: z', body: 'b3', priority: 'high', bug: { blocking: false } })
+    + ev({ key: 'bug-drain-cannot:bug-1', kind: 'bug-drain-cannot', session: 'b', title: 'blocking bug-1 not started by the drain: x', body: 'b4', priority: 'high' })
     + ev({ key: 'web:asks', kind: 'asks', session: 'web', body: 'Which one?' }));
   const o = r.stdout.split('\n').filter(Boolean).map((l) => JSON.parse(l));
-  assert.deepEqual(o.map((x) => [x.l.key, x.d, x.u]), [['a:bug', true, false], ['b:bug', false, true], ['c:bug', false, true], ['web:asks', false, true]]);
+  assert.deepEqual(o.map((x) => [x.l.key, x.d, x.u]), [['a:bug', true, false], ['b:bug', true, false], ['c:bug', true, false], ['bug-drain-cannot:bug-1', false, true], ['web:asks', false, true]]);
 });
 
 // one stop = one event; a blocked stop that is a wait and the low-action notices are deferred (2026-11-12, TASK-239 G6)
