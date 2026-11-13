@@ -16,6 +16,7 @@ One **integration lane per repository**, run by the mycodebox server, fed by eve
 
 1. **Sessions are developers.** A session commits on its own branch, pushes the branch, and hands off:
    `integrate request <branch> [--repo <name>] [--deploy frontend|server|host|full] [--note ...]`. It prints a request id.
+   Before queueing, the script compares a local `<branch>` with origin's: unpushed commits, or a branch origin does not have, are refused (`--no-push-check` / `INTEGRATE_NO_PUSH_CHECK=1` skips it; 2026-11-13). A branch already on the target is reported as "nothing new: … no commit of yours was merged", never as a merge.
    The session ends its turn with `STATUS: waiting: integration <id>` (or keeps working on something else). It never
    merges into the target, pushes the target or runs the deploy script itself.
 2. **The lane integrates, one request at a time per repo**, in its own clone (never a session's checkout):
