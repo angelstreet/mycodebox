@@ -6,6 +6,16 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A refused lease and a failed apply step are no longer the same thing** — the nightly report and the journal tell them apart
+  (`lease_not_granted` / `apply_failed`): a claim the lease CLI refused touched nothing and is retried at the end of the night, while
+  an apply step that died after the lease was granted is reported as such (the host may be half-changed), so the reader and the retry
+  no longer go after the wrong cause · area: rtsp-nightly
+- **A busy host lease no longer costs the night a stream** — the first lease wait is short (5 min) and a repair the lease blocked is
+  retried at the end of the night with the long wait (20 min), reusing the source that was already probed: the nightly no longer
+  gives up on a host another session is holding · area: rtsp-nightly
+- **A film that opens on a black leader is not a dead stream** — the probe looks past the leader before it calls a picture frozen,
+  and the nightly deletes its scratch file after the apply step: a healthy movie is no longer reported as broken, and the state dir
+  no longer fills up night after night · area: rtsp-nightly
 - **A night that finds nothing now says how much it looked at** — the nightly report carries `hosts` (`walked`: the hosts the
   servers listed, `read`: the hosts whose config answered), so "no rtsp devices found" can no longer be read as an empty inventory:
   15 hosts walked and 15 read is a fleet without an RTSP source, while 15 walked and 14 read is a host that did not answer ·
