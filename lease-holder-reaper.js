@@ -73,11 +73,14 @@ export function unusedGrants(rows, tickets, { sessionNames = [], activityOf = ()
 }
 
 // Pure. -> [{ id, agent, session, idleMin, sinceMs }] exclusive leases of an idle live codebox session; the caller still asks hasLiveJob before acting.
-export function idleHolders(rows, { sessionNames = [], activityOf = () => null, now = Date.now(), idleMs = IDLE_RELEASE_MS } = {}) {
+export function idleHolders(rows, { sessionNames = [], activityOf = () => null, now = Date.now(), idleMs = IDLE_RELEASE_MS, host = os.hostname() } = {}) {
   const out = [];
   if (!(idleMs > 0)) return out;
   for (const l of rows || []) {
-    if (l.mode !== 'exclusive' || l.system || l.deploy_id || l.holder_pid != null || SYSTEM_RE.test(l.agent || '')) continue;
+    if (l.mode !== 'exclusive' || l.system || l.deploy_id || SYSTEM_RE.test(l.agent || '')) continue;
+    // every CLI claim carries a holder_pid (the claiming process, on this host): that is not a dispatcher. Only a pid on another host cannot be observed here
+    // (2026-11-13: skipping any holder_pid meant no CLI-claimed lease was ever idle-released). A running script is protected by hasLiveJob and the heartbeat.
+    if (l.holder_pid != null && l.holder_host && l.holder_host !== host) continue;
     const m = /^codebox:(.+)$/.exec(l.agent || '');
     if (!m || !sessionNames.includes(m[1])) continue;
     let act; try { act = activityOf(m[1]); } catch { act = null; }
