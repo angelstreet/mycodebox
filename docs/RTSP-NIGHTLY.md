@@ -257,8 +257,10 @@ rolled back or a camera is down, and files `found-bug` for a camera down or a ro
 - The nightly now reads **both** pictures of a tile before calling one black (bug-6b227d92, fixed and merged the same
   night): a dry validation run against the fleet turned `lenovo-local-hd/DEVICE9` (thumbnail luma 19, live video 33) into a
   note instead of a false alarm, while `lenovo-local-low/DEVICE36` (12 / 19) and `vpt-nipogi/DEVICE31` (0 / 16) stayed black,
-  which is what they are. A black verdict now needs three signals to agree (dark thumbnail, dark live video, black source
-  frame), so the capture-driven repair is more conservative than before, never less.
+  which is what they are. The browser confirms the note: on hover `PD Movie 9 — Häxan (1922)` plays (`readyState` 4, the clock
+  advances ~3.2 s) and shows the film (22.7% of the picture above the luma threshold), so the dark thumbnail was a dark moment
+  of the clip. A black verdict now needs three signals to agree (dark thumbnail, dark live video, black source frame), so the
+  capture-driven repair is more conservative than before, never less.
 - The pool was not touched: re-probed from `vpt-pi4` (the host that runs `vpt-rtsp`), `smoke` still plays (h264 640x360) and the
   three public candidates still time out on port 554, so nothing new is vetted (bug-c7c2bb0e, still `wontfix`).
 
