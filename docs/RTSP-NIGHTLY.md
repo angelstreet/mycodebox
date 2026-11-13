@@ -217,6 +217,27 @@ rolled back or a camera is down, and files `found-bug` for a camera down or a ro
   public candidates still time out on port 554 from `vpt-pi4` and from codebox, so nothing new is vetted (bug-c7c2bb0e,
   bug-6b79b048).
 
+### Night of 2026-11-13 (live, run by the nightly session)
+
+103 streams checked, **93 ok, 10 down**, **0 replaced**, 0 rolled back, 0 cameras down, 0 unverified. 16 hosts walked, 16 read,
+**no inventory error** (every server and every host answered the host-config GET).
+
+- The 10 down: 8 devices with an empty source (`vpt-nipogi` DEVICE4, 5, 6, 17, 22, 23, 24 and `vpt-pi4` DEVICE2; reported by
+  name, never changed) and 2 live channels that timed out once and played on the confirming re-probe (`vpt-nipogi` DEVICE10 and
+  DEVICE27, both `jmp2.uk`; nothing touched). Nothing was really down, so nothing had to be replaced and the pool was never used.
+- 103 streams and 16 hosts instead of 99 and 15: `vpt-lenovo1` now carries 3 file devices (`eggs_loop`, `cars_loop`,
+  `tennis_analytics_loop`).
+- What the app shows (tile snapshots): 94 ok, 2 black, 6 unknown, 1 missing.
+  - **No `multi_audio` tile left**: the 10 tiles of 2026-11-12 (`vpt-lenovo5`, `vpt-lenovo6`, `vpt-nipogi`) all read `ok`, and no
+    device carries more than one audio track any more. The host-side fix of bug-ea31641c has landed everywhere, so no
+    `vpt-stream` restart was needed tonight.
+  - The 2 black: `vpt-nipogi/DEVICE31` (`FR Series — MDL`) is black for good (host snapshot and source frame, luma 0; bug-de449145
+    still open, `capture-mode` still `dry`, so the nightly reports it and changes nothing), and `lenovo-local-low/DEVICE36` was
+    black at 05:48 (luma 14) and bright again a few minutes later (luma 85): the transient black frame of the capture side
+    (bug-9b0cd7b5), and the same night the black reading had moved to `lenovo-local-low/DEVICE23` (luma 31).
+- The pool was not touched: re-probed from `vpt-pi4` (the host that runs `vpt-rtsp`), `smoke` still plays (h264 640x360) and the
+  three public candidates still time out on port 554, so nothing new is vetted (bug-c7c2bb0e, still `wontfix`).
+
 Two things the night of 2026-11-11 left open were closed on 2026-11-12 (both with tests):
 
 - The **end-of-night retry** of a repair the first lease wait did not get was verified for real: the real `vpt-lease` CLI against
