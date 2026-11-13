@@ -118,7 +118,7 @@ through the device's own server (the same path the browser uses, the auto-sign t
 | capture | Meaning | What the job does |
 |---|---|---|
 | `ok` | fresh (≤ `RTSP_STALE_SECONDS`, 120 s) and not black | nothing; it also turns an `unverified` file device into a checked one |
-| `black` | even the bright part is dark: 90th-percentile luma (ffmpeg `signalstats` YHIGH) under `RTSP_BLACK_LUMA` (32) on **three snapshots 10 s apart**. Not the mean: a dark, letterboxed Sintel scene averaged under 24 and was called black | the source frame is measured too: source bright = the host's capture is wrong, **reported**; source black too = the channel itself is black, **repaired from the lists** like a dead channel (only when `capture-mode` is `live`) |
+| `black` | even the bright part is dark: 90th-percentile luma (ffmpeg `signalstats` YHIGH) under `RTSP_BLACK_LUMA` (32) on **three snapshots 10 s apart**. Not the mean: a dark, letterboxed Sintel scene averaged under 24 and was called black | the source frame is measured too, **for an HLS channel** (the first frame of a file says nothing about the frame the tile shows): source bright = the host's capture is wrong, **reported**; source black too = the channel itself is black, **repaired from the lists** like a dead channel (only when `capture-mode` is `live`). A **file** is only reported, never blamed on the capture side: a dark frame of a looping clip is not a dead stream (2026-11-13) |
 | `stale` | older than 120 s | reported: the host stopped writing it (capture side) |
 | `multi_audio` | the host stream's newest segment (`segments/output.m3u8`, what the live player loads) carries more than one audio track | reported: hls.js buffers nothing, the live tile is black while the snapshot is fine. Fixed on the host 2026-11-12 (bug-ea31641c, virtualpytest 0d73213: `run_ffmpeg.sh` maps one usable audio track); a host still showing it runs the old script: restart `vpt-stream` there under the host lease (a host deploy does not restart it) |
 | `missing` / `unreachable` | 404, or the server did not answer after 3 tries | reported |
@@ -231,10 +231,18 @@ rolled back or a camera is down, and files `found-bug` for a camera down or a ro
   - **No `multi_audio` tile left**: the 10 tiles of 2026-11-12 (`vpt-lenovo5`, `vpt-lenovo6`, `vpt-nipogi`) all read `ok`, and no
     device carries more than one audio track any more. The host-side fix of bug-ea31641c has landed everywhere, so no
     `vpt-stream` restart was needed tonight.
-  - The 2 black: `vpt-nipogi/DEVICE31` (`FR Series — MDL`) is black for good (host snapshot and source frame, luma 0; bug-de449145
-    still open, `capture-mode` still `dry`, so the nightly reports it and changes nothing), and `lenovo-local-low/DEVICE36` was
-    black at 05:48 (luma 14) and bright again a few minutes later (luma 85): the transient black frame of the capture side
-    (bug-9b0cd7b5), and the same night the black reading had moved to `lenovo-local-low/DEVICE23` (luma 31).
+  - The 2 black, opened in the browser (hover, live layer):
+    - `vpt-nipogi/DEVICE31` (`FR Series — MDL`) is black for good: the host snapshot and the source frame are black (luma 0)
+      and the browser shows the same black picture with the station logo. bug-de449145 is still open, `capture-mode` is still
+      `dry`, so the nightly reports it and changes nothing.
+    - `lenovo-local-low/DEVICE36` was black at 05:48 (luma 14) and bright again a few minutes later (luma 85), the black
+      reading having moved to `lenovo-local-low/DEVICE23` (luma 31): a dark frame of a looping clip, not a dead stream
+      (bug-9b0cd7b5). Both tiles play live on hover in the browser (`readyState` 4, the clock advances ~3 s) and show the
+      clip's own content (a film frame, then its dark credits). The nightly judges "black" on the thumbnail alone, and a
+      looping clip moves: the thumbnail is one moment of it, the live tile another.
+    - `BFM2` (`vpt-lenovo5/DEVICE1`) plays its source and its snapshot is bright, but its live tile is still black in the
+      browser (`readyState` 1, the clock runs): the known audio/video drift of bug-c54ea30f, not the multi_audio of
+      bug-ea31641c (the host segment now carries one audio track).
 - The pool was not touched: re-probed from `vpt-pi4` (the host that runs `vpt-rtsp`), `smoke` still plays (h264 640x360) and the
   three public candidates still time out on port 554, so nothing new is vetted (bug-c7c2bb0e, still `wontfix`).
 
