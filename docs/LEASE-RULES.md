@@ -132,7 +132,7 @@ Hours were lost waiting on one web host while the other was free. When the work 
   **Idle release (owner 2026-11-11, TASK-239 item 3):** an exclusive lease of a live `codebox:<session>` whose session sits at its prompt (not
   working; no turn, prompt, heartbeat or grant) for 10 minutes (`GHOSTY_IDLE_RELEASE_MIN`, `0` = off) is released on 2 polls
   (`--reason "idle-release: ..."`, `lease-actions.jsonl` `type: idle-release`) and the session is told how to claim again. Never when the session has a
-  background task, a cron, a pane task or a child process of its agent, nor for a lease with a holder pid, a pin, a deploy or a Mac holder. Switch:
+  background task, a cron, a pane task or a child process of its agent, nor for a lease whose holder pid is on another host, a pin, a deploy or a Mac holder (a CLI claim carries a holder pid on this host and does qualify). Switch:
   `manager.json` `leaseIdleRelease` `"dry"` (code default: journal `dryRun:true` only) | `"live"` | `"off"`; live on codebox since 2026-11-12 00:55 UTC. Replay a day against the session transcripts:
   `node scripts/lease-idle-replay.js --day <date> --min 10` (2026-11-11: 7 idle events, 0 wrong). **A stop on `STATUS: waiting`/`blocked` with a live
   ticket while a healthy equivalent is free** is answered at once (3 s and 25 s after the stop) with the exact claim command (`lease-nudge.js` `answerStop`).

@@ -128,7 +128,7 @@ test('idleHolders: an idle live session is listed with its idle minutes; the ref
   assert.equal(idleHolders([idleRow()], idleOpts({ activityOf: () => act({ turnAt: NOW_MS - 2 * 60000 }) })).length, 0, 'recent turn');
 });
 test('idleHolders: never working, unknown, closed, pinned, system, deploy, pid or mac holders', () => {
-  const rows = [idleRow({ id: 'a', agent: 'codebox:gone' }), idleRow({ id: 'b', mode: 'pin' }), idleRow({ id: 'c', system: true }), idleRow({ id: 'd', deploy_id: 'x' }), idleRow({ id: 'e', holder_pid: 5 }), idleRow({ id: 'f', agent: 'mac:laptop' })];
+  const rows = [idleRow({ id: 'a', agent: 'codebox:gone' }), idleRow({ id: 'b', mode: 'pin' }), idleRow({ id: 'c', system: true }), idleRow({ id: 'd', deploy_id: 'x' }), idleRow({ id: 'e', holder_pid: 5, holder_host: 'proxmox' }), idleRow({ id: 'f', agent: 'mac:laptop' })];
   assert.equal(idleHolders(rows, idleOpts()).length, 0);
   assert.equal(idleHolders([idleRow()], idleOpts({ activityOf: () => act({ working: true }) })).length, 0);
   assert.equal(idleHolders([idleRow()], idleOpts({ activityOf: () => null })).length, 0);
@@ -167,4 +167,9 @@ test('idle release: a live background job, or an unknown one, blocks it; mode of
   const off = idleHarness('off');
   for (let i = 0; i < 4; i++) await off.r.poll();
   assert.equal(off.rel().length, 0);
+});
+
+test('idleHolders: a CLI claim carries holder_pid on this host and is still idle-released (2026-11-13 production proof); another host is not', () => {
+  assert.equal(idleHolders([idleRow({ holder_pid: 2214285, holder_host: 'codebox', holder_src: 'claim' })], idleOpts({ host: 'codebox' })).length, 1);
+  assert.equal(idleHolders([idleRow({ holder_pid: 9, holder_host: 'proxmox' })], idleOpts({ host: 'codebox' })).length, 0);
 });
