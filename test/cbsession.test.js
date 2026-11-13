@@ -90,3 +90,20 @@ test('every launcher exports the lease agent name for the MCP X-Agent-Name heade
   assert.equal(r.status, 0, r.stderr);
   assert.match(launch('cb-agentname'), /\nexport VPT_AGENT_NAME=[A-Za-z0-9_-]+:cb-agentname\n/);
 });
+
+test('no workers by default: prompt rule, -K opt-in, refusal from a session without -K', () => {
+  let r = run('-x', '-n', 'cb-nw', '-d', work, '-t', 'x');
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(fs.readFileSync(path.join(home, 'handovers', 'cb-nw.prompt.md'), 'utf8'), /\*\*No workers\*\*/);
+  assert.match(launch('cb-nw'), /export CBSESSION_PARENT=cb-nw\n/);
+  assert.match(launch('cb-nw'), /CBSESSION_WORKERS_OK=\n/);
+  r = run('-x', '-n', 'cb-w', '-d', work, '-K', '-t', 'x');
+  assert.match(fs.readFileSync(path.join(home, 'handovers', 'cb-w.prompt.md'), 'utf8'), /\*\*Workers\*\*/);
+  assert.match(launch('cb-w'), /export CBSESSION_WORKERS_OK=1\ncd /);
+  const env = (extra) => ({ PATH: process.env.PATH, HOME: home, GHOSTY_STATE_DIR: path.join(home, 'state'), ...extra });
+  const go = (extra, ...a) => spawnSync('bash', [SCRIPT, ...a], { encoding: 'utf8', env: env(extra) });
+  r = go({ CBSESSION_PARENT: 'boss' }, '-x', '-n', 'cb-c1', '-d', work, '-t', 'x');
+  assert.equal(r.status, 2); assert.match(r.stderr, /was not started with workers allowed/);
+  assert.equal(go({ CBSESSION_PARENT: 'boss', CBSESSION_WORKERS_OK: '1' }, '-x', '-n', 'cb-c2', '-d', work, '-t', 'x').status, 0);
+  assert.equal(go({ CBSESSION_PARENT: 'boss' }, '-x', '-A', '-n', 'cb-c3', '-d', work, '-t', 'x').status, 0);
+});

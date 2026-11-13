@@ -76,6 +76,11 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
 
 ## Working in the code
 
+- **No workers by default (owner, 2026-11-13).** A session does all the work itself: it does not start workers (`cbsession`, other
+  sessions, V2 tasks) or hand work to peers unless its brief or the owner says `workers: allowed` (`cbsession -K`). Sessions waited
+  hours on idle workers on easy tasks. The manager (and the workers it starts for the owner) is exempt. `cbsession` states the rule in
+  every prompt and refuses a start from a session that was not started with `-K` (`CBSESSION_PARENT` / `CBSESSION_WORKERS_OK`;
+  `-A` automation is exempt).
 - Node 20+, ES modules, one runtime dependency (`ws`). No build step: `server.js` serves `public/` as is.
 - Run `npm test` before you commit; it must pass. It runs only the tests your change touches (vs `origin/main`), and so
   does the integration lane on each merge. The full suite (`npm run test:full`) runs once a day on main as a daily check;

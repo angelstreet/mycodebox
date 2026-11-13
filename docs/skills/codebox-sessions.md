@@ -18,6 +18,7 @@ cbsession -n NAME -d DIR [-p claude|codex|minimax|opencode] [-m MODEL] (-H HANDO
 | `-m` | model: Claude `haiku`/`sonnet`/`opus`/`fable`/id; MiniMax `MiniMax-M3` (default and only MiniMax model); Codex model; OpenCode `provider/model` |
 | `-H` | handover file: the session reads it, summarises state and open items, proposes the next step, then waits |
 | `-f` / `-t` | prompt file (verbatim) / prompt text (with `-H` it adds an instruction) |
+| `-K` | workers allowed (owner 2026-11-13): sessions start no workers by default and `cbsession` refuses a start from such a session; pass `-K` only when the brief says `workers: allowed` |
 | `-x` | dry run: write the prompt and launch files, print them, start nothing |
 
 Environment: `MCODE_NODE_DIR` (Node bin dir put on `PATH` for `mcode`, default `$HOME/.local/node-v24.21.0-linux-x64/bin`),

@@ -23,6 +23,9 @@
 #       none at all = start refused (exit 2), except a -t one-liner or -A (an auto line + warning)
 #   -T  time box, e.g. "2 h" / "90 min" (else the brief's `Time box:`, else 2 h for a fix / bug* name, 6 h for a feature)
 #   -A  automation start (lane, bug-drain, nightly): accept a prompt without Done-when lines, with an auto line
+#   -K  workers allowed (owner 2026-11-13): the brief says this session may start workers; without it the prompt says "no workers" and
+#       the session cannot start one (cbsession called from a session started without -K is refused, exit 2; -A automation and
+#       callers outside cbsession sessions, i.e. the manager and the dashboard, are exempt)
 #   -w  worktree branch (default <type>/<name>: fix/ for BUG*, docs/ for docs*, else feat/; name lowercased)
 #   -N  no worktree: start in DIR itself
 #   -x  dry run: print the launch command (and the worktree step), start nothing
@@ -33,10 +36,10 @@
 # Env: MCODE_NODE_DIR (node bin dir for mcode), GHOSTY_STATE_DIR, GHOSTY_PORT (default $PORT or 7777) (to report the start to the dashboard history).
 set -euo pipefail
 q() { printf '%q' "$1"; }
-NAME= DIR= PROV=claude MODEL= BILL=sub HANDOVER= PFILE= TEXT= DRY=0 WAIT=0 WTB= NOWT=0 GOAL= TIMEBOX= AUTOMATION=0 DONEWHEN=()
-while getopts "n:d:p:m:b:H:f:t:w:g:D:T:ANxWh" o; do case $o in
+NAME= DIR= PROV=claude MODEL= BILL=sub HANDOVER= PFILE= TEXT= DRY=0 WAIT=0 WTB= NOWT=0 GOAL= TIMEBOX= AUTOMATION=0 WORKERS=0 DONEWHEN=()
+while getopts "n:d:p:m:b:H:f:t:w:g:D:T:ANKxWh" o; do case $o in
   n) NAME=$OPTARG;; d) DIR=$OPTARG;; p) PROV=$OPTARG;; m) MODEL=$OPTARG;; b) BILL=$OPTARG;; H) HANDOVER=$OPTARG;;
-  f) PFILE=$OPTARG;; t) TEXT=$OPTARG;; w) WTB=$OPTARG;; N) NOWT=1;; x) DRY=1;; W) WAIT=1;; g) GOAL=$OPTARG;; D) DONEWHEN+=("$OPTARG");; T) TIMEBOX=$OPTARG;; A) AUTOMATION=1;; *) sed -n 2,40p "$0"; exit 2;; esac; done
+  f) PFILE=$OPTARG;; t) TEXT=$OPTARG;; w) WTB=$OPTARG;; N) NOWT=1;; x) DRY=1;; W) WAIT=1;; g) GOAL=$OPTARG;; D) DONEWHEN+=("$OPTARG");; T) TIMEBOX=$OPTARG;; A) AUTOMATION=1;; K) WORKERS=1;; *) sed -n 2,40p "$0"; exit 2;; esac; done
 [[ $NAME =~ ^[A-Za-z0-9_-]{1,40}$ ]] || { echo "cbsession: -n NAME required (A-Z a-z 0-9 _ -, max 40)" >&2; exit 2; }
 [ -d "$DIR" ] || { echo "cbsession: -d DIR must be an existing directory" >&2; exit 2; }
 DIR=$(cd "$DIR" && pwd)
@@ -45,6 +48,10 @@ KF="$HOME/.config/anthropic/$BILL.key"
 if [ "$BILL" != sub ]; then
   [ "$PROV" = claude ] || { echo "cbsession: -b applies to -p claude only" >&2; exit 2; }
   [ -s "$KF" ] || { echo "cbsession: billing key $KF not found (one line, chmod 600)" >&2; exit 2; }
+fi
+# No workers by default (owner 2026-11-13): a session started by cbsession exports CBSESSION_PARENT (and CBSESSION_WORKERS_OK=1 with -K).
+if [ -n "${CBSESSION_PARENT:-}" ] && [ "${CBSESSION_WORKERS_OK:-}" != 1 ] && [ "$AUTOMATION" = 0 ]; then
+  echo "cbsession: refused: session '$CBSESSION_PARENT' was not started with workers allowed (owner 2026-11-13: a session does all the work itself). Do the work yourself; the owner or the brief must say 'workers: allowed' (cbsession -K) first." >&2; exit 2
 fi
 tmux has-session -t "=$NAME" 2>/dev/null && { echo "cbsession: tmux session '$NAME' already exists" >&2; exit 1; }
 
@@ -209,6 +216,8 @@ fi
 - **Done only with nothing open** (owner 2026-11-12): `done` needs `leftovers none` and `unverified none` in its closing review. A filed bug is not a finished task and an unverified item is a check not made: finish it, verify it, or end on the word that is true (`running`, `waiting`, `needs-manager`, `blocked`, `failed` with cause and plan). A bug outside the task goes in `bugs: reported <id>` and does not hold the line. A `done` line with anything open is sent back.
 - **Release note and bug record for shipped code** (owner 2026-11-13): after you merge code (not docs-only), the closing review's `docs` names the release-note entry you added (VirtualPyTest `docs/release_note/README.md`, mycodebox `docs/RELEASE-NOTES.md`; the done-check reads the merged diff, words alone do not count) or says `release note none needed: <reason>`. If the work fixed something, `bugs:` names the bug id (file it with `found-bug`, resolve it with `found-bug --resolve <id> --commit <integration id>`, then `bugs: fixed <id>`); `bugs: none` after a fix needs a reason. A done line without them is sent back once.
 GOAL_RULE
+  if [ "$WORKERS" = 1 ]; then printf '\n%s\n' '**Workers** (owner 2026-11-13): this brief allows workers (cbsession -K). Use them only where they save time, and never wait on an idle one: if a worker is idle for 10 min, do the work yourself.'
+  else printf '\n%s\n' '**No workers** (owner 2026-11-13): do all the work yourself. Do not start workers (cbsession, other sessions, V2 tasks) or hand work to peers unless this brief or the owner says "workers: allowed".'; fi
 } >> "$P"
 # -g GOAL: the explicit goal right under the first line (the done-check reads it: status-honesty.js goalOf)
 if [ -n "$GOAL" ]; then { head -n 1 "$P"; printf '\nGoal: %s\n' "$(printf '%s' "$GOAL" | tr '\n' ' ')"; tail -n +2 "$P"; } > "$P.tmp" && mv "$P.tmp" "$P"; fi
@@ -244,7 +253,7 @@ esac
 # ~/.local/bin on PATH for every provider: found-bug, integrate, vpt-lease live there (a tmux server started by a service has a bare PATH)
 # VPT_AGENT_NAME = the lease agent name (<host>:<session>, the vpt-lease agent): the virtualpytest MCP entry sends it as X-Agent-Name, so the host
 # lease guard knows which agent drives a device (bug-c6a65805). Same name as the agent's vpt-lease claims.
-printf '#!/usr/bin/env bash\nexport PATH="$HOME/.local/bin:$PATH"\nexport VPT_AGENT_NAME=%s:%s\ncd %s\n%s\n' "${VPT_AGENT_PREFIX:-$(hostname -s)}" "$NAME" "$(q "$DIR")" "$CMD" > "$L"; chmod +x "$L"
+printf '#!/usr/bin/env bash\nexport PATH="$HOME/.local/bin:$PATH"\nexport VPT_AGENT_NAME=%s:%s\nexport CBSESSION_PARENT=%s\nexport CBSESSION_WORKERS_OK=%s\ncd %s\n%s\n' "${VPT_AGENT_PREFIX:-$(hostname -s)}" "$NAME" "$NAME" "$([ "$WORKERS" = 1 ] && echo 1 || echo '')" "$(q "$DIR")" "$CMD" > "$L"; chmod +x "$L"
 if [ "$DRY" = 1 ]; then [ -n "$WTCMD" ] && echo "worktree: $WTCMD"; echo "prompt: $P"; echo "launch: $L"; cat "$L"; exit 0; fi
 
 # Claude: make sure the MCP entries carry the X-Agent-Name header (a no-op once set; best effort, never blocks a start).
