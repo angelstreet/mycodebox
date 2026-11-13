@@ -6,4 +6,11 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A black tile now needs both of its pictures dark** — the nightly reads the tile's thumbnail *and* the live video the browser
+  plays (the newest HLS segment, the brightest picture it holds), so a dark moment of a moving clip is reported as a note instead of
+  a dead stream, and a looping clip is never blamed on the capture side: the capture-driven repair now replaces a channel only when
+  thumbnail, live video and source frame all agree · area: rtsp-nightly
+- **The agent runtime's own process-group guard is no longer read as the session's job** — `own-jobs` treats an inline node module
+  (`node --input-type=module --eval`) as the runtime's infrastructure, like the `node -e` helper next to it: a STATUS word that merely
+  sits inside that command line ("live" in "keepalive", "table" in "system32") no longer pins a `done` line to `running` · area: harness
 - **Done-check asks for the release note and the bug record after a code fix** — a `STATUS: done` line after a merged code integration (not docs-only) whose diff has no release-note entry and whose closing review gives no `release note none needed: <reason>`, or whose fix names no bug id in `bugs:`, is sent back once with the two asks. In plain words: a shipped fix leaves a release note and a bug record without the owner asking · area: harness
