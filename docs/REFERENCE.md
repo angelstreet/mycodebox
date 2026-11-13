@@ -1793,6 +1793,9 @@ whose reply approves the plan around the question (round 9 `approvedAction`).
 - **Waiting on its own job** (`job-refs.js`, `own-jobs.js`): a STATUS `blocked` / `waiting` that names a pid, a log file, a run id or a deploy id is
   case `own_job_wait`, never shown as needs-you; the job is watched (deploy state, `/proc/<pid>` or the pane's process tree, a log file's mtime)
   and when it ends the session gets "your <job> finished at <time>, continue". A detached job (`nohup`, `setsid`, `disown`, `&`) is flagged in the feed.
+  The pane's process tree counts only the agent's children that are not shells or helpers; the agent runtime's own inline node module
+  (`node --input-type=module --eval`, its permanent process-group guard) is infrastructure, not session work (2026-11-13, bug-d2023d2f):
+  a STATUS word that merely sits inside that command line ("live" in "keepalive", "table" in "system32") must not pin a done line to `running`.
   Stale waits (owner, 2026-11-01, `wait-ids.js`): a script run / execution / task uuid (or an 8-hex prefix cut with `...`) is resolved with a read-only
   GET on the platform server (`/server/run-management/summary/script/<id>`, `JEV_URL` origin, `JEV_API_KEY`, `VPT_TEAM_ID`; never printed); an end state, or
   "running" longer than `maxRunMin` (120), wakes the session with "your run <id> ended <state> at <time> (<message>), continue". A lease ticket

@@ -29,7 +29,11 @@ export function descendants(pid, table, limit = 40) {
   return out;
 }
 // A shell or a short-lived helper the agent's own tools run is not "the job": only children whose command line is not a bare shell / sleep / ps.
-const HELPER_RE = /^(?:\S*\/)?(?:bash|zsh|sh|fish|dash|sleep|ps|tmux|cat|tail|head|grep|git|node -e|python3? -c)(?:\s|$)/;
+// The agent runtime's own permanent process-group guard is infrastructure, not session work: minimax-code spawns
+// `node --input-type=module --eval` at startup to kill its group when it disconnects, and a STATUS word that happens to sit inside that
+// command line ("live" in "keepalive", "table" in "system32") pinned the session to `running` for ever (2026-11-13, bug-d2023d2f).
+// An inline node module is the node twin of the `node -e` helper above: it is a script the runtime wrote, never the session's job.
+const HELPER_RE = /^(?:\S*\/)?(?:bash|zsh|sh|fish|dash|sleep|ps|tmux|cat|tail|head|grep|git|node -e|node --input-type=module --eval|python3? -c)(?:\s|$)/;
 export const jobPids = (pid, table) => descendants(pid, table).filter((c) => !HELPER_RE.test(String(table.args?.get(c) || '').trim()));
 
 const COMPLETION_RE = /\b(?:done|finished|complete[d]?|all (?:tests )?passed|exit(?:ed)?(?: code)? \d+|exit status \d+|Traceback \(most recent|error summary|\d+ passed|saved to)\b/i;

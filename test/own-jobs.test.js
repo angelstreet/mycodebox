@@ -63,6 +63,18 @@ test('process tree: children of the agent except shells and helpers', () => {
   assert.deepEqual(jobPids(10, table), [13, 14]);
 });
 
+// 2026-11-13 (bug-d2023d2f): the agent runtime's permanent process-group guard is an inline node module. It is the runtime's own
+// infrastructure, never the session's job: a STATUS word that sits inside its command line ("live" in "keepalive", "table" in
+// "system32") must not pin the session to `running` for ever.
+test('the agent runtime\'s own inline node module (the process-group guard) is not the session\'s job', async () => {
+  const guard = '/home/user/.local/node-v24/bin/node --input-type=module --eval const keepalive = setInterval(() => undefined, 60000); process.on("message", arm);';
+  const tb = { children: new Map([[10, [11, 12]]]), args: new Map([[11, guard], [12, 'python3 score_matrix.py']]) };
+  assert.deepEqual(jobPids(10, tb), [12], 'the guard is infrastructure, not a job');
+  const h = harness({ table: async () => tb });
+  assert.equal(await h.jobs.hasLiveChild('x', { text: 'done — rtsp-nightly live: 103 checked' }), false, 'a STATUS word inside the guard is not the session\'s job');
+  assert.equal(await h.jobs.hasLiveChild('x', { text: 'waiting on the final score_matrix run' }), true, 'the real job still counts');
+});
+
 function harness(over = {}) {
   const proc = tmp('fake-proc-');
   const sent = [], feed = [], logs = [];
