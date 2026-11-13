@@ -174,3 +174,34 @@ test('idleHolders: a CLI claim carries holder_pid on this host and is still idle
   assert.equal(idleHolders([idleRow({ holder_pid: 2214285, holder_host: 'codebox', holder_src: 'claim' })], idleOpts({ host: 'codebox' })).length, 1);
   assert.equal(idleHolders([idleRow({ holder_pid: 9, holder_host: 'proxmox' })], idleOpts({ host: 'codebox' })).length, 0);
 });
+
+// ---- idle Mac holder (manager decision 2026-11-13, bug-87be6e11) ----
+import { idleMacHolders } from '../lease-holder-reaper.js';
+const macRow = (o = {}) => ({ id: 'm1', mode: 'exclusive', agent: 'mac:laptop', since: SINCE, lastHeartbeatAt: new Date(SINCE * 1000).toISOString(), ...o });
+const macTk = [{ id: 't1', agent: 'codebox:waiter', holders: ['m1'] }];
+test('idleMacHolders: 20 min without renewal and a waiter, no run attached', () => {
+  const [u] = idleMacHolders([macRow()], macTk, { now: SINCE * 1000 + 25 * 60000 });
+  assert.equal(u.id, 'm1'); assert.equal(u.idleMin, 25); assert.deepEqual(u.waiters, ['codebox:waiter']);
+  assert.equal(idleMacHolders([macRow()], macTk, { now: SINCE * 1000 + 15 * 60000 }).length, 0, 'under 20 min');
+  assert.equal(idleMacHolders([macRow({ lastHeartbeatAt: new Date(SINCE * 1000 + 22 * 60000).toISOString() })], macTk, { now: SINCE * 1000 + 25 * 60000 }).length, 0, 'renewed 3 min ago');
+});
+test('idleMacHolders: never with a run attached (holder pid), a deploy, a pin, system, no waiter, or a codebox agent', () => {
+  const now = SINCE * 1000 + 40 * 60000;
+  assert.equal(idleMacHolders([macRow({ holder_pid: 77, holder_host: 'laptop' })], macTk, { now }).length, 0);
+  assert.equal(idleMacHolders([macRow({ deploy_id: 'd' }), macRow({ system: true }), macRow({ mode: 'pin' }), macRow({ agent: 'codebox:x' })], macTk, { now }).length, 0);
+  assert.equal(idleMacHolders([macRow()], [], { now }).length, 0);
+  assert.equal(idleMacHolders([macRow()], macTk, { now, graceMs: 0 }).length, 0);
+});
+test('Mac idle release: 2nd poll releases with the lease id and reason in the journal; dry journals only', async () => {
+  for (const [mode, expectRel] of [['live', 1], ['dry', 0], ['off', 0]]) {
+    const calls = [];
+    const run = async (a) => { calls.push(a); return a[0] === 'list' ? { code: 0, stdout: JSON.stringify({ leases: [macRow()], tickets: macTk }), stderr: '' } : { code: 0, stdout: 'released 1', stderr: '' }; };
+    const dir = tmp('hr-');
+    const r = createHolderReaper({ stateDir: dir, run, now: () => SINCE * 1000 + 30 * 60000, macIdleMs: () => 20 * 60000, macMode: () => mode, idleMode: () => 'off', log: { log() {}, error() {} } });
+    await r.poll(); await r.poll(); await r.poll();
+    const rel = calls.filter((c) => c[0] === 'release');
+    assert.equal(rel.length, expectRel, mode);
+    if (mode === 'live') { assert.match(rel[0][5], /^idle-release: released lease m1: Mac holder mac:laptop did not renew for 30 min, no run attached/); assert.match(readFileSync(join(dir, 'lease-actions.jsonl'), 'utf8'), /"type":"idle-release-mac".*"dryRun":false/); }
+    if (mode === 'dry') assert.match(readFileSync(join(dir, 'lease-actions.jsonl'), 'utf8'), /"dryRun":true/);
+  }
+});

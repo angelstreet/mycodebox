@@ -23,6 +23,8 @@ export const UNUSED_GRACE_MS = 10 * 60 * 1000;
 const unusedGraceFromEnv = () => { const v = process.env.GHOSTY_UNUSED_GRANT_MIN; const n = v == null || v === '' ? 10 : Number(v); return Number.isFinite(n) && n > 0 ? n * 60000 : 0; };
 export const IDLE_RELEASE_MS = 10 * 60 * 1000;
 const idleFromEnv = () => { const v = process.env.GHOSTY_IDLE_RELEASE_MIN; const n = v == null || v === '' ? 10 : Number(v); return Number.isFinite(n) && n > 0 ? n * 60000 : 0; };
+export const MAC_IDLE_MS = 20 * 60 * 1000;
+const macIdleFromEnv = () => { const v = process.env.GHOSTY_MAC_IDLE_RELEASE_MIN; const n = v == null || v === '' ? 20 : Number(v); return Number.isFinite(n) && n > 0 ? n * 60000 : 0; };
 const SKEW_S = 10;                    // the holder exists before it claims; a process that started later than the grant is a reused pid
 const MAX_PER_POLL = 3;               // circuit breaker
 const SYSTEM_RE = /^(manager:deploy|update_core:)/;
@@ -94,9 +96,28 @@ export function idleHolders(rows, { sessionNames = [], activityOf = () => null, 
   return out;
 }
 
-export function createHolderReaper({ stateDir, run, listSessionNames = async () => [], activityOf = () => null, startOf = procStartSec, now = Date.now, pollMs = 30000, log = console, enabled = () => process.env.GHOSTY_HOLDER_REAPER !== 'off', unusedGraceMs = () => unusedGraceFromEnv(), idleReleaseMs = () => idleFromEnv(), idleMode = () => 'dry', hasLiveJob = async () => false, notify = async () => {} } = {}) {
+// Pure. Idle Mac holder (manager decision 2026-11-13, bug-87be6e11): a mac:* exclusive lease that nobody renewed for graceMs, that has no run attached
+// (no holder pid, no deploy, not system) and that another agent waits for. A Mac session has no prompt state we can read, so a missing renewal is the only
+// signal; lease-nudge tells the manager at 10 min, the release comes at 20.
+// -> [{ id, agent, idleMin, waiters }]
+export function idleMacHolders(rows, tickets, { now = Date.now(), graceMs = MAC_IDLE_MS } = {}) {
+  const out = [];
+  if (!(graceMs > 0)) return out;
+  for (const l of rows || []) {
+    if (l.mode !== 'exclusive' || l.system || l.deploy_id || l.holder_pid != null || !/^mac:/.test(l.agent || '')) continue;
+    const ref = Math.max((Number(l.since) || 0) * 1000, Date.parse(l.lastHeartbeatAt || l.last_heartbeat_at || '') || 0);
+    if (!ref || now - ref < graceMs) continue;
+    const waiters = (tickets || []).filter((t) => t.agent !== l.agent && (t.holders || []).some((h) => (h && typeof h === 'object' ? h.id : h) === l.id)).map((t) => t.agent);
+    if (!waiters.length) continue;                                      // nobody waits: TTL as before
+    out.push({ id: l.id, agent: l.agent, idleMin: Math.floor((now - ref) / 60000), waiters });
+  }
+  return out;
+}
+
+export function createHolderReaper({ stateDir, run, listSessionNames = async () => [], activityOf = () => null, startOf = procStartSec, now = Date.now, pollMs = 30000, log = console, enabled = () => process.env.GHOSTY_HOLDER_REAPER !== 'off', unusedGraceMs = () => unusedGraceFromEnv(), idleReleaseMs = () => idleFromEnv(), idleMode = () => 'dry', hasLiveJob = async () => false, notify = async () => {}, macIdleMs = () => macIdleFromEnv(), macMode = () => 'live' } = {}) {
   const dead = new Map();      // lease id -> consecutive dead polls
   const unused = new Map();    // lease id -> consecutive polls seen as an unused grant
+  const macSeen = new Map();   // lease id -> consecutive polls seen as an idle Mac holder
   const idleSeen = new Map();  // lease id -> consecutive polls seen idle
   const armed = new Set();     // name-derived pids seen alive
   let timer = null, busy = false, snap = { at: 0, watched: 0, released: [] };
@@ -167,6 +188,24 @@ export function createHolderReaper({ stateDir, run, listSessionNames = async () 
           }
         } else if (n === CHECKS) log.log?.(`[lease-holder-reaper] DRY ${reason}`);   // dry: one line when first confirmed
         if (im !== 'live' && n !== CHECKS) continue;
+        await mkdir(stateDir, { recursive: true }).then(() => appendFile(join(stateDir, 'lease-actions.jsonl'), JSON.stringify(line) + '\n')).catch(() => {});
+      }
+      const mm = macMode();
+      const macIdle = mm === 'off' ? [] : idleMacHolders(rows, tickets, { now: now(), graceMs: macIdleMs() });
+      const macIds = new Set(macIdle.map((u) => u.id));
+      for (const id of [...macSeen.keys()]) if (!macIds.has(id)) macSeen.delete(id);
+      for (const u of macIdle) {
+        const n = (macSeen.get(u.id) || 0) + 1;
+        macSeen.set(u.id, n);
+        if (n < CHECKS || acted >= MAX_PER_POLL) continue;
+        const reason = `idle-release: released lease ${u.id}: Mac holder ${u.agent} did not renew for ${u.idleMin} min, no run attached, while ${u.waiters.slice(0, 3).join(', ')} wait${u.waiters.length > 1 ? '' : 's'}`;
+        const line = { at: new Date(now()).toISOString(), id: u.id, agent: u.agent, idleMin: u.idleMin, waiters: u.waiters, by: 'lease-holder-reaper', type: 'idle-release-mac', dryRun: mm !== 'live' };
+        if (mm === 'live') {
+          acted++;
+          const rr = await run(['release', u.id, '--by', 'lease-holder-reaper', '--reason', reason]);
+          line.ok = rr.code === 0; line.out = (rr.stdout || rr.stderr || '').trim().slice(0, 120);
+          if (rr.code === 0) { macSeen.delete(u.id); released.push(line); log.log?.(`[lease-holder-reaper] ${reason}`); }
+        } else if (n !== CHECKS) continue;
         await mkdir(stateDir, { recursive: true }).then(() => appendFile(join(stateDir, 'lease-actions.jsonl'), JSON.stringify(line) + '\n')).catch(() => {});
       }
       snap = { at: now(), watched: list.length, released };
