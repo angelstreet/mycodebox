@@ -98,6 +98,7 @@ main slice. "(est.)" means the session's own estimate.
   10 min of code finding, the ~15 min of real edit work, and the ~5 min lease search.
 - The session places its stb3 chip check at 11:34–11:38. The manager's answer that told it to check is stamped 11:36:19, so it may have
   started before the answer. Not resolved.
-- The final 24 px height after int-1a1d4c35 (deployed 11:58:51) is the session's own check (re-measure on vpt-pi3 stb4). It had not
-  reported the result when this review was written.
+- The final height after int-1a1d4c35 (deployed 11:58:51, main-2026.11.08-93446) is the session's own check, reported after this review
+  was first merged: 24/24/24/24 px on vpt-pi3 stb4, lease claimed and released. No frame of it is held here. The session also confirmed that
+  both empty requests had one cause: the pipe-guard hook cut off the commit/push, so it requested before the commit existed.
 - The new client check runs on a Mac only after `integrate self-update`. Which Macs have updated was not checked.
