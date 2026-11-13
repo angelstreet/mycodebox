@@ -276,16 +276,23 @@ def run(mode, timeout=10):
             elif cap['capture'] == 'black' and e['kind'] == 'file':
                 # A looping clip is not a channel: the source frame is only compared for HLS channels (the first frame of a
                 # file says nothing about the frame the tile shows), so the capture side is not proven (2026-11-13).
-                row['action'] = ("report: the tile's snapshot is black: a dark frame of the looping clip itself, not a dead"
-                                 " stream (the capture side is not proven: the source frame is only compared for HLS channels),"
-                                 " not changed")
+                row['action'] = ("report: the tile's snapshot and its live video are black: a dark frame of the looping clip"
+                                 " itself, not a dead stream (the capture side is not proven: the source frame is only"
+                                 " compared for HLS channels), not changed")
             else:
-                row['action'] = (f"report: the source plays but the tile's snapshot is {cap['capture']}"
+                what = ("the tile's snapshot and its live video are black" if cap['capture'] == 'black'
+                        else f"the tile's snapshot is {cap['capture']}")
+                row['action'] = (f"report: the source plays but {what}"
                                  + (f" ({cap['age']} s old)" if cap['capture'] == 'stale' and cap.get('age') is not None else '')
                                  + ": host capture side (vpt-stream / thumbnails), not changed")
         elif src_ok and not black_src:
-            row['action'] = ('none' if r['status'] == 'ok' or cap['capture'] == 'ok'
-                             else 'report: cannot verify from codebox (no ssh alias, no host snapshot)')
+            # The thumbnail was dark but the live video plays: the tile is not broken, a looping clip simply moves
+            # (2026-11-13, bug-6b227d92). Say so instead of losing it.
+            dark_thumb = cap.get('luma') is not None and cap['luma'] < rc.BLACK_LUMA
+            row['action'] = ("note: the tile's snapshot was dark but the live video plays (a dark moment of the clip),"
+                             " not changed") if cap['capture'] == 'ok' and dark_thumb else (
+                            'none' if r['status'] == 'ok' or cap['capture'] == 'ok'
+                            else 'report: cannot verify from codebox (no ssh alias, no host snapshot)')
         elif black_src and capture_mode != 'live':
             row['action'] = "report: the channel's own picture is black (host snapshot and source frame); capture checks are dry, nothing changed"
         elif black_src and budget <= 0:
