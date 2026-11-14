@@ -176,3 +176,9 @@ migration only when the text says it is destructive (drop / truncate / delete / 
 
 ## Worktree cleanup after a merge (2026-11-10)
 When a request ends `merged` or `deployed`, the lane removes the requesting worktree and local branch if clean, fully merged, unused by a live tmux session and lease-free; otherwise it leaves it and journals why. Guards, journal and the `worktreeCleanup` switch: [REFERENCE](../REFERENCE.md) "Integration lane".
+
+## Docs-only fast path (owner 2026-11-14)
+
+A merge whose files are all docs (`isDocFile`, convention files ignored) is final at the push: no CI wait and no registry
+deploy, even with `--deploy`; the next code deploy carries it. A self deploy (mycodebox) pulls the live checkout and does
+not restart for a docs-only range. Numbers and the rule: [REFERENCE "Integration lane"](../REFERENCE.md#integration-lane-round-13-owner-2026-10-18).
