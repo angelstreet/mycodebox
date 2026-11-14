@@ -187,7 +187,7 @@ import { createAskFold } from './ask-fold.js';
 import { createAskGuard } from './ask-guard.js';
 import { createOwnJobs, jobPids, parkedDeps } from './own-jobs.js';
 import { createScriptRunSource } from './wait-ids.js';
-import { findUnanswered, reminderText, MAX_PER_PUSH as STOP_ANSWER_MAX } from './stop-answer.js';
+import { findUnanswered, reminderText, reminderTarget, MAX_PER_PUSH as STOP_ANSWER_MAX } from './stop-answer.js';
 import { createPendingWakes, MAX_ATTEMPTS as MAX_PENDING_ATTEMPTS } from './pending-wakes.js';
 import { createExternalResult } from './external-result.js';
 import { createIntegrationNotify, integrationDigestEnabled, isQuietState } from './integration-notify.js';
@@ -911,14 +911,14 @@ async function jsonlTail(file, bytes = 400 * 1024) {
 }
 // A session stop the manager was woken for and left with no message and no decision line is sent back to it once (stop-answer.js).
 async function stopAnswerTick() {
-  const mgr = loadManagerSessions()[0];
+  const mgr = reminderTarget(loadManagerSessions(), (n) => standbyFlagsOf(n).standby);
   if (!mgr) return;
   const [events, sends, actions] = await Promise.all([jsonlTail(join(STATE_DIR, 'manager-events.jsonl')), jsonlTail(LOG_FILE), jsonlTail(join(STATE_DIR, 'manager-actions.jsonl'))]);
-  const list = findUnanswered({ events, sends, actions, done: { has: (k) => pendingWakes.seen(`stopans:${k}`) } });
+  const list = findUnanswered({ events, sends, actions, done: { has: (k) => pendingWakes.seen(`stopans:${mgr}:${k}`) } });
   if (!list.length) return;
   const first = list.slice(0, STOP_ANSWER_MAX);
-  const r = pendingWakes.add({ session: mgr, key: `stopans:${first[0].key}`, text: reminderText(first), by: 'stop-answer' });
-  for (const u of first.slice(1)) pendingWakes.markDone(`stopans:${u.key}`);
+  const r = pendingWakes.add({ session: mgr, key: `stopans:${mgr}:${first[0].key}`, text: reminderText(first), by: 'stop-answer' });
+  for (const u of first.slice(1)) pendingWakes.markDone(`stopans:${mgr}:${u.key}`);
   logEvent({ type: 'stop-answer-reminder', session: mgr, stops: first.map((u) => u.session), queued: !!r?.queued });
 }
 const askGuardSeen = new Map();   // manager session -> reply hash already checked

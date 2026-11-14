@@ -37,3 +37,13 @@ test('a stop inside the grace, one that is too old and an already reminded one a
 test('the reminder names the sessions', () => {
   assert.match(reminderText(findUnanswered({ events: [stop], now: NOW })), /campaign-x/);
 });
+
+import { reminderTarget } from '../stop-answer.js';
+test('the reminder goes to the Claude manager, not the failover standby listed first in managerSessions', () => {
+  const standby = (n) => n === 'mm-manager';
+  assert.equal(reminderTarget(['mm-manager', 'manager'], standby), 'manager');
+  assert.equal(reminderTarget(['manager'], standby), 'manager');
+  assert.equal(reminderTarget(['mm-manager', 'manager'], () => false), 'mm-manager');   // standby active: a manager like any other
+  assert.equal(reminderTarget(['mm-manager'], standby), 'mm-manager');                    // nothing else configured
+  assert.equal(reminderTarget([], standby), null);
+});
