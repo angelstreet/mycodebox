@@ -21,7 +21,7 @@
 #       (status-honesty.js goalOf; without -g the first task line of the prompt is the goal)
 #   -D  a Done-when line (repeatable, 1 to 5; numbered in order): checkable by something other than the session. Without -D the brief's `Done when:` lines are used;
 #       none at all = start refused (exit 2), except a -t one-liner or -A (an auto line + warning)
-#   -T  time box, e.g. "2 h" / "90 min" (else the brief's `Time box:`, else 2 h for a fix / bug* name, 6 h for a feature)
+#   -T  time box, e.g. "2 h" / "90 min" (else the brief's `Time box:`, else 30 min for a docs* name / docs/ branch, 2 h for a fix / bug* name, 6 h for a feature)
 #   -A  automation start (lane, bug-drain, nightly): accept a prompt without Done-when lines, with an auto line
 #   -K  workers allowed (owner 2026-11-13): the brief says this session may start workers; without it the prompt says "no workers" and
 #       the session cannot start one (cbsession called from a session started without -K is refused, exit 2; -A automation and
@@ -193,13 +193,20 @@ if [ -z "$DWOUT" ] && [ "$INPROMPT" = 0 ]; then
   DWOUT="1. The goal is reached, and the result carries evidence another party can open (a merged commit or integration id, a run id, a report link, a frame)."$'\n'
 fi
 [ -n "$DWOUT" ] && printf '\nDone when:\n%s' "$DWOUT" >> "$P"
-# the Time box: -T, else the brief's `Time box:` line, else 2 h for a fix (bug* / fix* name or branch), 6 h for a feature
+# the Time box: -T, else the brief's `Time box:` line, else 30 min for docs-only work (docs* name or docs/ branch, owner
+# 2026-11-14: "a doc-only update should be estimated in minutes"), 2 h for a fix (bug* / fix* name or branch), 6 h for a feature
 TB=$TIMEBOX
+DOCSTASK=0
+case "$(tr '[:upper:]' '[:lower:]' <<<"$NAME $WTB")" in docs*|*" docs/"*) DOCSTASK=1;; esac
 [ -n "$TB" ] || TB=$(grep -m1 -iE '^[*_#> -]*time[ -]?box ?[:=]' "$SRCF" 2>/dev/null | sed -E 's/^[^:=]*[:=][*_ ]*//' || true)
 if [ -z "$TB" ] && ! grep -qiE '^[*_#> -]*time[ -]?box ?[:=]' "$P"; then
-  case "$(tr '[:upper:]' '[:lower:]' <<<"$NAME $WTB")" in bug*|fix*|*" fix/"*|*" bug"*) TB="2 h";; *) TB="6 h";; esac
+  if [ "$DOCSTASK" = 1 ]; then TB="30 min"
+  else case "$(tr '[:upper:]' '[:lower:]' <<<"$NAME $WTB")" in bug*|fix*|*" fix/"*|*" bug"*) TB="2 h";; *) TB="6 h";; esac; fi
 fi
 [ -n "$TB" ] && printf '\nTime box: %s\n' "$TB" >> "$P"
+if [ "$DOCSTASK" = 1 ]; then
+  printf '\n%s\n' 'Docs-only task: no lease and no deploy are needed. Ship with `integrate request <branch>` (no `--deploy`): the lane merges a docs-only diff without waiting for CI or a deploy (mycodebox: pulled live, no restart), usually in under a minute. If the work grows into code, say so and re-estimate the time box.' >> "$P"
+fi
 if [ "$HAVE_GOAL" = 0 ] && ! grep -qiE '^[*_#> ]*goal ?:' "$P"; then
   echo "cbsession: warning: the brief has no 'Goal:' line (or -g); the goal check will use the first task line. Add 'Goal: <one line>'." >&2
   printf '\n%s\n' 'No `Goal:` line came with this brief: write it yourself as the first thing you say (`Goal: <one sentence>`, then `Done when:` and `Time box:`), then work.' >> "$P"
@@ -209,7 +216,7 @@ fi
 **Goal first, verification last (owner 2026-11-11).** A task opens and closes with the same list.
 
 - **First**: before any work, the task has `Goal: <one sentence>` and `Done when:` with 1 to 5 numbered lines, each checkable by something other than you: a fact the harness holds (merged, deployed, bug resolved), a command or URL with a pass / fail result, or an observation with an artefact (run id, report link, frame). The brief did not give them: write them yourself as the first thing you say, then work. A line you cannot check is rewritten, not dropped.
-- **Time box** (owner 2026-11-11): the opening also carries `Time box: <max duration>` (the brief's, else your own estimate; default 2 h for a fix, 6 h for a feature). At 50% with no `Done when` line passed, say so and change approach. At 100% **stop**: write the `Verification:` block as it stands and end `failed` (or `needs-manager` with what would unblock it); never extend your own time box, the manager or the owner does. The same check failing 3 times with the same error is the same stop, whatever the clock says: a retry loop is not progress.
+- **Time box** (owner 2026-11-11): the opening also carries `Time box: <max duration>` (the brief's, else your own estimate; default 30 min for docs-only work (docs, skills, release notes, AGENTS.md: no lease, no deploy), 2 h for a fix, 6 h for a feature). At 50% with no `Done when` line passed, say so and change approach. At 100% **stop**: write the `Verification:` block as it stands and end `failed` (or `needs-manager` with what would unblock it); never extend your own time box, the manager or the owner does. The same check failing 3 times with the same error is the same stop, whatever the clock says: a retry loop is not progress.
 - **Last**: the final message ends with `Verification:` and one row per `Done when` line, in the same order and numbering: `<n>. pass | fail | not checked — <evidence that resolves, or why>`, then the STATUS line. All `pass` = `done`. Any `fail` or `not checked` = not `done` (`running`, `waiting` or `failed`). Never change the `Done when` list at the end to fit what you did; a line the owner dropped is marked "dropped by owner", not deleted.
 - **Failing is not an ending** (owner 2026-11-12): before a `failed` line, investigate until you can name what broke (logs, frames, ledgers, code), or say what you checked and ruled out, and write the next approach. The line carries both: `STATUS: failed — goal not achieved: <why> · tried: <list> · cause: <what the investigation found> · plan: <next approach, who does it>`. A plan that is yours to do inside your time box is done, not written. A `failed` line without `cause:` and `plan:` is sent back once.
 - **Done is about the task's goal, not the last request** (owner 2026-11-12): the `Goal` and the `Done when` list are the ones the task opened with. A side request given on the way (pause these deployments, check this, answer that) is reported in one sentence, and the turn ends on the task's true state: `running`, `waiting` or `needs-...` while a `Done when` line is open, never `done — goal: achieved (<the side request>)`. Only the owner or the manager replaces the goal, in words.

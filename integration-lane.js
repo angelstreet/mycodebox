@@ -15,7 +15,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { spawn, execFile } from 'node:child_process';
-import { gitFacts, mergeFloor, isConvention, migrationReasons } from './merge-policy.js';
+import { gitFacts, mergeFloor, isConvention, isDocFile, migrationReasons } from './merge-policy.js';
 import { mergeReleaseNote } from './release-note-merge.js';
 import { cleanupWorktree } from './worktree-cleanup.js';
 import { attribute, readLedgerTail, rowCwdMatchesWorktree } from './usage-window.js';
@@ -905,6 +905,14 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
       if (!inst.ok) return selfFail(r, 'install_failed', `${INSTALL_CMD} failed in ${live} at ${short(sd.newSha)}: NOT restarted, the service still runs ${short(sd.prevSha)}`, inst.tail);
     }
 
+    // Docs-only pull (owner 2026-11-14): the service reads no doc at start, so the checkout is updated and nothing restarts.
+    if (sd.newSha !== sd.prevSha && await docsOnlyRange(r, c, sd.prevSha, sd.newSha, live)) {
+      r.docsOnly = true;
+      Object.assign(sd, { restart: 'skipped', note: 'docs-only: pulled, no restart' });
+      selfDone(r);
+      return;
+    }
+
     const syn = await step(r, 'deploy-syntax', async () => {
       const res = await run(`${sq(process.execPath)} --check server.js`, { cwd: live, timeoutMs: 60_000 });
       return { ok: res.code === 0 && !res.timedOut, tail: res.out };
@@ -1047,9 +1055,26 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
     return null;
   }
 
+  // Docs-only fast path (owner 2026-11-14, "a doc-only update should be almost instant"): every file of a..b is a doc
+  // (merge-policy isDocFile; convention files such as VERSION.txt do not count). Unknown (no sha, git error) is never docs-only.
+  async function docsOnlyRange(r, c, a, b, cwd) {
+    if (!a || !b || a === b) return false;
+    const x = await git(['diff', '--name-only', '-z', a, b], { cwd: cwd || c.clone, timeoutMs: 60_000 });
+    if (x.code !== 0) return false;
+    const real = x.out.split('\0').filter(Boolean).filter((f) => !isConvention(f, resolvable(c)));
+    return real.length > 0 && real.every(isDocFile);
+  }
+
   // The merge is on the target: CI, then the deploy. Nothing here returns the request or reverts anything.
   async function afterPush(r, c) {
     // from here the merge is on the target: nothing below returns the request or reverts anything
+    // A docs-only merge waits for neither CI nor a registry deploy (nothing runs a doc); the next code deploy carries it.
+    // A self deploy still pulls the live checkout (selfDeploy skips the restart itself for a docs-only range).
+    if (!r.revertOf && c.deploy?.kind !== 'self' && (c.ci || r.deployScope) && await docsOnlyRange(r, c, r.targetBase, r.sha)) {
+      r.docsOnly = true;
+      transition(r, 'merged', { reason: r.deployScope ? `docs-only: deploy ${r.deployScope} skipped (the next code deploy carries it)` : null });
+      return;
+    }
     if (c.ci && !(r.ci === 'success')) {
       const ciRes = await waitCi(r, c);
       if (!ciRes.ok) {
