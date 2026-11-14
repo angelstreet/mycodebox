@@ -1311,6 +1311,9 @@ tokens but re-reads ~200K of cached context), so sessions are ranked by calls; n
 
 ## Usage (Langfuse)
 
+
+**Memory (bug-1babb8b3, 2026-11-14).** `usage/ingest.js` never holds the ledger as one string: `ledgerLines()` streams it at init and for the scorecard post (today's rows only), and the init compaction is written in 1 MB chunks. The ledger keeps rows older than the window on disk (100+ MB), so slurping it made RSS ratchet up ~25 MB/h with a flat JS heap. Regression test: `test/usage-memory.test.js`.
+
 The tailer, `usage/ingest.js`, produces token usage and API-equivalent cost per session, project, agent, model and day.
 Usage records contain numbers and identifiers; evaluation/dataset features can additionally send closing text as described above.
 
