@@ -108,3 +108,12 @@ test('cbsession: the handover Goal / Done when / Time box lines reach the prompt
   for (const n of ['bug-cbg-fix', 'cbg-feat']) { const p = promptOf(n); assert.match(p, /\n2\. deployed, live sha\n/); assert.match(p, /\*\*Goal first, verification last/); }
   const r = run('-x', '-n', 'cbg-h3', '-d', work, '-H', h, '-T', '3 h'); assert.match(promptOf('cbg-h3'), /\nTime box: 3 h\n/);
 });
+test('cbsession: a docs* task gets a 30 min box and the no-lease / no-deploy line; a brief Time box still wins (owner 2026-11-14)', () => {
+  const h = path.join(home, 'hdocs.md'); fs.writeFileSync(h, 'Goal: fix the docs.\nDone when:\n1. merged, integration id\n');
+  run('-x', '-n', 'docs-cbg-a', '-d', work, '-H', h);
+  const p = promptOf('docs-cbg-a');
+  assert.match(p, /\nTime box: 30 min\n/); assert.match(p, /Docs-only task: no lease and no deploy are needed/);
+  run('-x', '-n', 'cbg-feat2', '-d', work, '-H', h); assert.doesNotMatch(promptOf('cbg-feat2'), /Docs-only task/);
+  fs.writeFileSync(h, 'Goal: fix the docs.\nDone when:\n1. merged\nTime box: 10 min\n');
+  run('-x', '-n', 'docs-cbg-b', '-d', work, '-H', h); assert.match(promptOf('docs-cbg-b'), /Time box: 10 min/); assert.doesNotMatch(promptOf('docs-cbg-b'), /Time box: 30 min/);
+});
