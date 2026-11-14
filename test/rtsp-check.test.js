@@ -20,8 +20,10 @@ function fakes() {
   // url containing "dead": refuses; "novideo": no streams; "still": identical frames; else 12 moving frames
   const ffprobe = sh(dir, 'ffprobe', `case "$*" in *stream=index,codec_type*) for a; do f=$a; done; n=$(cat "$f" | tr -dc 0-9); n=\${n:-1}; for pass in program streams; do echo 0,video; i=1; while [ $i -le $n ]; do echo $i,audio; i=$((i+1)); done; done; exit 0;; esac
 for a; do u=$a; done\ncase "$u" in http*) for a; do [ "$a" = -rtsp_transport ] && { echo 'Option rtsp_transport not found' >&2; exit 1; }; done;; esac\ncase "$u" in *dead*) echo "$u: Connection refused" >&2; exit 1;; *novideo*) echo '{"streams":[]}';; *) echo '{"streams":[{"codec_name":"h264","width":640,"height":360}]}';; esac`);
-  const ffmpeg = sh(dir, 'ffmpeg', `case "$*" in *signalstats*) for a; do last=$a; done; inp=""; prev=""; for a; do [ "$prev" = -i ] && inp=$a; prev=$a; done
-  if [ -f "$inp" ] && grep -q BLACK "$inp"; then echo "lavfi.signalstats.YHIGH=18.0" >&2; elif case "$inp" in *blacksrc*) true;; *) false;; esac; then echo "lavfi.signalstats.YHIGH=17.0" >&2; else echo "lavfi.signalstats.YHIGH=190.0" >&2; fi; exit 0;; esac
+  // "adbreak": the first frame is dark (17) but the channel itself is bright (120) - the window finds it.
+  // "blacksrc": every frame is dark (17): the channel is really black.
+  const ffmpeg = sh(dir, 'ffmpeg', `case "$*" in *signalstats*) inp=""; prev=""; win=""; for a; do [ "$prev" = -i ] && inp=$a; case "$a" in fps=2,*) win=1;; esac; prev=$a; done
+  if [ -f "$inp" ] && grep -q BLACK "$inp"; then echo "lavfi.signalstats.YHIGH=18.0" >&2; elif case "$inp" in *adbreak*) true;; *) false;; esac; then if [ -n "$win" ]; then echo "lavfi.signalstats.YHIGH=17.0" >&2; echo "lavfi.signalstats.YHIGH=120.0" >&2; else echo "lavfi.signalstats.YHIGH=17.0" >&2; fi; elif case "$inp" in *blacksrc*) true;; *) false;; esac; then echo "lavfi.signalstats.YHIGH=17.0" >&2; else echo "lavfi.signalstats.YHIGH=190.0" >&2; fi; exit 0;; esac
 for a; do case "$a" in rtsp*|http*|file*|/*) u=$a;; esac; done\necho '#format: frame checksums'\ncase "$u" in *still*) for i in 1 2 3 4; do echo "0, $i, $i, 1, 10, aaaa"; done;; *) for i in 1 2 3 4; do echo "0, $i, $i, 1, 10, m$i"; done;; esac`);
   return { dir, env: { RTSP_CHECK_FFPROBE: ffprobe, RTSP_CHECK_FFMPEG: ffmpeg } };
 }
@@ -134,7 +136,8 @@ async function world({ devices, pool, leaseBusy = false, leaseMissing = false, l
   // leaseMissing: a PATH without any vpt-lease, so the run really cannot find the lease CLI
   const pathV = leaseMissing ? `${dir}:/usr/bin:/bin` : `${dir}:${process.env.PATH}`;
   const E = { ...env, PATH: pathV, GHOSTY_STATE_DIR: state, RTSP_POOL_FILE: poolFile, RTSP_CHECK_TOKEN_CMD: path.join(dir, 'tok'),
-    RTSP_CHECK_SERVERS: `envA=http://127.0.0.1:${server.address().port}`, RTSP_SETTLE_SECONDS: '0', RTSP_CONFIRM_SECONDS: '0', RTSP_API_RETRY_SECONDS: '0', RTSP_BLACK_RESAMPLE_SECONDS: '0', RTSP_CHECK_SSH: 'h1=local', RTSP_LOOPBACK_HOSTS: 'h1' };
+    RTSP_CHECK_SERVERS: `envA=http://127.0.0.1:${server.address().port}`, RTSP_SETTLE_SECONDS: '0', RTSP_CONFIRM_SECONDS: '0', RTSP_API_RETRY_SECONDS: '0', RTSP_BLACK_RESAMPLE_SECONDS: '0',
+    RTSP_SOURCE_LUMA_RESAMPLE_SECONDS: '0', RTSP_CHECK_SSH: 'h1=local', RTSP_LOOPBACK_HOSTS: 'h1' };
   // the ssh alias must not run ssh in tests: the probe goes through a fake ssh that runs the command locally
   sh(dir, 'ssh', 'shift 5 2>/dev/null; eval "$*"');
   return { E, state, posts, restarts, devices, close: () => server.close() };
@@ -393,9 +396,13 @@ test('a channel whose own picture is black: reported while capture checks are dr
     w.E.RTSP_CHANNEL_LISTS = path.join(d, 'l.m3u'); };
   let w = await world({ pool: POOL, snapshots: { 'cap-FRNews1DarkNews': 'BLACKLIVE' }, devices: devices() }); lists(w);
   let r = await py(REPLACE, ['--mode', 'live'], w.E);
+  const day = new Date().toISOString().slice(0, 10);
+  const rep = JSON.parse(readFileSync(path.join(w.state, 'rtsp-nightly', `report-${day}.json`), 'utf8'));
   w.close();
   assert.match(r.stdout, /DEVICE1\s+hls\s+ok -> report: the channel's own picture is black .*capture checks are dry, nothing changed/, r.stdout);
   assert.equal(w.posts.length, 0);
+  const one = rep.streams.find((s) => s.device === 'DEVICE1');
+  assert.ok(one.source_luma < 32, `a channel that is dark in every frame stays black, got ${one.source_luma}`);
   w = await world({ pool: POOL, snapshots: { 'cap-FRNews1DarkNews': 'BLACKLIVE' }, devices: devices() }); lists(w);
   mkdirSync(path.join(w.state, 'rtsp-nightly'), { recursive: true });
   writeFileSync(path.join(w.state, 'rtsp-nightly', 'capture-mode'), 'live\n');
@@ -403,6 +410,24 @@ test('a channel whose own picture is black: reported while capture checks are dr
   w.close();
   assert.match(r.stdout, /DEVICE1\s+hls\s+ok -> replaced \(replace: 'Bright News'\)/, r.stdout);
   assert.equal(w.devices.DEVICE1.DEVICE_VIDEO, 'https://cdn.example/good/bright.m3u8');
+});
+
+test('a live channel is judged over a window: a dark first frame is not a black channel (the ad-break case)', async () => {
+  // The first frame of the channel is the dark start of an ad break (17/255). Over the window the
+  // channel is bright (120/255), so the channel itself is NOT black: the tile is black on the host
+  // side. The old check read the first frame only and called the channel black (vpt-nipogi/DEVICE7,
+  // 2026-11-14).
+  const w = await world({ pool: POOL, snapshots: { 'cap-FRMusic1AdBreak': 'BLACKLIVE' }, devices: {
+    DEVICE1: { ...dev('FR Music 1 — Ad Break', 'https://cdn.example/good/adbreak.m3u8'), DEVICE_MODEL: 'rtsp_video' } } });
+  const r = await py(REPLACE, ['--mode', 'live'], w.E);
+  const day = new Date().toISOString().slice(0, 10);
+  const rep = JSON.parse(readFileSync(path.join(w.state, 'rtsp-nightly', `report-${day}.json`), 'utf8'));
+  w.close();
+  assert.doesNotMatch(r.stdout, /the channel's own picture is black/, r.stdout);
+  assert.match(r.stdout, /DEVICE1\s+hls\s+ok -> report: the source plays but the tile's snapshot and its live video are black: host capture side/, r.stdout);
+  const one = rep.streams.find((s) => s.device === 'DEVICE1');
+  assert.ok(one.source_luma >= 32, `the channel was judged over the window, got ${one.source_luma}`);
+  assert.equal(w.posts.length, 0);
 });
 
 test('a host stream with several audio tracks (the browser player stays black) is reported', async () => {

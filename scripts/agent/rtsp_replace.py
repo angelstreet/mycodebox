@@ -265,7 +265,11 @@ def run(mode, timeout=10):
         src_ok = r['status'] in rc.OK_STATES
         black_src = False
         if src_ok and cap['capture'] == 'black' and e['kind'] == 'hls':
-            y = rc.luma(e['url'], 20, ssh_map.get(e['host']))  # is the channel itself black, or only the host's capture?
+            # Judge the channel over a WINDOW of frames, not on its first frame (2026-11-14): the first frame of a
+            # Pluto TV channel is the dark start of an ad break (17/255 on vpt-nipogi/DEVICE7) while the channel
+            # itself is bright (103-119 over the window). A channel that is really black stays dark in every
+            # sample (16/255 on vpt-nipogi/DEVICE31), so the window does not hide a dead channel.
+            y = rc.source_luma(e['url'], 20, ssh_map.get(e['host']))
             row['source_luma'] = None if y is None else round(y, 1)
             black_src = y is not None and y < rc.BLACK_LUMA
         if src_ok and not black_src and cap['capture'] not in ('ok', 'unknown'):
