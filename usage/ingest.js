@@ -7,6 +7,8 @@
 //   node usage/ingest.js --backfill rescan the last BACKFILL_DAYS days (forget offsets; ids are deterministic, so Langfuse upserts)
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
+import { createReadStream } from 'node:fs';
+import { createInterface } from 'node:readline';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { homedir } from 'node:os';
@@ -372,6 +374,13 @@ async function listFiles(dir, match, minMtime) {
   return out;
 }
 
+// The ledger one line at a time: never the whole file as one string plus a split array (it is 100+ MB).
+export async function* ledgerLines(file) {
+  let st; try { st = createReadStream(file, { encoding: 'utf8' }); } catch { return; }
+  try { for await (const l of createInterface({ input: st, crlfDelay: Infinity })) if (l) yield l; }
+  catch (e) { if (e.code !== 'ENOENT') throw e; }
+}
+
 async function readFrom(path, offset, size) {
   const fh = await fs.open(path, 'r');
   try {
@@ -413,12 +422,11 @@ export function createIngester(cfg, hooks = {}) {
     state = { files: {}, minimaxLastId: null, cwdProject: {}, traceLabel: {} };
     if (!forceBackfill) { try { state = { ...state, ...JSON.parse(await fs.readFile(cfg.offsetsFile, 'utf8')) }; } catch {} }
     const since = cfg.now() - cfg.backfillDays * DAY_MS;
-    let text = ''; try { text = await fs.readFile(cfg.ledgerFile, 'utf8'); } catch {}
     // later lines for the same id are updates (a message's output_tokens grows while it streams): last one wins
     // Round 6b: rows older than the window are kept (deduped by id, last wins), never dropped: the ledger is the only
     // record of past sessions for the History view (session-history.jsonl only began with round 6).
     const older = new Map();
-    if (!forceBackfill) for (const l of text.split('\n')) {
+    if (!forceBackfill) for await (const l of ledgerLines(cfg.ledgerFile)) {
       try {
         const r = JSON.parse(l);
         if (r.ts >= since) remember(r.agent === 'manager' && !r.trace ? { ...r, trace: traceIdOf('manager', r.session) } : r);
@@ -429,9 +437,20 @@ export function createIngester(cfg, hooks = {}) {
     // record outside the window after a long downtime) would otherwise wipe whatever's on disk — and the source
     // files have often been rotated by then, so the wipe is irreversible.
     for (const id of byId.keys()) older.delete(id);   // a row at the window edge is written once
-    const compacted = byId.size ? [...older.values(), ...byId.values()].map((r) => JSON.stringify(r) + '\n').join('') : '';
     // Temp file + rename: the ledger holds history whose source logs may be rotated, so a crash mid-write must not truncate it.
-    if (compacted) await atomicWrite(cfg.ledgerFile, compacted);
+    // Written in chunks: one 100+ MB joined string peaked the daemon at ~800 MB RSS (bug-1babb8b3).
+    if (byId.size) {
+      const tmp = `${cfg.ledgerFile}.${process.pid}.tmp`, fh = await fs.open(tmp, 'w');
+      try {
+        let chunk = [], bytes = 0;
+        for (const r of [...older.values(), ...byId.values()]) {
+          const l = JSON.stringify(r) + '\n'; chunk.push(l); bytes += l.length;
+          if (bytes > 1 << 20) { await fh.write(chunk.join('')); chunk = []; bytes = 0; }
+        }
+        if (chunk.length) await fh.write(chunk.join(''));
+      } finally { await fh.close(); }
+      await fs.rename(tmp, cfg.ledgerFile);
+    }
   }
 
   function remember(r) {
@@ -693,8 +712,11 @@ export function createScorecardPoster(cfg, { ing, log = console.log } = {}) {
     if (!force && now - lastAt < SCORECARD_MS) return { skipped: 'throttled' };
     try {
       // Read the file, not ing.ledger: the file is the full record (the ingester's map only covers its window).
-      const text = await fs.readFile(cfg.ledgerFile, 'utf8').catch(() => '');
-      const ledgerRows = text.split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+      // Stream it and keep only today's rows (all buildScorecard reads below): slurping the whole ledger (100+ MB, 240k rows)
+      // every 15 min ratcheted the daemon's RSS up (bug-1babb8b3).
+      const dayStart0 = Math.floor(now / 86400000) * 86400000;
+      const ledgerRows = [];
+      for await (const l of ledgerLines(cfg.ledgerFile)) { try { const r = JSON.parse(l); if (r && r.ts >= dayStart0) ledgerRows.push(r); } catch {} }
       let stallRecs = [], runsLines = [];
       try { stallRecs = (await fs.readFile(cfg.stallsFile, 'utf8')).split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); } catch {}
       try { runsLines = (await fs.readFile(join(cfg.stateDir, 'manager-runs.jsonl'), 'utf8')).split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); } catch {}
