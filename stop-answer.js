@@ -47,3 +47,11 @@ export function reminderText(list) {
   return `Harness check: ${list.length} session stop(s) you were woken for have no message to the session and no line in manager-actions.jsonl:\n${lines.join('\n')}\n`
     + 'Every stop ends in a message to that session (api/send or SendMessage) or a recorded decision line (kind decision, session <name>). Do that now for each, then carry on.';
 }
+
+// The session the reminder is typed to: the first configured manager session that is not the failover standby (manager.json
+// managerSessions is ['mm-manager', 'manager']: [0] was the MiniMax standby, so 26 reminders on 2026-11-13 never reached the Claude manager).
+// While the standby is active (failover state minimax) it is a manager like any other, and isStandby says false for it.
+export function reminderTarget(sessions, isStandby = () => false) {
+  const list = (sessions || []).filter(Boolean);
+  return list.find((n) => !isStandby(n)) || list[0] || null;
+}
