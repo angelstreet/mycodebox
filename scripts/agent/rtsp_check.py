@@ -287,24 +287,70 @@ def public_entry(e, res=None):
 # The mean (YAVG) is not enough: a dark, letterboxed film scene averaged under 24 and was called black (Sintel, 2026-11-11).
 BLACK_LUMA = float(os.environ.get('RTSP_BLACK_LUMA', '32'))
 STALE_SECONDS = int(os.environ.get('RTSP_STALE_SECONDS', '120'))  # latest.jpg is rewritten about once a second
+# The SOURCE side of a black tile: a live channel is judged over a WINDOW of frames, not on its
+# first frame. The first frame of a channel says nothing about the channel: a Pluto TV channel
+# starts its ad break on a dark frame (17/255 measured on vpt-nipogi/DEVICE7, 2026-11-14) while
+# the channel itself is bright (103-119 over the same window). A channel that is really black
+# stays dark over every window (16/255 on vpt-nipogi/DEVICE31 over 1, 3, 6, 12 and 30 s), so the
+# window does not hide a dead channel.
+SOURCE_LUMA_WINDOW_SEC = float(os.environ.get('RTSP_SOURCE_LUMA_WINDOW_SEC', '6'))
+SOURCE_LUMA_SAMPLES = int(os.environ.get('RTSP_SOURCE_LUMA_SAMPLES', '3'))
+SOURCE_LUMA_RESAMPLE_SECONDS = float(os.environ.get('RTSP_SOURCE_LUMA_RESAMPLE_SECONDS', '10'))
 
 
-def luma(path_or_url, timeout=20, ssh=None, all_frames=False):
+def luma(path_or_url, timeout=20, ssh=None, all_frames=False, window=None):
     """Brightness of the bright part (signalstats YHIGH, 90th percentile) of the first frame of a picture or stream, or None.
-    all_frames: every frame of the file (a live segment): the brightest picture it holds."""
+    all_frames: every frame of the file (a live segment): the brightest picture it holds.
+    window: read this many seconds of the source (2 frames a second) and return the BRIGHTEST frame
+      of that window, not its first one. A live channel is judged over a window: its first frame can
+      be the dark start of an ad break while the channel itself plays bright.
+    """
     v = clean_value(path_or_url)
     opts = (['-rtsp_transport', 'tcp'] if is_rtsp(v) else ['-rw_timeout', str(int(timeout * 1e6))] if is_http(v) else [])
-    frames = [] if all_frames else ['-frames:v', '1']
+    if all_frames:
+        frames = []
+    elif window:
+        frames = ['-frames:v', str(max(1, int(float(window) * 2)))]
+    else:
+        frames = ['-frames:v', '1']
+    vf = 'signalstats,metadata=print:key=lavfi.signalstats.YHIGH'
+    if window and not all_frames:
+        vf = f'fps=2,{vf}'   # 2 frames a second: the window is sampled, not read frame by frame
     try:
         p = _run([FFMPEG, '-v', 'info', *opts, '-i', v, *frames, '-vf',
-                  'signalstats,metadata=print:key=lavfi.signalstats.YHIGH', '-f', 'null', '-'], timeout, ssh)
+                  vf, '-f', 'null', '-'], timeout, ssh)
     except (subprocess.TimeoutExpired, OSError):
         return None
     m = re.findall(r'YHIGH=([0-9.]+)', (p.stderr or '') + (p.stdout or ''))
     if not m:
         return None
     # A segment's first frame can be a transition frame: the live layer is judged on the brightest picture it holds.
-    return max(float(x) for x in m) if all_frames else float(m[-1])
+    # A windowed source is judged the same way: the brightest frame of the window, not its first.
+    return max(float(x) for x in m) if (all_frames or window) else float(m[-1])
+
+
+def source_luma(path_or_url, timeout=20, ssh=None):
+    """How bright a live channel's OWN picture is, judged over a window instead of on its first frame.
+
+    The first frame of a channel says nothing about the channel (a Pluto TV channel starts its ad
+    break on a dark frame: 17/255 measured on vpt-nipogi/DEVICE7, 2026-11-14, while the channel
+    itself is 103-119 over the same window). A channel that is really black stays dark over every
+    window (16/255 on vpt-nipogi/DEVICE31 over 1, 3, 6, 12 and 30 s), so the window does not hide a
+    dead channel: it is dark in every sample, and the samples are 10 s apart.
+
+    -> the brightest frame of the window, or None when the source cannot be read."""
+    import time
+    best = None
+    for i in range(max(1, SOURCE_LUMA_SAMPLES)):
+        if i:
+            time.sleep(SOURCE_LUMA_RESAMPLE_SECONDS)
+        y = luma(path_or_url, timeout, ssh, window=SOURCE_LUMA_WINDOW_SEC)
+        if y is None:
+            return None
+        best = y if best is None else max(best, y)
+        if best >= BLACK_LUMA:
+            return best      # a bright frame in the window: the channel plays
+    return best
 
 
 def _fetch(url, timeout=20):

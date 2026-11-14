@@ -118,7 +118,7 @@ through the device's own server (the same path the browser uses, the auto-sign t
 | capture | Meaning | What the job does |
 |---|---|---|
 | `ok` | fresh (≤ `RTSP_STALE_SECONDS`, 120 s) and **not** black (at least one of the two pictures is bright) | nothing; it also turns an `unverified` file device into a checked one |
-| `black` | **both** pictures are dark: the thumbnail (90th-percentile luma, ffmpeg `signalstats` YHIGH, under `RTSP_BLACK_LUMA` 32, on **three snapshots 10 s apart**) **and** the live video (the newest HLS segment, what the browser plays). Not the mean: a dark, letterboxed Sintel scene averaged under 24 and was called black | the source frame is measured too, **for an HLS channel** (the first frame of a file says nothing about the frame the tile shows): source bright = the host's capture is wrong, **reported**; source black too = the channel itself is black, **repaired from the lists** like a dead channel (only when `capture-mode` is `live`). A **file** is only reported, never blamed on the capture side: a dark frame of a looping clip is not a dead stream (2026-11-13) |
+| `black` | **both** pictures are dark: the thumbnail (90th-percentile luma, ffmpeg `signalstats` YHIGH, under `RTSP_BLACK_LUMA` 32, on **three snapshots 10 s apart**) **and** the live video (the newest HLS segment, what the browser plays). Not the mean: a dark, letterboxed Sintel scene averaged under 24 and was called black | the source is measured too, **for an HLS channel**, over a **window** of frames (2 a second for 6 s, sampled again 10 s later if the window is dark — the first frame of a channel says nothing about the channel: a Pluto TV ad break opens on 17/255, bug-5ab9d8b4): source bright = the host's capture is wrong, **reported**; source black too = the channel itself is black, **repaired from the lists** like a dead channel (only when `capture-mode` is `live`). A **file** is only reported, never blamed on the capture side: a dark frame of a looping clip is not a dead stream (2026-11-13) |
 | `stale` | older than 120 s | reported: the host stopped writing it (capture side) |
 | `multi_audio` | the host stream's newest segment (`segments/output.m3u8`, what the live player loads) carries more than one audio track | reported: hls.js buffers nothing, the live tile is black while the snapshot is fine. Fixed on the host 2026-11-12 (bug-ea31641c, virtualpytest 0d73213: `run_ffmpeg.sh` maps one usable audio track); a host still showing it runs the old script: restart `vpt-stream` there under the host lease (a host deploy does not restart it) |
 | `missing` / `unreachable` | 404, or the server did not answer after 3 tries | reported |
@@ -274,6 +274,42 @@ Two things the night of 2026-11-11 left open were closed on 2026-11-12 (both wit
   retry) after the wrong cause. The apply step always leaves a result behind, and the run also reads the lease CLI's own
   "lease … held, running …" line, so a failed apply is never reported as a refused lease. The lease CLI prints that line **before**
   the command runs, so the run reads its whole output, not the tail of it.
+
+### Night of 2026-11-14 (live, run by the nightly session)
+
+103 streams checked, **94 ok, 9 down**, **0 replaced**, 0 rolled back, 0 cameras down, 0 unverified. 15 hosts walked, 15 read,
+**no inventory error** (every server and every host answered the host-config GET). The journal holds 103 `check` events for
+this night and nothing else: no `replace`, no `rolled_back`, no `lease_not_granted`, no `apply_failed`.
+
+- The 9 down: 8 devices with an empty source (`vpt-nipogi` DEVICE4, 5, 6, 17, 22, 23, 24 and `vpt-pi4` DEVICE2; reported by
+  name, never changed) and `vpt-nipogi/DEVICE27`, which timed out once and played on the confirming re-probe (nothing touched).
+  Nothing was really down, so nothing had to be replaced and the pool was never used.
+- What the app shows (tile snapshots): 93 ok, 2 black, 6 unknown, 1 stale, 1 missing.
+  - The 1 stale tile, `vpt-nipogi/DEVICE21`, was a **host-side stall**, and it was repaired live. The capture's ffmpeg was wedged
+    at `frame= 2 fps=0.0`, its log kept moving (so the stale-log watchdog was blind) and its folder held **0 `.ts` segments**; the
+    tile's snapshot was 28 739 s old. `vpt-stream` was restarted on that host under its lease
+    (`vpt-lease run node1-vpt vpt-nipogi --kind host`), the capture wrote segments again (723 `.ts`, thumbnail age 0 s) and the tile
+    plays in the browser (`readyState` 4, the clock advances 84.5 s → 88.5 s, no failed HLS request, a live frame on the
+    screenshot). The watchdog that should have done this never fired: see bug-555e3c05 below.
+  - The 2 black tiles:
+    - `vpt-nipogi/DEVICE7` (Pluto TV) was a **false black**. The nightly judged the channel on its **first frame** only, and that
+      frame was the dark start of an ad break (the report reads `source_luma` 27; the nightly's own three probes of that source
+      read 144.0 / 17.0 / 116.0). The channel itself is bright: over a window its brightest frame reads 103-119 (windows of
+      1-30 s), and 140-194 on the re-check after the fix. The browser confirms the channel plays: `readyState` 4, the clock
+      advances 149 s → 152 s, and the tile shows a movie frame. The nightly called the channel black because of that one frame —
+      bug-5ab9d8b4, fixed the same night (the channel is now judged over a window; a channel that is really black stays black,
+      see `DEVICE31`).
+    - `vpt-nipogi/DEVICE31` (`FR Series — MDL`) is black for good: host snapshot 0, live layer 16, source 16 — and 16 over every
+      window (1, 3, 6, 12 and 30 s), so the window does not hide it. bug-de449145 is still open and `capture-mode` is still `dry`,
+      so the nightly reports it and changes nothing. This device has no device-control card, so there is no browser proof for it.
+- The pool was not touched: re-probed from `vpt-pi4` (the host that runs `vpt-rtsp`), `smoke` plays (h264 640x360) and the three
+  public candidates still time out on port 554, so nothing new is vetted (bug-c7c2bb0e, still `wontfix`).
+- Two defects the night turned up, each fixed on its own branch with a test:
+  - **bug-555e3c05** (VirtualPyTest): the capture watchdog compared the age of the newest `.ts` segment only when there *was* a
+    segment, so a grabber that wrote none was never restarted — exactly the `DEVICE21` case above, which stayed stale for 8 h
+    until a human restarted the service. The grabber's own start is now the clock for that case.
+  - **bug-5ab9d8b4** (mycodebox): the nightly judged a live channel on its first frame only — the `DEVICE7` case above. The
+    channel is now judged over a window of frames, so an ad break no longer reads as a dead channel.
 
 ## Private config (not in the repo)
 
