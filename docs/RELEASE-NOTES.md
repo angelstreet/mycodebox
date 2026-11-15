@@ -6,6 +6,11 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A channel whose own picture is black is now repaired by the nightly** — the capture-driven repair is live since
+  2026-11-15 (`<state>/rtsp-nightly/capture-mode`): a channel whose **own** frames are dark (not just the host's snapshot
+  of it) is replaced from the free lists like a dead one, once the safety checks agree (three dark snapshots 10 s apart,
+  the tile's live video, and the source's own frames over a window). A file is never replaced, and a host capture that is
+  dark while the source plays is only reported · area: rtsp-nightly
 - **A session brief no longer repeats the rules its repo already carries** (TASK-239 audit 2026-11-15, bug-4a33bae4) — `cbsession` printed the STATUS table and the goal rule in every prompt (1,914 words for a handover start) while 734 of the 832 words of those two blocks were word for word in the AGENTS.md the same brief tells the session to read, and the ship rule came three times. When the repo's AGENTS.md carries the STATUS table, the goal rule, the fix-first rule and the closing review, the brief now points to it (416 words for a handover start, 228 for a `-t` one); a repo without them keeps the full text. The STATUS table itself is brought up to the owner's rules of 2026-11-12 in its five copies: `done` only with nothing left and nothing unverified, `failed` only after an investigation, with `cause:` and `plan:` in its form · area: sessions
 - Manager event filter: time-box alerts and no-progress of a non-Claude session ride with the next wake, a disk alert under 95% no longer closes the batch window, the manager's own undelivered integration result and `cmtest-` probe stops are dropped; replay prints the kinds of the wakes that stay empty (bug-2279681a) · area: platform
 
