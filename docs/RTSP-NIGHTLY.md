@@ -139,6 +139,13 @@ The capture-driven repair has its own switch, `<state>/rtsp-nightly/capture-mode
 runs report-only until one clean night has been read (manager, 2026-11-11). The report ends with a
 `tile snapshots (what the app shows): {...}` count.
 
+**The switch is `live` since 2026-11-15** (the nightly session of 2026-11-11 flipped it, after four clean nights with the
+safety checks in place: three dark snapshots 10 s apart, the live video of the tile, and the source's own frames over a
+window — a channel must be dark in all of them). It replaces a channel whose **own** picture is black, the same way it
+replaces a dead one: same channel under a new URL, else another channel of the same group, renamed. A file is never
+replaced, and a host capture that is dark while the source plays is only reported. Back to report-only with
+`echo dry > ~/.local/state/ghosty/rtsp-nightly/capture-mode`.
+
 What this still does not see: a tile that is black only in the browser for a reason outside the host (session cookie, CORS,
 the page itself). The 2026-11-11 BFM2 case had two layers: first, the snapshot was bright and fresh, but the browser could not mint the host-session cookie on the
 other server (CORS refused the new `X-Control-Session` header), virtualpytest BUG-8e34e51d, fixed and deployed the same night (the snapshot now shows); second, its live player stayed black
@@ -334,7 +341,7 @@ this night and nothing else: no `replace`, no `rolled_back`, no `lease_not_grant
     to 152 s): the dark frame of the looping clip, not a dead stream.
   - `vpt-nipogi/DEVICE31` ("FR Series — MDL") is black for good: host snapshot 0, live layer 16, source 16 over every window.
     bug-de449145 is still open and `capture-mode` is still `dry`, so the nightly reports it and changes nothing. This device has
-    no device-control card, so there is no browser proof for it.
+    no device-control card, so there is no browser proof for it. (Switched on later the same day: see the next section.)
 - The pool was not touched: re-probed from `vpt-pi4` (the host that runs `vpt-rtsp`), `smoke` plays (h264 640x360) and the three
   public candidates still time out on port 554, so nothing new is vetted (bug-c7c2bb0e, still `wontfix`).
 - Two ideas the night turned up, both **fixed the same morning on this branch** (the night's report was truthful when it
@@ -346,6 +353,30 @@ this night and nothing else: no `replace`, no `rolled_back`, no `lease_not_grant
   - **bug-59664715**: for a file tile the report said "a dark frame of the looping clip itself" without comparing the
     clip's own picture. The clip's own picture is now measured (over a window, past a black leader), so the line says what
     was seen; a file is still only reported, never changed and never blamed on the capture side.
+
+### Later on the night of 2026-11-15 (the nightly session of 2026-11-11, live)
+
+The capture-driven repair was switched on (`<state>/rtsp-nightly/capture-mode` = `live`) after four clean nights with the
+safety checks in place, and the nightly repaired the one channel that is black for good. Three passes, because the first
+replacement died again minutes later:
+
+1. `vpt-nipogi/DEVICE31` ("FR Series — MDL", black on every night since 2026-11-12: host snapshot 0, live layer 16, source
+   16 over every window) was replaced under the host lease at 20:01 UTC with the full host-config payload, a 0600 backup
+   and a read-back diff, and renamed "FR Series — RMC Decouverte (1080p)". The first pass could not get the host lease (a
+   deployment held it: the 5-min wait ran out and the end-of-night retry's ticket was cancelled by the registry), so the
+   next pass took the lease and did the repair.
+2. **The new URL was dead 10 minutes later**: the CloudFront master from the upstream channel list still answered HTTP 200,
+   but every playback probe failed (no_connect, 6/6 from the host and from codebox): the signed segments inside the
+   playlist had expired. It had played at the selection *and* after the `vpt-stream` restart, so no single probe could have
+   caught it → **bug-80678895** (the candidate's lifetime, filed with the repro).
+3. The same night replaced it again (20:12 UTC) with **"FR Series — TFX (1080p)"**, verified after the run: the tile's
+   picture is fresh and bright (luma 169, live layer 155, one audio track) and the source plays from the host (h264
+   960x540). **bug-de449145** is closed.
+- The switch's safety held: only `DEVICE31` was a candidate. The other dark tiles of the night were left alone — a Pluto
+  channel whose own source was bright (a dark moment on the host capture side) and a looping clip's own dark frame.
+- The two bugs the 2026-11-15 night had still open are closed: **bug-9b0cd7b5** (a black tile is judged over three dark
+  snapshots 10 s apart, so a transient dark moment is no longer reported as a dead channel: `int-1a1ccd263728b7d8b`) and
+  **bug-de449145** (the capture-driven repair is live and repaired the channel).
 
 ## Private config (not in the repo)
 
