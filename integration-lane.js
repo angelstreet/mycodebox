@@ -612,9 +612,13 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
     const ok = e?.verdict === 'merge', f = e?.facts || {};
     jr({ decision_id: `lane-merge-${r.id}${r.attempt > 1 ? `-${r.attempt}` : ''}`, kind: 'merge', ts: iso(), question: `Merge ${r.branch} into ${c.target}?`, chosen: ok ? 'merge' : 'escalate',
       rationale: ok ? 'the merge floor passed on the current target; the lane tests the merge before it pushes' : reasons.join('; ') || 'not mergeable',
-      evidence: [`branch ${r.branch}@${String(r.branchSha || '').slice(0, 12)} -> ${c.target}`, `floor: ${ok ? 'passed' : reasons.join('; ') || 'failed'}`, `files: ${f.files?.length ?? 0}${f.docsOnly ? ' (docs-only)' : ''}`],
+      evidence: [`branch ${r.branch}@${String(r.branchSha || '').slice(0, 12)} -> ${c.target}`, `floor: ${ok ? 'passed' : reasons.join('; ') || 'failed'}`, `files: ${f.files?.length ?? 0}${f.docsOnly ? ' (docs-only)' : ''}`,
+        // who let an approval-gated item through, and how many image/video files it carried (owner 2026-11-15)
+        ...(r.approvedBy ? [`approved by ${r.approvedBy}`] : []), ...(f.media?.length ? [`image/video files: ${f.media.length}`] : [])],
       confidence: Number.isFinite(e?.decision?.confidence) ? e.decision.confidence : null, rollback: 'git revert -m 1 <merge commit> on the target branch (queued through the lane)',
-      session: r.session, repo: r.repo, branch: r.branch, target: c.target, request: r.id, ...(ok ? {} : { reasons }) });
+      session: r.session, repo: r.repo, branch: r.branch, target: c.target, request: r.id,
+      // the approver is in evidence only: a top-level approvedBy marks the approval record itself (merge-approval-<id>)
+      ...(f.media?.length ? { mediaFiles: f.media.length } : {}), ...(ok ? {} : { reasons }) });
   }
   function journalDeploy(r, c, o) {
     const dsha = r.deploySha || r.sha;   // a superseded merge deploys the green tip that carries it

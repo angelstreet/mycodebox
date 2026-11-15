@@ -42,6 +42,17 @@ test('finding 5: a lane verdict and a self deploy are journaled as decision reco
   assert.equal(x.state, 'returned'); assert.equal(e.journal.length, 1); assert.equal(e.journal[0].chosen, 'escalate'); assert.deepEqual(e.journal[0].reasons, ['too risky']);
 });
 
+test('an approved media merge journals who approved and how many image/video files it carried', async () => {
+  const w = makeWorld(); w.branch('feat', { 'new.js': 'x\n' });
+  const media = ['learn/out/s/f_0001.webp', 'learn/out/s/f_0002.webp', 'learn/out/s/f_0003.webp'];
+  const m = mk(w, { lane: { mergeEval: async () => ({ verdict: 'merge', reasons: [], facts: { files: ['new.js', ...media], media } }) } });
+  const r = await m.go({ branch: 'feat', approvedBy: 'manager' });
+  assert.equal(r.state, 'merged', JSON.stringify(r));
+  const mj = m.journal.find((j) => j.kind === 'merge' && j.chosen === 'merge');
+  assert.equal(mj.approvedBy, undefined); assert.equal(mj.mediaFiles, 3);
+  assert.ok(mj.evidence.includes('approved by manager') && mj.evidence.includes('image/video files: 3'), JSON.stringify(mj.evidence));
+});
+
 test('finding 6: the per-repo mergeOptOut reaches the lane evaluation', async () => {
   const w = makeWorld(); w.branch('feat', { 'new.js': 'x\n' });
   const before = w.main();
