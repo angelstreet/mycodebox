@@ -1959,21 +1959,21 @@ repository, run by the server in its own clone, one request at a time per repo (
 
 Owner: "done and goal not achieved should not be a done status: it should be blocked or failure, which means the agent needs help and the
 manager should look at it." opus-openexit ended `STATUS: done — anchor not valid ... no v3 was built`, task208-pick5 called radio green from
-success flags. Canonical rule text (AGENTS.md of mycodebox and VirtualPyTest, `cbsession` preamble for every prompt, the MAC-HOOK snippet; `test/status-honesty.test.js` keeps them equal to `docs/STATUS-TABLE.md`, owner 2026-11-11 third follow-up): **the seven STATUS words, one table, the first true row wins**:
+success flags. Canonical rule text (AGENTS.md of mycodebox and VirtualPyTest, `cbsession` preamble for a repo whose AGENTS.md lacks it: since 2026-11-15 a repo that carries the STATUS table, the goal rule, `--why-not-fixed` and the closing review in its AGENTS.md gets a pointer to it, 416 words instead of 1,914, the MAC-HOOK snippet; `test/status-honesty.test.js` keeps them equal to `docs/STATUS-TABLE.md`, owner 2026-11-11 third follow-up): **the seven STATUS words, one table, the first true row wins**:
 
 **The seven STATUS words (owner 2026-11-11). Take the first row that is true.**
 
 | # | Word | Use it when | Never when | Who acts next |
 |---|---|---|---|---|
-| 1 | `done` | The goal is reached, you have the proof, nothing of yours is still running | A part is open, a worker or job of yours still runs, or it is "merged, not checked" | Nobody |
+| 1 | `done` | The goal is reached, you have the proof, nothing of yours is still running, **nothing is left and nothing is unverified** | A part is open, a bug of the task is filed and not fixed, an item is unverified, a worker or job of yours still runs, or it is "merged, not checked" | Nobody |
 | 2 | `running` | Work **of yours** is still going: your background job, a worker session you started. You will be woken and continue | Nothing is actually running | Nobody; the harness wakes you |
 | 3 | `waiting` | You depend on something **not yours** that ends by itself: a lane request, a deploy, a lease ticket, another session's work, a named time | You could work on something else meanwhile, or nothing will ever end it | Nobody; the harness wakes you |
 | 4 | `needs-manager` | You need a decision or an answer (technical, merge, deploy, lease, design) | You have a recommendation and the choice is reversible: decide | Manager |
 | 5 | `needs-owner` | Money, customers, deleting shared data, a credential only the owner holds, a physical action | Anything else | Owner |
 | 6 | `blocked` | You **cannot work** and nothing running will fix it: someone must act (a device is dead, an access is missing) | Something is running or queued (that is `running` or `waiting`) | Manager |
-| 7 | `failed` | You stopped and the goal is **not** reached after you tried what you could | You have not tried, or work is still running | Manager |
+| 7 | `failed` | You stopped and the goal is **not** reached after you tried what you could, **and you investigated**: the line names the cause and the next plan | You have not tried, work is still running, or you have no cause and no plan yet | Manager |
 
-Forms: `done — <what> · goal: achieved · evidence: <links / run ids / frames>`; `running: <job id / worker names> — <what is left>`; `waiting: <id / ticket / session / time>`; `blocked: <what stops you> · tried: <list> · need: <who must do what>`; `failed — goal not achieved: <why> · tried: <list>`. "blocked: waiting on ..." is never right. A green / pass / proven claim carries its evidence.
+Forms: `done — <what> · goal: achieved · evidence: <links / run ids / frames>`; `running: <job id / worker names> — <what is left>`; `waiting: <id / ticket / session / time>`; `blocked: <what stops you> · tried: <list> · need: <who must do what>`; `failed — goal not achieved: <why> · tried: <list> · cause: <what you found> · plan: <next approach, who does it>`. "blocked: waiting on ..." is never right. A green / pass / proven claim carries its evidence.
 
 Before you fix a filed bug, run `found-bug --claim <id>` (exit 3: someone else is fixing it).
 

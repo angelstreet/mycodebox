@@ -117,3 +117,28 @@ test('cbsession: a docs* task gets a 30 min box and the no-lease / no-deploy lin
   fs.writeFileSync(h, 'Goal: fix the docs.\nDone when:\n1. merged\nTime box: 10 min\n');
   run('-x', '-n', 'docs-cbg-b', '-d', work, '-H', h); assert.match(promptOf('docs-cbg-b'), /Time box: 10 min/); assert.doesNotMatch(promptOf('docs-cbg-b'), /Time box: 30 min/);
 });
+
+// TASK-239 audit 2026-11-15: rules once. A repo whose AGENTS.md carries the four rule blocks gets a pointer, not a second copy.
+test('cbsession: a repo whose AGENTS.md carries the harness rules gets a pointer instead of the STATUS table and the goal rule; any other repo keeps the full text', () => {
+  const rules = path.join(home, 'rules'); fs.mkdirSync(rules);
+  fs.writeFileSync(path.join(rules, 'AGENTS.md'), '**The seven STATUS words**\n**Goal first, verification last**\nfound-bug --why-not-fixed\n## Closing Review\n');
+  const partial = path.join(home, 'partial'); fs.mkdirSync(partial);
+  fs.writeFileSync(path.join(partial, 'AGENTS.md'), '**The seven STATUS words**\n');
+  const words = (p) => p.split(/\s+/).filter(Boolean).length;
+  for (const [n, args] of [['cbr-h', ['-H', handover]], ['cbr-t', ['-t', 'do the thing']]]) {
+    assert.equal(run('-x', '-N', '-n', n, '-d', rules, ...args).status, 0);
+    const p = promptOf(n);
+    assert.match(p.split('\n').slice(0, 4).join('\n'), /Ship rule/);
+    assert.match(p, /The rules the harness checks are in the AGENTS\.md of this repo: read it before your first message/);
+    assert.doesNotMatch(p, /\| 7 \| `failed` \|/); assert.doesNotMatch(p, /\*\*Goal first, verification last \(owner/);
+    assert.match(p, /\nDone when:\n1\. /); assert.match(p, /\*\*No workers\*\*/); assert.match(p, /found-bug --claim <id>/);
+    assert.ok(words(p) <= 700, `${n}: ${words(p)} words`);
+    assert.equal((p.match(/`integrate request <branch> \[--deploy/g) || []).length, 1, 'the ship rule is stated once');
+  }
+  assert.match(promptOf('cbr-h'), /`vpt-lease claim <env> --any <group> --wait`/);
+  for (const [n, dir] of [['cbr-p', partial], ['cbr-n', work]]) {
+    assert.equal(run('-x', '-N', '-n', n, '-d', dir, '-H', handover).status, 0);
+    const p = promptOf(n);
+    assert.match(p, /\| 7 \| `failed` \|/); assert.match(p, /\*\*Goal first, verification last \(owner/); assert.match(p, /cause: <what you found> · plan: <next approach, who does it>/);
+  }
+});
