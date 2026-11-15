@@ -454,8 +454,28 @@ test('M6: an unscannable diff and a new binary file fail closed', async () => {
   assert.ok(big.scanError);
   assert.ok(mergeFloor(big, testEvidence(GREEN), {}).includes('diff too large or unreadable to scan'));
   const bin = await gitFacts({ cwd: makeRepo({ files: { 'x/data.bin': 'a\0b\0c', 'docs/shot.png': 'a\0b', 'frontend/public/project-pages/cov.png': 'a\0b', 'frontend/public/other/x.png': 'a\0b' } }), branch: 'feat' });
-  assert.deepEqual(bin.binary.sort(), ['frontend/public/other/x.png', 'x/data.bin']);
+  assert.deepEqual(bin.binary, ['x/data.bin']);
+  assert.deepEqual(bin.media, ['frontend/public/other/x.png']);
   assert.match(mergeFloor(bin, testEvidence(GREEN), {}).join(), /adds a binary file: x\/data\.bin/);
+  assert.match(mergeFloor(bin, testEvidence(GREEN), {}).join(), /adds 1 image\/video file \(needs --approved-by manager\): frontend\/public\/other\/x\.png/);
+});
+test('M6b: image/video files: out of the line scan, one reason, merge with a manager approval; other binaries never', async () => {
+  // 3000 frames of binary bytes: their diff headers alone used to pass the 2 MB scan cap (website 3D Learn cards, 2026-11-15)
+  const files = { 'learn/cards/c.html': '<p>card</p>\n', 'learn/out/s/anchors.js': 'window.A = {"frames": 3000};\n' };
+  for (let i = 1; i <= 3000; i++) files[`learn/out/blender/scene-with-a-long-name/f_${String(i).padStart(4, '0')}.webp`] = `RIFF\0WEBP\0${i}`;
+  const f = await gitFacts({ cwd: makeRepo({ files }), branch: 'feat' });
+  assert.equal(f.scanError, null);
+  assert.equal(f.media.length, 3000);
+  assert.deepEqual(f.binary, []);
+  const no = mergeFloor(f, testEvidence(GREEN), {});
+  assert.equal(no.length, 1, no.join('\n'));
+  assert.match(no[0], /^adds 3000 image\/video files \(needs --approved-by manager\): learn\/out\/blender\/scene-with-a-long-name\/f_0001\.webp, /);
+  assert.deepEqual(mergeFloor(f, testEvidence(GREEN), { approveInfra: true, approveMedia: true }), []);
+  // a manager approval never lets another binary through, and a media-named text file is still read for secrets
+  const g = await gitFacts({ cwd: makeRepo({ files: { 'a/f.webp': 'RIFF\0x', 'b/tool.bin': 'a\0b', 'c/fake.png': 'key = ' + 'AKIA' + 'X'.repeat(16) + '\n' } }), branch: 'feat' });
+  assert.deepEqual(g.media, ['a/f.webp']);
+  assert.match(mergeFloor(g, testEvidence(GREEN), { approveInfra: true, approveMedia: true }).join(), /adds a binary file: b\/tool\.bin/);
+  assert.ok(g.sensitive.some((x) => x.file === 'c/fake.png' && x.why === 'secret-content'), JSON.stringify(g.sensitive));
 });
 test('M7: CI / deploy / infra and more secret file names are sensitive', async () => {
   const { sensitivePath } = await import('../merge-policy.js');
