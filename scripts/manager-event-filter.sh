@@ -42,6 +42,9 @@
 # 2026-11-12, third set (the manager's field list of wakes it did nothing on): a `needs-manager` stop is keyed like an ask (`stop|<session>|nm|<first 40
 # normalised chars>`, deduped across runs for 6 h: one Mac session re-sent the same unanswered question 3 times in 4 h); the low-priority notices
 # (`bug drain dry: 0 started` is priority low) are deferred like the default-priority ones.
+# 2026-11-15 (bug-2279681a, the manager's list of wakes it did nothing on): time-box alerts (`time-box:*`) and a no-progress of a non-Claude session are deferred even though
+# no-progress is urgent; a disk / quota alert under 95% never closes the batch window (policy urgent applies from 95%); the manager's own undelivered integration result
+# (`int-*:*:manager:undelivered`) and the stops of the `cmtest-*` probe sessions are dropped. test/manager-event-filter.test.js pins each.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STATE_DIR="${GHOSTY_STATE_DIR:-$HOME/.local/state/ghosty}"
 POLICY_DEFAULT="$HERE/manager-event-policy.json"
@@ -78,7 +81,10 @@ jq -c --unbuffered --argjson policy "$POLICY" '
   # A stop that is a wait (a time, a lease held by someone, a queue, "waiting on"): the blocked check sends it back to the session; the manager reads it with its next wake.
   def waitish: (((.body//"")|tostring)|test("\\b(kept free|held|reserved|free)\\b[^.;]{0,40}\\buntil [0-9]{1,2}:[0-9]{2}|\\b(held|leased) by\\b|\\bis (held|leased)\\b|\\bwaiting on\\b|\\bwaits? (on|for)\\b|\\byielded\\b|\\bqueued (claims?|next|behind)";"i"));
   # Notices the manager left alone on 2026-11-11: they ride with the next wake, unless the policy file makes the kind urgent or pass (waiting, hold, no-progress, quota are urgent by default).
-  def notice: ((((.kind//"")|tostring)|test("^(waiting|bug-unreported|leftovers|no-progress|hold|bug-drain|orphaned-task)$|^int-[0-9a-f]+:cancelled$")) or ((.kind=="lease") and (.state=="nudge")));
+  def timebox: (((.key//"")|tostring)|test("^time-box:"));
+  def noclaude: ((.kind=="no-progress") and (((.body//"")|tostring)|test("not a Claude session")));
+  def notice: (timebox or noclaude or (((.kind//"")|tostring)|test("^(waiting|bug-unreported|leftovers|no-progress|hold|bug-drain|orphaned-task)$|^int-[0-9a-f]+:cancelled$")) or ((.kind=="lease") and (.state=="nudge")));
+  def lowdisk: ((.kind=="disk") and (pct != null) and (pct < 95));
   def routine:
     ((.kind=="deploy") and (.state=="start" or .state=="done") and ((.blockedBy//[])|length)==0)
     or ((.jev.pick=="ignore") and ((.jev.confidence//0) >= 0.9) and (.kind=="deploy") and (.state!="failed") and (.state!="orphan"))
@@ -86,6 +92,8 @@ jq -c --unbuffered --argjson policy "$POLICY" '
     or ((.kind=="lease") and (.state=="released") and (((.title//"")|test("\\((agent )?manager:deploy\\)")) or ((.body//"")|test("by manager:deploy \\(deploy-finished\\)"))))
     or ((.kind=="lease") and (.state=="narrowed") and ((.title//"")|test("\\(agent manager:deploy\\)$")) and ((.body//"")|test("by manager:deploy \\(deploy [0-9a-f]+: done on [^)]+\\)")))
     or (((.kind//"")|tostring|test("^int-[0-9a-f]+:(merged|deployed)$")) and ((.priority//"default")=="default"))
+    or (((.kind//"")|tostring|test("^int-[0-9a-f]+:[a-z]+:manager:undelivered$")) and ((.priority//"default")=="default"))
+    or ((((.session//"")|tostring)|test("^cmtest-")) and ((.priority//"default")=="default"))
     or ((.kind=="told") or ((.kind//"")|tostring|test("^unseen:")))
     or ((.kind=="lease") and (.state=="released" or .state=="expired" or .state=="system-wait"))
     or ((.handled//"")=="session")
@@ -97,11 +105,11 @@ jq -c --unbuffered --argjson policy "$POLICY" '
     or (((.kind//"")|tostring|test("^(kpi-|pokestall-|pokemon-daily-|mobile-orchtnet-owner$|opus-openexit$|content-|mi-bugs-|pi1-load-|task208-)")) and ((.priority//"default")=="default"));
   select(pol != "ignore") | select(pol == "pass" or (routine|not))
   | {k:(if stopish then ("stop|"+stopsess+"|"+stopnorm) elif nmish then ("stop|"+nmsess+"|nm|"+nmnorm) elif ((.kind=="disk" or .kind=="quota") and (pct != null) and (pct < 95)) then ("pctx|"+((.key//.kind)|tostring|gsub("\\s";""))+"|"+((pct/5|floor)|tostring)) else (.session//"")+"|"+.kind+"|"+(if .kind=="health" then (.key//"") else ((.body//"") as $b | (if ($b|test("needs-owner:")) then ($b|capture("needs-owner:(?<q>[^\\[]*)").q) else $b end) | gsub("·\\s*[0-9][0-9hms ]*·\\s*[0-9.]+[kM]?\\s*tok\\s*";"")|gsub("\\s";"")|.[0:80]) end) end),
-     u:((.kind!="bug") and (pol=="urgent" or ((.priority//"")=="high") or ((.priority//"")=="urgent"))),
+     u:((.kind!="bug") and (lowdisk|not) and (timebox|not) and (noclaude|not) and (pol=="urgent" or ((.priority//"")=="high") or ((.priority//"")=="urgent"))),
      d:(((.kind=="bug") and (pol!="urgent") and (pol!="pass"))
         or (stopish and waitish and ((((.body//"")|tostring)|test("needs-owner"))|not) and (pol!="pass"))
-        or (notice and (((.priority//"default")=="default") or ((.priority//"")=="low")) and (pol!="urgent") and (pol!="pass"))
-        or ((.kind=="disk" or .kind=="quota") and (pct != null) and (pct < 95) and (pol!="urgent") and (pol!="pass"))), l:.}' \
+        or (notice and (((.priority//"default")=="default") or ((.priority//"")=="low")) and ((pol!="urgent") or timebox or noclaude) and (pol!="pass"))
+        or (lowdisk and (pol!="pass"))), l:.}' \
 | awk -W interactive -v now="$NOW" -v seen="$SEEN_FILE" '
     function persist(k) { printf "%d %s\n", now, k >> seen; fflush(seen) }
     BEGIN {

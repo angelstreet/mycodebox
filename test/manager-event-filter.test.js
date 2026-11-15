@@ -286,3 +286,19 @@ test('a needs-manager stop re-sent with other words after its first 40 character
   const d = out(run(env, ev({ key: 'bug-drain:tick', kind: 'bug-drain', title: 'bug drain dry: 0 started', body: 'dry: disk 93% >= 90%.', priority: 'low' })));
   assert.equal(d.length, 1); assert.equal(d[0].d, true);
 });
+
+// 2026-11-15 (bug-2279681a): the manager's list of wakes it did nothing on
+test('time-box alerts and a non-Claude no-progress ride with the next wake; a sub-95% disk alert is never urgent (quota stays as the policy says); the manager\'s undelivered integration result and cmtest- stops are dropped', () => {
+  const dir = tmp('ghosty-filt-noise-'); const env = { ...process.env, GHOSTY_STATE_DIR: dir };
+  const out = (r) => r.stdout.split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  const o = out(run(env,
+    ev({ key: 'time-box:s1', kind: 's1', session: 'time-box', title: 's1 is past its time box (90 min) and keeps going', body: 'woken once 364 min ago' })
+    + ev({ key: 'rtsp:no-progress', kind: 'no-progress', session: 'rtsp', title: 'rtsp: no progress for 68 min', body: 'working for 68 min; no transcript (not a Claude session).' })
+    + ev({ key: 'mo:no-progress', kind: 'no-progress', session: 'mo', title: 'mo: repeats the same tool call', body: 'tool call Monitor repeated 5 times' })
+    + ev({ key: 'disk:/', kind: 'disk', title: 'codebox disk / 90% full', priority: 'urgent', body: 'at 90' })
+    + ev({ key: 'int-1abc:returned:manager:undelivered', kind: 'int-1abc:returned:manager:undelivered', session: 'integration', title: 'manager: integration result never delivered (never stopped)' })
+    + ev({ key: 'cmtest-probe:asks', kind: 'asks', session: 'cmtest-probe', title: 'cmtest-probe asks you', body: 'STATUS: blocked · 10s · 1k tok · x' })));
+  assert.deepEqual(o.map((x) => [x.l.key, !!x.d, !!x.u]), [
+    ['time-box:s1', true, false], ['rtsp:no-progress', true, false], ['mo:no-progress', false, true], ['disk:/', true, false]]);
+  assert.equal(out(run(env, ev({ key: 'disk:/', kind: 'disk', title: 'codebox disk / 96% full', priority: 'urgent', body: 'at 96' })))[0].u, true, '95% and over is urgent');
+});
