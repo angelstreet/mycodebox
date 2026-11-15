@@ -2070,6 +2070,7 @@ bug-2f32e7a7, bug-8fc8fc0d, bug-03ccc6a7, bug-80bdcdc1 · unverified: none · bu
   honesty, Verification, the goal question): `zap-nodes-restore` wrote three done lines with open leftovers and was never asked. The skip is gone; the git
   check finds no repository there and says nothing. Check (B) leftovers now also keeps to done turns under 6 h, like (C) / (F) / (H).
 - **Wake share to 25% (owner, 2026-11-13, TASK-239 G6, bug-67c65223)**: (1) `stop-answer.js` + `stopAnswerTick` (server.js, every 60 s): a stop event (`asks`,
+  - 2026-11-15 (bug-2279681a): `scripts/manager-event-filter.sh` defers `time-box:*` alerts and a no-progress of a non-Claude session even though no-progress is urgent, keeps a disk alert under 95% from closing the batch window, and drops `int-*:*:manager:undelivered` and `cmtest-*` session stops; `manager-wake-rules-replay.py` prints the event kinds of the empty wakes that stay.
   `needs-manager`, a `<session> asks:` manager item) older than 10 min with no `send` by `manager-agent` to that session in `stalls.jsonl` and no
   `manager-actions.jsonl` line naming it is typed to the manager once (pending-wakes key `stopans:<event key>@<at>`, up to 5 stops per text). (2) The 36
   "own background job" empty wakes of 2026-11-12 (`task_done`, summary not `manager-wait.sh`) were the manager's `<ledger echo | curl send>; manager-wait.sh`

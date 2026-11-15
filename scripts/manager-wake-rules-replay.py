@@ -20,12 +20,12 @@ wk=sorted([r for r in allw if isw(r)],key=lambda r:r["start"]); starts=[w["start
 bg=[r for r in allw if r.get("trigger")=="task_done" and not isw(r)]; rest=[r for r in allw if r.get("trigger")!="task_done"]
 def rule(e):   # the filter already dropped and deduped; what it marks `d` rides with the next wake
     return "defer:rides with the next wake" if e.get("d") else None
-per=collections.defaultdict(list); stopev=collections.defaultdict(bool)
+kinds=collections.defaultdict(set); per=collections.defaultdict(list); stopev=collections.defaultdict(bool)
 STOP=re.compile(r'(^|:)(asks|needs-manager)$')
 isstop=lambda e: bool(STOP.search(str(e.get('kind','')))) or (str(e.get('key','')).endswith(':manager-item') and bool(re.match(r'\S+ asks:',str(e.get('body','')))))
 for e in ev:
     i=bisect.bisect_left(starts,e["l"]["at"])
-    if i<len(wk): per[i].append(rule(e)); stopev[i]|=isstop(e['l'])
+    if i<len(wk): per[i].append(rule(e)); kinds[i].add(str(e["l"].get("kind"))[:28] if not e.get("d") else ""); stopev[i]|=isstop(e['l'])
 surv=[];why=collections.Counter();lost=[];deferred=[]
 for i,w in enumerate(wk):
     L=per.get(i)
@@ -41,7 +41,7 @@ for i,w in enumerate(wk):
         continue
     if all(r for r in L):   # only deferred (+dropped)
         deferred.append(dict(acted=not w.get("nothing"),t=w["start"])); why["defer:rides with the next wake"]+=1; continue
-    surv.append(dict(acted=not w.get("nothing"),t=w["start"],stop=stopev[i]))
+    surv.append(dict(acted=not w.get("nothing"),t=w["start"],stop=stopev[i],kinds=sorted(kinds[i]-{""})))
 # deferred wakes merge into the next surviving wake within 60 min, else one flush wake per hour bucket
 import datetime
 ts=lambda s: datetime.datetime.fromisoformat(s.replace("Z","+00:00")).timestamp()
@@ -64,3 +64,5 @@ harness=[x for x in final if not x.get("by")]; other=[x for x in final if x.get(
 left_stop=sum(1 for x in harness if not x["acted"] and x.get("stop")); left_noise=sum(1 for x in harness if not x["acted"] and not x.get("stop"))
 print(f"  by kind: harness-caused {len(harness)} wakes, empty {left_stop+left_noise} (after a stop {left_stop}, noise {left_noise}); owner/peer {len(other)} wakes, empty {sum(not x['acted'] for x in other)} (own row, not S7)")
 print(f"  S7 (harness-caused only): {left_stop+left_noise}/{len(harness)} ({100*(left_stop+left_noise)/max(1,len(harness)):.0f}%); with every stop answered: {left_noise}/{len(harness)} ({100*left_noise/max(1,len(harness)):.0f}%)")
+nk=collections.Counter(k for x in surv if not x["acted"] and not x.get("stop") for k in x.get("kinds",[]))
+print("  empty noise wakes by event kind:",dict(nk.most_common(12)))
