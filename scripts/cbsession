@@ -87,6 +87,14 @@ if [ "$NOWT" != 1 ] && [ -n "$TOP" ] \
 fi
 
 H="$HOME/handovers"; mkdir -p "$H"; P="$H/$NAME.prompt.md"; L="$H/$NAME.launch.sh"
+# Rules once (TASK-239 audit 2026-11-15): when the repo's AGENTS.md already carries the harness rules (STATUS table, goal rule,
+# fix-first / found-bug, closing review) the brief points to it instead of repeating them: 734 of the 832 words of the two rule
+# blocks were verbatim in the AGENTS.md the brief tells the session to read. A repo whose AGENTS.md lacks one of the four
+# (evolai, roblox-gen, client-cockpit on 2026-11-15) or has no AGENTS.md keeps the full text.
+RULES_IN_REPO=0; AG=
+for c in "$DIR/AGENTS.md" "${WT:-}/AGENTS.md" "${TOP:-}/AGENTS.md"; do [ -f "$c" ] && { AG=$c; break; }; done
+if [ -n "$AG" ] && grep -q 'seven STATUS words' "$AG" && grep -q 'Goal first, verification last' "$AG" \
+   && grep -q 'why-not-fixed' "$AG" && grep -qi 'closing review' "$AG"; then RULES_IN_REPO=1; fi
 # A -f brief that already IS ~/handovers/<NAME>.prompt.md: `cat "$PFILE" > "$P"` truncated it to the preamble and the
 # start died on "input file is output file" (bug-3ac8b59c). Read it from a copy instead.
 PFILE_TMP=
@@ -96,7 +104,26 @@ if [ -n "$HANDOVER" ]; then
   HANDOVER=$(cd "$(dirname "$HANDOVER")" && pwd)/$(basename "$HANDOVER")
   # Unquoted heredoc (it must interpolate $DIR/$HANDOVER): every ` ... ` is a command substitution unless escaped,
   # which silently ran the integration commands and emptied them out of the prompt (2026-10-20).
-  cat > "$P" <<EOF
+  if [ "$RULES_IN_REPO" = 1 ]; then cat > "$P" <<EOF
+You are picking up work in a fresh session on this host. Working directory: $DIR.
+Ship rule (owner 2026-11-11): after a change run the touched tests/typecheck yourself, commit, push your branch, \`integrate request <branch> [--deploy ...]\`; never ask permission for these and never end a turn with an offer ("I can ...", "if you want", "should I", "nothing is committed") for something the rules already authorise; verify UI yourself with headless Playwright (skill vpt-headless-verify); end with a STATUS line.
+0. First command: \`git worktree list\`; create or reuse your worktree (\`git worktree add <dir> -b <branch> origin/main\`) and
+   work only there, never in a shared checkout (~/ghosty-sessions, ~/virtualpytest): a guard reports edits made there.
+1. Read the handover: $HANDOVER, then the files it links as needed.
+2. Write a short summary of the current state and the open items in priority order.
+3. Then do the work, most important item first, and keep going until it is done or truly blocked; corrections come at the end.
+   The rules the harness checks are in this repo's AGENTS.md: read it before your first message. It holds the ship rule and
+   the integration lane, fix-first and \`found-bug\`, the closing review, the hard floor (what only the owner decides), the
+   STATUS table ("The seven STATUS words") and the goal rule ("Goal first, verification last"). This brief and AGENTS.md win
+   over older task docs and handovers that say "no push / no merge / no deploy" or "the owner merges".
+   On this host: claim a lease before using a shared host or device and hold it only while you control it; never wait on a
+   named device while an equivalent is free: \`vpt-lease claim <env> --any <group> --wait\` (groups: \`vpt-lease inventory <env>\`,
+   docs/LEASE-RULES.md). Run long jobs in the foreground of a background shell the harness tracks (never nohup, setsid, disown
+   or a trailing &): you are woken when they end. After \`integrate request\` keep working on anything that does not depend
+   on it; the lane tells you the result.
+End every turn with one STATUS line (the AGENTS.md table; needs-owner only for the hard floor).
+EOF
+  else cat > "$P" <<EOF
 You are picking up work in a fresh session on this host. Working directory: $DIR.
 Ship rule (owner 2026-11-11): after a change run the touched tests/typecheck yourself, commit, push your branch, \`integrate request <branch> [--deploy ...]\`; never ask permission for these and never end a turn with an offer ("I can ...", "if you want", "should I", "nothing is committed") for something the rules already authorise; verify UI yourself with headless Playwright (skill vpt-headless-verify); end with a STATUS line.
 0. First command: \`git worktree list\`; create or reuse your worktree (\`git worktree add <dir> -b <branch> origin/main\`) and
@@ -137,6 +164,7 @@ End every turn with one STATUS line, one of the seven words of the table at the 
 (without it ghosty pushes once): before it, update every doc your change makes stale, fix or found-bug each leftover and
 idea, and name what you did not verify (AGENTS.md "Closing review").
 EOF
+  fi
   [ "$WAIT" = 1 ] && printf '\nReview only (owner asked): after step 2, propose the next step and stop; do not start step 3.\n' >> "$P"
   [ -n "$TEXT" ] && printf '\nExtra instruction from the owner: %s\n' "$TEXT" >> "$P"
 elif [ -n "$PFILE" ]; then { printf '%s\n\n' 'Ship rule (owner 2026-11-11): after a change run the touched tests/typecheck yourself, commit, push your branch, `integrate request <branch> [--deploy ...]`; never ask permission for these and never end a turn with an offer ("I can ...", "if you want", "should I", "nothing is committed") for something the rules already authorise; verify UI yourself with headless Playwright (skill vpt-headless-verify); end with a STATUS line.'; cat "$PFILE"; } > "$P"; BUGRULE=1
@@ -147,10 +175,11 @@ else echo "cbsession: give -H HANDOVER, -f PROMPT_FILE or -t TEXT" >&2; exit 2; 
 [ -n "$WTCMD" ] && printf '\nYour worktree is ready: %s (branch %s, made by cbsession from main before this prompt). Work only there; rename the branch if the task needs another name.\n' "$DIR" "$WTB" >> "$P"
 # -f / -t prompts get the found-bugs rule too (every provider launches from this one file; owner 2026-10-28)
 [ "${BUGRULE:-}" = 1 ] && printf '\nFirst command: `git worktree list`; create or reuse your worktree and work only there, never in a shared checkout.\n' >> "$P"
-[ "${BUGRULE:-}" = 1 ] && printf '\nA bug you find: fix it now yourself, in its own worktree, when it is small and you have the repro (it does not have to be your task); file it only when it is large, needs another host/device/credentials, is an owner-floor item, or belongs to a live session\047s task; never end a turn with "I filed X so someone will fix it". Bug outside your scope: to file it run `found-bug --title ... --why-not-fixed large|other-area|host-or-device|credentials|owner-floor|live-session-task --reason "..." --repro ... --error ... --blocking yes|no` (check `found-bug --help`; if missing, POST the JSON to $GHOSTY_URL/api/bugs with curl, see docs/MAC-HOOK.md); never leave it in a closing line. A STATUS: done line ends with `bugs: none | fixed <what> | reported <id>`.\n' >> "$P"
-[ "${BUGRULE:-}" = 1 ] && printf '\nClosing review before any STATUS: done: update every doc your change makes stale now (task doc, REFERENCE/MAP/INDEX, user guide, skill, release note); fix each leftover or file it with found-bug; file each improvement idea with found-bug; name what you did not verify. The done line carries `closing review: docs <updated list|none needed> · leftovers <none|filed ids> · unverified <none|list>`.\n' >> "$P"
+[ "${BUGRULE:-}" = 1 ] && [ "$RULES_IN_REPO" = 0 ] && printf '\nA bug you find: fix it now yourself, in its own worktree, when it is small and you have the repro (it does not have to be your task); file it only when it is large, needs another host/device/credentials, is an owner-floor item, or belongs to a live session\047s task; never end a turn with "I filed X so someone will fix it". Bug outside your scope: to file it run `found-bug --title ... --why-not-fixed large|other-area|host-or-device|credentials|owner-floor|live-session-task --reason "..." --repro ... --error ... --blocking yes|no` (check `found-bug --help`; if missing, POST the JSON to $GHOSTY_URL/api/bugs with curl, see docs/MAC-HOOK.md); never leave it in a closing line. A STATUS: done line ends with `bugs: none | fixed <what> | reported <id>`.\n' >> "$P"
+[ "${BUGRULE:-}" = 1 ] && [ "$RULES_IN_REPO" = 0 ] && printf '\nClosing review before any STATUS: done: update every doc your change makes stale now (task doc, REFERENCE/MAP/INDEX, user guide, skill, release note); fix each leftover or file it with found-bug; file each improvement idea with found-bug; name what you did not verify. The done line carries `closing review: docs <updated list|none needed> · leftovers <none|filed ids> · unverified <none|list>`.\n' >> "$P"
+[ "${BUGRULE:-}" = 1 ] && [ "$RULES_IN_REPO" = 1 ] && printf '\n%s\n' 'The rules the harness checks are in this repo\047s AGENTS.md: read it before your first message (ship rule and integration lane, fix-first and `found-bug`, closing review, hard floor, the STATUS table, the goal rule).' >> "$P"
 # STATUS vocabulary (owner 2026-11-11, status-honesty.js): every prompt, every provider. The table is docs/STATUS-TABLE.md, verbatim.
-{ printf '\n'; cat <<'STATUS_TABLE'
+{ if [ "$RULES_IN_REPO" = 0 ]; then printf '\n'; cat <<'STATUS_TABLE'
 **The seven STATUS words (owner 2026-11-11). Take the first row that is true.**
 
 | # | Word | Use it when | Never when | Who acts next |
@@ -165,6 +194,7 @@ else echo "cbsession: give -H HANDOVER, -f PROMPT_FILE or -t TEXT" >&2; exit 2; 
 
 Forms: `done — <what> · goal: achieved · evidence: <links / run ids / frames>`; `running: <job id / worker names> — <what is left>`; `waiting: <id / ticket / session / time>`; `blocked: <what stops you> · tried: <list> · need: <who must do what>`; `failed — goal not achieved: <why> · tried: <list>`. "blocked: waiting on ..." is never right. A green / pass / proven claim carries its evidence.
 STATUS_TABLE
+fi
 printf '\n%s\n' 'Before you fix a filed bug, run `found-bug --claim <id>` (exit 3: someone else is fixing it).'; } >> "$P"
 # Goal, Done when, Time box (owner 2026-11-11, docs/GOAL-RULE.md): a task opens and closes with the same list. The Done-when lines and the time box come from -D / -T,
 # else from the brief (`Done when:` numbered lines, `Time box:`); they go into the prompt, and the server stores them with the goal in goals.json (outside the worktree).
@@ -212,7 +242,7 @@ if [ "$HAVE_GOAL" = 0 ] && ! grep -qiE '^[*_#> ]*goal ?:' "$P"; then
   printf '\n%s\n' 'No `Goal:` line came with this brief: write it yourself as the first thing you say (`Goal: <one sentence>`, then `Done when:` and `Time box:`), then work.' >> "$P"
 fi
 # the rule text (docs/GOAL-RULE.md), verbatim, for every prompt and provider
-{ printf '\n'; cat <<'GOAL_RULE'
+{ if [ "$RULES_IN_REPO" = 0 ]; then printf '\n'; cat <<'GOAL_RULE'
 **Goal first, verification last (owner 2026-11-11).** A task opens and closes with the same list.
 
 - **First**: before any work, the task has `Goal: <one sentence>` and `Done when:` with 1 to 5 numbered lines, each checkable by something other than you: a fact the harness holds (merged, deployed, bug resolved), a command or URL with a pass / fail result, or an observation with an artefact (run id, report link, frame). The brief did not give them: write them yourself as the first thing you say, then work. A line you cannot check is rewritten, not dropped.
@@ -223,6 +253,7 @@ fi
 - **Done only with nothing open** (owner 2026-11-12): `done` needs `leftovers none` and `unverified none` in its closing review. A filed bug is not a finished task and an unverified item is a check not made: finish it, verify it, or end on the word that is true (`running`, `waiting`, `needs-manager`, `blocked`, `failed` with cause and plan). A bug outside the task goes in `bugs: reported <id>` and does not hold the line. A `done` line with anything open is sent back.
 - **Release note and bug record for shipped code** (owner 2026-11-13): after you merge code (not docs-only), the closing review's `docs` names the release-note entry you added (VirtualPyTest `docs/release_note/README.md`, mycodebox `docs/RELEASE-NOTES.md`; the done-check reads the merged diff, words alone do not count) or says `release note none needed: <reason>`. If the work fixed something, `bugs:` names the bug id (file it with `found-bug`, resolve it with `found-bug --resolve <id> --commit <integration id>`, then `bugs: fixed <id>`); `bugs: none` after a fix needs a reason. A done line without them is sent back once.
 GOAL_RULE
+  fi
   if [ "$WORKERS" = 1 ]; then printf '\n%s\n' '**Workers** (owner 2026-11-13): this brief allows workers (cbsession -K). Use them only where they save time, and never wait on an idle one: if a worker is idle for 10 min, do the work yourself.'
   else printf '\n%s\n' '**No workers** (owner 2026-11-13): do all the work yourself. Do not start workers (cbsession, other sessions, V2 tasks) or hand work to peers unless this brief or the owner says "workers: allowed".'; fi
 } >> "$P"
