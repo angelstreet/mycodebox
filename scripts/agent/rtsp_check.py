@@ -296,14 +296,21 @@ STALE_SECONDS = int(os.environ.get('RTSP_STALE_SECONDS', '120'))  # latest.jpg i
 SOURCE_LUMA_WINDOW_SEC = float(os.environ.get('RTSP_SOURCE_LUMA_WINDOW_SEC', '6'))
 SOURCE_LUMA_SAMPLES = int(os.environ.get('RTSP_SOURCE_LUMA_SAMPLES', '3'))
 SOURCE_LUMA_RESAMPLE_SECONDS = float(os.environ.get('RTSP_SOURCE_LUMA_RESAMPLE_SECONDS', '10'))
+# The tile's LIVE layer is judged over a window of the host's recent segments, not over the single newest one:
+# the newest segment can be dark for a moment (a Pluto ad break, the dark credits of a looping clip) while the
+# tile plays. vpt-nipogi/DEVICE10 read black at 05:48 on 2026-11-15 and played again minutes later
+# (bug-37646a38). A tile that is really black stays dark over the whole window (vpt-nipogi/DEVICE31: 16/255).
+TILE_LIVE_WINDOW_SECONDS = float(os.environ.get('RTSP_TILE_LIVE_WINDOW_SECONDS', '30'))
+TILE_LIVE_WINDOW_MAX_SEGMENTS = int(os.environ.get('RTSP_TILE_LIVE_WINDOW_MAX_SEGMENTS', '60'))
 
 
-def luma(path_or_url, timeout=20, ssh=None, all_frames=False, window=None):
+def luma(path_or_url, timeout=20, ssh=None, all_frames=False, window=None, seek=None):
     """Brightness of the bright part (signalstats YHIGH, 90th percentile) of the first frame of a picture or stream, or None.
     all_frames: every frame of the file (a live segment): the brightest picture it holds.
     window: read this many seconds of the source (2 frames a second) and return the BRIGHTEST frame
       of that window, not its first one. A live channel is judged over a window: its first frame can
       be the dark start of an ad break while the channel itself plays bright.
+    seek: read from this second on (a film can open on a black leader).
     """
     v = clean_value(path_or_url)
     opts = (['-rtsp_transport', 'tcp'] if is_rtsp(v) else ['-rw_timeout', str(int(timeout * 1e6))] if is_http(v) else [])
@@ -316,9 +323,11 @@ def luma(path_or_url, timeout=20, ssh=None, all_frames=False, window=None):
     vf = 'signalstats,metadata=print:key=lavfi.signalstats.YHIGH'
     if window and not all_frames:
         vf = f'fps=2,{vf}'   # 2 frames a second: the window is sampled, not read frame by frame
+    cmd = [FFMPEG, '-v', 'info', *opts]
+    if seek is not None:
+        cmd += ['-ss', str(seek)]   # an input seek: read further into the file
     try:
-        p = _run([FFMPEG, '-v', 'info', *opts, '-i', v, *frames, '-vf',
-                  vf, '-f', 'null', '-'], timeout, ssh)
+        p = _run(cmd + ['-i', v, *frames, '-vf', vf, '-f', 'null', '-'], timeout, ssh)
     except (subprocess.TimeoutExpired, OSError):
         return None
     m = re.findall(r'YHIGH=([0-9.]+)', (p.stderr or '') + (p.stdout or ''))
@@ -353,6 +362,21 @@ def source_luma(path_or_url, timeout=20, ssh=None):
     return best
 
 
+def file_luma(path, timeout=20, ssh=None):
+    """How bright the picture of a FILE itself is: over a window, and past a black leader (a film can open on
+    seconds of black, the same place the frozen probe looks). -> the brightest frame found, or None when the
+    file cannot be read. A file is only reported, never changed: this measures the clip, it never acts on it
+    (bug-59664715)."""
+    best = luma(path, timeout, ssh, window=SOURCE_LUMA_WINDOW_SEC)
+    dur = _duration(path, timeout, ssh)
+    seek = FILE_LEADER_SEEK if dur <= 0 else int(min(FILE_LEADER_SEEK, max(1.0, dur / 2)))
+    deep = luma(path, timeout, ssh, window=SOURCE_LUMA_WINDOW_SEC, seek=seek)
+    for y in (best, deep):
+        if y is not None and (best is None or y > best):
+            best = y
+    return best
+
+
 def _fetch(url, timeout=20):
     """GET through the device's server with the auto-sign header, 3 tries on 5xx / network errors.
     -> (status, body, last_modified); status 'ok' | 'missing' | 'unreachable'."""
@@ -380,21 +404,23 @@ def _bytes_luma(body, timeout=20):
         return luma(f.name, timeout)
 
 
-def stream_media(base, timeout=20):
-    """What the browser player loads: the host's newest HLS segment.
-    -> (audio_tracks, luma) of that segment, (None, None) when it cannot be read.
-    audio: hls.js does not play a TS with several audio tracks (bug-ea31641c): the live tile stays black.
-    luma: the live layer's brightness (the tile's video, not its thumbnail)."""
+def playlist_segments(body):
+    """-> [(segment name, duration in s)] of an HLS media playlist, oldest first."""
+    segs, dur = [], 0.0
+    for line in (body or b'').decode('utf-8', 'replace').splitlines():
+        line = line.strip()
+        if line.startswith('#EXTINF:'):
+            m = re.search(r'#EXTINF:\s*([0-9.]+)', line)
+            dur = float(m.group(1)) if m else 0.0
+        elif line and not line.startswith('#'):
+            segs.append((line, dur))
+            dur = 0.0
+    return segs
+
+
+def _segment_audio_luma(body, timeout=20):
+    """-> (audio track count, brightest frame luma) of one media segment."""
     import tempfile
-    st, pl, _ = _fetch(f'{base}/segments/output.m3u8', timeout)
-    if st != 'ok':
-        return None, None
-    segs = [x.strip() for x in pl.decode('utf-8', 'replace').splitlines() if x.strip() and not x.startswith('#')]
-    if not segs:
-        return None, None
-    st, body, _ = _fetch(f'{base}/segments/{segs[-1]}', timeout)
-    if st != 'ok':
-        return None, None
     with tempfile.NamedTemporaryFile(suffix='.ts') as f:
         f.write(body or b''); f.flush()
         try:
@@ -407,6 +433,43 @@ def stream_media(base, timeout=20):
         if p is not None:
             audio = len({line.split(',')[0] for line in p.stdout.split() if line.strip().endswith(',audio')})
         return audio, luma(f.name, timeout, all_frames=True)
+
+
+def stream_media(base, timeout=20):
+    """What the browser player loads: the host's newest HLS segment.
+    -> (audio_tracks, luma) of that segment, (None, None) when it cannot be read.
+    audio: hls.js does not play a TS with several audio tracks (bug-ea31641c): the live tile stays black.
+    luma: the live layer's brightness (the tile's video, not its thumbnail), judged over a WINDOW of the
+    host's recent segments: the newest segment alone can be dark for a moment while the tile plays
+    (bug-37646a38: vpt-nipogi/DEVICE10 read black at 05:48 on 2026-11-15 and played again minutes later)."""
+    st, pl, _ = _fetch(f'{base}/segments/output.m3u8', timeout)
+    if st != 'ok':
+        return None, None
+    segs = playlist_segments(pl)
+    if not segs:
+        return None, None
+    st, body, _ = _fetch(f'{base}/segments/{segs[-1][0]}', timeout)
+    if st != 'ok':
+        return None, None
+    audio, live = _segment_audio_luma(body, timeout)
+    if live is not None and live < BLACK_LUMA:
+        # The newest segment is dark: walk back over the host's recent segments and keep the brightest frame.
+        # A tile that plays shows it in that window; a tile that is really black stays dark in all of it.
+        spent, count = 0.0, 0
+        for name, dur in reversed(segs[:-1]):
+            if spent >= TILE_LIVE_WINDOW_SECONDS or count >= TILE_LIVE_WINDOW_MAX_SEGMENTS:
+                break
+            spent += dur
+            count += 1
+            st2, body2, _ = _fetch(f'{base}/segments/{name}', min(timeout, 8))
+            if st2 != 'ok':
+                break
+            y = _segment_audio_luma(body2, min(timeout, 8))[1]
+            if y is not None and y > live:
+                live = y
+            if live >= BLACK_LUMA:
+                break
+    return audio, live
 
 
 def capture_check(e, timeout=20):
