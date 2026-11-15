@@ -264,6 +264,7 @@ def run(mode, timeout=10):
         row.update({k: v for k, v in cap.items() if k != 'detail'})
         src_ok = r['status'] in rc.OK_STATES
         black_src = False
+        file_black = src_ok and cap['capture'] == 'black' and e['kind'] == 'file'
         if src_ok and cap['capture'] == 'black' and e['kind'] == 'hls':
             # Judge the channel over a WINDOW of frames, not on its first frame (2026-11-14): the first frame of a
             # Pluto TV channel is the dark start of an ad break (17/255 on vpt-nipogi/DEVICE7) while the channel
@@ -272,17 +273,27 @@ def run(mode, timeout=10):
             y = rc.source_luma(e['url'], 20, ssh_map.get(e['host']))
             row['source_luma'] = None if y is None else round(y, 1)
             black_src = y is not None and y < rc.BLACK_LUMA
-        if src_ok and not black_src and cap['capture'] not in ('ok', 'unknown'):
+        if file_black:
+            # A file is only reported, never changed, and never blamed on the capture side (owner, 2026-11-13).
+            # The clip's own picture is measured now (bug-59664715), so the line says what was seen instead of
+            # assuming a cause: the clip's own dark frame, or a tile that shows something else.
+            fl = rc.file_luma(e['url'], 20, ssh_map.get(e['host']))
+            row['source_luma'] = None if fl is None else round(fl, 1)
+            if fl is None:
+                row['action'] = ("report: the tile's snapshot and its live video are black: the clip's own picture could"
+                                 " not be read (the capture side is not proven), not changed")
+            elif fl < rc.BLACK_LUMA:
+                row['action'] = ("report: the tile's snapshot and its live video are black, and the clip's own picture is"
+                                 f" dark too (luma {row['source_luma']}): the black frame is the clip's own, not a dead"
+                                 " stream, not changed")
+            else:
+                row['action'] = (f"report: the clip plays (luma {row['source_luma']}) but the tile's snapshot and its live"
+                                 " video are black: the tile's own frames are dark, not changed")
+        elif src_ok and not black_src and cap['capture'] not in ('ok', 'unknown'):
             if cap['capture'] == 'multi_audio':
                 row['action'] = (f"report: the source plays but the host stream has {cap.get('audio')} audio tracks: the browser's"
                                  " live player cannot play it: the host's vpt-stream runs a run_ffmpeg.sh from before the one-track"
                                  " fix (bug-ea31641c): restart vpt-stream on that host under its lease, not changed")
-            elif cap['capture'] == 'black' and e['kind'] == 'file':
-                # A looping clip is not a channel: the source frame is only compared for HLS channels (the first frame of a
-                # file says nothing about the frame the tile shows), so the capture side is not proven (2026-11-13).
-                row['action'] = ("report: the tile's snapshot and its live video are black: a dark frame of the looping clip"
-                                 " itself, not a dead stream (the capture side is not proven: the source frame is only"
-                                 " compared for HLS channels), not changed")
             else:
                 what = ("the tile's snapshot and its live video are black" if cap['capture'] == 'black'
                         else f"the tile's snapshot is {cap['capture']}")
@@ -293,7 +304,8 @@ def run(mode, timeout=10):
             # The thumbnail was dark but the live video plays: the tile is not broken, a looping clip simply moves
             # (2026-11-13, bug-6b227d92). Say so instead of losing it.
             dark_thumb = cap.get('luma') is not None and cap['luma'] < rc.BLACK_LUMA
-            row['action'] = ("note: the tile's snapshot was dark but the live video plays (a dark moment of the clip),"
+            moment = 'clip' if e['kind'] == 'file' else 'channel'
+            row['action'] = (f"note: the tile's snapshot was dark but the live video plays (a dark moment of the {moment}),"
                              " not changed") if cap['capture'] == 'ok' and dark_thumb else (
                             'none' if r['status'] == 'ok' or cap['capture'] == 'ok'
                             else 'report: cannot verify from codebox (no ssh alias, no host snapshot)')

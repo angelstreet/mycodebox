@@ -118,7 +118,7 @@ through the device's own server (the same path the browser uses, the auto-sign t
 | capture | Meaning | What the job does |
 |---|---|---|
 | `ok` | fresh (≤ `RTSP_STALE_SECONDS`, 120 s) and **not** black (at least one of the two pictures is bright) | nothing; it also turns an `unverified` file device into a checked one |
-| `black` | **both** pictures are dark: the thumbnail (90th-percentile luma, ffmpeg `signalstats` YHIGH, under `RTSP_BLACK_LUMA` 32, on **three snapshots 10 s apart**) **and** the live video (the newest HLS segment, what the browser plays). Not the mean: a dark, letterboxed Sintel scene averaged under 24 and was called black | the source is measured too, **for an HLS channel**, over a **window** of frames (2 a second for 6 s, sampled again 10 s later if the window is dark — the first frame of a channel says nothing about the channel: a Pluto TV ad break opens on 17/255, bug-5ab9d8b4): source bright = the host's capture is wrong, **reported**; source black too = the channel itself is black, **repaired from the lists** like a dead channel (only when `capture-mode` is `live`). A **file** is only reported, never blamed on the capture side: a dark frame of a looping clip is not a dead stream (2026-11-13) |
+| `black` | **both** pictures are dark: the thumbnail (90th-percentile luma, ffmpeg `signalstats` YHIGH, under `RTSP_BLACK_LUMA` 32, on **three snapshots 10 s apart**) **and** the live video (the host's newest HLS segment, what the browser plays — and, when that segment is dark, the **window of the host's recent segments** (`RTSP_TILE_LIVE_WINDOW_SECONDS`, 30 s): one dark segment does not call the tile black, bug-37646a38). Not the mean: a dark, letterboxed Sintel scene averaged under 24 and was called black | the source is measured too, **for an HLS channel**, over a **window** of frames (2 a second for 6 s, sampled again 10 s later if the window is dark — the first frame of a channel says nothing about the channel: a Pluto TV ad break opens on 17/255, bug-5ab9d8b4): source bright = the host's capture is wrong, **reported**; source black too = the channel itself is black, **repaired from the lists** like a dead channel (only when `capture-mode` is `live`). A **file** is measured too (bug-59664715): the clip's own picture, over a window and past its black leader, so the line says what was seen instead of assuming a cause. A file is still only reported, never changed and never blamed on the capture side: a dark frame of a looping clip is not a dead stream (2026-11-13) |
 | `stale` | older than 120 s | reported: the host stopped writing it (capture side) |
 | `multi_audio` | the host stream's newest segment (`segments/output.m3u8`, what the live player loads) carries more than one audio track | reported: hls.js buffers nothing, the live tile is black while the snapshot is fine. Fixed on the host 2026-11-12 (bug-ea31641c, virtualpytest 0d73213: `run_ffmpeg.sh` maps one usable audio track); a host still showing it runs the old script: restart `vpt-stream` there under the host lease (a host deploy does not restart it) |
 | `missing` / `unreachable` | 404, or the server did not answer after 3 tries | reported |
@@ -129,8 +129,11 @@ another. So a dark thumbnail alone is reported as a **note** ("the tile's snapsh
 broken tile; `black` means both are dark. The live layer is read from the host's newest HLS segment (`segments/output.m3u8`),
 the same bytes the browser's player loads; they are fetched once per device and the audio-track count comes from them too.
 Its luma is the **brightest** picture that segment holds (the 90th percentile over its frames), not its first frame: a
-segment's first frame can be a transition frame and read black while the tile plays. The report carries both luma's per
-device (`luma` = the thumbnail, `live_luma` = the live video).
+segment's first frame can be a transition frame and read black while the tile plays. When that segment is dark, the live
+layer is read over a **window of the host's recent segments** (30 s, `RTSP_TILE_LIVE_WINDOW_SECONDS`): the host keeps
+375 of them (2.5 min), so a tile that played a moment ago is seen, and a tile that is really black stays dark in all of
+them (bug-37646a38: `vpt-nipogi/DEVICE10` read black at 05:48 on 2026-11-15 and played again minutes later).
+The report carries both luma's per device (`luma` = the thumbnail, `live_luma` = the live video).
 
 The capture-driven repair has its own switch, `<state>/rtsp-nightly/capture-mode` (`dry` unless it holds `live`), so it
 runs report-only until one clean night has been read (manager, 2026-11-11). The report ends with a
@@ -334,12 +337,15 @@ this night and nothing else: no `replace`, no `rolled_back`, no `lease_not_grant
     no device-control card, so there is no browser proof for it.
 - The pool was not touched: re-probed from `vpt-pi4` (the host that runs `vpt-rtsp`), `smoke` plays (h264 640x360) and the three
   public candidates still time out on port 554, so nothing new is vetted (bug-c7c2bb0e, still `wontfix`).
-- Two ideas filed, both about how the nightly reads a tile (the night's report was truthful at the time it was written, so
-  neither is a defect to repair):
-  - **bug-37646a38**: the tile's live layer is read from the single newest segment, so one dark segment decides the verdict for
-    the whole night — the `DEVICE10` case above, where the tile played again minutes later.
-  - **bug-59664715**: for a file tile the report says "a dark frame of the looping clip itself" without comparing the file's own
-    picture (the source frame is only compared for HLS channels), so the claim stays an assumption.
+- Two ideas the night turned up, both **fixed the same morning on this branch** (the night's report was truthful when it
+  was written, so neither cost the night a stream):
+  - **bug-37646a38**: the tile's live layer was read from the single newest segment, so one dark segment decided the
+    verdict for the whole night — the `DEVICE10` case above, where the tile played again minutes later. The live layer is
+    now judged over a window of the host's recent segments (30 s): a tile that plays shows it there, a tile that is really
+    black stays dark in all of it (`DEVICE31` stays black).
+  - **bug-59664715**: for a file tile the report said "a dark frame of the looping clip itself" without comparing the
+    clip's own picture. The clip's own picture is now measured (over a window, past a black leader), so the line says what
+    was seen; a file is still only reported, never changed and never blamed on the capture side.
 
 ## Private config (not in the repo)
 

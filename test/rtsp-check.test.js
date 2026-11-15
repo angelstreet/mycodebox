@@ -110,13 +110,20 @@ async function world({ devices, pool, leaseBusy = false, leaseMissing = false, l
         if (kind === 'MISSING') { res.statusCode = 404; return res.end(); }
         if (kind.startsWith('MULTI')) return res.end('PICTURE'); // a fine snapshot; the stream is the problem
         res.setHeader('Last-Modified', new Date(Date.now() - (kind === 'STALE' ? 3600e3 : 1e3)).toUTCString());
-        return res.end(kind === 'STALE' ? 'PICTURE' : kind);
+        // DARKNEWEST: a dark snapshot and a dark newest segment (the tile played a moment ago)
+        return res.end(kind === 'STALE' ? 'PICTURE' : (kind === 'DARKNEWEST' ? 'BLACK' : kind));
       }
       const sg = u.pathname.match(/^\/host\/([^/]+)\/stream\/([^/]+)\/segments\/(.+)$/);
       if (sg) { // the stream the live player loads: MULTI4 = 4 audio tracks in its segments, BLACKLIVE = a black live layer, else 1
         const kind = snapshots[sg[2]] || '';
         const n = kind.startsWith('MULTI') ? kind.slice(5) : '1';
-        if (sg[3] === 'output.m3u8') return res.end('#EXTM3U\n#EXTINF:0.4,\nsegment_1.ts\n');
+        if (sg[3] === 'output.m3u8') {
+          // DARKNEWEST: the newest segment is dark, the one before it plays (the live layer over a window)
+          return res.end(kind === 'DARKNEWEST'
+            ? '#EXTM3U\n#EXTINF:0.4,\nsegment_1.ts\n#EXTINF:0.4,\nsegment_2.ts\n'
+            : '#EXTM3U\n#EXTINF:0.4,\nsegment_1.ts\n');
+        }
+        if (kind === 'DARKNEWEST' && sg[3] === 'segment_2.ts') return res.end('BLACKTS');
         return res.end(kind === 'BLACKLIVE' ? 'BLACKTS' : `TS${n}`);
       }
       res.statusCode = 404; send({});
@@ -377,15 +384,52 @@ test('a black tile needs both layers dark: a dark thumbnail with a live tile tha
   assert.equal(w.posts.length, 0);
 });
 
-test('a file whose tile snapshot is black is not blamed on the capture side (the source frame is only compared for HLS channels)', async () => {
+test('a file whose tile snapshot is black is measured against the clip itself and never blamed on the capture side', async () => {
   const w = await world({ pool: POOL, snapshots: { 'cap-Clip36': 'BLACKLIVE', 'cap-BFM2': 'BLACKLIVE' }, devices: {
     DEVICE1: { ...dev('Clip 36', '/var/lib/vpt-movies/36_elephants_12.mp4'), DEVICE_MODEL: 'rtsp_video' },
     DEVICE2: { ...dev('BFM2', 'https://cdn.example/good/bfm2.m3u8'), DEVICE_MODEL: 'rtsp_video' } } });
   const r = await py(REPLACE, ['--mode', 'live'], w.E);
   w.close();
-  assert.match(r.stdout, /DEVICE1\s+file\s+ok -> report: the tile's snapshot and its live video are black: a dark frame of the looping clip itself, not a dead stream/, r.stdout);
-  assert.doesNotMatch(r.stdout, /DEVICE1[^\n]*host capture side/, 'a file must not be blamed on the capture side: no source frame was compared');
+  // the clip itself plays (the fake ffmpeg reads 190 for it): the tile's black frames are the tile's own
+  assert.match(r.stdout, /DEVICE1\s+file\s+ok -> report: the clip plays \(luma 190(?:\.0)?\) but the tile's snapshot and its live video are black/, r.stdout);
+  assert.doesNotMatch(r.stdout, /DEVICE1[^\n]*host capture side/, 'a file must not be blamed on the capture side');
   assert.match(r.stdout, /DEVICE2\s+hls\s+ok -> report: the source plays but the tile's snapshot and its live video are black: host capture side/, r.stdout);
+  assert.equal(w.posts.length, 0);
+});
+
+test('a file tile says the clip own picture is dark only when it was measured (bug-59664715)', async () => {
+  const w = await world({ pool: POOL, snapshots: { 'cap-DarkClip': 'BLACKLIVE', 'cap-BrightClip': 'BLACKLIVE' }, devices: {
+    // "blacksrc": the fake ffmpeg reads 17 for that path (a clip whose own picture is dark)
+    DEVICE1: { ...dev('Dark Clip', '/var/lib/vpt-movies/blacksrc.mp4'), DEVICE_MODEL: 'rtsp_video' },
+    DEVICE2: { ...dev('Bright Clip', '/var/lib/vpt-movies/36_elephants_12.mp4'), DEVICE_MODEL: 'rtsp_video' } } });
+  const r = await py(REPLACE, ['--mode', 'live'], w.E);
+  const day = new Date().toISOString().slice(0, 10);
+  const rep = JSON.parse(readFileSync(path.join(w.state, 'rtsp-nightly', `report-${day}.json`), 'utf8'));
+  w.close();
+  assert.match(r.stdout, /DEVICE1\s+file\s+ok -> report: the tile's snapshot and its live video are black, and the clip's own picture is dark too \(luma 17(?:\.0)?\)/, r.stdout);
+  assert.match(r.stdout, /DEVICE2\s+file\s+ok -> report: the clip plays \(luma 190(?:\.0)?\) but the tile's snapshot and its live video are black/, r.stdout);
+  assert.doesNotMatch(r.stdout, /DEVICE1[^\n]*host capture side/);
+  assert.doesNotMatch(r.stdout, /DEVICE2[^\n]*host capture side/);
+  const one = rep.streams.find((s) => s.device === 'DEVICE1');
+  assert.ok(one.source_luma < 32, `the clip own picture was measured, got ${one.source_luma}`);
+  assert.equal(w.posts.length, 0);
+});
+
+test('a tile whose newest live segment is dark but whose recent segments play is not a host-capture fault (bug-37646a38)', async () => {
+  // The host's newest segment was dark at the check (a Pluto ad break, the dark credits of a clip) and the
+  // tile played again minutes later (vpt-nipogi/DEVICE10, 2026-11-15): the live layer is judged over the
+  // host's recent segments, so one dark segment does not call the tile black.
+  const w = await world({ pool: POOL, snapshots: { 'cap-DarkNewest': 'DARKNEWEST' }, devices: {
+    DEVICE1: { ...dev('Dark Newest', 'https://cdn.example/good/darknewest.m3u8'), DEVICE_MODEL: 'rtsp_video' } } });
+  const r = await py(REPLACE, ['--mode', 'live'], w.E);
+  const day = new Date().toISOString().slice(0, 10);
+  const rep = JSON.parse(readFileSync(path.join(w.state, 'rtsp-nightly', `report-${day}.json`), 'utf8'));
+  w.close();
+  const one = rep.streams.find((s) => s.device === 'DEVICE1');
+  assert.ok(one.live_luma >= 32, `the live layer is bright over the window, got ${one.live_luma}`);
+  assert.equal(one.capture, 'ok', 'a dark newest segment does not make the tile black');
+  assert.match(r.stdout, /DEVICE1\s+hls\s+ok -> note: the tile's snapshot was dark but the live video plays/, r.stdout);
+  assert.doesNotMatch(r.stdout, /host capture side/);
   assert.equal(w.posts.length, 0);
 });
 
