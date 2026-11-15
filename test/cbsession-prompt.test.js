@@ -129,7 +129,7 @@ test('cbsession: a repo whose AGENTS.md carries the harness rules gets a pointer
     assert.equal(run('-x', '-N', '-n', n, '-d', rules, ...args).status, 0);
     const p = promptOf(n);
     assert.match(p.split('\n').slice(0, 4).join('\n'), /Ship rule/);
-    assert.match(p, /The rules the harness checks are in this repo's AGENTS\.md: read it before your first message/);
+    assert.match(p, /The rules the harness checks are in the AGENTS\.md of this repo: read it before your first message/);
     assert.doesNotMatch(p, /\| 7 \| `failed` \|/); assert.doesNotMatch(p, /\*\*Goal first, verification last \(owner/);
     assert.match(p, /\nDone when:\n1\. /); assert.match(p, /\*\*No workers\*\*/); assert.match(p, /found-bug --claim <id>/);
     assert.ok(words(p) <= 700, `${n}: ${words(p)} words`);
