@@ -311,6 +311,36 @@ this night and nothing else: no `replace`, no `rolled_back`, no `lease_not_grant
   - **bug-5ab9d8b4** (mycodebox): the nightly judged a live channel on its first frame only — the `DEVICE7` case above. The
     channel is now judged over a window of frames, so an ad break no longer reads as a dead channel.
 
+### Night of 2026-11-15 (live, run by the nightly session)
+
+103 streams checked, **95 ok, 8 down**, **0 replaced**, 0 rolled back, 0 cameras down, 0 unverified. 15 hosts walked, 15 read,
+**no inventory error** (every server and every host answered the host-config GET). The journal holds 103 `check` events for
+this night and nothing else: no `replace`, no `rolled_back`, no `lease_not_granted`, no `apply_failed`.
+
+- The 8 down: 8 devices with an empty source (`vpt-nipogi` DEVICE4, 5, 6, 17, 22, 23, 24 and `vpt-pi4` DEVICE2; reported by
+  name, never changed). Nothing was really down, so nothing had to be replaced and the pool was never used.
+- What the app shows (tile snapshots): 93 ok, 3 black, 6 unknown, 1 missing.
+  - **No `multi_audio` tile**: no host runs the old `run_ffmpeg.sh` any more, so no `vpt-stream` restart was needed tonight.
+  - `vpt-nipogi/DEVICE10` ("FR Movie 7 — Pluto TV Dating") read **black** at 05:48 (thumbnail luma 16, live layer 27) while the
+    channel itself was bright (source luma 169 over the window): the blackness was on the host capture side at that moment.
+    The host was healthy and was **not touched** — fresh segments and a fresh thumbnail every second, the grabber running since
+    the service started. The tile **plays again** minutes later, and the browser proves it (readyState 4, the clock advances, the
+    screenshot shows the picture): a dark moment of a Pluto channel, not a fault.
+  - `lenovo-local-low/DEVICE35` ("Low 360p Clip 35") read black (thumbnail 0, live layer 15) while the file itself plays
+    (h264 640x360 from the host). The browser shows the clip's own **credits frame** (on hover: readyState 4, the clock advances
+    to 152 s): the dark frame of the looping clip, not a dead stream.
+  - `vpt-nipogi/DEVICE31` ("FR Series — MDL") is black for good: host snapshot 0, live layer 16, source 16 over every window.
+    bug-de449145 is still open and `capture-mode` is still `dry`, so the nightly reports it and changes nothing. This device has
+    no device-control card, so there is no browser proof for it.
+- The pool was not touched: re-probed from `vpt-pi4` (the host that runs `vpt-rtsp`), `smoke` plays (h264 640x360) and the three
+  public candidates still time out on port 554, so nothing new is vetted (bug-c7c2bb0e, still `wontfix`).
+- Two ideas filed, both about how the nightly reads a tile (the night's report was truthful at the time it was written, so
+  neither is a defect to repair):
+  - **bug-37646a38**: the tile's live layer is read from the single newest segment, so one dark segment decides the verdict for
+    the whole night — the `DEVICE10` case above, where the tile played again minutes later.
+  - **bug-59664715**: for a file tile the report says "a dark frame of the looping clip itself" without comparing the file's own
+    picture (the source frame is only compared for HLS channels), so the claim stays an assumption.
+
 ## Private config (not in the repo)
 
 `~/.config/rtsp-nightly/env`, sourced by the session: `RTSP_CHECK_SERVERS="<label>=<server url>,..."` (one per backend server), `RTSP_LEASE_ENV` (the `vpt-lease` environment of the hosts, default
