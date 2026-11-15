@@ -288,7 +288,8 @@ export async function defaultMergeEval({ cwd, branch, branchSha, target, remote,
   const facts = await gitFacts({ cwd, branch, branchSha, target, remote, conventionFiles });
   const files = (facts.sensitive || []).filter((s) => s.why === 'deploy').map((s) => s.file);
   const rest = mergeFloor(facts, { state: 'green' }, { conventionFiles, approveInfra: true, optOut });
-  const base = approveInfra ? rest : mergeFloor(facts, { state: 'green' }, { conventionFiles, optOut });
+  // a manager approval also lets image/video files merge (facts.media); other binaries never do
+  const base = approveInfra ? mergeFloor(facts, { state: 'green' }, { conventionFiles, approveInfra: true, approveMedia: true, optOut }) : mergeFloor(facts, { state: 'green' }, { conventionFiles, optOut });
   // the path-based migration reasons become the effect-based ones (or vanish when the attestation allows the merge)
   const mig = migrationReasons(facts, { approvedBy: approveInfra, migrationApplied });
   const reasons = base.filter((x) => !MIGRATION_REASON.test(x)).concat(mig);
@@ -1197,7 +1198,7 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
   // The approval decision record for --approved-by (OWNER_DECISIONS §15); enqueue and a coalesce both write one.
   function journalApproval(r, v) {
     journal({ kind: 'merge', decision_id: `merge-approval-${r.id}`, ts: r.approvedAt, source: 'integration-lane', question: `Approve the infra-path floor reason for ${v.branch} into ${v.target}?`,
-      chosen: 'approve', approvedBy: r.approvedBy, approvedAt: r.approvedAt, rationale: 'a manager approval skips only the CI/deploy/infra-path floor reason; secrets, migrations, sudoers, units, red tests and conflicts still return the request',
+      chosen: 'approve', approvedBy: r.approvedBy, approvedAt: r.approvedAt, rationale: 'a manager approval skips only the CI/deploy/infra-path and the image/video-file floor reasons; secrets, migrations, sudoers, units, other binaries, red tests and conflicts still return the request',
       request: r.id, repo: v.key, branch: v.branch, target: v.target });
   }
 

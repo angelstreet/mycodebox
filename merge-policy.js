@@ -116,6 +116,18 @@ const DOC_NAMES = /(^|\/)(?:LICENSE|CHANGELOG|NOTICE|AUTHORS|CONTRIBUTING|CODEOW
 export const isDocFile = (f) => /\.(?:md|markdown)$/i.test(f) || DOC_NAMES.test(f) || (/^docs\//.test(f) && !CODE_EXT.test(f));
 // docs images and the Pages-tab thumbnails (frontend/public/project-pages/<key>.png, CUSTOM_PAGES.md; bug-b9ac5715) are not a binary floor
 const DOC_IMAGE = /^(?:docs\/.*|frontend\/public\/project-pages\/[^/]+)\.(?:png|jpe?g|gif|svg|webp)$/i;
+// Image, video and font files (owner 2026-11-15: the website's 3D Learn cards are 450 WebP frames each). Their added bytes are
+// not text, so the line scan reads none of them and counts them apart (facts.media): they no longer fill the 2 MB scan cap, and
+// a manager approval (--approved-by) lets them merge. Without it they return the request, in one line. Any other binary
+// (an archive, an executable, a .bin) is still `adds a binary file` with or without approval. A media-named file that git
+// sees as text is scanned like any text file.
+export const MEDIA_EXT = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'mp4', 'webm', 'woff', 'woff2', 'ttf', 'otf'];
+const MEDIA_PATHSPEC = MEDIA_EXT.map((e) => `:(glob)**/*.${e}`);
+const MEDIA_EXCLUDE = MEDIA_EXT.map((e) => `:(exclude,glob)**/*.${e}`);
+export function mediaReason(media) {
+  const n = media.length;
+  return `adds ${n} image/video file${n === 1 ? '' : 's'} (needs --approved-by manager): ${media.slice(0, 3).join(', ')}${n > 3 ? ', ...' : ''}`;
+}
 export const isConvention = (f, conv) => conv.some((c) => f === c || basename(f) === c);
 const SENSITIVE_CONTENT = [
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----/, 'private key'], [/AKIA[0-9A-Z]{16}/, 'cloud access key'], [/ghp_[A-Za-z0-9]{30,}/, 'git host token'],
@@ -527,7 +539,7 @@ export function schemaReasons(facts, { schemaIgnore = [] } = {}) {
 // read the whole diff sets scanError (fails closed in the floors). Migration files keep their ADDED lines (migrationAdds) so the
 // lane can classify them by effect instead of by path (Q199).
 export async function scanRange(repo, spec, conventionFiles = MERGE_DEFAULTS.mergeConventionFiles) {
-  const out = { files: [], docsOnly: false, sensitive: [], scanError: null, binary: [], migrationAdds: {}, migrationRemoved: {}, migrationDeleted: [], tableUses: [] };
+  const out = { files: [], docsOnly: false, sensitive: [], scanError: null, binary: [], media: [], migrationAdds: {}, migrationRemoved: {}, migrationDeleted: [], tableUses: [] };
   const names2 = await git(repo, ['diff', '--name-only', '-z', spec]);
   if (names2.code !== 0) return { error: `git diff failed: ${names2.err || 'unknown'}` };
   out.files = names2.out.split('\0').filter(Boolean);
@@ -537,7 +549,22 @@ export async function scanRange(repo, spec, conventionFiles = MERGE_DEFAULTS.mer
   const del = await git(repo, ['diff', '--diff-filter=D', '--name-only', '-z', spec]);
   if (del.code === 0) out.migrationDeleted = del.out.split('\0').filter((f) => f && sensitivePath(f) === 'migration');
   // added lines only, capped at 2 MB; an unreadable, timed-out or truncated scan fails closed (mergeFloor)
-  const diff = await git(repo, ['diff', '--no-color', '--no-ext-diff', '--no-textconv', '-U0', spec], { max: 2 * 1024 * 1024 });
+  // binary media files are listed apart (numstat "-\t-") and left out of the line scan; media-named text files stay in it
+  const textMedia = [];
+  const mnum = await git(repo, ['diff', '--numstat', '-z', '--diff-filter=A', spec, '--', ...MEDIA_PATHSPEC]);
+  if (mnum.code !== 0) out.scanError = mnum.err || 'unreadable';
+  for (const rec of mnum.out.split('\0').filter(Boolean)) {
+    const m = /^(-|\d+)\t(-|\d+)\t(.+)$/.exec(rec);
+    if (!m) continue;
+    if (m[1] === '-' && m[2] === '-') { if (!DOC_IMAGE.test(m[3])) out.media.push(m[3]); } else textMedia.push(m[3]);
+  }
+  const diff = await git(repo, ['diff', '--no-color', '--no-ext-diff', '--no-textconv', '-U0', spec, '--', '.', ...MEDIA_EXCLUDE], { max: 2 * 1024 * 1024 });
+  // an exclude pathspec wins over an include, so media-named text files are read in their own diff and scanned like the rest
+  if (textMedia.length && diff.code === 0 && !diff.truncated) {
+    const tm = await git(repo, ['diff', '--no-color', '--no-ext-diff', '--no-textconv', '-U0', spec, '--', ...textMedia.map((f) => `:(literal)${f}`)], { max: 2 * 1024 * 1024 - diff.out.length });
+    if (tm.code !== 0 || tm.truncated || tm.timedOut) Object.assign(diff, { code: tm.code || -1, truncated: !!tm.truncated, timedOut: !!tm.timedOut, err: tm.err });
+    else diff.out += '\n' + tm.out;
+  }
   if (diff.code !== 0 || diff.truncated || diff.timedOut) out.scanError = diff.truncated ? 'larger than 2 MB' : diff.err || 'unreadable';
   let file = null, codeFile = false;
   const uses = new Set();
@@ -567,7 +594,7 @@ export async function scanRange(repo, spec, conventionFiles = MERGE_DEFAULTS.mer
 }
 
 export async function gitFacts({ cwd, branch, branchSha = null, target, remote = 'origin', conventionFiles = MERGE_DEFAULTS.mergeConventionFiles, schemaPaths = MERGE_DEFAULTS.schemaPaths } = {}) {
-  const fail = (error) => ({ ok: false, error, repo: null, repoName: null, repoNames: [], branch: branch || null, target: target || null, branchSha: null, targetSha: null, targetShaLocal: null, alreadyMerged: false, conflicts: [], conventionOnly: false, files: [], docsOnly: false, sensitive: [], scanError: null, binary: [], tableUses: [], schemaDirs: [], knownTables: [] });
+  const fail = (error) => ({ ok: false, error, repo: null, repoName: null, repoNames: [], branch: branch || null, target: target || null, branchSha: null, targetSha: null, targetShaLocal: null, alreadyMerged: false, conflicts: [], conventionOnly: false, files: [], docsOnly: false, sensitive: [], scanError: null, binary: [], media: [], tableUses: [], schemaDirs: [], knownTables: [] });
   if (!cwd) return fail('no working directory');
   const top = await git(cwd, ['rev-parse', '--show-toplevel']);
   if (top.code !== 0) return fail('not a git repository');
@@ -595,7 +622,7 @@ export async function gitFacts({ cwd, branch, branchSha = null, target, remote =
   const oRef = (await resolves(`refs/remotes/${remote}/${tName}`)) ? `refs/remotes/${remote}/${tName}` : null;
   const lRef = (await resolves(`refs/heads/${tName}`)) ? `refs/heads/${tName}` : null;
   const tRef = oRef || lRef;
-  const base = { ok: true, repo, repoName, repoNames: names, branch: bName, target: tName, branchSha: null, targetSha: null, targetShaLocal: null, alreadyMerged: false, conflicts: [], conventionOnly: false, files: [], docsOnly: false, sensitive: [], scanError: null, binary: [], tableUses: [], schemaDirs: [], knownTables: [] };
+  const base = { ok: true, repo, repoName, repoNames: names, branch: bName, target: tName, branchSha: null, targetSha: null, targetShaLocal: null, alreadyMerged: false, conflicts: [], conventionOnly: false, files: [], docsOnly: false, sensitive: [], scanError: null, binary: [], media: [], tableUses: [], schemaDirs: [], knownTables: [] };
   if (!bRef || bName === tName) return { ...base, ok: false, error: 'branch not found' };
   if (!tRef) return { ...base, ok: false, error: `target ${tName} not found` };
   const sha = async (r) => (await git(repo, ['rev-parse', r])).out.trim();
@@ -624,7 +651,7 @@ export async function gitFacts({ cwd, branch, branchSha = null, target, remote =
 
 export const SENS_TEXT = { secret: 'a secret/credential path', migration: 'a migration', sudoers: 'sudoers', systemd: 'a systemd unit', deploy: 'a CI/deploy/infra path', 'secret-content': 'secret-looking content' };
 // Reasons to escalate; empty = the manager may proceed.
-export function mergeFloor(facts, ev, { optOut = [], conventionFiles = MERGE_DEFAULTS.mergeConventionFiles, approveInfra = false, schemaIgnore = [] } = {}) {
+export function mergeFloor(facts, ev, { optOut = [], conventionFiles = MERGE_DEFAULTS.mergeConventionFiles, approveInfra = false, approveMedia = false, schemaIgnore = [] } = {}) {
   if (!facts) return ['not a git repository or git error'];
   const reasons = [];
   const out = (optOut || []).map(String);
@@ -639,6 +666,7 @@ export function mergeFloor(facts, ev, { optOut = [], conventionFiles = MERGE_DEF
   for (const s of facts.sensitive || []) if (!(approveInfra && s.why === 'deploy')) reasons.push(`touches ${SENS_TEXT[s.why] || 'a sensitive path'}: ${s.file}`);
   if (facts.scanError) reasons.push('diff too large or unreadable to scan');
   for (const f of facts.binary || []) reasons.push(`adds a binary file: ${f}`);
+  if (facts.media?.length && !approveMedia) reasons.push(mediaReason(facts.media));
   for (const r of schemaReasons(facts, { schemaIgnore })) reasons.push(r);
   return reasons;
 }

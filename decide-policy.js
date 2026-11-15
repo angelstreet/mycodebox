@@ -10,7 +10,7 @@
 import { basename } from 'node:path';
 import { buildRequest } from './router.js';
 import { deployHint } from './stall.js';
-import { git, repoNames, repoToplevel, scanRange, testEvidence, SENS_TEXT, short, sensitivePath, MERGE_DEFAULTS } from './merge-policy.js';
+import { git, repoNames, repoToplevel, scanRange, testEvidence, SENS_TEXT, short, sensitivePath, mediaReason, MERGE_DEFAULTS } from './merge-policy.js';
 
 export const DECIDE_DEFAULTS = { labEnvs: [], migrationProcedure: {}, pushDecisions: true, deployDecisions: true, pushMinConfidence: 0.85, deployMinConfidence: 0.85, pushOptOut: [], deployOptOut: [] };
 
@@ -89,7 +89,7 @@ export async function evaluatePush({ cwd, text, session = null, config = {}, jev
   const parsed = parsePushAsk(text);
   let bName = branch || parsed.branch, dName = dest || parsed.dest;
   const namedBranches = branch ? [branch] : parsed.branches;
-  const facts = { ok: false, repo: null, repoName: null, branch: bName, dest: dName, branchSha: null, remoteSha: null, ahead: 0, files: [], docsOnly: false, sensitive: [], binary: [], scanError: null, afterMerge: !!afterMerge };
+  const facts = { ok: false, repo: null, repoName: null, branch: bName, dest: dName, branchSha: null, remoteSha: null, ahead: 0, files: [], docsOnly: false, sensitive: [], binary: [], media: [], scanError: null, afterMerge: !!afterMerge };
   const done = (verdict, why, decision, tests, extra = {}) => ({ verdict, reasons: verdict === 'push' ? [] : why, rationale: verdict === 'push' ? extra.rationale : why.join('; '),
     question: `Push ${facts.branch || bName || 'the branch'} to origin/${facts.dest || dName || facts.branch || 'its branch'}?`, facts, tests: tests || { state: 'unknown', explicit: false, quote: '' }, decision });
   const esc = (why, tests) => done('escalate', Array.isArray(why) ? why : [why], { source: 'floor', choice: 'escalate', confidence: 1, decision_id: null }, tests);
@@ -150,6 +150,7 @@ export async function evaluatePush({ cwd, text, session = null, config = {}, jev
     for (const x of facts.sensitive) rs.push(`local ${bName} carries ${SENS_TEXT[x.why] || 'a sensitive path'}: ${x.file}`);
     if (facts.scanError) rs.push(`local ${bName}: diff too large or unreadable to scan`);
     for (const f of facts.binary) rs.push(`local ${bName} adds a binary file: ${f}`);
+    if (facts.media?.length) rs.push(`local ${bName} ${mediaReason(facts.media)}`);
     if (rs.length) return esc(rs, tests);
     const r = await rate('push', 'push', { jev, jevFacts: { session, repo: facts.repoName, branch: bName, dest: dName, ahead: facts.ahead, after_merge: true, floor_reasons: [] }, session, min: cfg.pushMinConfidence, reasoning: afterMerge.decision?.confidence >= cfg.pushMinConfidence ? 0.9 : 0.8 });
     if (r.escalate) return done('escalate', [r.escalate], r.decision, tests);
@@ -167,6 +168,7 @@ export async function evaluatePush({ cwd, text, session = null, config = {}, jev
   for (const s of facts.sensitive) reasons.push(`touches ${SENS_TEXT[s.why] || 'a sensitive path'}: ${s.file}`);
   if (facts.scanError) reasons.push('diff too large or unreadable to scan');
   for (const f of facts.binary) reasons.push(`adds a binary file: ${f}`);
+  if (facts.media?.length) reasons.push(mediaReason(facts.media));
   if (reasons.length) return esc(reasons, tests);
   const strong = facts.docsOnly || (tests.state === 'green' && tests.explicit);
   const r = await rate('push', 'push', { jev, jevFacts: { session, repo: facts.repoName, branch: bName, dest: dName, ahead: facts.ahead, tests: tests.state, tests_quote: tests.quote, docs_only: facts.docsOnly, files: facts.files.length, floor_reasons: [] }, session, min: cfg.pushMinConfidence, reasoning: strong ? 0.9 : 0.8 });
