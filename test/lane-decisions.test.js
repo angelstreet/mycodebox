@@ -49,7 +49,7 @@ test('an approved media merge journals who approved and how many image/video fil
   const r = await m.go({ branch: 'feat', approvedBy: 'manager' });
   assert.equal(r.state, 'merged', JSON.stringify(r));
   const mj = m.journal.find((j) => j.kind === 'merge' && j.chosen === 'merge');
-  assert.equal(mj.approvedBy, 'manager'); assert.equal(mj.mediaFiles, 3);
+  assert.equal(mj.approvedBy, undefined); assert.equal(mj.mediaFiles, 3);
   assert.ok(mj.evidence.includes('approved by manager') && mj.evidence.includes('image/video files: 3'), JSON.stringify(mj.evidence));
 });
 

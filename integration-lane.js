@@ -616,7 +616,8 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
         // who let an approval-gated item through, and how many image/video files it carried (owner 2026-11-15)
         ...(r.approvedBy ? [`approved by ${r.approvedBy}`] : []), ...(f.media?.length ? [`image/video files: ${f.media.length}`] : [])],
       confidence: Number.isFinite(e?.decision?.confidence) ? e.decision.confidence : null, rollback: 'git revert -m 1 <merge commit> on the target branch (queued through the lane)',
-      session: r.session, repo: r.repo, branch: r.branch, target: c.target, request: r.id, ...(r.approvedBy ? { approvedBy: r.approvedBy } : {}),
+      session: r.session, repo: r.repo, branch: r.branch, target: c.target, request: r.id,
+      // the approver is in evidence only: a top-level approvedBy marks the approval record itself (merge-approval-<id>)
       ...(f.media?.length ? { mediaFiles: f.media.length } : {}), ...(ok ? {} : { reasons }) });
   }
   function journalDeploy(r, c, o) {
