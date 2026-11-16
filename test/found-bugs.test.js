@@ -226,3 +226,19 @@ test('a report stored before the why field existed counts as missing (send-back,
   fs.writeFileSync(join(dir, 'found-bugs.jsonl'), JSON.stringify({ id: 'bug-aaaaaaaa', session: 'a', title: 'old', at: new Date().toISOString(), repro: 'r', blocking: false }) + '\n');
   assert.equal((await createFoundBugs({ stateDir: dir }).week(7)).whyMissing, 1);
 });
+
+import { liveTuningOf, liveTuningRule } from '../found-bugs.js';
+test('a large/host-or-device filing whose reason is only live tuning on a device is sent back with the lease rule', async () => {
+  const b = createFoundBugs({ stateDir: tmp('fb-live-') });
+  for (const reason of ['needs live tuning on device50', 'Needs live tuning on the device', 'needs a device run to tune thresholds', 'tuning on the real device required']) {
+    const r = await b.add({ title: 't ' + reason, session: 's1', why: 'host-or-device', reason, repro: 'x' });
+    assert.equal(r.ok, false, reason); assert.equal(r.error, liveTuningRule); assert.match(r.error, /vpt-lease claim .* --any <group> --wait/);
+  }
+  assert.equal((await b.add({ title: 'big', session: 's1', why: 'large', reason: 'needs live tuning on device50' })).ok, false);
+  assert.equal((await b.list()).length, 0);
+  // a real blocker, another why, or unrelated reasons still file
+  assert.equal((await b.add({ title: 'a', session: 's1', why: 'host-or-device', reason: 'needs live tuning on device50 but the host is unreachable' })).ok, true);
+  assert.equal((await b.add({ title: 'b', session: 's1', why: 'credentials', reason: 'needs live tuning on device50' })).ok, true);
+  assert.equal((await b.add({ title: 'c', session: 's1', why: 'large', reason: 'touches 12 modules' })).ok, true);
+  assert.equal(liveTuningOf({ why: 'large', reason: '' }), false);
+});

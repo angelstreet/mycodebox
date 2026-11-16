@@ -150,6 +150,9 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     // Priority (owner 2026-10-20): every lease and ticket carries its holder's P0..P2 (P0 highest). A lease of priority `lowPriority` or lower is capped at
     // `lowPriorityMaxTtlMin` per claim/renew and cannot be renewed while a ticket of strictly higher priority waits on a resource it blocks (`yield`).
     defaultPriority: 'P1', lowPriority: 'P2', lowPriorityMaxTtlMin: 10,
+    // Scheduled jobs (owner 2026-11-16): a P3 lease also yields to a queued deploy, and ends `scheduledYieldGraceMs` after the yield was signalled
+    // (a missed scheduled run is acceptable, a dev claim or deploy waiting on one is not).
+    scheduledPriority: 'P3', scheduledYieldGraceMs: 2 * MIN,
     // Hard cap (owner 2026-10-27): no claim or renewal of a non-system lease gets more than `maxClaimMin`, and while anyone waits the continuous hold
     // (since the claim began) may not pass it either. System leases (deploy runner, `exempt`) keep their own limits.
     maxClaimMin: 60, overCapGraceMs: 10 * MIN, keepFinished: 50, deployTtlMin: 360, maxEvents: 5000, readonly: false, io: defaultIo,
@@ -561,6 +564,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     for (const l of Object.values({ ...S.leases })) {
       const rel = (why, reason, by = 'system') => emit({ t: 'release', ids: [l.id], why, reason, by, at: t });
       if (l.expires <= t) { rel('expired', 'ttl'); continue; }
+      if (l.yieldAt && isScheduled(l) && l.yieldAt + cfg.scheduledYieldGraceMs <= t) { rel('expired', 'yield-grace'); continue; }   // scheduled job ignored the yield for 2 min: its run is skipped, the waiter goes first
       // owner 2026-10-27 ("never 240 min"): a lease from before the cap is cut back to claim + maxClaimMin (graceMs to wrap up if that is past)
       if (!l.system && !l.deployId && l.expires > t + cfg.maxClaimMin * MIN) {
         const to = Math.max(l.since + cfg.maxClaimMin * MIN, t + cfg.overCapGraceMs);
@@ -608,8 +612,12 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
   // Tickets of STRICTLY higher priority waiting on something this low-priority lease blocks: while any, the holder may not extend and must yield.
   function yieldWaiters(l) {
     if (!l || l.mode !== 'exclusive' || !isLow(l)) return [];
-    return waitingTickets(l.env).filter((tk) => tk.agent !== l.agent && prioRank(prioOf(tk)) < prioRank(prioOf(l)) && leasesConflict(tk, l));
+    const ws = waitingTickets(l.env).filter((tk) => tk.agent !== l.agent && prioRank(prioOf(tk)) < prioRank(prioOf(l)) && leasesConflict(tk, l));
+    // a queued deploy counts as P0: it makes a scheduled (P3) lease yield too
+    if (prioOf(l) === cfg.scheduledPriority) for (const d of S.deploys) if (d.env === l.env && (d.state === 'queued' || d.state === 'awaiting-approval') && deployBlockers(d).blockers.some((b) => b.id === l.id)) ws.push({ id: `deploy-${d.id}`, agent: `deploy ${d.id}`, priority: 'P0' });
+    return ws;
   }
+  const isScheduled = (l) => isLow(l) && prioOf(l) === cfg.scheduledPriority;
   // Anyone waiting on this lease: a ticket (any priority) or a queued deploy that it blocks. Drives the continuous-hold limit.
   function holdWaiters(l) {
     const w = waitingTickets(l.env).filter((tk) => tk.agent !== l.agent && leasesConflict(tk, l)).map((tk) => tk.agent);
