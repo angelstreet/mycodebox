@@ -94,6 +94,10 @@ function bashWritesFile(cmd) {
   return false;
 }
 
+// A decision line about a session in manager-actions.jsonl is how the manager answers a stop that needs no message (owner 2026-11-12: a stop ends in a
+// message or a decision line); the wake that wrote one decided something, so it is not an empty wake (bug-2279681a: 19 of 26 empty wakes on 2026-11-16 had one).
+const isDecisionLine = (cmd) => (ACTIONS_LOG.test(cmd) || /manager-action-append/.test(cmd)) && /["']kind["']\s*:\s*["']decision["']/.test(cmd) && /["']session["']\s*:\s*["'][^"']+["']/.test(cmd);
+
 function firstLine(text) {
   for (const l of String(text || '').split('\n')) { const s = l.trim(); if (s) return squash(s, 160); }
   return '';
@@ -123,7 +127,7 @@ export function splitWakes(records, { prices = null } = {}) {
     w.end = new Date(w._end).toISOString();
     w.tokens = tok;
     w.usd = priced || !unpriced ? Math.round(usd * 1e6) / 1e6 : null;
-    w.nothing = !w.alertsSent && !w.sendsToSessions && !w.workersStarted && !w.fileWrites;
+    w.nothing = !w.alertsSent && !w.sendsToSessions && !w.workersStarted && !w.fileWrites && !w.decisionLines;
     delete w._start; delete w._end;
     finish();
   };
@@ -135,7 +139,7 @@ export function splitWakes(records, { prices = null } = {}) {
       const trig = classifyTrigger(o, agentToolIds);
       if (trig && t !== null) {
         close();
-        cur = { _start: t, _end: t, trigger: trig, triggerSummary: summarize(o), ...(trig === 'task_done' && isWaitChain(o) ? { waitChain: true } : {}), tools: {}, alertsSent: 0, sendsToSessions: 0, workersStarted: 0, fileWrites: 0, decision: '' };
+        cur = { _start: t, _end: t, trigger: trig, triggerSummary: summarize(o), ...(trig === 'task_done' && isWaitChain(o) ? { waitChain: true } : {}), tools: {}, alertsSent: 0, sendsToSessions: 0, workersStarted: 0, fileWrites: 0, decisionLines: 0, decision: '' };
         continue;
       }
     }
@@ -166,6 +170,7 @@ export function splitWakes(records, { prices = null } = {}) {
         if (cmd.includes('/api/send/') || cmd.includes('/api/send-many')) cur.sendsToSessions++;
         if (/\bmcode\s+exec\b/.test(cmd)) cur.workersStarted++;
         if (bashWritesFile(cmd)) cur.fileWrites++;
+        if (isDecisionLine(cmd)) cur.decisionLines++;
       }
     }
     if (text.trim()) cur.decision = firstLine(text);
@@ -175,7 +180,7 @@ export function splitWakes(records, { prices = null } = {}) {
   return wakes.map(order);
 }
 function order(w) {
-  return { start: w.start, end: w.end, durationSec: w.durationSec, trigger: w.trigger, triggerSummary: w.triggerSummary, ...(w.waitChain ? { waitChain: true } : {}), tools: w.tools, alertsSent: w.alertsSent, sendsToSessions: w.sendsToSessions, workersStarted: w.workersStarted, fileWrites: w.fileWrites, decision: w.decision, tokens: w.tokens, usd: w.usd, nothing: w.nothing };
+  return { start: w.start, end: w.end, durationSec: w.durationSec, trigger: w.trigger, triggerSummary: w.triggerSummary, ...(w.waitChain ? { waitChain: true } : {}), tools: w.tools, alertsSent: w.alertsSent, sendsToSessions: w.sendsToSessions, workersStarted: w.workersStarted, fileWrites: w.fileWrites, ...(w.decisionLines ? { decisionLines: w.decisionLines } : {}), decision: w.decision, tokens: w.tokens, usd: w.usd, nothing: w.nothing };
 }
 
 const dayOf = (iso) => String(iso || '').slice(0, 10);   // UTC day, like the usage ledger

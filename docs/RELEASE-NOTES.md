@@ -6,6 +6,9 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- Manager wakes: a wake that wrote a decision line about a session to manager-actions.jsonl (how a stop that needs no message is answered) is no longer counted as an empty wake; on 2026-11-16 this takes the harness-caused empty share from 26 of 31 to 8 of 32 (bug-2279681a) · area: platform
+
+
 - **Scheduled (P3) leases end 2 min after a dev claim or deploy starts waiting** — a stream-wall run held `vpt-nipogi/device50` for 4.3 min against a waiting claim because the guard only stopped renewing and the 10 min TTL ran out. A P3 lease now also yields to a queued deploy and the lease service ends it 2 min after the first `yield` (`yield-grace`); a missed scheduled run is acceptable, a waiting dev claim is not; the rtsp-nightly repair claim is now P3 ttl 10 (was P1 ttl 20) · area: lease-service
 - **`found-bug` sends back "needs live tuning on a device"** (bug-171d2ca9) — seven bugs were filed as large/host-or-device with only "needs live tuning on device50" as the reason and the intake accepted them. `POST /api/bugs` now answers 400 with the rule (claim the device with `vpt-lease claim <env> --any <group> --wait`, fix it, `integrate request`) when `why` is large, host-or-device or other-area and the reason is only live tuning or runs on a device; a reason that names a real blocker (host unreachable, device absent, busy, credentials) still files · area: found-bug
 - **A channel whose own picture is black is now repaired by the nightly** — the capture-driven repair is live since
