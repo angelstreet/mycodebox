@@ -24,6 +24,13 @@ cbsession -n NAME -d DIR [-p claude|codex|minimax|opencode] [-m MODEL] (-H HANDO
 Environment: `MCODE_NODE_DIR` (Node bin dir put on `PATH` for `mcode`, default `$HOME/.local/node-v24.21.0-linux-x64/bin`),
 `GHOSTY_STATE_DIR` and `GHOSTY_PORT` (default `$PORT`, else 7777) for the history report below.
 
+`CBSESSION_MCP_WAIT` (seconds, default 60): before a Claude start, `cbsession` waits until the HTTP MCP servers of the
+project answer (`scripts/mcp-ready.js`: the project entry of the directory or of its main checkout in `~/.claude.json`).
+Claude Code connects an MCP server once, at start, so a session started while the VirtualPyTest server restarts (every
+server deploy, about 15 s) had no MCP tool for its whole life (2026-11-16). A server still down after the wait: the
+session starts anyway, `cbsession` prints a warning and the prompt gets a "MCP not connected" note that names the
+command-line fallback.
+
 The prompt and launch files go to `~/handovers/<NAME>.prompt.md` and `<NAME>.launch.sh`. After starting, the script posts
 a `session.started` record (provider, model, cwd, prompt file, handover, Remote Control link) to the loopback-only
 `POST /api/history/started`, authenticated with the reporter token in the state dir. If that fails it prints one warning

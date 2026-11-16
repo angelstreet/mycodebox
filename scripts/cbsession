@@ -296,6 +296,17 @@ if [ "$DRY" = 1 ]; then [ -n "$WTCMD" ] && echo "worktree: $WTCMD"; echo "prompt
 
 # Claude: make sure the MCP entries carry the X-Agent-Name header (a no-op once set; best effort, never blocks a start).
 [ "$PROV" = claude ] && command -v node >/dev/null && node "$(dirname "$(readlink -f "$0")")/vpt-mcp-agent-header.js" --apply >/dev/null 2>&1 || true
+# Claude connects each MCP server once, at start: a server that is restarting then (a VirtualPyTest server deploy closes
+# its port for about 15 s) leaves the session without its tools for good. Wait for the project's HTTP MCP servers
+# (CBSESSION_MCP_WAIT seconds, default 60); if one stays down, start anyway and say so in the prompt (mcp-ready.js).
+if [ "$PROV" = claude ] && command -v node >/dev/null; then
+  MCPDOWN=$(node "$(dirname "$(readlink -f "$0")")/mcp-ready.js" "$DIR" --wait "${CBSESSION_MCP_WAIT:-60}" 2>/dev/null) || true
+  if [ -n "$MCPDOWN" ]; then
+    MCPDOWN=$(printf '%s' "$MCPDOWN" | paste -sd, - | sed 's/,/, /g')
+    echo "cbsession: warning: MCP server not answering after ${CBSESSION_MCP_WAIT:-60} s: $MCPDOWN; the session starts without its tools" >&2
+    printf '\n**MCP not connected** (cbsession, %s UTC): the MCP server %s did not answer for %s s when this session started (down or restarting), so its tools are missing here and do not come back by themselves. Do not read code to replace them: use the command-line or REST way your skill names (VirtualPyTest: `scripts/agent/vpt_quicktest.py` to save a Quick Test, `scripts/agent/vpt_run.py` to run), and say in your first message that the MCP was down.\n' "$(date -u +%H:%M)" "$MCPDOWN" "${CBSESSION_MCP_WAIT:-60}" >> "$P"
+  fi
+fi
 tmux new-session -d -s "$NAME" -c "$DIR" -x 160 -y 45 "bash $(q "$L"); exec bash -l"
 # Claude: accept the folder-trust dialog if it appears (the selected option differs by version), then wait for Remote Control.
 for i in $(seq 1 30); do
