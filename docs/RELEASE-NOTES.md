@@ -6,6 +6,7 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **found-bug checks the proof against the repo the bug belongs to** — the proof gate (`--checked-main`) and the possibly-fixed marks only looked at the dashboard's `origin/main`, so a VirtualPyTest bug could not be filed (its sha was refused) and could be marked fixed by an unrelated dashboard commit. A report now carries `repo` (`--repo`, else the endpoint, else the filer's cwd repo); the server checks that repo's `origin/main` (one fetch on a miss). Dashboard filings keep the same gate · area: found-bug
 - **A replacement the nightly installs is verified before the night ends** — a source can die minutes after it was put in
   place (2026-11-15: the nightly repaired the black channel `vpt-nipogi/DEVICE31` with "RMC Decouverte", whose playlist still
   answered HTTP 200 while every playback probe failed 6/6 ten minutes later: the signed segments inside had expired), and the

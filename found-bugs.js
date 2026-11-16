@@ -86,6 +86,15 @@ export function possiblyFixedOf(b, commits) {
   return null;
 }
 
+// Which repo a bug belongs to (owner, 2026-11-16): the proof (--checked-main) and the possibly-fixed marks are checked against that repo's origin/main.
+// Order: explicit --repo, then the endpoint names a repo, then the filer's cwd repo (found-bug sends `cwdRepo`), else the dashboard (mycodebox). Pure.
+export const REPOS = ['mycodebox', 'virtualpytest'];
+export const repoName = (v) => { const t = String(v ?? '').toLowerCase(); return /virtualpytest|^vpt$/.test(t) ? 'virtualpytest' : /mycodebox|ghosty|dashboard/.test(t) ? 'mycodebox' : ''; };
+export function repoOf(o) {
+  const x = o && typeof o === 'object' ? o : {};
+  return repoName(x.repo) || repoName(/virtualpytest|ghosty-sessions|mycodebox/i.exec(String(x.endpoint ?? ''))?.[0]) || repoName(x.cwdRepo) || 'mycodebox';
+}
+
 export function normalize(input, { now = Date.now() } = {}) {
   const o = input && typeof input === 'object' ? input : {};
   const title = redact(o.title).replace(/\s+/g, ' ').trim().slice(0, FIELDS.title);
@@ -99,12 +108,13 @@ export function normalize(input, { now = Date.now() } = {}) {
   const sha = String(o.checkedMain ?? '').trim().toLowerCase();
   r.checkedMain = /^[0-9a-f]{7,40}$/.test(sha) ? sha : '';
   r.tried = redact(o.tried).replace(/\s+/g, ' ').trim().slice(0, 300);
+  r.repo = repoOf(o);
   if (o.test) r.test = true;
   r.id = 'bug-' + createHash('sha1').update(r.session + '\0' + r.title.toLowerCase() + '\0' + r.at).digest('hex').slice(0, 8);
   return r;
 }
 
-// proof(sha) -> '' | error: when given, the proof gate is on (the server passes it; sha must be a recent commit of origin/main). commits() -> recent main commits.
+// proof(sha, repo) -> '' | error: when given, the proof gate is on (the server passes it; sha must be a recent commit of origin/main). commits(repo) -> recent main commits of that repo.
 export function createFoundBugs({ stateDir, onNew = async () => {}, now = Date.now, proof = null, commits = null } = {}) {
   const file = join(stateDir, FILE_NAME);
   async function all() {
@@ -120,7 +130,7 @@ export function createFoundBugs({ stateDir, onNew = async () => {}, now = Date.n
       if (r.invalid) return { ok: false, error: r.invalid };
       if (liveTuningOf(r) && !input?.test) return { ok: false, error: liveTuningRule };
       if (proof && !input?.test) {
-        const miss = proofMissing(r) || (!IDEA.test(r.title) && (await proof(r.checkedMain))) || '';
+        const miss = proofMissing(r) || (!IDEA.test(r.title) && (await proof(r.checkedMain, r.repo))) || '';
         if (miss) return { ok: false, error: miss, rule: 'proof' };
       }
       const key = (b) => b.session + '\0' + String(b.title ?? '').toLowerCase();
@@ -203,13 +213,13 @@ export function createFoundBugs({ stateDir, onNew = async () => {}, now = Date.n
   async function list({ limit = 100, unresolved = false, state = '', offset = 0 } = {}) {
     const rows = await all(), gone = new Set(rows.filter((r) => r.removed).map((r) => r.id));
     const claims = claimsOf(rows), seen = new Set(rows.filter((r) => r.checked).map((r) => r.id));
-    let recent = []; try { recent = commits ? await commits() : []; } catch { /* no git: nothing is marked */ }
+    let recent = {}; try { recent = {}; if (commits) for (const rp of REPOS) recent[rp] = await commits(rp); } catch { /* no git: nothing is marked */ }
     const done = new Map(rows.filter((r) => r.fixed).map((r) => [r.id, r])), res = new Map(rows.filter((r) => r.resolved).map((r) => [r.id, r]));
     const out = rows.filter((r) => r.title && !r.removed && !gone.has(r.id)).map((r) => {
       const v = res.get(r.id), f = done.get(r.id);
       if (v) return { ...r, state: v.state, resolved: true, ...(v.state === 'fixed' ? { fixed: true } : {}), commit: v.commit, resolvedNote: v.note, resolvedBy: v.by, resolvedAt: v.at };
       if (f) return { ...r, state: 'fixed', resolved: true, fixed: true, fixedNote: f.note, fixedAt: f.at };
-      const pf = !seen.has(r.id) && !r.test ? possiblyFixedOf(r, recent) : null;
+      const pf = !seen.has(r.id) && !r.test ? possiblyFixedOf(r, recent[r.repo || 'mycodebox']) : null;
       return { ...r, state: 'open', ...(claims.has(r.id) ? { claim: claims.get(r.id) } : {}), ...(pf ? { possiblyFixed: pf } : {}) };
     });
     // newest `limit` of the (filtered) rows; offset skips that many of the newest first, so a client pages back through 340+ reports
