@@ -209,7 +209,7 @@ def apply_one(env, host, device, src_file, out):
 def lease_cmd(env, host, device, pool_id, out, max_wait=None):
     # The first wait is short (5 min): a busy host must not hold the whole night. A repair the lease blocked is
     # retried at the end of the night with the long wait (RTSP_LEASE_RETRY_MAX_WAIT).
-    return ['vpt-lease', 'run', os.environ.get('RTSP_LEASE_ENV', 'node1-vpt'), host, '--agent', AGENT, '--kind', 'host', '--ttl', '20',
+    return ['vpt-lease', 'run', os.environ.get('RTSP_LEASE_ENV', 'node1-vpt'), host, '--agent', AGENT, '--kind', 'host', '--priority', 'P3', '--ttl', '10',
             '--max-wait', str(max_wait if max_wait is not None else os.environ.get('RTSP_LEASE_MAX_WAIT', '5')),
             '--purpose', f'rtsp nightly: replace {device} source', '--',
             sys.executable, os.path.abspath(__file__), '--apply', env, host, device, pool_id, '--out', out]  # env = the server label of RTSP_CHECK_SERVERS

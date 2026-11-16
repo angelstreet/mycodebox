@@ -197,6 +197,35 @@ session's own priority (the owner's setting on the dashboard, read from the stat
   and `vpt-lease release <id>`; do not retry the renewal.
 - P0 and P1 leases keep the ordinary TTL and renewal rules.
 
+### Scheduled jobs never delay dev work (owner 2026-11-16)
+
+A missed scheduled run (stream wall, nightly, daily phone run) is acceptable; a dev claim or deploy waiting on one is not.
+
+- A **P3 lease** (every `deployment:*` lease, claimed by the deployment scheduler's lease guard with `priority P3`, `ttl 10`) yields not only to a waiting
+  P0..P2 ticket but also to a **queued deploy** that it blocks (a deploy counts as P0). From the first `yield` event the lease **ends itself 2 minutes later**
+  (`reason: yield-grace`, config `scheduledYieldGraceMs`), whether or not the job noticed the refused renew. So a dev claim or deploy waits at most
+  2 min on a scheduled job (before: up to the lease TTL, 10 min, because the guard only stops renewing). P2 leases keep the old rule (refused renew, not cut).
+- A new P3 claim never queues ahead of a dev ticket (`E_HELD`, `queued`): the scheduler skips that run, it does not retry in a loop.
+- The scheduler's own run-skip rules (a recurring run skipped when another agent holds the device, a platform lease waited for within the trigger window) stay in
+  VirtualPyTest `deployment_scheduler.py` / `lease_guard.py`.
+
+Audit of scheduled job classes, `vpt-lease events` 2026-11-13 23:45Z to 2026-11-16 06:26Z (5000 events, all of them):
+
+| Class | Leases | Priority | Hold (avg / max min) | Yields |
+|---|---|---|---|---|
+| `deployment:stream-wall*` | 971 | P3, ttl 10 | 3.5 / 38 | yes (4 `yield` events) |
+| `deployment:content-daily`, `daily-content-*`, `kpi-*-daily*`, `radio_replay*`, `kpi_measurement*` | ~90 | P3, ttl 10 | 3-17 / 22 | yes |
+| `deployment:phone-s21x-daily` | 5 | P3, ttl 10 | 60 / 71 | yes (renewed while nobody waited) |
+| `deployment:nightly_*`, `stb-orchtnet-functional-nightly-*` | ~25 | P3, ttl 10 | 6-90 / 98 | yes |
+| `deployment:CoC*`, `codebox:coc-hourly-run` | 6 + 301 codebox | P3 (hourly bot) | 11 / 35 | yes (3 yields) |
+| `ci:*` (backend-server-tests, e2e-viewport) | 167 | default P1: push-triggered dev work, not scheduled | 1.9 / 7 | n/a |
+| `codebox:rtsp-nightly` | cron session on codebox, repairs under `vpt-lease run --priority P3 --ttl 10` (was P1 ttl 20; fixed here) | P3 | short | yes |
+| `codebox:nightly-fleet` | cron fleet lease in VirtualPyTest | not confirmed from the events (they carry no priority except on `yield`); set `--priority P3` there | up to 107 | to check in VirtualPyTest |
+
+Dev tickets that waited on a scheduled holder in those 3 days: `mobile-orchtnet-owner` on `vpt-nipogi/device50` waited 4.3 min behind `deployment:stream-wall mobile
+vpt-nipogi S21x` (2026-11-14 10:55Z) and 3.0 min (19:06Z), 0.3 min behind a `kpi_measurement` run; `mac:fp194-pub` 1.8 min behind the nightly fleet. Every other
+ticket wait of 3 days (up to 32 min) was behind another dev session (`mac:tc435`, `codebox:ab208-vscript`), not a scheduled job.
+
 ## Exit codes
 
 | Code | Meaning | What to do |
