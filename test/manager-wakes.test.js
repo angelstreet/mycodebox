@@ -154,3 +154,15 @@ test('a chained `<action>; manager-wait.sh` background command is a wait wake, e
   assert.match(ws[0].triggerSummary, /manager-wait\.sh$/);
   assert.equal(ws[1].waitChain, undefined);
 });
+
+test('a decision line about a session in manager-actions.jsonl is an answer (not an empty wake); a sweep line without a session is not', () => {
+  const dec = `cd ~ && python3 - <<'P'\nr={"at":"x","kind":"decision","session":"foo","decision":"owner asks, left to the owner"}\nopen("/h/manager-actions.jsonl","a").write(str(r))\nP`.replace(/"([a-z]+)":/g, '"$1":');
+  const w = splitWakes([
+    notif(T(0), '<task-id>b</task-id>\n<summary>Background command "Re-arm manager event waiter" completed (exit code 0)</summary>'),
+    asst(T(0, 3), 'a1', [text('Stop for the owner.'), tool('x1', 'Bash', { command: dec })]),
+    notif(T(10), '<task-id>b</task-id>\n<summary>Background command "Re-arm manager event waiter" completed (exit code 0)</summary>'),
+    asst(T(10, 3), 'a2', [text('Sweep ok.'), tool('x2', 'Bash', { command: `node scripts/manager-action-append.js '{"kind":"decision","decision":"sweep done"}'` })]),
+  ], { prices: PRICES });
+  assert.equal(w[0].decisionLines, 1); assert.equal(w[0].nothing, false);
+  assert.equal(w[1].nothing, true);
+});

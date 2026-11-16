@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- Manager wakes: a wake that wrote a decision line about a session to manager-actions.jsonl (how a stop that needs no message is answered) is no longer counted as an empty wake; on 2026-11-16 this takes the harness-caused empty share from 26 of 31 to 8 of 32 (bug-2279681a) · area: platform
+
 - **A channel whose own picture is black is now repaired by the nightly** — the capture-driven repair is live since
   2026-11-15 (`<state>/rtsp-nightly/capture-mode`): a channel whose **own** frames are dark (not just the host's snapshot
   of it) is replaced from the free lists like a dead one, once the safety checks agree (three dark snapshots 10 s apart,
