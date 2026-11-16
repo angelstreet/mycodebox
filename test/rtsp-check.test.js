@@ -144,7 +144,8 @@ async function world({ devices, pool, leaseBusy = false, leaseMissing = false, l
   const pathV = leaseMissing ? `${dir}:/usr/bin:/bin` : `${dir}:${process.env.PATH}`;
   const E = { ...env, PATH: pathV, GHOSTY_STATE_DIR: state, RTSP_POOL_FILE: poolFile, RTSP_CHECK_TOKEN_CMD: path.join(dir, 'tok'),
     RTSP_CHECK_SERVERS: `envA=http://127.0.0.1:${server.address().port}`, RTSP_SETTLE_SECONDS: '0', RTSP_CONFIRM_SECONDS: '0', RTSP_API_RETRY_SECONDS: '0', RTSP_BLACK_RESAMPLE_SECONDS: '0',
-    RTSP_SOURCE_LUMA_RESAMPLE_SECONDS: '0', RTSP_CHECK_SSH: 'h1=local', RTSP_LOOPBACK_HOSTS: 'h1' };
+    RTSP_SOURCE_LUMA_RESAMPLE_SECONDS: '0', RTSP_CHECK_SSH: 'h1=local', RTSP_LOOPBACK_HOSTS: 'h1',
+    RTSP_INSTALL_VERIFY_SECONDS: '0' };  // the night verifies what it installed: no wait in the tests
   // the ssh alias must not run ssh in tests: the probe goes through a fake ssh that runs the command locally
   sh(dir, 'ssh', 'shift 5 2>/dev/null; eval "$*"');
   return { E, state, posts, restarts, devices, close: () => server.close() };
@@ -246,6 +247,32 @@ test('run live: an apply step that died without any result is not a refused leas
   const j = readFileSync(path.join(w.state, 'rtsp-nightly', 'journal.jsonl'), 'utf8');
   assert.match(j, /"outcome": "apply_failed"/);
   assert.doesNotMatch(j, /"outcome": "lease_not_granted"/);
+});
+
+test('run live: a source that dies after it was installed is replaced again in the same night', async () => {
+  // The candidate plays at the pick and after the vpt-stream restart, then it dies (a CDN whose signed segments
+  // expire). The night must notice before it ends and put another channel in place (bug-80678895).
+  const POOL2 = { maxReplacementsPerNight: 3, sources: [
+    { id: 'expire', kind: 'public', url: 'rtsp://test.example/expire', vetted: '2026-11-16' },
+    { id: 'smoke', kind: 'loopback', url: 'rtsp://127.0.0.1:8554/good-smoke', vetted: '2026-11-11', hostsEnv: 'RTSP_LOOPBACK_HOSTS' } ] };
+  const w = await world({ pool: POOL2, devices: { DEVICE1: dev('a', 'rtsp://test.example/dead-pub') } });
+  // the expire source answers ok twice (the pick, the post-restart probe) and refuses from the third probe on
+  writeFileSync(w.E.RTSP_CHECK_FFPROBE, `#!/bin/sh
+case "$*" in *stream=index,codec_type*) for a; do f=$a; done; n=$(cat "$f" | tr -dc 0-9); n=\${n:-1}; for pass in program streams; do echo 0,video; i=1; while [ $i -le $n ]; do echo $i,audio; i=$((i+1)); done; done; exit 0;; esac
+for a; do u=$a; done
+n=0; [ -f "${w.state}/expire-n" ] && n=$(cat "${w.state}/expire-n")
+case "$u" in *expire*) n=$((n+1)); echo $n > "${w.state}/expire-n"; if [ "$n" -ge 3 ]; then echo "$u: Connection refused" >&2; exit 1; fi;; esac
+case "$u" in *dead*) echo "$u: Connection refused" >&2; exit 1;; *novideo*) echo '{"streams":[]}';; *) echo '{"streams":[{"codec_name":"h264","width":640,"height":360}]}';; esac
+`);
+  w.E.RTSP_INSTALL_VERIFY_SECONDS = '0';
+  const r = await py(REPLACE, ['--mode', 'live'], w.E);
+  w.close();
+  assert.match(r.stdout, /the new source died again/, r.stdout + r.stderr);
+  assert.equal(w.posts.length, 2, r.stdout + r.stderr);      // the first install, then the second one
+  assert.equal(w.devices.DEVICE1.DEVICE_VIDEO, 'rtsp://127.0.0.1:8554/good-smoke', 'the dead candidate is not taken again');
+  const j = readFileSync(path.join(w.state, 'rtsp-nightly', 'journal.jsonl'), 'utf8');
+  assert.match(j, /"outcome": "died_again_replaced"/);
+  assert.match(j, /"outcome": "replaced"/);
 });
 
 test('run live: a missing lease command is reported, the night does not die on it', async () => {

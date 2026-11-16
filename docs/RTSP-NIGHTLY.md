@@ -62,6 +62,13 @@ The journal keeps the per-stream check events, not the inventory errors, so a ni
      partial set: the host deletes every `DEVICE<n>` it is not sent (bug-591e8166). Read back and diff: same devices, same other fields.
   4. `POST /server/system/controlHostService {service: vpt-stream, action: restart}` (the allowlisted routine path).
   5. After 15 s `rtsp_check` the new source. Any failure: POST the backup devices back, restart, journal `rolled_back`.
+- **What the night installed is verified again before the night ends** (`RTSP_INSTALL_VERIFY_SECONDS`, 5 min): a source can die
+  minutes after it was put in place (a CDN whose signed segments expire), and the channel would then stay dead until the next
+  night (2026-11-15: `vpt-nipogi/DEVICE31` was repaired with "RMC Decouverte", which answered HTTP 200 for the playlist while
+  every playback probe failed 6/6 ten minutes later, bug-80678895). The night re-probes what it installed from the host: a source
+  that still plays is left alone (the row says "the new source still plays"), a source that is dead is **replaced again** with the
+  next candidate that plays (the dead one is never taken again), and the budget still bounds the night. The journal keeps a
+  `verify` event per installed source (`plays`, `died_again_replaced`, `died_again`).
 - Journal `<state>/rtsp-nightly/journal.jsonl` (redacted), daily `report-<date>.json`; `<state>` is `$GHOSTY_STATE_DIR` (default
   `~/.local/state/ghosty`). The report carries `hosts` (`walked`: hosts the servers listed, `read`: hosts whose config
   answered) next to `streams` and `errors`, so a night with no rtsp device says how much was looked at instead of
@@ -377,6 +384,9 @@ replacement died again minutes later:
 - The two bugs the 2026-11-15 night had still open are closed: **bug-9b0cd7b5** (a black tile is judged over three dark
   snapshots 10 s apart, so a transient dark moment is no longer reported as a dead channel: `int-1a1ccd263728b7d8b`) and
   **bug-de449145** (the capture-driven repair is live and repaired the channel).
+- **bug-80678895** (the candidate that died 10 min after it was installed) is fixed by the **post-install verification**: the
+  night re-probes what it installed before it ends and replaces it again when it is dead (the policy bullet above). On
+  2026-11-15 it was worked around by hand (a second pass put "FR Series — TFX (1080p)" in place); the tool now does it itself.
 
 ### Night of 2026-11-16 (live, run by the nightly session)
 
@@ -407,7 +417,7 @@ this night and nothing else: no `replace`, no `rolled_back`, no `lease_not_grant
 `~/.config/rtsp-nightly/env`, sourced by the session: `RTSP_CHECK_SERVERS="<label>=<server url>,..."` (one per backend server), `RTSP_LEASE_ENV` (the `vpt-lease` environment of the hosts, default
 `node1-vpt`: it lists the hosts of every server), `RTSP_CHECK_SSH="<host>=<ssh alias>,..."`, `RTSP_LOOPBACK_HOSTS="<host>,..."` (where the `smoke` source exists), optional `RTSP_CHECK_TOKEN_CMD`
 (default `~/virtualpytest/scripts/agent/auto_sign_token.sh`), `RTSP_POOL_FILE`, `RTSP_SETTLE_SECONDS`, `RTSP_LEASE_MAX_WAIT` (5 min: the first wait for a
-host lease), `RTSP_LEASE_RETRY_MAX_WAIT` (20 min: the end-of-night retry of a repair the first wait did not get).
+host lease), `RTSP_LEASE_RETRY_MAX_WAIT` (20 min: the end-of-night retry of a repair the first wait did not get), `RTSP_INSTALL_VERIFY_SECONDS` (5 min: the wait before the night verifies what it installed).
 
 `RTSP_CHECK_SSH` is what makes the pool usable: a loopback candidate is skipped without an ssh alias to the host that runs it
 (`unverified`, never `ok`), so with it unset every down stream is only reported. The live path also needs `vpt-lease` on the PATH of

@@ -6,6 +6,12 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A replacement the nightly installs is verified before the night ends** — a source can die minutes after it was put in
+  place (2026-11-15: the nightly repaired the black channel `vpt-nipogi/DEVICE31` with "RMC Decouverte", whose playlist still
+  answered HTTP 200 while every playback probe failed 6/6 ten minutes later: the signed segments inside had expired), and the
+  channel then stayed dead until the next night. The night now re-probes what it installed from the host (5 min later): a source
+  that still plays is left alone, a source that is dead is replaced again with the next candidate that plays (the dead one is
+  never taken again), and the nightly budget still bounds the night · area: rtsp-nightly
 - Bug intake proof gate: `found-bug` / `POST /api/bugs` refuse a filing without `--checked-main <sha of origin/main>`, the exact error and `--tried` (exit 2 with the rule); effort / time reasons and a free equivalent device send a live filer's bug back once; open bugs a main commit may already fix are marked `possiblyFixed` and skipped by the bug drain until checked (`found-bug --checked <id>`); the scorecard shows filed / fixed-by-filer / stale-closed per day, so stale and already-fixed filings stop costing a worker · area: bug intake
 - `cbsession` waits for the project's MCP servers before it starts Claude (bug-dfa9f42a): Claude Code connects an MCP server once, at start, so a worker started inside the 15 s of a VirtualPyTest server deploy had no `virtualpytest` tool for its whole life and spent 20 more turns reading code. `scripts/mcp-ready.js` asks each HTTP MCP server of the project until it answers (60 s at most, `CBSESSION_MCP_WAIT`); one still down is named in a warning and in the prompt, with the command-line fallback · area: platform
 - Done-but-failed check: a done line with `goal: achieved`, an all-pass `Verification:` block and a reported bug id is no longer sent back for mentioning the filed out-of-scope failure; "goal not achieved / met" still fires (bug-6b6e6440) · area: platform
