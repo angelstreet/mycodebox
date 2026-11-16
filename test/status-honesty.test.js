@@ -377,3 +377,13 @@ test('done-check reads the long closing text: a Verification block longer than t
   assert.equal(closingTextOf({ excerpt }), excerpt, 'no long text: the excerpt');
   assert.equal(closingTextOf(null), '');
 });
+
+test('goal achieved + all-pass Verification + reported bug id: a mentioned failed run is not done-but-failed (bug-6b6e6440)', () => {
+  const v = (n) => `Verification:\n1. pass — run 7f503fec\n2. ${n} — x\n\n`;
+  const line = 'STATUS: done — fixed; the r5 run failed 3/3 and could not start, filed out of scope · goal: achieved · evidence: run 7f503fec · bugs: reported bug-9a737e9b';
+  assert.equal(doneButFailedOf(v('pass') + line, 'fix the thing'), null);
+  assert.ok(doneButFailedOf(v('fail') + line, 'fix the thing'), 'a failing row still fires');
+  assert.ok(doneButFailedOf(line, 'fix the thing'), 'no Verification block still fires');
+  assert.ok(doneButFailedOf(v('pass') + line.replace('could not start', 'goal not achieved'), 'fix the thing'), 'goal not achieved still fires');
+  assert.ok(doneButFailedOf(v('pass') + line.replace(' · goal: achieved', '').replace('bug-9a737e9b', 'none'), 'fix the thing'));
+});
