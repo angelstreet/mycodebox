@@ -6,6 +6,7 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **`found-bug` sends back "needs live tuning on a device"** (bug-171d2ca9) — seven bugs were filed as large/host-or-device with only "needs live tuning on device50" as the reason and the intake accepted them. `POST /api/bugs` now answers 400 with the rule (claim the device with `vpt-lease claim <env> --any <group> --wait`, fix it, `integrate request`) when `why` is large, host-or-device or other-area and the reason is only live tuning or runs on a device; a reason that names a real blocker (host unreachable, device absent, busy, credentials) still files · area: found-bug
 - **A channel whose own picture is black is now repaired by the nightly** — the capture-driven repair is live since
   2026-11-15 (`<state>/rtsp-nightly/capture-mode`): a channel whose **own** frames are dark (not just the host's snapshot
   of it) is replaced from the free lists like a dead one, once the safety checks agree (three dark snapshots 10 s apart,
