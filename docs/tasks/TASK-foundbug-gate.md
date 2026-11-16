@@ -40,3 +40,5 @@ bug-acc369c2 (`vpt-lease run --no-auto-equivalent`; merge feat/lease-named-devic
 bug-da4e6466 (parallel sessions on a red main; a3a24ad0), bug-2a939202 (host deploy left units running; 9d87f73f), bug-cc0695b9 (lane
 restarts the live service for docs; 53bcff5d docs-only notes), plus idea bugs already shipped: bug-bf0c99af, bug-ffd2e84e (pokemon retention),
 bug-b2cffe7a (worktree prune). The live server now marks these `possiblyFixed` on `GET /api/bugs`.
+
+Follow-up (2026-11-16, int-1a1e62ffa7606a785): the proof and the possibly-fixed marks are checked against the repo the bug belongs to (`--repo`, endpoint, filer cwd); see REFERENCE "Which repo".
