@@ -33,6 +33,13 @@ const FIELDS = { title: 200, endpoint: 300, repro: 1200, error: 1200, workaround
 const yes = (v) => v === true || /^(?:y|yes|true|1|blocking)$/i.test(String(v ?? ''));
 
 // Pure. -> clean report or { error }
+// Live-tuning send-back (owner, 2026-11-16, bug-171d2ca9): "needs live tuning / runs on device50" is no reason to file; the finder claims
+// the device (vpt-lease claim --any <group> --wait) and fixes it. A reason that names a real blocker (busy, down, absent, physical, creds) passes.
+const LIVE_TUNING = /\b(live[- ]tun\w*|tun(?:e|ing) (?:live|on|against|with) (?:the |a )?(?:real |live )?(?:device|host|box|stb|phone|tv)\w*|needs? (?:a |the )?(?:live |real )?(?:device|hardware|host) (?:run|runs|test|tests|access|iteration)s?|(?:run|runs|tests?|iterat\w+) on (?:the )?(?:real |live )?(?:device|host)\s*\w*\d*)/i;
+const REAL_BLOCKER = /\b(unreachable|offline|down|dead|absent|unplugged|no free|none free|busy|held by|credential|password|login|sms|physical|replug|power|broken hardware|no such device)\b/i;
+export const liveTuningRule = 'Needing live tuning or runs on a device is not a reason to file: claim the device with `vpt-lease claim <env> --any <group> --wait` (groups: `vpt-lease inventory <env>`), tune and fix it yourself, then `integrate request`. Re-file only if the claim cannot be had (host down, device absent, credentials) and say which in --reason.';
+export const liveTuningOf = (r) => ['large', 'host-or-device', 'other-area'].includes(r.why) && LIVE_TUNING.test(r.reason || '') && !REAL_BLOCKER.test(r.reason || '');
+
 export function normalize(input, { now = Date.now() } = {}) {
   const o = input && typeof input === 'object' ? input : {};
   const title = redact(o.title).replace(/\s+/g, ' ').trim().slice(0, FIELDS.title);
@@ -61,6 +68,7 @@ export function createFoundBugs({ stateDir, onNew = async () => {}, now = Date.n
     const p = chain.then(async () => {
       const r = normalize(input, { now: now() });
       if (r.invalid) return { ok: false, error: r.invalid };
+      if (liveTuningOf(r) && !input?.test) return { ok: false, error: liveTuningRule };
       const key = (b) => b.session + '\0' + String(b.title ?? '').toLowerCase();
       // tombstone lines ({ id, removed, at }) have no title: only real reports that were not removed dedupe
       const rows = await all(), gone = new Set(rows.filter((b) => b.removed).map((b) => b.id));
