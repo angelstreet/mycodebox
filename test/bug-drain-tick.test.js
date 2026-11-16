@@ -25,6 +25,7 @@ test('claims, live filers (2 h) and live-session areas are dropped', () => {
   const live = new Set(['alice-session', 'kpi-first-paint-fix']);
   assert.match(skipReason(bug({ claim: { by: 'x', at: ago(1), until: new Date(NOW + 3600e3).toISOString() } }), { live, now: NOW }), /claimed/);
   assert.match(skipReason(bug({ session: 'alice-session', at: ago(1) }), { live, now: NOW }), /live session/);
+  assert.match(skipReason(bug({ possiblyFixed: { sha: 'abcdef123456', subject: 'fix it' } }), { live, now: NOW }), /possibly fixed by abcdef12/);
   assert.equal(skipReason(bug({ session: 'alice-session', at: ago(5) }), { live, now: NOW }), '');     // old report of a live session: drainable
   assert.match(skipReason(bug({ session: 'alice-session', at: ago(5), why: 'live-session-task' }), { live, now: NOW }), /live session task/);
   assert.match(skipReason(bug({ title: 'kpi first paint is slow on card' }), { live, now: NOW }), /area owned by live session kpi-first-paint-fix/);

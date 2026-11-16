@@ -153,7 +153,7 @@ test('CLI: every flag set files cleanly against a store with marker lines', asyn
     const { promisify } = await import('node:util');
     const { execFile } = await import('node:child_process');
     const env = { ...process.env, PORT: String(srv.address().port), MYCODEBOX_CONFIG_DIR: '/nonexistent', GHOSTY_URL: '', MYCODEBOX_URL: '' };
-    const flags = ['--why-not-fixed', 'large', '--reason', 'r', '--title', 'host unreachable (No route to host)', '--endpoint', 'ssh host:227', '--repro', 'ssh from codebox', '--error', 'ssh: No route to host', '--workaround', 'none', '--blocking', 'no', '--session', 'cli-test'];
+    const flags = ['--checked-main', 'abc1234', '--tried', 'read the handler and tried', '--why-not-fixed', 'large', '--reason', 'r', '--title', 'host unreachable (No route to host)', '--endpoint', 'ssh host:227', '--repro', 'ssh from codebox', '--error', 'ssh: No route to host', '--workaround', 'none', '--blocking', 'no', '--session', 'cli-test'];
     const out = await promisify(execFile)('sh', ['scripts/found-bug', ...flags], { env });
     assert.match(out.stdout, /^filed bug-[0-9a-f]{8}/);
     const again = await promisify(execFile)('sh', ['scripts/found-bug', ...flags], { env });
@@ -183,7 +183,7 @@ test('week(): filed vs fixed by finder vs by a worker', async () => {
   const x = (await b.add({ title: 'x', session: 's1', why: 'large' })).bug, y = (await b.add({ title: 'y', session: 's1', why: 'large' })).bug;
   await b.add({ title: 'z', session: 's2' });
   await b.resolve(x.id, { state: 'fixed', commit: 'abc', by: 's1' }); await b.resolve(y.id, { state: 'fixed', commit: 'def', by: 'worker-1' });
-  assert.deepEqual(await b.week(7), { days: 7, filed: 3, fixed: 2, fixedByFinder: 1, fixedByWorker: 1, open: 1, whyMissing: 1 });
+  assert.deepEqual(await b.week(7), { days: 7, daily: [{ day: new Date().toISOString().slice(0, 10), filed: 3, fixedByFinderPct: 33, staleClosedPct: 0 }], staleClosed: 0, filed: 3, fixed: 2, fixedByFinder: 1, fixedByWorker: 1, open: 1, whyMissing: 1 });
 });
 
 test('claim: one holder at a time, renewable by the holder, expires after 2 h, dropped by a resolve; list shows it', async () => {
@@ -241,4 +241,52 @@ test('a large/host-or-device filing whose reason is only live tuning on a device
   assert.equal((await b.add({ title: 'b', session: 's1', why: 'credentials', reason: 'needs live tuning on device50' })).ok, true);
   assert.equal((await b.add({ title: 'c', session: 's1', why: 'large', reason: 'touches 12 modules' })).ok, true);
   assert.equal(liveTuningOf({ why: 'large', reason: '' }), false);
+});
+
+// Proof gate, effort / equivalent send-back, possibly-fixed marks, per-day stats (owner 2026-11-16)
+import { proofMissing, effortOf, equivalentFreeOf, possiblyFixedOf } from '../found-bugs.js';
+const PROOF = { checkedMain: 'abc1234', error: 'HTTP 500 Internal', tried: 'read the handler, could not find it' };
+test('proof gate: refuses a filing with no checked-main / error / tried, accepts one with proof on a recent main sha', async () => {
+  const dir = tmp('fb-proof-');
+  const b = createFoundBugs({ stateDir: dir, proof: async (sha) => (sha === 'abc1234' ? '' : `--checked-main ${sha} is not on origin/main`) });
+  const base = { title: 'GET /api/x 500', session: 's1', why: 'large', reason: 'touches 12 modules', repro: 'curl it' };
+  for (const [patch, re] of [[{}, /checked-main/], [{ checkedMain: 'zz' }, /checked-main/], [{ checkedMain: 'abc1234', error: 'x', tried: PROOF.tried }, /--error/], [{ checkedMain: 'abc1234', error: PROOF.error }, /--tried/], [{ ...PROOF, checkedMain: 'def5678' }, /not on origin\/main/]]) {
+    const r = await b.add({ ...base, ...patch }); assert.equal(r.ok, false); assert.match(r.error, re);
+  }
+  assert.equal((await b.add({ ...base, ...PROOF })).ok, true);
+  assert.equal((await b.add({ title: 'idea: a timer', session: 's1' })).ok, true, 'ideas are not bugs');
+  assert.equal((await b.add({ title: 'probe', session: 's1', test: true })).ok, true);
+  assert.match(proofMissing({ title: 't', checkedMain: '', error: '', tried: '' }), /checked-main/);
+});
+test('send-back: effort wording and a claimable equivalent device go back to a live filer', () => {
+  const b = (o) => ({ id: 'bug-1', title: 't', why: 'large', reason: '', repro: '', blocking: false, ...o });
+  assert.equal(effortOf(b({ reason: 'too big for this session' })), true);
+  assert.equal(effortOf(b({ reason: 'touches 12 modules' })), false);
+  assert.equal(effortOf(b({ reason: 'too long but the host is unreachable' })), false);
+  assert.equal(sendBackOf(b({ why: 'host-or-device', reason: 'would take hours', blocking: true })), true);
+  const inv = 'stb3: vpt-pi1/device5 (free)  vpt-mf1/device2 (free)  vpt-pi3/device1 (UNHEALTHY: host down)\n';
+  const dev = b({ why: 'host-or-device', reason: 'device5 shows it', title: 'zap fails on vpt-pi1/device5', repro: 'r' });
+  assert.equal(equivalentFreeOf(dev, inv, ''), 'vpt-mf1/device2');
+  assert.equal(equivalentFreeOf(dev, inv, 'node1/vpt-mf1/device2 agent=x'), '', 'held members are not claimable');
+  assert.equal(sendBackOf(dev, { equivalent: 'vpt-mf1/device2' }), true);
+  assert.equal(sendBackOf(dev), false, 'a host-or-device report with no free equivalent stays filed');
+  assert.match(sendBackText(dev, { equivalent: 'vpt-mf1/device2' }), /vpt-mf1\/device2/);
+});
+test('possibly fixed: a commit on main after the report that names its id or most of its title; checked clears it; per-day stats', async () => {
+  const bug = { id: 'bug-aaaa1111', title: 'lease queue claim ignores holder pid on restart', at: '2026-11-10T10:00:00Z' };
+  const c = (at, subject) => ({ sha: 'f'.repeat(40), at, subject });
+  assert.ok(possiblyFixedOf(bug, [c('2026-11-11T00:00:00Z', 'lease: claim keeps holder pid on queue restart')]));
+  assert.ok(possiblyFixedOf(bug, [c('2026-11-11T00:00:00Z', 'fix bug-aaaa1111')]));
+  assert.equal(possiblyFixedOf(bug, [c('2026-11-09T00:00:00Z', 'fix bug-aaaa1111')]), null, 'older than the report');
+  assert.equal(possiblyFixedOf(bug, [c('2026-11-11T00:00:00Z', 'docs: manager manual')]), null);
+  assert.equal(possiblyFixedOf({ ...bug, title: 'idea: ' + bug.title }, [c('2026-11-11T00:00:00Z', 'fix bug-aaaa1111')]), null);
+  const dir = tmp('fb-pf-'), t = Date.now();
+  const fb = createFoundBugs({ stateDir: dir, now: () => t, commits: async () => [{ sha: 'a'.repeat(40), at: new Date(t + 1000).toISOString(), subject: 'lease queue claim holder pid restart fixed' }] });
+  const x = (await fb.add({ title: 'lease queue claim ignores holder pid on restart', session: 's', why: 'large', reason: 'r' })).bug;
+  assert.equal((await fb.list({ unresolved: true }))[0].possiblyFixed.sha, 'a'.repeat(40));
+  assert.equal((await fb.checked(x.id, 'drain')).ok, true);
+  assert.equal((await fb.list({ unresolved: true }))[0].possiblyFixed, undefined);
+  const y = (await fb.add({ title: 'other stale one', session: 's', why: 'large', reason: 'r' })).bug;
+  await fb.resolve(y.id, { state: 'wontfix', note: 'already fixed on main', by: 'bugdrain-1' });
+  const w = await fb.week(7); assert.equal(w.daily.length, 1); assert.equal(w.daily[0].filed, 2); assert.equal(w.daily[0].staleClosedPct, 50); assert.equal(w.staleClosed, 1);
 });

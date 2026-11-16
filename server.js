@@ -122,7 +122,7 @@ import { createRulesWatch } from './rules-watch.js';
 import { createOverlapGuard, DEFAULT_IGNORE } from './overlap-guard.js';
 import { createProgressWatch } from './progress-watch.js';
 import { createSharedCheckoutGuard, expandHome } from './shared-checkout-guard.js';
-import { createFoundBugs, unreportedBugOf, sendBackOf, sendBackText, sweepGroups } from './found-bugs.js';
+import { createFoundBugs, unreportedBugOf, sendBackOf, sendBackText, sweepGroups, equivalentFreeOf } from './found-bugs.js';
 import { goalOf as goalOfPrompt, blockedOrUnknownStatus } from './status-honesty.js';
 import { createGoalGate, createGoalStore } from './goal-check.js';
 import { createDoneCheck, closingTextOf, DEFAULT_IGNORE_BRANCHES, shipOfferOf, unconfirmedStatusOf, waitingOnLeaseStatus } from './done-check.js';
@@ -865,7 +865,33 @@ const mockups = createMockups({
 });
 // Found bugs (found-bugs.js, owner 2026-10-28): a session files a bug outside its scope; owner feed (counter) + manager feed kind `bug`.
 const bugSendBacks = new Map();   // session -> send-back timestamps (cap per hour)
-const foundBugs = createFoundBugs({ stateDir: STATE_DIR, onNew: async (b) => {
+// Proof gate + possibly-fixed marks (owner, 2026-11-16): git facts of origin/main, cached 60 s; no git or no origin/main = the sha format check only.
+const BUG_GIT_DIR = dirname(fileURLToPath(import.meta.url));
+let mainFacts = { at: 0, commits: [] };
+async function mainCommits() {
+  if (Date.now() - mainFacts.at < 60000) return mainFacts.commits;
+  try {
+    const { stdout } = await exec('git', ['log', '-n', '400', '--format=%H%x09%cI%x09%s', 'origin/main'], { cwd: BUG_GIT_DIR, timeout: 15000 });
+    mainFacts = { at: Date.now(), commits: stdout.split('\n').filter(Boolean).map((l) => { const [sha, at, ...r] = l.split('\t'); return { sha, at, subject: r.join('\t') }; }) };
+  } catch { mainFacts = { at: Date.now(), commits: [] }; }
+  return mainFacts.commits;
+}
+// the reproduced sha must be a commit of origin/main within its last 400 (a repro on a stale checkout proves nothing about main)
+async function bugProof(sha) {
+  const cs = await mainCommits();
+  if (!cs.length) return '';
+  return cs.some((c) => c.sha.startsWith(sha)) ? '' : `--checked-main ${sha} is not one of the last ${cs.length} commits of origin/main: git fetch, run the repro on current origin/main and pass its sha (git rev-parse origin/main).`;
+}
+let invCache = { at: 0, inv: '', held: '' };
+async function leaseInventoryText() {
+  if (Date.now() - invCache.at < 60000) return invCache;
+  try {
+    const run = async (a) => (await exec('vpt-lease', a, { timeout: 20000 })).stdout;
+    invCache = { at: Date.now(), inv: await run(['inventory', process.env.BUG_DRAIN_LEASE_ENV || 'node1-vpt']), held: await run(['list']) };
+  } catch { invCache = { at: Date.now(), inv: '', held: '' }; }
+  return invCache;
+}
+const foundBugs = createFoundBugs({ stateDir: STATE_DIR, proof: bugProof, commits: mainCommits, onNew: async (b) => {
   alert(`${b.session}:bug`, { title: `${b.session}: ${b.blocking ? 'BLOCKING bug' : 'bug'} found: ${b.title}`, body: [b.endpoint, b.error].filter(Boolean).join(' · ') || b.title,
     url: `/?s=${encodeURIComponent(b.session)}`, priority: b.blocking ? 'high' : 'low', ntfyTags: 'bug', meta: { bug: { id: b.id, title: b.title, endpoint: b.endpoint, blocking: b.blocking, why: b.why, ...(b.test ? { test: true } : {}) } } }, 0);
   // bug-67c65223: a blocking filing goes to the bug drain first (it claims and starts a worker when it can); the manager hears of it
@@ -877,11 +903,12 @@ const foundBugs = createFoundBugs({ stateDir: STATE_DIR, onNew: async (b) => {
   }
   // fix-first (owner, 2026-11-11): a small-looking bug from a live session goes back to it once (kept for its next stop, <= 4 per session per hour)
   try {
-    if (sendBackOf(b) && (await listPanes()).has(b.session)) {
+    const eq = b.why === 'host-or-device' ? await leaseInventoryText().then((c) => equivalentFreeOf(b, c.inv, c.held)) : '';
+    if (sendBackOf(b, { equivalent: eq }) && (await listPanes()).has(b.session)) {
       const hits = (bugSendBacks.get(b.session) || []).filter((t) => Date.now() - t < 3600e3);
       if (hits.length < 4) {
         bugSendBacks.set(b.session, [...hits, Date.now()]);
-        const r = pendingWakes.add({ session: b.session, key: `bugback:${b.id}`, text: sendBackText(b), by: 'found-bugs' });
+        const r = pendingWakes.add({ session: b.session, key: `bugback:${b.id}`, text: sendBackText(b, { equivalent: eq }), by: 'found-bugs' });
         logEvent({ type: 'bug-send-back', id: b.id, session: b.session, why: b.why, queued: !!r?.queued });
       }
     }
@@ -2931,6 +2958,8 @@ async function handleHttp(req, res) {
       // fix claim (found-bug --claim <id> [--release]): 409 when another session holds it; a remote client with no session is mac-<client>
       const cm = p.match(/^\/api\/bugs\/([^/]+)\/claim$/);
       if (cm && req.method === 'POST') { const b = await readJsonBody(req); const sess = String(b?.session || '').replace(/^unknown$/, '') || (remoteClient ? `mac-${remoteClient}` : ''); const r = await foundBugs.claim(decodeURIComponent(cm[1]), { session: sess, release: !!b?.release }); return json(res, r.ok ? 200 : r.claimedBy ? 409 : r.error === 'no such bug' ? 404 : 400, r); }
+      const km = p.match(/^\/api\/bugs\/([^/]+)\/checked$/);   // possibly-fixed bug checked against main: it still reproduces, a worker may take it
+      if (km && req.method === 'POST') { const b = await readJsonBody(req); const r = await foundBugs.checked(decodeURIComponent(km[1]), b?.by); return json(res, r.ok ? 200 : 404, r); }
       const rm = p.match(/^\/api\/bugs\/([^/]+)\/resolve$/);
       if (rm && req.method === 'POST') { const b = await readJsonBody(req); const r = await foundBugs.resolve(decodeURIComponent(rm[1]), b); return json(res, r.ok ? 200 : r.error === 'no such bug' ? 404 : 400, r); }
       if (req.method === 'DELETE' && p.startsWith('/api/bugs/')) { const r = await foundBugs.remove(decodeURIComponent(p.slice('/api/bugs/'.length))); return json(res, r.ok ? 200 : 404, r); }

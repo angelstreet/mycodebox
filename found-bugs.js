@@ -40,6 +40,52 @@ const REAL_BLOCKER = /\b(unreachable|offline|down|dead|absent|unplugged|no free|
 export const liveTuningRule = 'Needing live tuning or runs on a device is not a reason to file: claim the device with `vpt-lease claim <env> --any <group> --wait` (groups: `vpt-lease inventory <env>`), tune and fix it yourself, then `integrate request`. Re-file only if the claim cannot be had (host down, device absent, credentials) and say which in --reason.';
 export const liveTuningOf = (r) => ['large', 'host-or-device', 'other-area'].includes(r.why) && LIVE_TUNING.test(r.reason || '') && !REAL_BLOCKER.test(r.reason || '');
 
+// Proof gate (owner, 2026-11-16): filing must be harder than fixing. A bug is filed only with proof it still reproduces on current main
+// (--checked-main <sha> of origin/main when you ran the repro + the exact error) and one line of what the filer tried. "idea:" entries are not bugs.
+export const proofRule = 'A bug is filed only with proof it is real on current main and that you could not fix it: --checked-main <sha of origin/main where you reproduced it> (git rev-parse origin/main), --error "<the exact error text>" and --tried "<one line: what you tried to fix it>". Re-run the repro on current origin/main first; if it no longer fails, it is fixed: do not file. If it is small, fix it yourself now.';
+export const IDEA = /^\s*idea\s*:/i;
+// Pure. -> error text | ''. proofOf(r) checks only what the report itself carries; sha freshness is the injected `proof` option of createFoundBugs.
+export function proofMissing(r) {
+  if (IDEA.test(r.title)) return '';
+  if (!r.checkedMain) return `--checked-main <sha> is missing or not a git sha. ${proofRule}`;
+  if (r.error.length < 5) return `--error with the exact error text is required. ${proofRule}`;
+  if (r.tried.length < 10) return `--tried "one line: what you tried" is required. ${proofRule}`;
+  return '';
+}
+// Effort / time wording is no reason to file (owner, 2026-11-16): sent back once to a live filer.
+const EFFORT = /\b(too (?:long|big|much|large|complex)|takes? (?:too )?long|(?:no|not enough|out of) time|not worth|(?:a )?lot of (?:work|effort)|big refactor|large refactor|(?:would|will) take (?:hours|days|a while)|effort|time[- ]consuming|later|someone else|another session|not my (?:task|area))\b/i;
+export const effortOf = (b) => ['large', 'other-area', 'host-or-device'].includes(b.why) && EFFORT.test(b.reason || '') && !REAL_BLOCKER.test(b.reason || '');
+
+// `vpt-lease inventory <env>` ("group: host[/device] (state)  host (UNHEALTHY: ...)") + `vpt-lease list` (held resources). A bug that names a
+// host or device that sits in a group with another healthy, unheld member has a claimable equivalent: claim it and fix it. Pure.
+export function equivalentFreeOf(b, inventoryText, listText = '') {
+  const t = [b.title, b.endpoint, b.repro, b.error, b.reason].join(' ').toLowerCase();
+  for (const line of String(inventoryText || '').split('\n')) {
+    const g = line.match(/^\s*([\w.-]+)\s*:\s*(.*)$/); if (!g) continue;
+    const members = [...g[2].matchAll(/([a-z][\w.-]*(?:\/device\d+)?)\s+\(([^)]*)\)/gi)].map((m) => ({ id: m[1].toLowerCase(), state: m[2] }));
+    const named = members.filter((m) => t.includes(m.id) || t.includes(m.id.split('/')[0]));
+    if (!named.length) continue;
+    const free = members.find((m) => !named.includes(m) && !/^UNHEALTHY/i.test(m.state) && !/held|leased|busy|in use/i.test(m.state) && !String(listText).toLowerCase().includes(m.id));
+    if (free) return free.id;
+  }
+  return '';
+}
+
+// A bug filed before a commit on main that names it (bug id) or shares >= 4 (or half, min 3) of its title words was possibly fixed already; no worker takes it until checked.
+// commits: [{ sha, at (ISO), subject }]. Pure. -> { sha, subject } | null
+const STOP = new Set(['with', 'from', 'that', 'this', 'when', 'after', 'before', 'fix', 'fixes', 'bug', 'error', 'returns', 'merge', 'into', 'main', 'integration', 'test', 'tests', 'feat', 'idea']);
+const words = (s) => new Set(String(s || '').toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 4 && !STOP.has(w) && !/^\d+$/.test(w)));
+export function possiblyFixedOf(b, commits) {
+  if (IDEA.test(b.title)) return null;
+  const since = Date.parse(b.at), tw = words(b.title);
+  for (const c of commits || []) {
+    if (!(Date.parse(c.at) > since)) continue;
+    if (String(c.subject).toLowerCase().includes(b.id)) return { sha: c.sha, subject: c.subject };
+    if (tw.size >= 3) { const cw = words(c.subject); let n = 0; for (const w of tw) if (cw.has(w)) n++; if (n >= 4 || (n >= 3 && n >= tw.size / 2)) return { sha: c.sha, subject: c.subject }; }
+  }
+  return null;
+}
+
 export function normalize(input, { now = Date.now() } = {}) {
   const o = input && typeof input === 'object' ? input : {};
   const title = redact(o.title).replace(/\s+/g, ' ').trim().slice(0, FIELDS.title);
@@ -50,12 +96,16 @@ export function normalize(input, { now = Date.now() } = {}) {
   const why = String(o.why ?? o.whyNotFixed ?? '').trim().toLowerCase();
   r.why = WHY.includes(why) ? why : 'missing';
   r.reason = redact(o.reason).replace(/\s+/g, ' ').trim().slice(0, 300);
+  const sha = String(o.checkedMain ?? '').trim().toLowerCase();
+  r.checkedMain = /^[0-9a-f]{7,40}$/.test(sha) ? sha : '';
+  r.tried = redact(o.tried).replace(/\s+/g, ' ').trim().slice(0, 300);
   if (o.test) r.test = true;
   r.id = 'bug-' + createHash('sha1').update(r.session + '\0' + r.title.toLowerCase() + '\0' + r.at).digest('hex').slice(0, 8);
   return r;
 }
 
-export function createFoundBugs({ stateDir, onNew = async () => {}, now = Date.now } = {}) {
+// proof(sha) -> '' | error: when given, the proof gate is on (the server passes it; sha must be a recent commit of origin/main). commits() -> recent main commits.
+export function createFoundBugs({ stateDir, onNew = async () => {}, now = Date.now, proof = null, commits = null } = {}) {
   const file = join(stateDir, FILE_NAME);
   async function all() {
     let text = '';
@@ -69,6 +119,10 @@ export function createFoundBugs({ stateDir, onNew = async () => {}, now = Date.n
       const r = normalize(input, { now: now() });
       if (r.invalid) return { ok: false, error: r.invalid };
       if (liveTuningOf(r) && !input?.test) return { ok: false, error: liveTuningRule };
+      if (proof && !input?.test) {
+        const miss = proofMissing(r) || (!IDEA.test(r.title) && (await proof(r.checkedMain))) || '';
+        if (miss) return { ok: false, error: miss, rule: 'proof' };
+      }
       const key = (b) => b.session + '\0' + String(b.title ?? '').toLowerCase();
       // tombstone lines ({ id, removed, at }) have no title: only real reports that were not removed dedupe
       const rows = await all(), gone = new Set(rows.filter((b) => b.removed).map((b) => b.id));
@@ -107,6 +161,12 @@ export function createFoundBugs({ stateDir, onNew = async () => {}, now = Date.n
     await appendFile(file, JSON.stringify({ id, resolved: true, state, commit: clean(commit, 80), note: clean(note, 300), by: clean(by, 80) || 'unknown', at: new Date(now()).toISOString() }) + '\n');
     return { ok: true };
   }
+  // checked(id, by): the drain (or anyone) checked a possibly-fixed bug against main and it still reproduces: it may go to a worker.
+  async function checked(id, by = '') {
+    if (!(await all()).find((x) => x.id === id && x.title)) return { ok: false, error: 'no such bug' };
+    await appendFile(file, JSON.stringify({ id, checked: true, by: redact(by).slice(0, 80) || 'unknown', at: new Date(now()).toISOString() }) + '\n');
+    return { ok: true };
+  }
   // claim(id, { session, release }) -> { ok, claim } | { ok: false, error, claimedBy?, until? }. Marker lines; the last claim / release wins.
   // The same session may renew its own claim (a new 2 h window). A resolved bug cannot be claimed.
   function claim(id, { session = '', release = false } = {}) {
@@ -142,13 +202,15 @@ export function createFoundBugs({ stateDir, onNew = async () => {}, now = Date.n
   }
   async function list({ limit = 100, unresolved = false, state = '', offset = 0 } = {}) {
     const rows = await all(), gone = new Set(rows.filter((r) => r.removed).map((r) => r.id));
-    const claims = claimsOf(rows);
+    const claims = claimsOf(rows), seen = new Set(rows.filter((r) => r.checked).map((r) => r.id));
+    let recent = []; try { recent = commits ? await commits() : []; } catch { /* no git: nothing is marked */ }
     const done = new Map(rows.filter((r) => r.fixed).map((r) => [r.id, r])), res = new Map(rows.filter((r) => r.resolved).map((r) => [r.id, r]));
     const out = rows.filter((r) => r.title && !r.removed && !gone.has(r.id)).map((r) => {
       const v = res.get(r.id), f = done.get(r.id);
       if (v) return { ...r, state: v.state, resolved: true, ...(v.state === 'fixed' ? { fixed: true } : {}), commit: v.commit, resolvedNote: v.note, resolvedBy: v.by, resolvedAt: v.at };
       if (f) return { ...r, state: 'fixed', resolved: true, fixed: true, fixedNote: f.note, fixedAt: f.at };
-      return { ...r, state: 'open', ...(claims.has(r.id) ? { claim: claims.get(r.id) } : {}) };
+      const pf = !seen.has(r.id) && !r.test ? possiblyFixedOf(r, recent) : null;
+      return { ...r, state: 'open', ...(claims.has(r.id) ? { claim: claims.get(r.id) } : {}), ...(pf ? { possiblyFixed: pf } : {}) };
     });
     // newest `limit` of the (filtered) rows; offset skips that many of the newest first, so a client pages back through 340+ reports
     const rows2 = state ? out.filter((r) => r.state === state) : unresolved ? out.filter((r) => !r.resolved) : out;
@@ -165,12 +227,19 @@ export function createFoundBugs({ stateDir, onNew = async () => {}, now = Date.n
     const since = now() - days * DEDUPE_MS, rows = (await list({ limit: 5000 })).filter((b) => !b.test && Date.parse(b.at) >= since);
     const fixed = rows.filter((b) => b.resolved && b.state === 'fixed'), mine = fixed.filter((b) => b.resolvedBy === b.session);
     const missing = rows.filter((b) => !b.why || b.why === 'missing').length;
-    return { days, filed: rows.length, fixed: fixed.length, fixedByFinder: mine.length, fixedByWorker: fixed.length - mine.length, open: rows.filter((b) => !b.resolved).length, whyMissing: missing };
+    // per day (UTC): filed, share fixed by the filer, share closed as already-fixed / stale (duplicate, wontfix, or a note saying so)
+    const STALE = /already fixed|fixed (?:on|in) main|stale|no longer (?:repro|fail|happen)|cannot reproduce|not reproducible|fixed by/i;
+    const stale = (b) => b.resolved && (b.state === 'duplicate' || b.state === 'wontfix' || (b.state !== 'fixed' && STALE.test(b.resolvedNote || '')) || (b.state === 'fixed' && !b.commit && STALE.test(b.resolvedNote || '')));
+    const byDay = new Map();
+    for (const b of rows) byDay.set(b.at.slice(0, 10), [...(byDay.get(b.at.slice(0, 10)) || []), b]);
+    const pct = (n, d) => (d ? Math.round((100 * n) / d) : 0);
+    const daily = [...byDay].sort().map(([day, l]) => ({ day, filed: l.length, fixedByFinderPct: pct(l.filter((b) => b.resolved && b.state === 'fixed' && b.resolvedBy === b.session).length, l.length), staleClosedPct: pct(l.filter(stale).length, l.length) }));
+    return { days, daily, staleClosed: rows.filter(stale).length, filed: rows.length, fixed: fixed.length, fixedByFinder: mine.length, fixedByWorker: fixed.length - mine.length, open: rows.filter((b) => !b.resolved).length, whyMissing: missing };
   }
   async function recentBy(session, ms = REPORTED_MS) {
     return (await list({ limit: 5000 })).some((b) => b.session === session && now() - Date.parse(b.at) < ms);
   }
-  return { add, remove, fixed, resolve, claim, list, counts, week, recentBy, file };
+  return { add, remove, fixed, resolve, checked, claim, list, counts, week, recentBy, file };
 }
 
 // Detector: closing text that mentions a failure, an unrelated/pre-existing problem or a workaround but never filed it.
@@ -192,12 +261,15 @@ export function unreportedBugOf(text) {
 // Send-back (owner, 2026-11-11): a bug filed with no reason or as large/other-area, with a repro and not blocking, by a live session, goes back to
 // its finder once: it knows the repro. Hard-floor topics never. Pure.
 const FLOOR = /\b(?:credentials?|secrets?|tokens?|passwords?|api[- ]?keys?|sudoers?|delet(?:e|ion)s? of data|data loss|force-?push|money|payment|invoice|billing|customers?|production|prod host|migration)\b/i;
-export function sendBackOf(b) {
-  if (!b || b.test || b.blocking || !String(b.repro || '').trim()) return false;
-  if (!['missing', 'large', 'other-area'].includes(b.why || 'missing')) return false;   // a report stored before the field existed has no why: missing
-  return !FLOOR.test([b.title, b.repro, b.error, b.reason].join(' '));
+// opts.equivalent: a claimable equivalent device id (equivalentFreeOf) for a host-or-device report. Effort / time wording and a claimable equivalent
+// send a live filer's bug back even when it is blocking or has no repro (owner, 2026-11-16): the reason given is not a blocker.
+export function sendBackOf(b, { equivalent = '' } = {}) {
+  if (!b || b.test || FLOOR.test([b.title, b.repro, b.error, b.reason].join(' '))) return false;
+  if (effortOf(b) || (b.why === 'host-or-device' && equivalent)) return true;
+  if (b.blocking || !String(b.repro || '').trim()) return false;
+  return ['missing', 'large', 'other-area'].includes(b.why || 'missing');   // a report stored before the field existed has no why: missing
 }
-export const sendBackText = (b) => `You filed ${b.id}. If it is small, claim it (found-bug --claim ${b.id}), fix it now in your own worktree and resolve it (found-bug --resolve ${b.id} --commit <sha|integration id>); otherwise reply with the reason (found-bug --why-not-fixed large|other-area|host-or-device|credentials|owner-floor|live-session-task).`;
+export const sendBackText = (b, { equivalent = '' } = {}) => `You filed ${b.id}.${equivalent ? ` A free equivalent device exists (${equivalent}): claim it (vpt-lease claim <env> --any <group> --wait) and fix it yourself.` : effortOf(b) ? ' Effort or time is not a reason to file: do the fix.' : ''} If it is small, claim it (found-bug --claim ${b.id}), fix it now in your own worktree and resolve it (found-bug --resolve ${b.id} --commit <sha|integration id>); otherwise reply with the reason (found-bug --why-not-fixed large|other-area|host-or-device|credentials|owner-floor|live-session-task).`;
 
 // Sweep (owner, 2026-11-11): open reports from sessions that are still live, grouped per session: one kept wake each listing the ids. Pure.
 export function sweepGroups(bugs, liveSessions, { perSession = 8 } = {}) {
