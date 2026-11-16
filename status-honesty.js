@@ -86,9 +86,13 @@ export function doneButFailedOf(text, goal = '') {
   const achieved = /\bgoal\s*[:=]\s*achieved\b/i.test(st.text);
   const gw = words(goal);
   const hits = [];
+  // bug-6b6e6440: goal achieved + every Verification row pass + a reported bug id: a failure the text mentions is the filed out-of-scope one
+  const rows = verificationRowsOf(text) || [];
+  const filedOut = achieved && rows.length > 0 && rows.every((r) => r.verdict === 'pass' || r.verdict === 'dropped') && /\bbug-[0-9a-f]{6,}\b/i.test(st.text);
   for (const c of clauses(head)) {
     const clean = c.replace(/\b(?:no|not|nothing) (?:\w+ )?(?:was |is )?(?:needed|required|necessary|pending|changed|left)\b/gi, '');   // "no tree change was needed" is not a failure
     const s = STRONG.find(([, re]) => re.test(clean));
+    if (s && filedOut && !/^goal not/.test(s[0])) continue;
     if (s) { hits.push({ label: s[0], clause: c.slice(0, 200), strong: true }); continue; }
     if (achieved) continue;
     const w = SOFT.find(([, re]) => re.test(clean));

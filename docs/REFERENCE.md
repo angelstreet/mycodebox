@@ -1998,7 +1998,8 @@ Goal first, verification last (owner 2026-11-11; `docs/GOAL-RULE.md`, kept equal
   "not valid", "no X was built / created / published", "nothing was built", "0 of N", "failed N/N", "could not / unable to", "proof is
   incomplete", "still failing", "gave up" ("no X was needed" is not one). Soft signals ("blocked", "not measured / run / verified ...",
   "unverified") and the `unverified:` segment count only when the clause names the goal (2 goal words; 3 for the segment) and the line does not
-  say `goal: achieved`. ONE wake per done line ("your own text says the goal was not achieved: <its words> ... restate as failed / blocked /
+  say `goal: achieved`. Strong signals other than "goal not achieved / met" are also silent when the line says `goal: achieved`, every `Verification:` row
+  passes and the line names a reported bug id (`bugs: reported bug-...`): the failure is the filed out-of-scope one (bug-6b6e6440). ONE wake per done line ("your own text says the goal was not achieved: <its words> ... restate as failed / blocked /
   waiting, or add goal: achieved · evidence") and ONE manager event (`done-but-failed:<session>`); the closing-review push is skipped for such a
   line. Replay of the 184 distinct done stops of 2026-11-11 (66 sessions): 17 stops of 5 sessions flagged, all read by hand as true (opus-openexit
   "anchor not valid ... no v3 was built", content-mobile "goal not met: 5 of 10", kpi-zap-fix "5-zap proof is incomplete", fix-ci-parallel-timing
