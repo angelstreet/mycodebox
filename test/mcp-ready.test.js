@@ -88,3 +88,34 @@ test('no ~/.claude.json or no MCP server: exit 0 at once (never blocks a start)'
   fs.writeFileSync(path.join(home, '.claude.json'), '{"projects":{}}');
   assert.equal((await runScript(home, [home])).code, 0);
 });
+
+test('cbsession: a server down at start = a warning and a note in the prompt; a server up = neither', async () => {
+  const CB = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'cbsession');
+  const home = tmp('mcprdy-cb-');
+  const work = path.join(home, 'work'); fs.mkdirSync(work);
+  const bin = path.join(home, 'bin'); fs.mkdirSync(bin);
+  // tmux and sleep stubs: nothing starts, the trust / remote-control wait loop does not wait.
+  fs.writeFileSync(path.join(bin, 'tmux'), '#!/bin/sh\n[ "$1" = has-session ] && exit 1\nexit 0\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, 'sleep'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  const port = await freePort();
+  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ projects: { [work]: { mcpServers: { virtualpytest: http_(`http://127.0.0.1:${port}/server/mcp`) } } } }));
+  const start = (name) => new Promise((res) => {
+    const c = spawn('bash', [CB, '-n', name, '-d', work, '-N', '-t', 'do it'], { env: {
+      PATH: `${bin}:${process.env.PATH}`, HOME: home, GHOSTY_STATE_DIR: path.join(home, 'state'), CBSESSION_MCP_WAIT: '0.3', MCP_READY_EVERY_MS: '100' } });
+    let err = ''; c.stderr.on('data', (d) => { err += d; }); c.stdout.resume();
+    c.on('close', (code) => res({ code, err, prompt: fs.readFileSync(path.join(home, 'handovers', `${name}.prompt.md`), 'utf8') }));
+  });
+  const down = await start('mcp-down');
+  assert.equal(down.code, 0, down.err);
+  assert.match(down.err, new RegExp(`warning: MCP server not answering after 0.3 s: virtualpytest \\(127.0.0.1:${port}\\)`));
+  assert.match(down.prompt, /\*\*MCP not connected\*\* \(cbsession, \d\d:\d\d UTC\): the MCP server virtualpytest \(127\.0\.0\.1:\d+\) did not answer/);
+  assert.match(down.prompt, /vpt_quicktest\.py/);
+  assert.doesNotMatch(down.err + down.prompt, /SECRET/);
+  const server = await serve(port);
+  try {
+    const up = await start('mcp-up');
+    assert.equal(up.code, 0, up.err);
+    assert.doesNotMatch(up.err, /MCP server not answering/);
+    assert.doesNotMatch(up.prompt, /MCP not connected/);
+  } finally { server.close(); }
+});
