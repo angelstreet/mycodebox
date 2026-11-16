@@ -378,6 +378,30 @@ replacement died again minutes later:
   snapshots 10 s apart, so a transient dark moment is no longer reported as a dead channel: `int-1a1ccd263728b7d8b`) and
   **bug-de449145** (the capture-driven repair is live and repaired the channel).
 
+### Night of 2026-11-16 (live, run by the nightly session)
+
+103 streams checked, **93 ok, 10 down**, **0 replaced**, 0 rolled back, 0 cameras down, 0 unverified. 15 hosts walked, 15 read,
+**no inventory error** (every server and every host answered the host-config GET). The journal holds 103 `check` events for
+this night and nothing else: no `replace`, no `rolled_back`, no `lease_not_granted`, no `apply_failed`.
+
+- The 10 down: 8 devices with an empty source (`vpt-nipogi` DEVICE4, 5, 6, 17, 22, 23, 24 and `vpt-pi4` DEVICE2; reported by
+  name, never changed) and 2 channels that failed once and played on the confirming re-probe (`vpt-nipogi` DEVICE10 frozen
+  once, DEVICE26 timed out once; nothing touched). Nothing was really down, so nothing had to be replaced and the pool was
+  never used.
+- What the app shows (tile snapshots): 96 ok, 6 unknown, 1 missing.
+  - **No `multi_audio` tile**: no host runs the old `run_ffmpeg.sh` any more, so no `vpt-stream` restart was needed tonight.
+  - The 2 "dark snapshot but the live video plays" notes, opened in the browser on the pi4 server (hover, live layer), are
+    real pictures and not dead tiles: `vpt-nipogi/DEVICE27` ("FR Travel — Voyages & Saveurs") plays (readyState 4, the clock
+    advances 128.5 s → 130.9 s, the screenshot shows the channel's own picture) and `lenovo-local-low/DEVICE35`
+    ("Low 360p Clip 35") plays (readyState 4, 149.5 s → 151.9 s, 640x360, the screenshot shows the clip's own frame). A dark
+    thumbnail of a moving picture, not a dead stream (bug-6b227d92).
+  - The 1 `missing` tile is `vpt-nipogi/DEVICE5`, one of the devices with an empty source: there is no snapshot of a stream
+    that was never set up. The 6 `unknown` tiles are the other empty-source devices.
+- The pool was not touched: re-probed from `vpt-pi4` (the host that runs `vpt-rtsp`), `smoke` plays (h264) and the three
+  public candidates still time out on port 554, so nothing new is vetted (bug-c7c2bb0e, still `wontfix`).
+- The pi4 server answered a 502 to codebox once, right after the run (200 on the next try): the same slow-origin blip as
+  2026-11-12. The run's own inventory reads had no error, so no host was skipped.
+
 ## Private config (not in the repo)
 
 `~/.config/rtsp-nightly/env`, sourced by the session: `RTSP_CHECK_SERVERS="<label>=<server url>,..."` (one per backend server), `RTSP_LEASE_ENV` (the `vpt-lease` environment of the hosts, default
