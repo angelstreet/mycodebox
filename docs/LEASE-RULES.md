@@ -224,7 +224,7 @@ Audit of scheduled job classes, `vpt-lease events` 2026-11-13 23:45Z to 2026-11-
 
 Live proof (2026-11-16 06:45Z, free device, agents `proof:sched-*`): P3 claim, P1 ticket behind it, `yield` at 06:45:20.644, `yield-grace` end at 06:47:20.660, P1 granted 06:47:21.
 
-Known limit: the lease ends but the scheduler does not abort a campaign already running on the device (no stop hook in `deployment_scheduler.py`); the next run of that job is skipped by the guard (a P3 claim behind a dev ticket is refused).
+Stop hook (2026-11-16, VirtualPyTest int-1a1e3210d2ff0f8f5): the scheduler's lease guard renews every 60 s; on `yield_required` (or a lease already ended) it aborts the running script or campaign on the device and records the execution as `skipped` ("yielded to dev work"), not failed. The next run is refused behind the waiting dev claim and skipped.
 
 Dev tickets that waited on a scheduled holder in those 3 days: `mobile-orchtnet-owner` on `vpt-nipogi/device50` waited 4.3 min behind `deployment:stream-wall mobile
 vpt-nipogi S21x` (2026-11-14 10:55Z) and 3.0 min (19:06Z), 0.3 min behind a `kpi_measurement` run; `mac:fp194-pub` 1.8 min behind the nightly fleet. Every other
