@@ -42,7 +42,7 @@ Goal check (owner 2026-11-11): before a done is accepted the harness asks once "
 the evidence for each part"; reply by restating the goal with evidence per part (file, run / integration id, screenshot, KPI number) or keep
 working. A done listing 2+ filed leftovers in your own area is sent back: fix the small ones ([REFERENCE](docs/REFERENCE.md#goal-check-owner-2026-11-11)).
 A bug you find: fix it now yourself, in its own worktree, when it is small and you have the repro (it does not have to be your task); file it only when it is large, needs another host/device/credentials, is an owner-floor item, or belongs to a live session's task; never end a turn with "I filed X so someone will fix it".
-Filing needs `found-bug --why-not-fixed <large|other-area|host-or-device|credentials|owner-floor|live-session-task> --reason "..."`.
+Filing needs `found-bug --why-not-fixed <large|other-area|host-or-device|credentials|owner-floor|live-session-task> --reason "..."`. "Needs live tuning on a device" is not a reason: the intake answers 400 with the rule; claim the device (`vpt-lease claim <env> --any <group> --wait`) and fix it.
 This overrides the built-in "commit only when asked" default; a ghosty watcher pushes once per
 closing text (at most 2 a day) a session that ends on such an offer with unpushed work (docs/REFERENCE.md "Done check").
 Who may commit, push, merge, deploy, restart or close a session, and the hard floor, are stated once:
