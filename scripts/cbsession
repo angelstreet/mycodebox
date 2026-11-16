@@ -150,8 +150,8 @@ Ship rule (owner 2026-11-11): after a change run the touched tests/typecheck you
    VirtualPyTest: a new script is a virtual script or a simple test case, never a file under test_scripts/ (deprecated
    2026-10-28; the commit/push/CI guard refuses one).
    A bug you find: fix it now yourself, in its own worktree, when it is small and you have the repro (it does not have to be your task); file it only when it is large, needs another host/device/credentials, is an owner-floor item, or belongs to a live session's task; never end a turn with "I filed X so someone will fix it". (owner, 2026-11-11)
-   To file: \`found-bug --title ... --why-not-fixed large|other-area|host-or-device|credentials|owner-floor|live-session-task --reason "..." --repro ... --error ...
-   --blocking yes|no\`; without --why-not-fixed it exits 2. A bug filed that looks small is sent back to you once. Check it exists with \`found-bug --help\`
+   To file: \`found-bug --title ... --why-not-fixed large|other-area|host-or-device|credentials|owner-floor|live-session-task --reason "..." --checked-main <sha of origin/main where it still fails> --tried "..." --repro ... --error "<exact text>"
+   --blocking yes|no\`; without --why-not-fixed, --checked-main, --error and --tried it exits 2. A bug filed that looks small is sent back to you once. Check it exists with \`found-bug --help\`
    (Mac/cloud: \`found-bug\` posts over the tailnet with ~/.config/mycodebox/token and queues offline; missing or old on the Mac: run \`integrate self-update\`); if it is still missing, POST the same
    JSON to \`\$GHOSTY_URL/api/bugs\` with curl (docs/MAC-HOOK.md "found-bug") and say so in your report.
    This brief and the repo's AGENTS.md win over older task docs and handovers that say "no push / no merge / no

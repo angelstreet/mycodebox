@@ -12,6 +12,7 @@ import { tmp } from './helpers-tmp.js';
 
 const ROOT = resolve(dirname(new URL(import.meta.url).pathname), '..');
 const BIN = join(ROOT, 'scripts', 'found-bug');
+const PF = ['--checked-main', 'abc1234', '--tried', 'read the handler and tried', '--error', 'boom at x'];
 const TOKEN = 'bug-token-0123456789abcdef';
 
 function run(args, env) {
@@ -40,10 +41,10 @@ test('found-bug files over GHOSTY_URL with the bearer token and escapes quotes/n
   const s = await stub(tmp('fb-srv-'), { requireToken: true });
   try {
     const env = { HOME: home, GHOSTY_URL: s.url, GHOSTY_STATE_DIR: state, MYCODEBOX_CONFIG_DIR: cfg, FOUND_BUG_SESSION: 'mac-test' };
-    const r = await run(['--why-not-fixed', 'large', '--reason', 'r', '--title', 'A "quoted" title', '--error', 'line1\nline2 \\ back', '--blocking', 'yes', '--test'], env);
+    const r = await run([...PF, '--why-not-fixed', 'large', '--reason', 'r', '--title', 'A "quoted" title', '--error', 'line1\nline2 \\ back', '--blocking', 'yes', '--test'], env);
     assert.equal(r.code, 0, r.stderr); assert.match(r.stdout, /^filed bug-[0-9a-f]{8} \(blocking\)/);
     const [b] = await s.bugs.list(); assert.equal(b.title, 'A "quoted" title'); assert.equal(b.error, 'line1\nline2 \\ back'); assert.equal(b.session, 'mac-test'); assert.equal(b.test, true);
-    const d = await run(['--why-not-fixed', 'large', '--reason', 'r', '--title', 'A "quoted" title'], env); assert.match(d.stdout, /already filed/);
+    const d = await run([...PF, '--why-not-fixed', 'large', '--reason', 'r', '--title', 'A "quoted" title'], env); assert.match(d.stdout, /already filed/);
     assert.match((await run(['list'], env)).stdout, /mac-test: A "quoted" title/);
     assert.equal((await run(['--help'], env)).code, 0);
     assert.equal(existsSync(join(state, 'found-bug-queue.jsonl')), false);
@@ -53,10 +54,10 @@ test('found-bug files over GHOSTY_URL with the bearer token and escapes quotes/n
 test('found-bug unreachable: saves the record, prints the fallback, exits 5; the next call posts it', async () => {
   const state = tmp('fb-state-'), home = tmp('fb-home-');
   const env = { HOME: home, GHOSTY_URL: 'http://127.0.0.1:1', GHOSTY_STATE_DIR: state, MYCODEBOX_CONFIG_DIR: join(home, 'none'), FOUND_BUG_SESSION: 'mac-q' };
-  const r = await run(['--why-not-fixed', 'large', '--reason', 'r', '--title', 'offline bug', '--error', 'boom'], env);
+  const r = await run([...PF, '--why-not-fixed', 'large', '--reason', 'r', '--title', 'offline bug', '--error', 'boom at x'], env);
   assert.equal(r.code, 5); assert.match(r.stderr, /SAVED in .*found-bug-queue\.jsonl/); assert.match(r.stderr, /curl -sS -X POST/);
   assert.match(readFileSync(join(state, 'found-bug-queue.jsonl'), 'utf8'), /offline bug/);
-  const r2 = await run(['--why-not-fixed', 'large', '--reason', 'r', '--title', 'second offline'], env); assert.equal(r2.code, 5);
+  const r2 = await run([...PF, '--why-not-fixed', 'large', '--reason', 'r', '--title', 'second offline'], env); assert.equal(r2.code, 5);
   assert.equal(readFileSync(join(state, 'found-bug-queue.jsonl'), 'utf8').trim().split('\n').length, 2);
   const s = await stub(tmp('fb-srv-'));
   try {
@@ -104,4 +105,16 @@ test('found-bug --claim: the first session claims, a second is refused with exit
     assert.equal((await run(['--claim', bug.id, '--release'], env('mac-laptop'))).code, 0);
     assert.equal((await run(['--claim', bug.id], env('bug-drain-2'))).code, 0);
   } finally { await s.close(); }
+});
+
+test('found-bug refuses a filing without proof (exit 2 + the rule) and accepts one with it', async () => {
+  const state = tmp('fb-state-'), home = tmp('fb-home-');
+  const env = { HOME: home, GHOSTY_URL: 'http://127.0.0.1:1', GHOSTY_STATE_DIR: state, MYCODEBOX_CONFIG_DIR: join(home, 'none'), FOUND_BUG_SESSION: 'mac-p' };
+  const base = ['--why-not-fixed', 'large', '--reason', 'r', '--title', 'no proof'];
+  for (const [extra, re] of [[[], /--checked-main/], [['--checked-main', 'nothex'], /--checked-main/], [['--checked-main', 'abc1234'], /--error/], [['--checked-main', 'abc1234', '--error', 'HTTP 500 x'], /--tried/]]) {
+    const r = await run([...base, ...extra], env); assert.equal(r.code, 2, r.stderr); assert.match(r.stderr, re); assert.match(r.stderr, /current main/);
+  }
+  assert.equal(existsSync(join(state, 'found-bug-queue.jsonl')), false, 'a refused filing is not queued');
+  assert.equal((await run(['--title', 'idea: a timer', '--why-not-fixed', 'large', '--reason', 'r'], env)).code, 5, 'ideas need no proof (manager unreachable here)');
+  assert.equal((await run([...base, ...PF], env)).code, 5, 'with proof it goes on to the manager (unreachable here: queued)');
 });

@@ -78,6 +78,7 @@ const tokens = (name) => String(name).toLowerCase().split(/[^a-z0-9]+/).filter((
 export function skipReason(b, { live, now, reachable = null }) {
   if (b.test) return 'test report';
   if (isOwnerOnly(b)) return 'owner-only / hard floor';
+  if (b.possiblyFixed) return `possibly fixed by ${String(b.possiblyFixed.sha).slice(0, 8)} (${String(b.possiblyFixed.subject).slice(0, 60)}): check it on main, then found-bug --resolve or found-bug --checked ${b.id}`;
   const bad = unreachableHosts(b, reachable);
   if (bad.length) return `host not reachable from a worker (no lease inventory entry): ${bad.join(', ')}`;
   if (b.claim && (!b.claim.until || Date.parse(b.claim.until) > now || now - Date.parse(b.claim.at) < RECENT_MS)) return `claimed by ${b.claim.by}`;

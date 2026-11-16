@@ -3,8 +3,12 @@
 # (it does not have to be your task); file it only when it is large, needs another host/device/credentials, is an owner-floor item, or belongs to a
 # live session's task. Never end a turn with "I filed X so someone will fix it". POSIX sh + curl: codebox, Mac, cloud.
 #   found-bug --title "REST list of virtual scripts errors" --why-not-fixed large|other-area|host-or-device|credentials|owner-floor|live-session-task
-#             --reason "one line: why you could not fix it now" [--endpoint GET /api/x] [--repro "..."] [--error "exact text"]
+#             --reason "one line: why you could not fix it now" --checked-main <sha> --tried "one line: what you tried" --error "exact text"
+#             [--endpoint GET /api/x] [--repro "..."] 
 #             [--workaround "..."] [--blocking yes|no] [--session NAME] [--test]
+#   PROOF (owner, 2026-11-16): a filing needs --checked-main <sha> (git fetch; git rev-parse origin/main, where you re-ran the repro and it still fails),
+#   the exact --error and --tried (one line). Without them: exit 2 and the rule. Fixed on main already = do not file. "idea:" titles are exempt.
+#   found-bug --checked <id> [--session NAME]            the bug drain: a possibly-fixed bug was checked against main and still reproduces
 #   found-bug --flush                                    post the reports queued while the manager was unreachable
 #   found-bug --resolve <id> --commit <sha|integration id> [--state fixed|wontfix|doc-only|duplicate] [--note text] [--session NAME]   (codebox only)
 #   found-bug --claim <id> [--release] [--session NAME]   before you fix a FILED bug: "I am fixing it" for 2 h (renew by claiming again). Exit 3 when
@@ -18,9 +22,9 @@
 # Never loses a report: when the manager is unreachable the record is appended to <state>/found-bug-queue.jsonl
 # (GHOSTY_STATE_DIR, default ~/.local/state/ghosty), the exact fallback is printed, and the next call (or --flush) posts it.
 # Session defaults to the tmux session, else FOUND_BUG_SESSION, else `mac` on a Mac, else `unknown`. Secrets are redacted server-side.
-# Exit: 0 filed; 5 manager unreachable (report queued, not lost); 1 error.
+# Exit: 0 filed; 2 refused (the rule is printed: no proof, no reason, or a reason that is no reason); 3 claim held by another; 5 manager unreachable (report queued, not lost); 1 error.
 
-CLIENT_SCRIPTS_VERSION=4   # bump with every change to scripts/integrate or scripts/found-bug (same number in both); the server compares it
+CLIENT_SCRIPTS_VERSION=5   # bump with every change to scripts/integrate or scripts/found-bug (same number in both); the server compares it
 
 CFG_DIR="${MYCODEBOX_CONFIG_DIR:-$HOME/.config/mycodebox}"
 STATE_DIR="${GHOSTY_STATE_DIR:-$HOME/.local/state/ghosty}"
@@ -128,7 +132,7 @@ cmd=$1
 case "$cmd" in
   --self-update) self_update; exit 0 ;;
   --help|-h|help)
-    sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   list) api GET '/api/bugs?format=text'; [ "$CODE" = 000 ] && die "manager unreachable at $URL ($(head -n 1 "$TMP/err"))" 5; [ "$CODE" = 200 ] || die "HTTP $CODE: $(cat "$OUT")"; cat "$OUT"; exit 0 ;;
   fixed) [ -n "$2" ] || die "usage: found-bug fixed <id> [note]"; id=$2; shift 2
     api POST "/api/bugs/$id/fixed" "{\"note\":\"$(jesc "$*")\"}"; [ "$CODE" = 000 ] && die "manager unreachable at $URL" 5
@@ -160,6 +164,15 @@ if [ "$cmd" = --claim ]; then
   die "$(jval error)"
 fi
 
+if [ "$cmd" = --checked ]; then
+  shift; id=$1; [ -n "$id" ] || die "--checked needs a bug id"; shift; sess=
+  while [ $# -gt 0 ]; do case "$1" in --session) [ $# -ge 2 ] || die "--session needs a value"; sess=$2; shift 2 ;; *) die "unknown argument $1" ;; esac; done
+  [ -n "$sess" ] || sess=$(session_default)
+  api POST "/api/bugs/$id/checked" "{\"by\":\"$(jesc "$sess")\"}"
+  [ "$CODE" = 000 ] && die "manager unreachable at $URL" 5
+  if grep -q '"ok":true' "$OUT"; then echo "marked $id as checked against main: a worker may take it"; exit 0; fi; die "$(jval error)"
+fi
+
 if [ "$cmd" = --resolve ]; then
   shift; id=$1; [ -n "$id" ] || die "--resolve needs a bug id"; shift
   state=fixed; commit=; note=; sess=
@@ -175,13 +188,13 @@ if [ "$cmd" = --resolve ]; then
   if grep -q '"ok":true' "$OUT"; then echo "resolved $id ($state)"; exit 0; fi; die "$(jval error)"
 fi
 
-title=; endpoint=; repro=; err=; workaround=; blocking=; sess=; test=; why=; reason=
+title=; endpoint=; repro=; err=; workaround=; blocking=; sess=; test=; why=; reason=; main=; tried=
 while [ $# -gt 0 ]; do
   case "$1" in
     --test) test=1; shift ;;
-    --title|--endpoint|--repro|--error|--workaround|--blocking|--session|--why-not-fixed|--reason)
+    --title|--endpoint|--repro|--error|--workaround|--blocking|--session|--why-not-fixed|--reason|--checked-main|--tried)
       [ $# -ge 2 ] || die "$1 needs a value"
-      case "$1" in --title) title=$2;; --endpoint) endpoint=$2;; --repro) repro=$2;; --error) err=$2;; --workaround) workaround=$2;; --blocking) blocking=$2;; --session) sess=$2;; --why-not-fixed) why=$2;; --reason) reason=$2;; esac; shift 2 ;;
+      case "$1" in --title) title=$2;; --endpoint) endpoint=$2;; --repro) repro=$2;; --error) err=$2;; --workaround) workaround=$2;; --blocking) blocking=$2;; --session) sess=$2;; --why-not-fixed) why=$2;; --reason) reason=$2;; --checked-main) main=$2;; --tried) tried=$2;; esac; shift 2 ;;
     *) die "unknown argument $1 (found-bug --title ... [--endpoint --repro --error --workaround --blocking yes|no --session]; found-bug --help)" ;;
   esac
 done
@@ -189,8 +202,15 @@ done
 WHYS="large other-area host-or-device credentials owner-floor live-session-task"
 case " $WHYS " in *" $why "*) [ -n "$why" ] ;; *) false ;; esac || { printf 'found-bug: Fix it yourself now (small + you have the repro). If you really cannot, re-run with --why-not-fixed <%s> --reason "one line".\n' "$(echo $WHYS | tr ' ' '|')" >&2; exit 2; }
 [ -n "$reason" ] || { printf 'found-bug: --reason "one line: why you could not fix it now" is required with --why-not-fixed. Fix it yourself now if it is small and you have the repro.\n' >&2; exit 2; }
+case "$title" in [Ii][Dd][Ee][Aa]:*|[Ii][Dd][Ee][Aa]\ :*) ;; *)
+  PROOF='A bug is filed only with proof it is real on current main and that you could not fix it: --checked-main <sha> (git fetch; git rev-parse origin/main, where you re-ran the repro and it still fails), --error "<exact error text>", --tried "<one line: what you tried>". If it no longer fails on main it is fixed: do not file. If it is small, fix it yourself now.'
+  case "$main" in ""|*[!0-9a-fA-F]*) printf 'found-bug: --checked-main <sha> is missing or not a git sha. %s\n' "$PROOF" >&2; exit 2 ;; esac
+  [ "${#main}" -ge 7 ] && [ "${#main}" -le 40 ] || { printf 'found-bug: --checked-main must be 7 to 40 hex chars. %s\n' "$PROOF" >&2; exit 2; }
+  [ "${#err}" -ge 5 ] || { printf 'found-bug: --error with the exact error text is required. %s\n' "$PROOF" >&2; exit 2; }
+  [ "${#tried}" -ge 10 ] || { printf 'found-bug: --tried "one line: what you tried" is required. %s\n' "$PROOF" >&2; exit 2; } ;;
+esac
 [ -n "$sess" ] || sess=$(session_default)
-REC="{\"title\":\"$(jesc "$title")\",\"endpoint\":\"$(jesc "$endpoint")\",\"repro\":\"$(jesc "$repro")\",\"error\":\"$(jesc "$err")\",\"workaround\":\"$(jesc "$workaround")\",\"blocking\":\"$(jesc "$blocking")\",\"why\":\"$(jesc "$why")\",\"reason\":\"$(jesc "$reason")\",\"session\":\"$(jesc "$sess")\"${test:+,\"test\":true}}"
+REC="{\"title\":\"$(jesc "$title")\",\"endpoint\":\"$(jesc "$endpoint")\",\"repro\":\"$(jesc "$repro")\",\"error\":\"$(jesc "$err")\",\"workaround\":\"$(jesc "$workaround")\",\"blocking\":\"$(jesc "$blocking")\",\"why\":\"$(jesc "$why")\",\"reason\":\"$(jesc "$reason")\",\"checkedMain\":\"$(jesc "$main")\",\"tried\":\"$(jesc "$tried")\",\"session\":\"$(jesc "$sess")\"${test:+,\"test\":true}}"
 
 # older queued reports go first (best effort), then this one
 flush_queue
