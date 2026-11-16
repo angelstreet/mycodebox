@@ -220,7 +220,11 @@ Audit of scheduled job classes, `vpt-lease events` 2026-11-13 23:45Z to 2026-11-
 | `deployment:CoC*`, `codebox:coc-hourly-run` | 6 + 301 codebox | P3 (hourly bot) | 11 / 35 | yes (3 yields) |
 | `ci:*` (backend-server-tests, e2e-viewport) | 167 | default P1: push-triggered dev work, not scheduled | 1.9 / 7 | n/a |
 | `codebox:rtsp-nightly` | cron session on codebox, repairs under `vpt-lease run --priority P3 --ttl 10` (was P1 ttl 20; fixed here) | P3 | short | yes |
-| `codebox:nightly-fleet` | cron fleet lease in VirtualPyTest | not confirmed from the events (they carry no priority except on `yield`); set `--priority P3` there | up to 107 | to check in VirtualPyTest |
+| `codebox:nightly-fleet` | cron fleet lease (VirtualPyTest `nightly_fleet_leases.sh`): was P1 ttl 60, now `--priority P3 --ttl 10` (VirtualPyTest branch `feat/fleet-lease-p3`) | P3 | up to 107 before | yes |
+
+Live proof (2026-11-16 06:45Z, free device, agents `proof:sched-*`): P3 claim, P1 ticket behind it, `yield` at 06:45:20.644, `yield-grace` end at 06:47:20.660, P1 granted 06:47:21.
+
+Known limit: the lease ends but the scheduler does not abort a campaign already running on the device (no stop hook in `deployment_scheduler.py`); the next run of that job is skipped by the guard (a P3 claim behind a dev ticket is refused).
 
 Dev tickets that waited on a scheduled holder in those 3 days: `mobile-orchtnet-owner` on `vpt-nipogi/device50` waited 4.3 min behind `deployment:stream-wall mobile
 vpt-nipogi S21x` (2026-11-14 10:55Z) and 3.0 min (19:06Z), 0.3 min behind a `kpi_measurement` run; `mac:fp194-pub` 1.8 min behind the nightly fleet. Every other
