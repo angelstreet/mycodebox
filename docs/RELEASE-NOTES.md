@@ -6,6 +6,7 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- Done-but-failed check: a done line with `goal: achieved`, an all-pass `Verification:` block and a reported bug id is no longer sent back for mentioning the filed out-of-scope failure; "goal not achieved / met" still fires (bug-6b6e6440) · area: platform
 - Manager wakes: a wake that wrote a decision line about a session to manager-actions.jsonl (how a stop that needs no message is answered) is no longer counted as an empty wake; on 2026-11-16 this takes the harness-caused empty share from 26 of 31 to 8 of 32 (bug-2279681a) · area: platform
 
 
