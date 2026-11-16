@@ -867,20 +867,25 @@ const mockups = createMockups({
 const bugSendBacks = new Map();   // session -> send-back timestamps (cap per hour)
 // Proof gate + possibly-fixed marks (owner, 2026-11-16): git facts of origin/main, cached 60 s; no git or no origin/main = the sha format check only.
 const BUG_GIT_DIR = dirname(fileURLToPath(import.meta.url));
-let mainFacts = { at: 0, commits: [] };
-async function mainCommits() {
-  if (Date.now() - mainFacts.at < 60000) return mainFacts.commits;
+// the repo a bug belongs to decides which origin/main it is checked against (found-bugs.js repoOf); BUG_REPO_VIRTUALPYTEST_DIR overrides ~/virtualpytest
+const BUG_REPO_DIRS = { mycodebox: BUG_GIT_DIR, virtualpytest: process.env.BUG_REPO_VIRTUALPYTEST_DIR || join(homedir(), 'virtualpytest') };
+const mainFacts = {};
+async function mainCommits(repo = 'mycodebox', { fresh = false } = {}) {
+  const cwd = BUG_REPO_DIRS[repo] || BUG_REPO_DIRS.mycodebox, f = mainFacts[repo];
+  if (!fresh && f && Date.now() - f.at < 60000) return f.commits;
   try {
-    const { stdout } = await exec('git', ['log', '-n', '400', '--format=%H%x09%cI%x09%s', 'origin/main'], { cwd: BUG_GIT_DIR, timeout: 15000 });
-    mainFacts = { at: Date.now(), commits: stdout.split('\n').filter(Boolean).map((l) => { const [sha, at, ...r] = l.split('\t'); return { sha, at, subject: r.join('\t') }; }) };
-  } catch { mainFacts = { at: Date.now(), commits: [] }; }
-  return mainFacts.commits;
+    if (fresh) await exec('git', ['fetch', '-q', 'origin', 'main'], { cwd, timeout: 20000 }).catch(() => {});
+    const { stdout } = await exec('git', ['log', '-n', '400', '--format=%H%x09%cI%x09%s', 'origin/main'], { cwd, timeout: 15000 });
+    mainFacts[repo] = { at: Date.now(), commits: stdout.split('\n').filter(Boolean).map((l) => { const [sha, at, ...r] = l.split('\t'); return { sha, at, subject: r.join('\t') }; }) };
+  } catch { mainFacts[repo] = { at: Date.now(), commits: [] }; }
+  return mainFacts[repo].commits;
 }
-// the reproduced sha must be a commit of origin/main within its last 400 (a repro on a stale checkout proves nothing about main)
-async function bugProof(sha) {
-  const cs = await mainCommits();
+// the reproduced sha must be a commit of that repo's origin/main within its last 400 (a repro on a stale checkout proves nothing about main); one fetch on a miss
+async function bugProof(sha, repo = 'mycodebox') {
+  let cs = await mainCommits(repo);
   if (!cs.length) return '';
-  return cs.some((c) => c.sha.startsWith(sha)) ? '' : `--checked-main ${sha} is not one of the last ${cs.length} commits of origin/main: git fetch, run the repro on current origin/main and pass its sha (git rev-parse origin/main).`;
+  if (!cs.some((c) => c.sha.startsWith(sha))) cs = await mainCommits(repo, { fresh: true });
+  return !cs.length || cs.some((c) => c.sha.startsWith(sha)) ? '' : `--checked-main ${sha} is not one of the last ${cs.length} commits of origin/main of the ${repo} repo: git fetch, run the repro on current origin/main of that repo and pass its sha (git rev-parse origin/main), or name the repo with --repo mycodebox|virtualpytest.`;
 }
 let invCache = { at: 0, inv: '', held: '' };
 async function leaseInventoryText() {

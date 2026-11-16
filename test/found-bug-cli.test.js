@@ -118,3 +118,19 @@ test('found-bug refuses a filing without proof (exit 2 + the rule) and accepts o
   assert.equal((await run(['--title', 'idea: a timer', '--why-not-fixed', 'large', '--reason', 'r'], env)).code, 5, 'ideas need no proof (manager unreachable here)');
   assert.equal((await run([...base, ...PF], env)).code, 5, 'with proof it goes on to the manager (unreachable here: queued)');
 });
+
+test('found-bug sends the repo: --repo, else the cwd repo (a virtualpytest checkout)', async () => {
+  const home = tmp('fb-home-'), vpt = join(tmp('fb-vpt-'), 'virtualpytest');
+  mkdirSync(vpt, { recursive: true });
+  const { execFileSync } = await import('node:child_process'); execFileSync('git', ['init', '-q', vpt]);
+  const s = await stub(tmp('fb-srv-'));
+  try {
+    const env = { HOME: home, GHOSTY_URL: s.url, GHOSTY_STATE_DIR: tmp('fb-state-'), MYCODEBOX_CONFIG_DIR: join(home, 'none'), FOUND_BUG_SESSION: 'w' };
+    const go = (args, cwd) => new Promise((res) => execFile('sh', [BIN, ...args], { cwd, env: { PATH: process.env.PATH, ...env }, timeout: 30000 }, (e, stdout, stderr) => res({ code: e ? e.code : 0, stdout, stderr })));
+    const a = ['--why-not-fixed', 'large', '--reason', 'r', ...PF];
+    assert.equal((await go([...a, '--title', 'from vpt cwd'], vpt)).code, 0);
+    assert.equal((await go([...a, '--title', 'explicit repo', '--repo', 'mycodebox'], vpt)).code, 0);
+    const rows = await s.bugs.list(), by = (t) => rows.find((b) => b.title === t);
+    assert.equal(by('from vpt cwd').repo, 'virtualpytest'); assert.equal(by('explicit repo').repo, 'mycodebox');
+  } finally { await s.close(); }
+});

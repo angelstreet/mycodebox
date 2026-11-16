@@ -290,3 +290,28 @@ test('possibly fixed: a commit on main after the report that names its id or mos
   await fb.resolve(y.id, { state: 'wontfix', note: 'already fixed on main', by: 'bugdrain-1' });
   const w = await fb.week(7); assert.equal(w.daily.length, 1); assert.equal(w.daily[0].filed, 2); assert.equal(w.daily[0].staleClosedPct, 50); assert.equal(w.staleClosed, 1);
 });
+
+// Repo of a bug (owner 2026-11-16): the proof and the possibly-fixed marks use that repo's origin/main
+test('repo: explicit > endpoint > cwd repo > mycodebox; proof and possibly-fixed use the bug repo', async () => {
+  const { repoOf } = await import('../found-bugs.js');
+  assert.equal(repoOf({}), 'mycodebox');
+  assert.equal(repoOf({ cwdRepo: 'virtualpytest' }), 'virtualpytest');
+  assert.equal(repoOf({ repo: 'mycodebox', cwdRepo: 'virtualpytest' }), 'mycodebox');
+  assert.equal(repoOf({ endpoint: 'GET ~/virtualpytest/x', cwdRepo: 'mycodebox' }), 'virtualpytest');
+  const shas = { mycodebox: 'abc1234', virtualpytest: 'def5678' }, seen = [];
+  const b = createFoundBugs({ stateDir: tmp('fb-repo-'), proof: async (sha, repo) => { seen.push(repo); return sha === shas[repo] ? '' : `${sha} not on ${repo}`; } });
+  const base = { why: 'large', reason: 'touches 12 modules', error: 'run-now takes no lease', tried: 'read the handler, could not find it' };
+  const vpt = await b.add({ ...base, title: 'run-now of a nightly takes no lease', session: 's', cwdRepo: 'virtualpytest', checkedMain: 'def5678' });
+  assert.equal(vpt.ok, true); assert.equal(vpt.bug.repo, 'virtualpytest');
+  const dash = await b.add({ ...base, title: 'dashboard proof missing', session: 's', cwdRepo: 'mycodebox' });
+  assert.equal(dash.ok, false); assert.match(dash.error, /checked-main/);
+  assert.equal((await b.add({ ...base, title: 'wrong repo sha', session: 's', cwdRepo: 'mycodebox', checkedMain: 'def5678' })).ok, false, 'a vpt sha does not prove a dashboard bug');
+  assert.deepEqual(seen, ['virtualpytest', 'mycodebox']);
+  const t = Date.now();
+  const fb = createFoundBugs({ stateDir: tmp('fb-repo2-'), now: () => t, commits: async (repo) => (repo === 'mycodebox' ? [{ sha: 'a'.repeat(40), at: new Date(t + 1000).toISOString(), subject: 'lease queue claim holder pid restart fixed' }] : []) });
+  await fb.add({ title: 'lease queue claim ignores holder pid on restart', session: 's', why: 'large', reason: 'r', repo: 'virtualpytest' });
+  await fb.add({ title: 'lease queue claim ignores holder pid on restart', session: 't', why: 'large', reason: 'r' });
+  const l = await fb.list({ unresolved: true });
+  assert.equal(l.find((x) => x.repo === 'virtualpytest').possiblyFixed, undefined, 'a dashboard commit does not mark a vpt bug');
+  assert.ok(l.find((x) => x.repo === 'mycodebox').possiblyFixed);
+});
