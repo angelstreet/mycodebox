@@ -28,6 +28,9 @@ import stream_catalog as sc  # noqa: E402
 
 STATE = os.path.join(os.environ.get('GHOSTY_STATE_DIR') or os.path.expanduser('~/.local/state/ghosty'), 'rtsp-nightly')
 SETTLE = int(os.environ.get('RTSP_SETTLE_SECONDS', '15'))
+# The night verifies what it installed before it ends: a source can die minutes after it was put in place (a CDN
+# whose signed segments expire), and the channel would then stay dead until the next night (bug-80678895).
+INSTALL_VERIFY = int(os.environ.get('RTSP_INSTALL_VERIFY_SECONDS', '300'))
 AGENT = 'codebox:rtsp-nightly'
 
 
@@ -62,10 +65,10 @@ def replaced_today():
     return n
 
 
-def candidates(entry, pool):
-    """Vetted pool sources usable for this device, current source excluded."""
+def candidates(entry, pool, exclude=()):
+    """Vetted pool sources usable for this device, current source excluded (and the ones that just died)."""
     for s in pool['sources']:
-        if not s.get('vetted') or s['url'] == entry['url']:
+        if not s.get('vetted') or s['url'] == entry['url'] or s['url'] in exclude:
             continue
         if rc.is_http(s['url']) != rc.is_http(entry['url']):  # an HLS device gets an HLS source, an rtsp device an rtsp one
             continue
@@ -74,12 +77,14 @@ def candidates(entry, pool):
         yield s
 
 
-def pick_hls(entry, catalog, used_urls, ssh_map, timeout, tries=8):
+def pick_hls(entry, catalog, used_urls, ssh_map, timeout, tries=8, exclude=()):
     """restore (same channel, new URL) else replace (same group, unused on the host); first that plays, probed from the host."""
     ssh = ssh_map.get(entry['host'])
     for n, (how, c, new_name) in enumerate(sc.candidates(entry.get('name', ''), entry['url'], used_urls, catalog)):
         if n >= tries:
             break
+        if c['url'] in exclude:  # a source that just died is never taken again
+            continue
         if rc.check_stream(c['url'], timeout, ssh)['status'] == 'ok':
             return {'id': f"{how}:{c['name']}", 'url': c['url'], 'how': how, 'name': new_name, 'label': c['name']}
     return None
@@ -91,9 +96,9 @@ def confirm_down(entry, ssh_map, timeout):
     return rc.check_stream(entry['url'], timeout * 3, ssh_map.get(entry['host']))['status']
 
 
-def pick(entry, pool, ssh_map, timeout):
+def pick(entry, pool, ssh_map, timeout, exclude=()):
     """First vetted candidate that plays now, probed from the host when we have an ssh alias for it (its network matters)."""
-    for s in candidates(entry, pool):
+    for s in candidates(entry, pool, exclude):
         ssh = ssh_map.get(entry['host'])
         if rc.is_loopback(s['url']) and not ssh:
             continue
@@ -258,7 +263,41 @@ def run(mode, timeout=10):
     rows = []
     catalog = None
     chosen = {}
-    deferred = []  # repairs the host lease blocked: retried at the end of the night
+    deferred = []   # repairs the host lease blocked: retried at the end of the night
+    installed = []  # the sources this night put in place: verified again before the night ends
+
+    def choose(e, exclude=()):
+        """The source this device could get tonight: the same channel under a new URL, else another channel of the
+        same group (hls), else the first vetted pool source that plays (rtsp). -> the choice, or None."""
+        nonlocal catalog
+        if e['kind'] == 'hls':
+            if catalog is None:
+                catalog, cat_err = sc.load()
+                errors.extend(cat_err)
+            used = [x['url'] for x in entries if x['host'] == e['host']] + chosen.setdefault(e['host'], [])
+            s = pick_hls(e, catalog, used, ssh_map, timeout, exclude=exclude)
+            if s:
+                chosen[e['host']].append(s['url'])  # one channel per host: never give it to a second device tonight
+            return s
+        p0 = pick(e, pool, ssh_map, timeout, exclude)
+        return p0 and {'id': p0['id'], 'url': p0['url'], 'how': 'replace', 'label': f"pool {p0['id']}"}
+
+    def apply_choice(e, s, row, max_wait=None):
+        """Apply a chosen source under the host lease; the row says what happened. -> the outcome."""
+        res, detail, cli_missing = apply_with_lease(e, s, max_wait)
+        if res is None:  # the lease was refused or the apply step died: no stream was replaced
+            why = apply_failure(detail, cli_missing)
+            if why == 'lease_not_available':
+                row['action'] = 'report: the lease command could not be run (vpt-lease missing), nothing touched'
+            elif why == 'apply_failed':
+                row['action'] = 'report: the lease was granted but the apply step failed (see the journal), the host may be half-changed'
+            else:
+                row['action'] = 'report: host lease not granted (busy or refused), nothing touched'
+            journal({'event': 'replace', 'host': e['host'], 'device': e['device'], 'outcome': why, 'detail': detail[-200:]})
+            return why
+        row['action'] = (f"report: the apply step failed ({res.get('reason', 'see the journal')}), nothing replaced"
+                         if res['outcome'] == 'apply_failed' else f"{res['outcome']} ({s['how']}: '{s['label']}')")
+        return res['outcome']
     for e, r, cap in zip(entries, results, caps):
         row = rc.public_entry(e, r)
         row.update({k: v for k, v in cap.items() if k != 'detail'})
@@ -328,42 +367,22 @@ def run(mode, timeout=10):
         elif not black_src and confirmed == 'frozen':
             row['action'] = 'report: frozen picture confirmed (could be a still or radio channel), not changed automatically'
         else:
-            if e['kind'] == 'hls':
-                if catalog is None:
-                    catalog, cat_err = sc.load()
-                    errors += cat_err
-                used = [x['url'] for x in entries if x['host'] == e['host']] + chosen.setdefault(e['host'], [])
-                s = pick_hls(e, catalog, used, ssh_map, timeout)
-                if s:
-                    chosen[e['host']].append(s['url'])  # one channel per host: never give it to a second device tonight
-            else:
-                p0 = pick(e, pool, ssh_map, timeout)
-                s = p0 and {'id': p0['id'], 'url': p0['url'], 'how': 'replace', 'label': f"pool {p0['id']}"}
+            s = choose(e)
             if not s:
                 row['action'] = ('report: no working same channel or same-group channel in the lists' if e['kind'] == 'hls'
                                  else 'report: no vetted pool source plays now')
             elif mode != 'live':
                 row['action'] = f"dry: would {s['how']} with '{s['label']}'" + (f" (device renamed '{s['name']}')" if s.get('name') and s['name'] != e.get('name') else '')
             else:
-                res, detail, cli_missing = apply_with_lease(e, s)
-                if res is None:  # the lease was refused or the apply step died: no stream was replaced
-                    why = apply_failure(detail, cli_missing)
-                    if why == 'lease_not_available':
-                        row['action'] = 'report: the lease command could not be run (vpt-lease missing), nothing touched'
-                    elif why == 'apply_failed':
-                        row['action'] = 'report: the lease was granted but the apply step failed (see the journal), the host may be half-changed'
-                    else:
-                        row['action'] = 'report: host lease not granted (busy or refused), nothing touched'
-                    journal({'event': 'replace', 'host': e['host'], 'device': e['device'], 'outcome': why, 'detail': detail[-200:]})
-                    if why == 'lease_not_granted':
-                        # The host was busy for the short wait: try again at the end of the night, when the other
-                        # work is done and the lease is more likely free. A busy lease must not cost the night a stream.
-                        deferred.append((e, s, row))
-                else:
-                    row['action'] = (f"report: the apply step failed ({res.get('reason', 'see the journal')}), nothing replaced"
-                                     if res['outcome'] == 'apply_failed' else f"{res['outcome']} ({s['how']}: '{s['label']}')")
-                    if res['outcome'] in ('replaced', 'rolled_back'):
-                        budget -= 1
+                outcome = apply_choice(e, s, row)
+                if outcome in ('replaced', 'rolled_back'):
+                    budget -= 1
+                if outcome == 'lease_not_granted':
+                    # The host was busy for the short wait: try again at the end of the night, when the other
+                    # work is done and the lease is more likely free. A busy lease must not cost the night a stream.
+                    deferred.append((e, s, row))
+                elif outcome == 'replaced':
+                    installed.append((e, s, row))
         rows.append(row)
         journal({'event': 'check', 'host': row['host'], 'device': row['device'], 'kind': row['kind'], 'status': row['status'], 'capture': row.get('capture'), 'luma': row.get('luma'), 'action': row['action'], 'source': row['source']})
     # The night is over: retry the repairs the host lease blocked, with the long wait.
@@ -371,19 +390,45 @@ def run(mode, timeout=10):
         if budget <= 0:
             row['action'] = 'report: replacement budget used up tonight'
             continue
-        res, detail, cli_missing = apply_with_lease(e, s, max_wait=int(os.environ.get('RTSP_LEASE_RETRY_MAX_WAIT', '20')))
-        if res is None:
-            why = apply_failure(detail, cli_missing)
-            row['action'] = ('report: the lease was granted but the apply step failed at the end of the night (see the journal)'
-                             if why == 'apply_failed' else
-                             'report: host lease not granted again at the end of the night, nothing touched')
-            journal({'event': 'replace', 'host': e['host'], 'device': e['device'], 'outcome': why, 'detail': detail[-200:]})
-        else:
-            row['action'] = (f"report: the apply step failed at the end of the night ({res.get('reason', 'see the journal')}), nothing replaced"
-                             if res['outcome'] == 'apply_failed' else f"{res['outcome']} ({s['how']}: '{s['label']}')")
-            if res['outcome'] in ('replaced', 'rolled_back'):
-                budget -= 1
+        outcome = apply_choice(e, s, row, max_wait=int(os.environ.get('RTSP_LEASE_RETRY_MAX_WAIT', '20')))
+        if outcome in ('replaced', 'rolled_back'):
+            budget -= 1
+        if outcome == 'replaced':
+            installed.append((e, s, row))
+        elif outcome == 'lease_not_granted':
+            row['action'] = 'report: host lease not granted again at the end of the night, nothing touched'
+        elif outcome == 'apply_failed':
+            row['action'] = ('report: the lease was granted but the apply step failed at the end of the night (see the journal),'
+                             ' the host may be half-changed')
         journal({'event': 'check', 'host': row['host'], 'device': row['device'], 'kind': row['kind'], 'status': row['status'], 'capture': row.get('capture'), 'luma': row.get('luma'), 'action': row['action'], 'source': row['source']})
+    # Before the night ends: verify what it installed. A source can die minutes after it was put in place (a CDN
+    # whose signed segments expire, bug-80678895) and the channel would then stay dead until the next night.
+    if mode == 'live' and installed:
+        time.sleep(INSTALL_VERIFY)
+        for e, s, row in list(installed):
+            st = rc.check_stream(s['url'], timeout * 3, ssh_map.get(e['host']))['status']
+            if st in ('ok', 'unverified', 'frozen'):
+                row['action'] += ' (the new source still plays)'
+                journal({'event': 'verify', 'host': e['host'], 'device': e['device'], 'outcome': 'plays', 'source': s['url']})
+                continue
+            # the source the night installed is dead again: take the next candidate that plays
+            if budget <= 0:
+                row['action'] += ' (the new source died again: the replacement budget is used up tonight)'
+                journal({'event': 'verify', 'host': e['host'], 'device': e['device'], 'outcome': 'died_again', 'source': s['url'], 'detail': 'no budget left tonight'})
+                continue
+            s2 = choose(e, exclude=(s['url'],))
+            if not s2:
+                row['action'] += ' (the new source died again and no other source plays now)'
+                journal({'event': 'verify', 'host': e['host'], 'device': e['device'], 'outcome': 'died_again', 'source': s['url'], 'detail': 'no other candidate plays'})
+                continue
+            before = row['action']
+            outcome = apply_choice(e, s2, row)
+            if outcome in ('replaced', 'rolled_back'):
+                budget -= 1
+            row['action'] = f"{before}, but the new source died again: {row['action']}"
+            journal({'event': 'verify', 'host': e['host'], 'device': e['device'], 'outcome': f"died_again_{outcome}", 'source': s['url'], 'new': s2['url']})
+        for e, s, row in installed:
+            journal({'event': 'check', 'host': row['host'], 'device': row['device'], 'kind': row['kind'], 'status': row['status'], 'capture': row.get('capture'), 'luma': row.get('luma'), 'action': row['action'], 'source': row['source']})
     return {'mode': mode, 'streams': rows, 'errors': errors, 'hosts': hosts}
 
 
