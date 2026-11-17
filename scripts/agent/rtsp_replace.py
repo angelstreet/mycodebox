@@ -370,8 +370,13 @@ def run(mode, timeout=10):
                 row['action'] = (f"note: the tile's snapshot was dark but the live video plays (a dark moment of the {moment}),"
                                  f" not changed ({nums})")
             else:
-                row['action'] = ('none' if r['status'] == 'ok' or cap['capture'] == 'ok'
-                                 else 'report: cannot verify from codebox (no ssh alias, no host snapshot)')
+                if cap['capture'] == 'unknown' and dark_thumb:
+                    # the live video could not be read: the tile is not proven broken, and it is not blamed either
+                    row['action'] = ("report: the tile's snapshot is dark and its live video could not be read: the tile is not"
+                                     " proven broken (the capture side), not changed")
+                else:
+                    row['action'] = ('none' if r['status'] == 'ok' or cap['capture'] == 'ok'
+                                     else 'report: cannot verify from codebox (no ssh alias, no host snapshot)')
         elif black_src and capture_mode != 'live':
             row['action'] = "report: the channel's own picture is black (host snapshot and source frame); capture checks are dry, nothing changed"
         elif black_src and budget <= 0:

@@ -111,7 +111,8 @@ async function world({ devices, pool, leaseBusy = false, leaseMissing = false, l
         if (kind.startsWith('MULTI')) return res.end('PICTURE'); // a fine snapshot; the stream is the problem
         res.setHeader('Last-Modified', new Date(Date.now() - (kind === 'STALE' ? 3600e3 : 1e3)).toUTCString());
         // DARKNEWEST: a dark snapshot and a dark newest segment (the tile played a moment ago)
-        return res.end(kind === 'STALE' ? 'PICTURE' : (kind === 'DARKNEWEST' ? 'BLACK' : kind));
+        // DARKNOLIVE: a dark snapshot whose live video cannot be read at all
+        return res.end(kind === 'STALE' ? 'PICTURE' : (kind === 'DARKNEWEST' || kind === 'DARKNOLIVE') ? 'BLACK' : kind);
       }
       const sg = u.pathname.match(/^\/host\/([^/]+)\/stream\/([^/]+)\/segments\/(.+)$/);
       if (sg) { // the stream the live player loads: MULTI4 = 4 audio tracks in its segments, BLACKLIVE = a black live layer, else 1
@@ -123,6 +124,7 @@ async function world({ devices, pool, leaseBusy = false, leaseMissing = false, l
             ? '#EXTM3U\n#EXTINF:0.4,\nsegment_1.ts\n#EXTINF:0.4,\nsegment_2.ts\n'
             : '#EXTM3U\n#EXTINF:0.4,\nsegment_1.ts\n');
         }
+        if (kind === 'DARKNOLIVE') { res.statusCode = 404; return res.end(); } // the live layer cannot be read
         if (kind === 'DARKNEWEST' && sg[3] === 'segment_2.ts') return res.end('BLACKTS');
         return res.end(kind === 'BLACKLIVE' ? 'BLACKTS' : `TS${n}`);
       }
@@ -345,6 +347,22 @@ test('the pool file never holds credentials and only vetted entries are replacem
   for (const s of pool.sources) { assert.ok(!/\/\/[^/]*@/.test(s.url), `${s.id} has credentials`); assert.ok(['loopback', 'public'].includes(s.kind)); }
   assert.ok(pool.maxReplacementsPerNight <= 3);
   assert.ok(existsSync(path.resolve('scripts/agent/rtsp_replace.py')));
+});
+
+test('a dark thumbnail whose live video cannot be read is not called black: the tile is not proven broken (bug-4f69009f)', async () => {
+  const w = await world({ pool: POOL, snapshots: { 'cap-Dark3': 'DARKNOLIVE' }, devices: {
+    DEVICE1: { ...dev('Dark3', 'https://cdn.example/good/dark3.m3u8'), DEVICE_MODEL: 'rtsp_video' } } });
+  const r = await py(REPLACE, [], w.E);
+  const day = new Date().toISOString().slice(0, 10);
+  const rep = JSON.parse(readFileSync(path.join(w.state, 'rtsp-nightly', `report-${day}.json`), 'utf8'));
+  w.close();
+  const one = rep.streams.find((s) => s.device === 'DEVICE1');
+  assert.ok(one.luma < 32, 'the thumbnail was dark');
+  assert.equal(one.live_luma, null, 'the live layer could not be read');
+  assert.equal(one.capture, 'unknown', 'an unreadable live layer is no signal: the tile is not proven black');
+  assert.match(r.stdout, /the tile's snapshot is dark and its live video could not be read/, r.stdout);
+  assert.doesNotMatch(r.stdout, /its live video are black/, 'the tile is not called black');
+  assert.doesNotMatch(r.stdout, /host capture side/, 'a tile that is not proven broken is not blamed on the capture side');
 });
 
 test('the report carries the pool\'s own probe status, so a broken pool source is visible without a hand probe (idea bug-c64fb86c)', async () => {
