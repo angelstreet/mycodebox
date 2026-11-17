@@ -271,7 +271,7 @@ test('one stop is one event: asks, lease stop and deploy stop of the same text s
   const nudge = ev({ key: 'lease:nudge', kind: 'lease', state: 'nudge', title: 'ask a to release', body: 'Your lease blocks b' });
   const quota = ev({ key: 'quota:claude:week', kind: 'quota', title: 'claude default at 80% of the week', body: 'resets 2026-11-14' });
   const r2 = lines(run(env2, wait + owner + note + nudge + quota));
-  assert.deepEqual(r2.map((x) => [x.l.kind, x.d]), [['asks', true], ['asks', false], ['leftovers', true], ['lease', true], ['quota', false]], 'quota is urgent in the default policy: not deferred');
+  assert.deepEqual(r2.map((x) => [x.l.kind, x.d]), [['asks', true], ['asks', false], ['leftovers', true], ['lease', true], ['quota', true]], 'quota under 95% is deferred (replay 2026-11-11: 4 of 4 wakes did nothing); at 95% and over it stays urgent');
 });
 
 // 2026-11-12, third set: the manager's field list of wakes it did nothing on
@@ -301,4 +301,13 @@ test('time-box alerts and a non-Claude no-progress ride with the next wake; a su
   assert.deepEqual(o.map((x) => [x.l.key, !!x.d, !!x.u]), [
     ['time-box:s1', true, false], ['rtsp:no-progress', true, false], ['mo:no-progress', false, true], ['disk:/', true, false]]);
   assert.equal(out(run(env, ev({ key: 'disk:/', kind: 'disk', title: 'codebox disk / 96% full', priority: 'urgent', body: 'at 96' })))[0].u, true, '95% and over is urgent');
+});
+
+test('quota under 95% and a refused self-approval are deferred (d), never urgent; quota at 95% and over stays urgent (replay 2026-11-11)', () => {
+  const dir = tmp('ghosty-filt-'); const env = { ...process.env, GHOSTY_STATE_DIR: dir };
+  const o = (s) => s.stdout.split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  const r = o(run(env, ev({ key: 'quota:a', kind: 'quota', title: 'Claude week quota at 80%', priority: 'high', body: 'q' })
+    + ev({ key: 'quota:b', kind: 'quota', title: 'MiniMax 5h quota at 98%', priority: 'high', body: 'q' })
+    + ev({ key: 'int-1:sa', kind: 'self-approval:int-1', title: 'x passed --approved-by on b', priority: 'high', body: 'only a manager may' })));
+  assert.deepEqual(r.map((x) => [x.l.key, !!x.d, !!x.u]), [['quota:a', true, false], ['quota:b', false, true], ['int-1:sa', true, false]]);
 });

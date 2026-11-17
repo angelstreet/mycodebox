@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **Quota alerts under 95% and refused self-approvals no longer wake the manager alone** — both are deferred like disk alerts (they ride with the next real event); the wake replay now counts deferred events as delivered later, not lost. Replay of 2026-11-11: 410 to 347 wakes, 72.9% to 71.2% no-op, 0 lost actions · area: manager
+
 - **The dashboard answers to the names of this box only** — a browser request whose `Host` is not an IP address, `localhost`, a single-label name, a `*.ts.net` name, this machine's hostname, the host of `PUBLIC_URL` or a name in `GHOSTY_ALLOWED_HOSTS` gets `421` before routing (`host-allow.js`); token clients are not affected. The same-origin rule of the dashboard only means something under a name of the box · area: server
 
 - **Approve and deny follow the calling session; a deploy request is pre-approved only by trusted clients** — a credential-less dashboard-style request from a process inside a tmux pane is that session and may create or cancel V2 tasks but not approve or deny; the `approved` field of a lease deploy request counts only for an owner client, the runner client or a `DEPLOY_AUTO_APPROVE_CLIENTS` client · area: integration-lane
