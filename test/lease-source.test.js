@@ -93,11 +93,11 @@ test('central: an unavailable or failing service is a failure, never "free"', as
   assert.equal(summarize({ ok: false }).ok, false);
 });
 
-test('owner actions call the service with by owner and the identity (central); only pin is a valid mode', async () => {
+test('owner actions call the service with the identity as an unverified claim (central); only pin is a valid mode', async () => {
   const svc = fakeService();
   const src = createLeaseSource({ authority: 'central', getService: () => svc });
   assert.equal((await src.ownerRelease('L1', 'me@example.test')).ok, true);
-  assert.deepEqual(svc.calls[0], ['ownerRelease', { id: 'L1', by: 'owner:me@example.test', identity: 'me@example.test' }]);
+  assert.deepEqual(svc.calls[0], ['ownerRelease', { id: 'L1', by: 'claimed:me@example.test', identity: 'me@example.test' }]);
   assert.equal((await src.ownerMode('L1', 'pin')).ok, true);
   assert.deepEqual(svc.calls[1], ['setMode', { id: 'L1', mode: 'pin', by: 'loopback', owner: true, identity: 'loopback' }]);
   assert.equal((await src.ownerMode('L1', 'exclusive')).status, 400);
@@ -207,12 +207,24 @@ test('server wiring: the lease consumers go through the source; legacy keeps the
   assert.match(s, /\/api\/leases\/owner\/release/);
 });
 
-test('identity: the Serve login counts only on a proxied request; a bare loopback request is loopback (item 4)', () => {
-  assert.equal(requestIdentity({ 'tailscale-user-login': 'me@example.test' }), 'loopback');   // a local process can set any header
-  assert.equal(requestIdentity({ 'x-forwarded-for': '100.64.0.9', 'tailscale-user-login': 'me@example.test' }), 'me@example.test');   // leak-scan: allow (CGNAT test address)
+test('identity: a login read from a header is recorded as an unverified claim, never as owner (item 4)', () => {
+  assert.equal(requestIdentity({ 'tailscale-user-login': 'me@example.test' }), 'loopback');   // no forwarding headers: loopback
+  assert.equal(requestIdentity({ 'x-forwarded-for': '100.64.0.9', 'tailscale-user-login': 'me@example.test' }), 'claimed:me@example.test');   // leak-scan: allow (CGNAT test address)
+  assert.equal(requestIdentity({ forwarded: 'for=x', 'tailscale-user-login': 'me@example.test' }), 'claimed:me@example.test');
   assert.equal(requestIdentity({ 'x-forwarded-for': '100.64.0.9' }), 'loopback');   // leak-scan: allow (CGNAT test address)
   assert.equal(requestIdentity({}), 'loopback');
   assert.equal(requestIdentity(), 'loopback');
+  assert.doesNotMatch(String(requestIdentity({ 'x-forwarded-for': 'x', 'tailscale-user-login': 'a@b.test' })), /^owner:/);
+});
+
+test('owner actions record a claimed login as claimed:<login>, never owner:<login>', async () => {
+  const svc = fakeService();
+  const src = createLeaseSource({ authority: 'central', getService: () => svc });
+  await src.ownerRelease('L1', requestIdentity({ 'x-forwarded-for': 'x', 'tailscale-user-login': 'a@b.test' }));
+  await src.ownerMode('L1', 'pin', 'a@b.test');
+  assert.equal(svc.calls[0][1].by, 'claimed:a@b.test');
+  assert.equal(svc.calls[1][1].by, 'claimed:a@b.test');
+  assert.ok(svc.calls.every((c) => !/^owner:/.test(c[1].by)));
   const s = readFileSync(new URL('../server.js', import.meta.url), 'utf8');
   assert.match(s, /requestIdentity\(req\.headers\)/);
 });

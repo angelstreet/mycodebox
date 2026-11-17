@@ -327,6 +327,22 @@ function splitSql(lines) {
   flush();
   return { stmts };
 }
+// The action list of an ALTER TABLE, one entry per top-level comma (outside parentheses and quoted literals), so every action is classified on its own.
+function splitActions(text) {
+  const out = []; let depth = 0, cur = '', q = '';
+  for (const c of text) {
+    if (q) { cur += c; if (c === q) q = ''; continue; }
+    if (c === "'" || c === '"') { q = c; cur += c; continue; }
+    if (c === '(') depth++; else if (c === ')') depth--;
+    if (c === ',' && depth <= 0) { out.push(cur.trim()); cur = ''; } else cur += c;
+  }
+  out.push(cur.trim());
+  return out;
+}
+// A statement that evaluates an expression while the migration is applied (CREATE TABLE ... AS, a view, a column DEFAULT, an index or CHECK expression,
+// ALTER TABLE ADD ...). If it calls a function the same file created, the function body runs at apply time, and the body is not read.
+const SQL_EVALUATING = /^(?:create\s+(?:(?:unique|temp(?:orary)?|unlogged|global|local|concurrently)\s+)*(?:table|index|view)\b|alter\s+table\b)/;
+const callsAny = (head, names) => { const t = head.replace(/["`]/g, ''); return names.some((n) => new RegExp(`(?<![\\w$])${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\(`).test(t)); };
 // One SQL statement of the file -> true (additive) | null (a statement the caller judges against the file's other statements) |
 // { reason } naming what it found.
 function sqlAdditive(s) {
@@ -336,7 +352,7 @@ function sqlAdditive(s) {
   if (SQL_DROP_POLICY.test(head) || SQL_DROP_TRIGGER.test(head)) return null;   // additive only as the re-create pattern, the caller has the later statements
   if (SQL_REVOKE_ON.test(head)) return null;      // additive only on tables this file CREATEs earlier, the caller has the earlier statements
   const alter = SQL_ALTER_TABLE.exec(head);
-  if (alter && alter[1].split(/,\s*(?=add\b|drop\b|alter\b|rename\b|set\b|owner\b)/).every((c) => SQL_ALTER_ADDITIVE.test(c.trim()))) return true;
+  if (alter && splitActions(alter[1]).every((c) => SQL_ALTER_ADDITIVE.test(c))) return true;   // every action on its own: an unknown action is not additive
   for (const [re, name] of SQL_DESTRUCTIVE) { const m = re.exec(head); if (m) return { reason: name(m) }; }
   return { reason: `not additive: ${head.slice(0, 80)}` };
 }
@@ -414,7 +430,10 @@ export function migrationAdditive(file, addedLines, removedLines = []) {
     // file's own plain CREATE FUNCTION of that name and signature head, so OR REPLACE re-creates what the file already created.
     const ownFunctions = new Set((Array.isArray(removedLines) ? removedLines : []).map((l) => SQL_CREATE_FUNCTION.exec(String(l).trim().toLowerCase().replace(/\s+/g, ' '))).filter((m) => m && !/^create or replace/.test(m[0])).map((m) => objectKey(m[1])));
     const ownReplace = (i) => { const m = SQL_CREATE_FUNCTION.exec(heads[i]); return !!m && ownFunctions.has(objectKey(m[1])); };
+    // the unqualified names of the functions this file creates
+    const madeFns = heads.map((h) => SQL_CREATE_FUNCTION.exec(h)).filter(Boolean).map((m) => objectKey(m[1]).split('.').pop());
     for (let i = 0; i < heads.length; i++) {
+      if (madeFns.length && SQL_EVALUATING.test(heads[i]) && callsAny(heads[i], madeFns)) return { additive: false, reason: 'calls a function this file creates' };
       if (/^\s*create\s+or\s+replace\s+function\b/.test(heads[i]) && !usedByTrigger(i) && !ownReplace(i)) return { additive: false, reason: 'CREATE OR REPLACE FUNCTION' };
       const r = sqlAdditive(cut.stmts[i]);
       if (r === true) continue;

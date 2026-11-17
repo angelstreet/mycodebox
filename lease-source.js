@@ -111,15 +111,16 @@ const EXIT = { E_HELD: 3, E_DEPLOY_PENDING: 4, E_UNAVAILABLE: 5, E_NOT_FOUND: 1,
 export const exitOf = (res) => (res && res.ok === false ? EXIT[res.code] ?? 1 : 0);
 const csv = (s) => String(s || '').split(',').map((x) => x.trim()).filter(Boolean);
 
-// the caller identity the service logs: a bare loopback caller is `loopback` (anyone on the box can curl it: never "owner"), a request through Serve carries its login
-const ownerBy = (identity) => (!identity || identity === 'loopback' ? 'loopback' : `owner:${identity}`);
+// the caller identity the service logs: a bare loopback caller is `loopback`; a login read from a request header is only a claim (the header is
+// written by the caller), so it is recorded as `claimed:<login>`, never as a verified owner
+const ownerBy = (identity) => (!identity || identity === 'loopback' ? 'loopback' : String(identity).startsWith('claimed:') ? identity : `claimed:${identity}`);
 
-// A reverse proxy (Tailscale Serve) connects from 127.0.0.1 too. Its login header counts only on a proxied request (forwarding headers present);
-// a bare loopback request is `loopback`, whatever header it may carry.
+// A reverse proxy (Tailscale Serve) connects from 127.0.0.1 too. A login header on a request carrying forwarding headers is returned as an
+// unverified claim (`claimed:<login>`); a request without them is `loopback`, whatever header it may carry.
 export function requestIdentity(headers = {}) {
   const proxied = ['x-forwarded-for', 'forwarded'].some((h) => headers[h] !== undefined);
   const login = headers['tailscale-user-login'];
-  return proxied && typeof login === 'string' && login.trim() ? login.trim().slice(0, 80) : 'loopback';
+  return proxied && typeof login === 'string' && login.trim() ? `claimed:${login.trim().slice(0, 80)}` : 'loopback';
 }
 
 export function centralRegistry(getService, { now = Date.now } = {}) {

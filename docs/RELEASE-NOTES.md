@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The migration floor reads every ALTER TABLE action, and a login from a header is a claim** — the lane now classifies each action of an `ALTER TABLE` on its own (an unknown action means not additive) and treats a file that creates a function and calls it while applying (`CREATE TABLE ... AS`, a view, a column `DEFAULT`, an index or `CHECK` expression) as not additive. A lease owner action whose login comes from a request header is journalled as `claimed:<login>` instead of `owner:<login>`; who may perform the action is unchanged · area: merge-policy, leases
+
 - **A lost live-layer measurement is measured again** — the GETs of a tile's live video retried three times, but the ffprobe/ffmpeg measurement of the newest segment did not: a slow host under load lost the reading, and the tile came back as "the live video could not be read" (the night of 2026-11-17 read `vpt-nipogi/DEVICE21` that way while its segment measured 196/255 by hand). The measurement now gets a second try before the layer counts as unreadable, so one slow pass is no longer a lost reading (bug-c27e2c95) · area: rtsp-nightly
 - **The nightly's pool probe runs in parallel** — the pool entries were probed one after the other, and the three public candidates that time out on port 554 added about 35 s to every night. They are probed in parallel now (the pool file's order is kept in the report), so the pool block costs about the slowest single probe instead of the sum (bug-5473cd69) · area: rtsp-nightly
 
