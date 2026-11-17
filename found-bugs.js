@@ -95,9 +95,15 @@ export function repoOf(o) {
   return repoName(x.repo) || repoName(/virtualpytest|ghosty-sessions|mycodebox/i.exec(String(x.endpoint ?? ''))?.[0]) || repoName(x.cwdRepo) || 'mycodebox';
 }
 
-// The session a /api/bugs file or claim request acts as: a remote client is always its own `mac-<client>`; a local
-// caller keeps the body's session (`unknown` counts as none).
-export const sessionOfRequest = (remoteClient, bodySession) => (remoteClient ? `mac-${remoteClient}` : String(bodySession || '').replace(/^unknown$/, ''));
+// The session a /api/bugs file or claim request acts as: a remote client acts as `mac-<client>`, or `<name>@mac-<client>` when it
+// names one of its own sessions (so two sessions of one client stay distinct); a local caller keeps the body's session
+// (`unknown` counts as none). `@` is not a valid local session name character, so the two never collide.
+export const sessionOfRequest = (remoteClient, bodySession) => {
+  const s = String(bodySession || '').replace(/^unknown$/, '');
+  if (!remoteClient) return s;
+  const own = `mac-${remoteClient}`, name = s.replace(/[^\w.-]/g, '').slice(0, 40);
+  return !name || name === own ? own : `${name}@${own}`;
+};
 
 export function normalize(input, { now = Date.now() } = {}) {
   const o = input && typeof input === 'object' ? input : {};

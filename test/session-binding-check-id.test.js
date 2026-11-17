@@ -9,8 +9,10 @@ import { createTaskStore } from '../orchestration/store.js';
 import { spec, clock } from './fixtures/v2-task.js';
 import { tmp } from './helpers-tmp.js';
 
-test('sessionOfRequest: a remote client always uses its own mac-<client> session', () => {
-  assert.equal(sessionOfRequest('laptop', 'dev-1'), 'mac-laptop');
+test('sessionOfRequest: a remote client always acts under its own mac-<client> name', () => {
+  assert.equal(sessionOfRequest('laptop', 'dev-1'), 'dev-1@mac-laptop');
+  assert.equal(sessionOfRequest('laptop', 'mac-laptop'), 'mac-laptop');
+  assert.equal(sessionOfRequest('laptop', 'a@b c'), 'abc@mac-laptop');
   assert.equal(sessionOfRequest('laptop', ''), 'mac-laptop');
   assert.equal(sessionOfRequest('laptop', undefined), 'mac-laptop');
 });
@@ -28,7 +30,7 @@ test('a remote client report is stored under its mac-<client> session', async ()
   body.session = sessionOfRequest('laptop', body.session);
   const r = await fb.add(body);
   assert.equal(r.ok, true);
-  assert.deepEqual(seen, ['mac-laptop']);
+  assert.deepEqual(seen, ['dev-1@mac-laptop']);
 });
 
 const good = { id: 'unit', command: ['node', '-v'], expect: { exit: 0 }, evidence_type: 'test', required: true };
