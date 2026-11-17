@@ -148,7 +148,9 @@ the diff (comments and blank lines ignored) and classifies them:
 - **Additive**: only `CREATE TABLE`, `CREATE INDEX` and `ALTER TABLE ... ADD COLUMN` (plus the session, policy, grant and RLS
   bookkeeping a real migration carries). A non-SQL migration (alembic `.py`) is additive only when its operations are
   `op.create_table`, `op.create_index` and `op.add_column`; anything else (e.g. `op.drop_column`) is not.
-  Anything the lane cannot read (truncated diff, a statement it does not recognise) is **not** additive.
+  Anything the lane cannot read (truncated diff, a statement it does not recognise) is **not** additive. Every action of an
+  `ALTER TABLE` is classified on its own (one unknown action makes the file not additive), and a file that creates a function
+  and also calls it while applying (`CREATE TABLE ... AS`, a view, a column `DEFAULT`, an index or `CHECK` expression) is not additive.
 
 An additive migration can always be applied and merged. The session applies it itself, then requests the merge as usual:
 

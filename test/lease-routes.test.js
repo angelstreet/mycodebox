@@ -263,8 +263,8 @@ test('review 4/5/6: HTTP clients cannot touch in-process leases or other clients
   } finally { await c.close(); }
 });
 
-test('review 16: the Tailscale login is honoured only when the server says the request came through Serve; a bare loopback request is logged as loopback', async () => {
-  assert.equal(callerIdentity({ login: 'alice@example.test', viaServe: true, remoteAddress: '127.0.0.1', client: 'owner' }), 'alice@example.test via client:owner');
+test('review 16: a Tailscale login on a forwarded request is logged as claimed:<login>; a bare loopback request is logged as loopback', async () => {
+  assert.equal(callerIdentity({ login: 'alice@example.test', viaServe: true, remoteAddress: '127.0.0.1', client: 'owner' }), 'claimed:alice@example.test via client:owner');
   assert.equal(callerIdentity({ login: 'alice@example.test', viaServe: false, remoteAddress: '127.0.0.1', client: 'owner' }), 'loopback via client:owner');
   assert.equal(callerIdentity({ login: 'x', viaServe: false, remoteAddress: '100.64.1.2', client: 'owner' }), 'client:owner');   // leak-scan: allow (CGNAT test address)
   const c = await boot(undefined, { viaServe: (req) => req.headers['x-test-serve'] === '1' });
@@ -274,7 +274,7 @@ test('review 16: the Tailscale login is honoured only when the server says the r
     const l2 = (await claim(c, 'a', ['frontend'])).body.lease;
     await c.call('POST', '/owner/release', { body: { id: l2.id }, token: OWNER, headers: { 'tailscale-user-login': 'mallory@example.test' } });
     const by = (await c.call('GET', '/events')).body.events.filter((e) => e.kind === 'forced').map((e) => e.by);
-    assert.deepEqual(by, ['alice@example.test via client:owner', 'loopback via client:owner']);
+    assert.deepEqual(by, ['claimed:alice@example.test via client:owner', 'loopback via client:owner']);
   } finally { await c.close(); }
 });
 

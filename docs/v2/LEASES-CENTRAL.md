@@ -70,9 +70,10 @@ server process:
   internal client name no token can match; imported leases answer to their agent string or an owner.
   The dashboard itself calls the service in-process. Behind Tailscale Serve every request arrives from loopback, so the
   address allowlist gates nothing in that setup: the bearer token is the real gate (Serve is private, never Funnel).
-  Owner actions from the dashboard record the real caller (`Tailscale-User-Login` on a request that came through Serve,
-  else `loopback`; "came through Serve" is the presence of the proxy's forwarding headers, the server's existing
-  convention, so a local caller could fake the login, but the record always names the token's client too).
+  Owner actions from the dashboard record the caller: a bare loopback request is `loopback`; a `Tailscale-User-Login` on a
+  request that carries the proxy's forwarding headers is recorded as an unverified claim, `claimed:<login>` (never
+  `owner:<login>`), because both headers are written by the caller. The record also names the token's client, and the
+  login never changes who may perform the action.
 - **Client.** `vpt-lease` becomes a thin client (`scripts/vpt-lease`, Python 3 standard library only, so it runs on the
   registry host and the device hosts unchanged): the same subcommands, arguments, output lines and exit codes, plus the
   new options below. Scripts and skills keep working.
