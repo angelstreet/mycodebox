@@ -507,8 +507,11 @@ def capture_check(e, timeout=20):
     # A tile has two pictures: the thumbnail (what a page with many tiles shows) and the live video (what a page with
     # few tiles, and every hover, shows). Black only if BOTH are dark (2026-11-13): a looping clip moves, so its
     # thumbnail can be a dark moment while the live tile shows a picture.
+    # A live layer that could not be READ is no signal at all (bug-4f69009f): a fetch or ffmpeg timeout under load
+    # read it as "the live video is dark" and called a playing tile black. It is 'unknown' now: not proven broken.
     status = ('stale' if age is not None and age > STALE_SECONDS else
-              'black' if dark and (live_luma is None or live_luma < BLACK_LUMA) else
+              'unknown' if dark and live_luma is None else
+              'black' if dark and live_luma < BLACK_LUMA else
               'multi_audio' if audio is not None and audio > 1 else 'ok')
     return {'capture': status, 'age': age, 'luma': None if y is None else round(y, 1),
             'live_luma': live_luma, 'audio': audio}

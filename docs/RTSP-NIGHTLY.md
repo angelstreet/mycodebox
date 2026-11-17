@@ -131,6 +131,13 @@ through the device's own server (the same path the browser uses, the auto-sign t
 | `stale` | older than 120 s | reported: the host stopped writing it (capture side) |
 | `multi_audio` | the host stream's newest segment (`segments/output.m3u8`, what the live player loads) carries more than one audio track | reported: hls.js buffers nothing, the live tile is black while the snapshot is fine. Fixed on the host 2026-11-12 (bug-ea31641c, virtualpytest 0d73213: `run_ffmpeg.sh` maps one usable audio track); a host still showing it runs the old script: restart `vpt-stream` there under the host lease (a host deploy does not restart it) |
 | `missing` / `unreachable` | 404, or the server did not answer after 3 tries | reported |
+| `unknown` | the tile has no capture path (an empty source), **or** the live video could not be read: a dark thumbnail whose live layer could not be fetched or measured is **no signal**, not a dark live video (bug-4f69009f) | reported: "the tile's snapshot is dark and its live video could not be read: the tile is not proven broken". Never repaired from this: a black verdict needs the three signals to agree |
+
+A live layer that could not be **read** is never read as a dark one (bug-4f69009f, 2026-11-17). On the night of 2026-11-17 the
+closing review's dry run read `vpt-nipogi/DEVICE21` as `black` while the live layer was `null` — the fetch or the ffmpeg
+measurement had timed out under load — and the host's newest segment measured **196/255** (bright) when it was fetched by
+hand. A tile that is not proven broken is not blamed on the capture side either: the line says the live video could not be
+read, and the night changes nothing.
 
 The `capture` column reads **both** pictures of a tile (2026-11-13, bug-6b227d92): the thumbnail and the live video. The
 thumbnail alone cannot judge a tile, because a looping clip moves: the thumbnail is one moment of the clip and the live video
