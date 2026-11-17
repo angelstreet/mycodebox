@@ -36,7 +36,7 @@ export const summary = (r) => ({ id: r.id, repo: r.repo, branch: r.branch, targe
 const one = (v) => String(v ?? '').replace(/[\r\n]+/g, ' ');
 export const kv = (o, tail = '') => `${Object.entries(o).map(([k, v]) => `${k}=${one(v)}`).join('\n')}\n${tail ? `---\n${tail}\n` : ''}`;
 
-export function createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk, sessionCwd = async () => null, sessionKnown = async () => true, remoteResolve = () => null, externalResult = null, scriptsDir = undefined, cidrs = process.env.LEASE_ALLOW_CIDRS } = {}) {
+export function createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk, sessionCwd = async () => null, sessionKnown = async () => true, remoteResolve = () => null, externalResult = null, scriptsDir = undefined, cidrs = process.env.LEASE_ALLOW_CIDRS, peerSession = null } = {}) {
   const allow = parseCidrs([...DEFAULT_CIDRS, ...String(cidrs || '').split(',')].join(','));
   const clientsFile = join(stateDir, 'leases', 'clients.json');
   let cache = { key: '', clients: [] };
@@ -149,7 +149,9 @@ export function createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk
         // A client token (Mac) has no session the server can wake: it is always external, labelled by --mac, else the per-request session name, else the client name (review 2026-11-11 item 4).
         const clientSession = typeof body.session === 'string' && body.session.trim() ? body.session.trim().slice(0, 60) : null;
         const external = who.by.startsWith('client:') ? (macLabel || clientSession || who.client) : macLabel || (forNote && body.forSession ? String(body.forSession) : null);
-        const out = lane.enqueue({ repo, branch: body.branch, session, forSession, external, worktree: who.loopback && typeof body.worktree === 'string' ? body.worktree : null, deploy: body.deploy || null, note: body.note, sha: body.sha, by: who.by, approvedBy: body.approvedBy != null ? (who.by === 'loopback' ? String(body.approvedBy) : `${String(body.approvedBy)} (${who.by})`) : undefined, migrationApplied: body.migrationApplied === true ? true : undefined });
+        // An approval claim on the loopback token is made by the session the request really comes from (peerSession), not by the name in the body.
+        const claimant = peerSession && who.by === 'loopback' && (body.approvedBy != null || body.migrationApplied != null) ? { claimant: await Promise.resolve(peerSession(req)).catch(() => null) } : {};
+        const out = lane.enqueue({ ...claimant, repo, branch: body.branch, session, forSession, external, worktree: who.loopback && typeof body.worktree === 'string' ? body.worktree : null, deploy: body.deploy || null, note: body.note, sha: body.sha, by: who.by, approvedBy: body.approvedBy != null ? (who.by === 'loopback' ? String(body.approvedBy) : `${String(body.approvedBy)} (${who.by})`) : undefined, migrationApplied: body.migrationApplied === true ? true : undefined });
         send(res, 200, { ok: true, ...out, flat: { id: out.id, position: out.position, repo: out.repo, clientScripts: clientScriptsVersion(), ...(out.coalesced ? { coalesced: 1 } : {}), ...(forSession ? { forSession } : {}), ...(forNote ? { forNote } : {}), ...(out.approvalIgnored ? { approvalIgnored: 1, approvalRefused: JSON.stringify(out.approvalRefused) } : {}) } }, fmt);
       } else if (req.method === 'GET' && sub === '/requests') {
         const q = url.searchParams;

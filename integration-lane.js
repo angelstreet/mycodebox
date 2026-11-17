@@ -660,7 +660,7 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
       const st = await G(r, c, ['diff', '--stat', `${c.remote}/${c.target}...${r.branchSha}`]);
       const stat = tailOf(st.out || st.err || '');
       const reason = `needs manager approval: touches CI/deploy/infra paths: ${paths.join(', ')}`;
-      try { managerItem({ kind: 'merge', id: r.id, repo: r.repo, branch: r.branch, session: r.session, paths, diffStat: stat, text: `${reason}\n${stat}\nApprove: integrate request ${r.branch} --repo ${r.repo} --approved-by manager` }); } catch (err) { log('manager item failed', err?.message); }
+      try { managerItem({ kind: 'merge', id: r.id, repo: r.repo, branch: r.branch, session: r.session, paths, diffStat: stat, text: `${reason}\n${stat}\nApprove (covers commit ${String(r.branchSha).slice(0, 12)}): integrate request ${r.branch} --repo ${r.repo} --approved-by manager` }); } catch (err) { log('manager item failed', err?.message); }
       throw new Ret(reason, stat, { outcome: 'needs_approval', infraPaths: paths, reasons: ev.info.reasons });
     }
     if (!ev.ok) throw new Ret(`merge evaluation: ${ev.info.reasons.join('; ') || 'not mergeable'}`, ev.tail, { reasons: ev.info.reasons });
@@ -994,6 +994,12 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
         });
         if (!branchSha.ok) throw new Ret(branchSha.tail);
         r.branchSha = branchSha.info.sha;
+        // An approval covers the commit that was returned for approval: a different tip is evaluated without it.
+        if (r.approvedBy && r.approvedSha && r.approvedSha !== r.branchSha) {
+          r.approvalStale = { approvedSha: r.approvedSha, at: iso() };
+          delete r.approvedBy; delete r.approvedAt; delete r.approvedSha; delete r.migrationApplied; delete r.migrationAppliedBy; delete r.migrationAppliedAt;
+          persist(r);
+        }
         const alreadyIn = (await G(r, c, ['merge-base', '--is-ancestor', r.branchSha, `${c.remote}/${c.target}`])).code === 0;
         if (!alreadyIn) {
           // A V2 task branch merges only with the owner's SHA-bound integration grant in the task store (OWNER_DECISIONS §11.1); no store, no merge.
@@ -1126,6 +1132,16 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
     let names; try { names = managerSessions(); } catch { return false; }
     return Array.isArray(names) && !!session && names.includes(session);
   };
+  // Who makes an approval claim: the session the route identified for the request (`claimant`, null when it could not), else the
+  // session named on the request (callers that identify nobody: tests, older wiring).
+  const claimantOf = (input, session) => (Object.hasOwn(input, 'claimant') ? input.claimant : session);
+  // The commit an approval covers: the tip the lane evaluated when it last returned this branch for approval. null when the
+  // branch's latest request was not such a return (an approval given ahead of any evaluation covers the tip the lane resolves).
+  const reviewedSha = (r) => {
+    const last = [...reqs.values()].filter((x) => x !== r && x.repo === r.repo && x.branch === r.branch && x.target === r.target && x.state !== 'queued' && x.state !== 'running')
+      .sort((a, b) => (b.seq || 0) - (a.seq || 0))[0];
+    return last && last.state === 'returned' && last.outcome === 'needs_approval' && last.branchSha ? last.branchSha : null;
+  };
   // Tell the manager once that a session tried to approve for it. One event per request id: a re-request that repeats the same
   // claim (a coalesce while queued) must not fill the feed.
   function managerItemRefusal(r, refused) {
@@ -1148,18 +1164,18 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
     const by = input.approvedBy ? String(input.approvedBy).slice(0, 80) : null;
     const wantsMigration = !!input.migrationApplied;
     if (!by && !wantsMigration) {
-      delete r.approvedBy; delete r.approvedAt; delete r.migrationApplied; delete r.migrationAppliedBy; delete r.migrationAppliedAt; delete r.approvalRefused;
+      delete r.approvedBy; delete r.approvedAt; delete r.approvedSha; delete r.migrationApplied; delete r.migrationAppliedBy; delete r.migrationAppliedAt; delete r.approvalRefused;
       return { honoured: false, refused: false };
     }
     if (!isManagerSession(who)) {
-      delete r.approvedBy; delete r.approvedAt; delete r.migrationApplied; delete r.migrationAppliedBy; delete r.migrationAppliedAt;
+      delete r.approvedBy; delete r.approvedAt; delete r.approvedSha; delete r.migrationApplied; delete r.migrationAppliedBy; delete r.migrationAppliedAt;
       const same = r.approvalRefused && r.approvalRefused.by === (by || 'migration-applied') && r.approvalRefused.session === who;
       r.approvalRefused = { by: by || 'migration-applied', session: who, at: iso() };
       if (!same) managerItemRefusal(r, r.approvalRefused);
       return { honoured: false, refused: true };
     }
     delete r.approvalRefused;
-    if (by) { r.approvedBy = by; r.approvedAt = iso(); } else delete r.approvedBy;
+    if (by) { r.approvedBy = by; r.approvedAt = iso(); const sha = reviewedSha(r); if (sha) r.approvedSha = sha; else delete r.approvedSha; } else { delete r.approvedBy; delete r.approvedSha; }
     if (wantsMigration) { r.migrationApplied = true; r.migrationAppliedBy = by; r.migrationAppliedAt = iso(); }
     else delete r.migrationApplied;
     return { honoured: !!by, refused: false };
@@ -1186,7 +1202,7 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
     if (input.external && !r.origin) { r.origin = 'external'; r.externalLabel = String(input.external).trim().replace(/[^\w.:@ -]/g, '?').slice(0, 60); }
     if (v.worktree && !r.worktree) r.worktree = v.worktree;
     const wasApproved = r.approvedBy;
-    const ap = applyApproval(r, input, input.session);
+    const ap = applyApproval(r, input, claimantOf(input, input.session));
     r.head = /^[0-9a-f]{7,64}$/.test(String(input.sha || '')) ? String(input.sha) : null;   // the caller's tip; the lane re-reads it from the remote
     r.settleUntil = settleUntilOf(v.key);
     markBehind(r);
@@ -1292,7 +1308,7 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
         settleUntil: quietBranch(key, branch, c.target) ? null : settleUntilOf(key), afterId: null };
       // --approved-by / --migration-applied: honoured only when the requesting session is a manager session (2026-10-20); a claim from
       // any other session is ignored and the request is evaluated as if none was given.
-      const ap = applyApproval(r, input, session);
+      const ap = applyApproval(r, input, claimantOf(input, session));
       try {
         const prev = Math.max(0, ...[...reqs.values()].filter((x) => session && x.session === session).map((x) => Date.parse(x.createdAt) || 0));
         const to = now(); r.usage = usage({ stateDir, session, worktree: r.worktree, from: Math.max(prev, to - 864e5), to });

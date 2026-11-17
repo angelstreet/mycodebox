@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A merge approval counts for the session that sends it and for the commit that was shown** — `--approved-by` on the reporter token is honoured when the request comes from a manager session's own pane (the lane reads which tmux session the connection belongs to), and it covers the commit the manager item showed: if the branch moved since, the request comes back for approval with the new diff instead of merging · area: integration
+
 - **A remote bug client acts under its own name, and V2 check ids are plain names** — a report or fix claim sent with a client token is recorded as `mac-<client>` (or `<session>@mac-<client>`), never as a session of this box, and an acceptance check id must match `[A-Za-z0-9][A-Za-z0-9._-]{0,63}` so the verifier's log files always stay in the task's artifact folder · area: api
 
 - **The migration floor reads every ALTER TABLE action, and a login from a header is a claim** — the lane now classifies each action of an `ALTER TABLE` on its own (an unknown action means not additive) and treats a file that creates a function and calls it while applying (`CREATE TABLE ... AS`, a view, a column `DEFAULT`, an index or `CHECK` expression) as not additive. A lease owner action whose login comes from a request header is journalled as `claimed:<login>` instead of `owner:<login>`; who may perform the action is unchanged · area: merge-policy, leases
