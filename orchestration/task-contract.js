@@ -74,6 +74,8 @@ export function outcomeOf(state) {
 // ---- schema ---------------------------------------------------------------------------------------
 
 // Acceptance check bounds: a check's own time limit (round 5), a positive integer up to 2 h.
+export const CHECK_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const repoRelative = (a) => typeof a === 'string' && a.trim() !== '' && !a.startsWith('/') && !/^[A-Za-z]:/.test(a) && !a.includes('\0') && !a.split(/[\\/]/).includes('..');
 export const CHECK_TIMEOUT_MS = Object.freeze({ min: 1, max: 2 * 3600_000 });
 
 // One validator for task checks and the project policy's per-class checks (.ai/project.json checks.by_task_class).
@@ -85,10 +87,11 @@ export function checkListErrors(a, prefix) {
   a.forEach((c, i) => {
     const p = `${prefix}[${i}]`;
     if (!isObj(c)) return err(p, 'object');
-    if (!isStr(c.id)) err(`${p}.id`, 'non-empty string');
+    if (!isStr(c.id) || !CHECK_ID_RE.test(c.id)) err(`${p}.id`, 'check id: [A-Za-z0-9][A-Za-z0-9._-]{0,63}');
     else if (ids.has(c.id)) err(`${p}.id`, 'duplicate check id'); else ids.add(c.id);
     if (!(isStrArr(c.command) && c.command.length)) err(`${p}.command`, 'argv array of strings');
     if (!isObj(c.expect) || !Number.isInteger(c.expect.exit)) err(`${p}.expect.exit`, 'integer');
+    if (c.artifact !== undefined && !repoRelative(c.artifact)) err(`${p}.artifact`, 'repo-relative path without ..');
     if (!isStr(c.evidence_type)) err(`${p}.evidence_type`, 'non-empty string');
     if (typeof c.required !== 'boolean') err(`${p}.required`, 'boolean');
     if (c.timeout_ms !== undefined && !(Number.isInteger(c.timeout_ms) && c.timeout_ms >= CHECK_TIMEOUT_MS.min && c.timeout_ms <= CHECK_TIMEOUT_MS.max)) {

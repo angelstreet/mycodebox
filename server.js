@@ -122,7 +122,7 @@ import { createRulesWatch } from './rules-watch.js';
 import { createOverlapGuard, DEFAULT_IGNORE } from './overlap-guard.js';
 import { createProgressWatch } from './progress-watch.js';
 import { createSharedCheckoutGuard, expandHome } from './shared-checkout-guard.js';
-import { createFoundBugs, unreportedBugOf, sendBackOf, sendBackText, sweepGroups, equivalentFreeOf } from './found-bugs.js';
+import { createFoundBugs, sessionOfRequest, unreportedBugOf, sendBackOf, sendBackText, sweepGroups, equivalentFreeOf } from './found-bugs.js';
 import { goalOf as goalOfPrompt, blockedOrUnknownStatus } from './status-honesty.js';
 import { createGoalGate, createGoalStore } from './goal-check.js';
 import { createDoneCheck, closingTextOf, DEFAULT_IGNORE_BRANCHES, shipOfferOf, unconfirmedStatusOf, waitingOnLeaseStatus } from './done-check.js';
@@ -2950,7 +2950,7 @@ async function handleHttp(req, res) {
         if (url.searchParams.get('format') === 'text') { res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' }); return res.end(bugs.map((b) => `${b.id}  ${b.resolved ? `[${b.state}] ` : ''}${b.claim ? `[claimed by ${b.claim.by} until ${b.claim.until.slice(11, 16)} UTC] ` : ''}${b.blocking ? 'BLOCKING ' : ''}${b.session}: ${b.title}`).join('\n') + (bugs.length ? '\n' : '')); }
         return json(res, 200, { ok: true, bugs, counts: await foundBugs.counts() });
       }
-      if (req.method === 'POST' && p === '/api/bugs') { const b = await readJsonBody(req); if (remoteClient && b && typeof b === 'object' && !String(b.session || '').replace(/^unknown$/, '')) b.session = `mac-${remoteClient}`;   // a remote report with no session is named after its client
+      if (req.method === 'POST' && p === '/api/bugs') { const b = await readJsonBody(req); if (remoteClient && b && typeof b === 'object') b.session = sessionOfRequest(remoteClient, b.session);   // a remote report is always its client's own session
       const r = await foundBugs.add(b); return json(res, r.ok ? 200 : 400, r); }
       if (req.method === 'POST' && p === '/api/bugs/send-back-sweep' && loop) {   // one kept wake per live filer listing its open, small-looking bugs (idempotent per session per day)
         const day = new Date().toISOString().slice(0, 10), groups = sweepGroups(await foundBugs.list({ limit: 5000, unresolved: true }), new Set([...(await listPanes()).keys()]));
@@ -2960,9 +2960,9 @@ async function handleHttp(req, res) {
       }
       const fm = p.match(/^\/api\/bugs\/([^/]+)\/fixed$/);
       if (fm && req.method === 'POST') { const r = await foundBugs.fixed(decodeURIComponent(fm[1]), (await readJsonBody(req)).note); return json(res, r.ok ? 200 : 404, r); }
-      // fix claim (found-bug --claim <id> [--release]): 409 when another session holds it; a remote client with no session is mac-<client>
+      // fix claim (found-bug --claim <id> [--release]): 409 when another session holds it; a remote client always acts as mac-<client>
       const cm = p.match(/^\/api\/bugs\/([^/]+)\/claim$/);
-      if (cm && req.method === 'POST') { const b = await readJsonBody(req); const sess = String(b?.session || '').replace(/^unknown$/, '') || (remoteClient ? `mac-${remoteClient}` : ''); const r = await foundBugs.claim(decodeURIComponent(cm[1]), { session: sess, release: !!b?.release }); return json(res, r.ok ? 200 : r.claimedBy ? 409 : r.error === 'no such bug' ? 404 : 400, r); }
+      if (cm && req.method === 'POST') { const b = await readJsonBody(req); const sess = sessionOfRequest(remoteClient, b?.session); const r = await foundBugs.claim(decodeURIComponent(cm[1]), { session: sess, release: !!b?.release }); return json(res, r.ok ? 200 : r.claimedBy ? 409 : r.error === 'no such bug' ? 404 : 400, r); }
       const km = p.match(/^\/api\/bugs\/([^/]+)\/checked$/);   // possibly-fixed bug checked against main: it still reproduces, a worker may take it
       if (km && req.method === 'POST') { const b = await readJsonBody(req); const r = await foundBugs.checked(decodeURIComponent(km[1]), b?.by); return json(res, r.ok ? 200 : 404, r); }
       const rm = p.match(/^\/api\/bugs\/([^/]+)\/resolve$/);

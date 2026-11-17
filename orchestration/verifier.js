@@ -70,12 +70,18 @@ export function createVerifier({ spawn = nodeSpawn, fs = nodeFs, env = process.e
   }
 
   // Deterministic per (task, sha, check, run index): reused evidence can find its output again after a restart.
-  const logPath = (task_id, sha, check_id, i) => (artifactRoot ? path.join(artifactRoot, task_id, sha.slice(0, 12), `${check_id}-${i}.log`) : null);
+  // Always inside artifactRoot: a path that resolves elsewhere is null (no log read or written).
+  const logPath = (task_id, sha, check_id, i) => {
+    if (!artifactRoot) return null;
+    const dir = path.resolve(artifactRoot, String(task_id), sha.slice(0, 12)), f = path.resolve(dir, `${check_id}-${i}.log`);
+    return path.dirname(f) === dir && dir.startsWith(path.resolve(artifactRoot) + path.sep) ? f : null;
+  };
   const readLog = (...a) => { try { return fs.readFileSync(logPath(...a), 'utf8'); } catch { return ''; } };
   function saveArtifact(task_id, sha, check_id, i, text) {
     if (!artifactRoot) return null;
     try {
       const f = logPath(task_id, sha, check_id, i);
+      if (!f) return null;
       fs.mkdirSync(path.dirname(f), { recursive: true, mode: 0o700 });
       fs.writeFileSync(f, text, { mode: 0o600 });
       return f;
