@@ -84,7 +84,9 @@ jq -c --unbuffered --argjson policy "$POLICY" '
   def timebox: (((.key//"")|tostring)|test("^time-box:"));
   def noclaude: ((.kind=="no-progress") and (((.body//"")|tostring)|test("not a Claude session")));
   def notice: (timebox or noclaude or (((.kind//"")|tostring)|test("^(waiting|bug-unreported|leftovers|no-progress|hold|bug-drain|orphaned-task)$|^int-[0-9a-f]+:cancelled$")) or ((.kind=="lease") and (.state=="nudge")));
-  def lowdisk: ((.kind=="disk") and (pct != null) and (pct < 95));
+  def lowdisk: (((.kind=="disk") or (.kind=="quota")) and (pct != null) and (pct < 95));
+  # The lane refused a self-approval (the session asked for the merge floor to be skipped): the lane already answered the session, the manager read it and did nothing (2 of 2 wakes, replay 2026-11-11).
+  def selfappr: (((.kind//"")|tostring)|test("^self-approval:"));
   def routine:
     ((.kind=="deploy") and (.state=="start" or .state=="done") and ((.blockedBy//[])|length)==0)
     or ((.jev.pick=="ignore") and ((.jev.confidence//0) >= 0.9) and (.kind=="deploy") and (.state!="failed") and (.state!="orphan"))
@@ -105,11 +107,11 @@ jq -c --unbuffered --argjson policy "$POLICY" '
     or (((.kind//"")|tostring|test("^(kpi-|pokestall-|pokemon-daily-|mobile-orchtnet-owner$|opus-openexit$|content-|mi-bugs-|pi1-load-|task208-)")) and ((.priority//"default")=="default"));
   select(pol != "ignore") | select(pol == "pass" or (routine|not))
   | {k:(if stopish then ("stop|"+stopsess+"|"+stopnorm) elif nmish then ("stop|"+nmsess+"|nm|"+nmnorm) elif ((.kind=="disk" or .kind=="quota") and (pct != null) and (pct < 95)) then ("pctx|"+((.key//.kind)|tostring|gsub("\\s";""))+"|"+((pct/5|floor)|tostring)) else (.session//"")+"|"+.kind+"|"+(if .kind=="health" then (.key//"") else ((.body//"") as $b | (if ($b|test("needs-owner:")) then ($b|capture("needs-owner:(?<q>[^\\[]*)").q) else $b end) | gsub("·\\s*[0-9][0-9hms ]*·\\s*[0-9.]+[kM]?\\s*tok\\s*";"")|gsub("\\s";"")|.[0:80]) end) end),
-     u:((.kind!="bug") and (lowdisk|not) and (timebox|not) and (noclaude|not) and (pol=="urgent" or ((.priority//"")=="high") or ((.priority//"")=="urgent"))),
+     u:((.kind!="bug") and (lowdisk|not) and (selfappr|not) and (timebox|not) and (noclaude|not) and (pol=="urgent" or ((.priority//"")=="high") or ((.priority//"")=="urgent"))),
      d:(((.kind=="bug") and (pol!="urgent") and (pol!="pass"))
         or (stopish and waitish and ((((.body//"")|tostring)|test("needs-owner"))|not) and (pol!="pass"))
         or (notice and (((.priority//"default")=="default") or ((.priority//"")=="low")) and ((pol!="urgent") or timebox or noclaude) and (pol!="pass"))
-        or (lowdisk and (pol!="pass"))), l:.}' \
+        or ((lowdisk or selfappr) and (pol!="pass"))), l:.}' \
 | awk -W interactive -v now="$NOW" -v seen="$SEEN_FILE" '
     function persist(k) { printf "%d %s\n", now, k >> seen; fflush(seen) }
     BEGIN {

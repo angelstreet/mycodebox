@@ -28,3 +28,9 @@ test('model replay: cases need an acted wake with an event; blind pairs hide the
   assert.ok(!/sonnet|opus/i.test(md.replace(/Sonnet vs Opus/, '')));
   assert.ok(['sonnet', 'opus'].includes(p[0].aIs)); assert.equal(scrub('ip 1.2.3.4'), 'ip <ip>');
 });
+test('replay: a wake whose only delivered events are deferred is removed but not lost (they ride with the next event)', () => {
+  const wakes = [wk('2026-01-01T00:10:00Z', false), wk('2026-01-01T00:20:00Z', false)];
+  const events = [{ at: '2026-01-01T00:09:00Z', id: 'a' }, { at: '2026-01-01T00:19:00Z', id: 'b' }];
+  const r = replay({ wakes, events, baseKeys: new Set(['a', 'b']), candKeys: new Set(['a', 'b']), deferKeys: new Set(['a']) });
+  assert.equal(r.removed.length, 1); assert.equal(r.deferred.length, 1); assert.equal(r.lost.length, 0); assert.equal(r.after, 1);
+});
