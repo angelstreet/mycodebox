@@ -70,10 +70,10 @@ export function clientOf(clients, token) {
 export const isRunner = (client) => (client.exemptAgents || []).length > 0;
 // Owner-only routes need a client with `owner: true` in clients.json (lease-token.js add --owner).
 export const OWNER_ONLY = /^\/(owner\/|import$|deploy\/approve$)/;
-// Who is acting, for the logs. The Tailscale-User-Login header is honoured only on a request the server identified as coming
-// through Tailscale Serve (viaServe); on a bare loopback request anyone on the box can write that header, so it is ignored.
+// Who is acting, for the logs. A Tailscale-User-Login header on a request the server saw forwarding headers on (viaServe) is recorded as an
+// unverified claim (`claimed:<login>`); without them it is ignored. The client token, not the login, decides what may be done.
 export function callerIdentity({ login, viaServe, remoteAddress, client }) {
-  if (viaServe && typeof login === 'string' && login) return `${login.slice(0, 80)} via client:${client}`;
+  if (viaServe && typeof login === 'string' && login) return `claimed:${login.slice(0, 80)} via client:${client}`;
   return /^(127\.|::1$|::ffff:127\.)/.test(String(remoteAddress || '')) ? `loopback via client:${client}` : `client:${client}`;
 }
 export const exemptFor = (client, agent) => typeof agent === 'string' && (client.exemptAgents || []).some((p) => (p.endsWith('*') ? agent.startsWith(p.slice(0, -1)) : p === agent));

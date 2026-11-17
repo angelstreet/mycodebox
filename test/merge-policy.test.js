@@ -763,3 +763,27 @@ test('migrationAdditive: the added lines of a real re-runnable diff (function he
   const r = migrationAdditive('db/migrations/2.sql', adds, ['CREATE FUNCTION public.bump(p_id uuid)', 'ALTER TABLE public.t ADD CONSTRAINT c CHECK (live = TRUE);']);
   assert.equal(r.additive, true, JSON.stringify(r));
 });
+
+test('migrationAdditive: every ALTER TABLE action is classified on its own; an unknown action is not additive', () => {
+  const f = 'db/migrations/030.sql';
+  for (const act of ['DISABLE ROW LEVEL SECURITY', 'NO FORCE ROW LEVEL SECURITY', 'DISABLE TRIGGER ALL', 'VALIDATE CONSTRAINT c', 'CLUSTER ON i']) {
+    assert.equal(migrationAdditive(f, [`ALTER TABLE t ADD COLUMN c int, ${act};`]).additive, false, `ADD + ${act}`);
+    assert.equal(migrationAdditive(f, [`ALTER TABLE t ${act};`]).additive, false, act);
+  }
+  assert.equal(migrationAdditive(f, ['ALTER TABLE t ADD COLUMN a int, ADD COLUMN b int, ENABLE ROW LEVEL SECURITY;']).additive, true);
+  assert.equal(migrationAdditive(f, ['ALTER TABLE t ADD COLUMN a numeric(10,2) DEFAULT 0, ADD CONSTRAINT k CHECK (a in (1,2));']).additive, true, 'commas in parentheses stay in one action');
+  assert.equal(migrationAdditive(f, ["ALTER TABLE t ADD COLUMN a text DEFAULT 'x, disable row level security';"]).additive, true, 'a comma in a literal is not a separator');
+});
+
+test('migrationAdditive: a file that calls a function it creates, while applying, is not additive', () => {
+  const f = 'db/migrations/031.sql';
+  const fn = 'CREATE FUNCTION public.fx() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;';
+  assert.equal(migrationAdditive(f, [fn]).additive, true, 'a plain CREATE FUNCTION alone');
+  assert.equal(migrationAdditive(f, [fn, 'CREATE TABLE t AS SELECT fx() AS v;']).additive, false);
+  assert.equal(migrationAdditive(f, [fn, 'CREATE VIEW v AS SELECT public.fx();']).additive, false);
+  assert.equal(migrationAdditive(f, [fn, 'ALTER TABLE t ADD COLUMN c int DEFAULT fx();']).additive, false);
+  assert.equal(migrationAdditive(f, [fn, 'CREATE TABLE t (c int DEFAULT fx());']).additive, false);
+  assert.equal(migrationAdditive(f, [fn, 'CREATE INDEX i ON t ((fx() + c));']).additive, false);
+  assert.equal(migrationAdditive(f, [fn, 'ALTER TABLE t ADD CONSTRAINT k CHECK (fx() > c);']).additive, false);
+  assert.equal(migrationAdditive(f, [fn, 'CREATE TABLE t (c int);', 'CREATE TRIGGER g BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION fx();']).additive, true, 'a trigger wiring is unchanged');
+});
