@@ -139,6 +139,11 @@ evaluated as if no approval was given — a floor still returns it — the attem
 `approvalRefused: { by, session, at }`, and the manager gets one event `lane:self-approval:<request id>`
 (`<session> passed --approved-by on <branch>`). A coalesce follows the same rule, and repeating the same claim on one request raises
 one event only. Without the `managerSessions` lane option (tests, older wiring) every caller keeps the old behaviour.
+On the loopback reporter token the session that makes the claim is the tmux session the request comes from (`peer-session.js`: the
+process that owns the connection, followed up to its pane), not the `session` field of the request; a request whose session cannot be
+identified carries no approval. An approval covers the commit that was returned for approval (`approvedSha`, shown in the manager
+item as "covers commit <sha>"): when the branch tip is a different commit at processing time the approval is dropped
+(`approvalStale`), the request is evaluated without it and returned again with the new diff.
 
 ## Migrations merge by effect (Q199, owner 2026-10-20; additive migrations are free, owner 2026-10-21)
 

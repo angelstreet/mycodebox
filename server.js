@@ -168,6 +168,7 @@ import { quotaLine, leasesLine, deploysLine } from './triage.js';
 import { createReporter, isLoopback, TOKEN_HEADER } from './reporter.js';
 import { createIntegrationLane, createTmuxRestart } from './integration-lane.js';   // round 13: the integration lane (INTEGRATION BLOCK below)
 import { createIntegrationRoutes, PREFIX as INTEGRATION_API } from './integration-routes.js';
+import { createPeerSession } from './peer-session.js';
 import { createClaudeIndex, claudeOfPane, minimaxOfPane, codexOfPane, busyChildren, lastActivityOf, leasesOfSession, capView, createParking, readManualNotes, autoParkArchived, transcriptFile, SESSION_CAP } from './parking.js';
 import { actorOf, agentFromArgs, createAlertApi, DEFAULT_ACTOR, interactiveAgentOf, paneBackgroundOf, scriptBusyOf, shouldRefuse } from './api-extras.js';
 import { gitCleanOf } from './git-facts.js';
@@ -3133,7 +3134,8 @@ const integrationRoutes = createIntegrationRoutes({ lane: integrationLane, state
   sessionCwd: async (name) => (await listPanes()).get(name)?.cwd || null,
   sessionKnown: async (name) => (await listPanes()).has(name),   // --for <session>: a live tmux session
   remoteResolve: (name, client) => remote.resolveFor(name, client),
-  externalResult: { ack: (id) => externalResult.ack(id) } });   // `remote` is created below; called per request only
+  externalResult: { ack: (id) => externalResult.ack(id) },   // `remote` is created below; called per request only
+  peerSession: createPeerSession({ panes: async () => { const { stdout } = await exec(TMUX, ['list-panes', '-a', '-F', '#{pane_pid}|#{session_name}']); return stdout.split('\n').filter(Boolean).map((l) => { const i = l.indexOf('|'); return { pid: Number(l.slice(0, i)), name: l.slice(i + 1) }; }); } }) });
 // start() is called below, once the hooks are assigned: a resumed request notifies / deploys at once
 // ===== END INTEGRATION BLOCK =====
 
