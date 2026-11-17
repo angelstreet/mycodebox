@@ -405,6 +405,8 @@ test('a black tile needs both layers dark: a dark thumbnail with a live tile tha
   assert.equal(one.capture, 'ok');
   assert.ok(one.luma < 32, 'the thumbnail was dark');
   assert.ok(one.live_luma > 32, 'the live layer was measured and is bright');
+  // the note carries the two numbers that prove it: the reader does not need the JSON for them (bug-6c8bbe31)
+  assert.match(r.stdout, new RegExp(`note: the tile's snapshot was dark but the live video plays[^\\n]*\\(snapshot luma ${Math.round(one.luma)}, live luma ${Math.round(one.live_luma)}\\)`), r.stdout);
   const two = rep.streams.find((s) => s.device === 'DEVICE2');
   assert.equal(two.capture, 'black');
   assert.ok(two.live_luma < 32, 'the live layer is black too');
