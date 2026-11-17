@@ -452,6 +452,12 @@ def stream_media(base, timeout=20):
     if st != 'ok':
         return None, None
     audio, live = _segment_audio_luma(body, timeout)
+    if live is None:
+        # A slow host can make the ffprobe or the ffmpeg measurement time out under load (bug-c27e2c95): the reading
+        # was lost and the tile read as "the live video could not be read". One more try gives the host a second chance.
+        audio2, live2 = _segment_audio_luma(body, timeout)
+        if live2 is not None:
+            audio, live = (audio2 if audio2 is not None else audio), live2
     if live is not None and live < BLACK_LUMA:
         # The newest segment is dark: walk back over the host's recent segments and keep the brightest frame.
         # A tile that plays shows it in that window; a tile that is really black stays dark in all of it.
