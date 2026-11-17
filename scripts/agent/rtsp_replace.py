@@ -21,6 +21,7 @@ died (the host may be half-changed) are two different outcomes in the journal: l
 Journal: <state>/rtsp-nightly/journal.jsonl, redacted. Default mode is dry: no writes at all.
 """
 import copy, datetime, json, os, subprocess, sys, time
+from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import rtsp_check as rc  # noqa: E402
@@ -81,17 +82,24 @@ def probe_pool(pool, ssh_map, timeout):
     """Probe the pool's own candidates, so the report says whether the pool still plays (the pool is never edited here).
 
     A loopback source only exists on the host that runs it: it is probed from there (through that host's ssh alias),
-    the public ones from codebox. Without an alias a loopback source reads 'unverified', never 'ok'."""
-    out = []
-    for s in pool.get('sources', []):
+    the public ones from codebox. Without an alias a loopback source reads 'unverified', never 'ok'.
+    The entries are probed in parallel (bug-5473cd69): the public ones time out, and one after the other they added
+    about 35 s to every night. The order of the pool file is kept in the report."""
+    sources = pool.get('sources', [])
+
+    def one(s):
         ssh, where = None, 'codebox'
         hosts = [h.strip() for h in (os.environ.get(s.get('hostsEnv') or '') or '').split(',') if h.strip()]
         if hosts:
             ssh = ssh_map.get(hosts[0])
             where = hosts[0] if ssh else f'{hosts[0]} (no ssh alias)'
         res = rc.check_stream(s['url'], timeout, ssh)
-        out.append({'id': s['id'], 'kind': s.get('kind'), 'vetted': s.get('vetted'), 'status': res['status'], 'from': where, 'url': s['url']})
-    return out
+        return {'id': s['id'], 'kind': s.get('kind'), 'vetted': s.get('vetted'), 'status': res['status'], 'from': where, 'url': s['url']}
+
+    if not sources:
+        return []
+    with ThreadPoolExecutor(max_workers=min(6, len(sources))) as ex:
+        return list(ex.map(one, sources))
 
 
 def pick_hls(entry, catalog, used_urls, ssh_map, timeout, tries=8, exclude=()):

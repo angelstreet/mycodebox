@@ -365,6 +365,49 @@ test('a dark thumbnail whose live video cannot be read is not called black: the 
   assert.doesNotMatch(r.stdout, /host capture side/, 'a tile that is not proven broken is not blamed on the capture side');
 });
 
+test('a slow host that loses the first live-layer measurement is measured again, not read as unreadable (bug-c27e2c95)', async () => {
+  const w = await world({ pool: POOL, snapshots: { 'cap-Dark4': 'BLACK' }, devices: {
+    DEVICE1: { ...dev('Dark4', 'https://cdn.example/good/dark4.m3u8'), DEVICE_MODEL: 'rtsp_video' } } });
+  // the first measurement of the live SEGMENT times out (a slow host under load); the next one reads it
+  const orig = w.E.RTSP_CHECK_FFMPEG, counter = path.join(w.state, 'seg-luma-n');
+  w.E.RTSP_CHECK_FFMPEG = sh(path.dirname(orig), 'ffmpeg-slow', `#!/bin/sh
+c=0; [ -f "${counter}" ] && c=$(cat "${counter}")
+for a; do case "$a" in *.ts) seg=1;; esac; done
+case "$*" in *signalstats*) if [ "\${seg:-0}" = 1 ]; then c=$((c+1)); echo $c > "${counter}"; if [ "$c" -eq 1 ]; then echo "timed out" >&2; exit 124; fi; fi;; esac
+exec "${orig}" "$@"`);
+  const r = await py(REPLACE, [], w.E);
+  const day = new Date().toISOString().slice(0, 10);
+  const rep = JSON.parse(readFileSync(path.join(w.state, 'rtsp-nightly', `report-${day}.json`), 'utf8'));
+  w.close();
+  const one = rep.streams.find((s) => s.device === 'DEVICE1');
+  assert.ok(one.live_luma > 32, `the live layer was measured on the second try, got ${one.live_luma}`);
+  assert.equal(one.capture, 'ok', 'a lost measurement is not a lost reading');
+  assert.match(r.stdout, /note: the tile's snapshot was dark but the live video plays/, r.stdout);
+  assert.doesNotMatch(r.stdout, /could not be read/, 'the live layer was read, it is not unreadable');
+});
+
+test('the pool entries are probed in parallel, the night does not wait for every timeout in turn (bug-5473cd69)', async () => {
+  const w = await world({ pool: POOL, devices: { DEVICE1: dev('One', 'https://cdn.example/good/one.m3u8') } });
+  // the pool candidates sleep 1 s each: in parallel they overlap, one after the other they would not
+  const marks = path.join(w.state, 'pool-probe');
+  w.E.RTSP_CHECK_FFPROBE = sh(path.dirname(w.E.RTSP_CHECK_FFPROBE), 'ffprobe-parallel', `#!/bin/sh
+case "$*" in *stream=index,codec_type*) for a; do f=$a; done; n=$(cat "$f" | tr -dc 0-9); n=\${n:-1}; for pass in program streams; do echo 0,video; i=1; while [ $i -le $n ]; do echo $i,audio; i=$((i+1)); done; done; exit 0;; esac
+for a; do u=$a; done
+case "$u" in *good-smoke|*dead-pub*) echo "start $u $(date +%s.%N)" >> "${marks}"; sleep 1; echo "end $u $(date +%s.%N)" >> "${marks}";; esac
+case "$u" in *dead*) echo "$u: Connection refused" >&2; exit 1;; *novideo*) echo '{"streams":[]}';; *) echo '{"streams":[{"codec_name":"h264","width":640,"height":360}]}';; esac`);
+  const r = await py(REPLACE, [], w.E);
+  const day = new Date().toISOString().slice(0, 10);
+  const rep = JSON.parse(readFileSync(path.join(w.state, 'rtsp-nightly', `report-${day}.json`), 'utf8'));
+  w.close();
+  const spans = {};
+  for (const l of readFileSync(marks, 'utf8').trim().split('\n')) { const [kind, u, t] = l.split(' '); (spans[u] ??= {})[kind] = Number(t); }
+  const ivs = Object.values(spans).map((s) => [s.start, s.end]);
+  assert.equal(ivs.length, 2, 'both pool entries were probed');
+  assert.ok(Math.min(...ivs.map((i) => i[1])) > Math.max(...ivs.map((i) => i[0])), 'the two pool probes overlapped: they ran in parallel');
+  assert.deepEqual(rep.pool.map((p) => p.id), ['smoke', 'pub'], 'the order of the pool file is kept');
+  assert.match(r.stdout, /pool: smoke ok \(from h1\), pub no_connect \(from codebox\)/, r.stdout);
+});
+
 test('the report carries the pool\'s own probe status, so a broken pool source is visible without a hand probe (idea bug-c64fb86c)', async () => {
   const w = await world({ pool: POOL, devices: { DEVICE1: dev('One', 'https://cdn.example/good/one.m3u8') } });
   const r = await py(REPLACE, [], w.E);
