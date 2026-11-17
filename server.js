@@ -169,6 +169,7 @@ import { createReporter, isLoopback, TOKEN_HEADER } from './reporter.js';
 import { createIntegrationLane, createTmuxRestart } from './integration-lane.js';   // round 13: the integration lane (INTEGRATION BLOCK below)
 import { createIntegrationRoutes, PREFIX as INTEGRATION_API } from './integration-routes.js';
 import { createPeerSession } from './peer-session.js';
+import { createHostAllow } from './host-allow.js';
 import { createClaudeIndex, claudeOfPane, minimaxOfPane, codexOfPane, busyChildren, lastActivityOf, leasesOfSession, capView, createParking, readManualNotes, autoParkArchived, transcriptFile, SESSION_CAP } from './parking.js';
 import { actorOf, agentFromArgs, createAlertApi, DEFAULT_ACTOR, interactiveAgentOf, paneBackgroundOf, scriptBusyOf, shouldRefuse } from './api-extras.js';
 import { gitCleanOf } from './git-facts.js';
@@ -2339,7 +2340,11 @@ function originOk(req) {
   try { return new URL(o).host === req.headers.host; } catch { return false; }
 }
 
+// The names this dashboard answers to (host-allow.js). A browser request under any other name is not routed.
+const hostAllow = createHostAllow();
+
 async function handleHttp(req, res) {
+  if (hostAllow.refuses(req)) return json(res, 421, { ok: false, error: 'this dashboard does not answer to that host name (GHOSTY_ALLOWED_HOSTS adds one)' });
   // Tight CORS — bound to Tailscale only anyway, but be explicit.
   res.setHeader('referrer-policy', 'no-referrer');
 
@@ -3210,6 +3215,7 @@ const server = http.createServer((req, res) => {
 const wss = new WebSocketServer({ noServer: true });
 
 server.on('upgrade', (req, socket, head) => {
+  if (hostAllow.refuses(req)) { socket.write('HTTP/1.1 421 Misdirected Request\r\n\r\n'); socket.destroy(); return; }
   if (!originOk(req)) { socket.write('HTTP/1.1 403 Forbidden\r\n\r\n'); socket.destroy(); return; }
   const url = new URL(req.url, `http://${req.headers.host}`);
   const p = url.pathname;
