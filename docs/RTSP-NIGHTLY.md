@@ -412,6 +412,28 @@ this night and nothing else: no `replace`, no `rolled_back`, no `lease_not_grant
 - The pi4 server answered a 502 to codebox once, right after the run (200 on the next try): the same slow-origin blip as
   2026-11-12. The run's own inventory reads had no error, so no host was skipped.
 
+### Night of 2026-11-17 (live, run by the nightly session)
+
+103 streams checked, **95 ok, 8 down**, **0 replaced**, 0 rolled back, 0 cameras down, 0 unverified. 15 hosts walked, 15 read,
+**no inventory error** (every server and every host answered the host-config GET). The journal holds 103 `check` events for
+this night and nothing else: no `replace`, no `rolled_back`, no `lease_not_granted`, no `apply_failed`.
+
+- The 8 down: 8 devices with an empty source (`vpt-nipogi` DEVICE4, 5, 6, 17, 22, 23, 24 and `vpt-pi4` DEVICE2; reported by
+  name, never changed). Nothing was really down, so nothing had to be replaced and the pool was never used.
+- What the app shows (tile snapshots): 96 ok, 6 unknown, 1 missing.
+  - **No `multi_audio` tile**: no host runs the old `run_ffmpeg.sh` any more, so no `vpt-stream` restart was needed tonight.
+  - The 2 "dark snapshot but the live video plays" notes, opened in the browser on the pi4 server (hover, live layer), are
+    real pictures and not dead tiles: `vpt-nipogi/DEVICE10` ("FR Movie 7 — Pluto TV Dating") plays (readyState 4, the clock
+    advances 149.3 s → 159.7 s, 320x180, no failed HLS request, brightest pixel 235/255) and `vpt-nipogi/DEVICE26` ("FR Kids 2 —
+    Pluto TV Teen FR") plays (readyState 4, 149.3 s → 160.0 s, 320x180, brightest pixel 235/255). A dark thumbnail of a moving
+    picture, not a dead stream (bug-6b227d92). Both clocks run slightly behind wall time (10.4 s and 10.6 s over 12 s): the
+    live edge of these Pluto channels, not a frozen tile.
+  - The 1 `missing` tile is `vpt-nipogi/DEVICE5`, one of the devices with an empty source: there is no snapshot of a stream
+    that was never set up. The 6 `unknown` tiles are the other empty-source devices.
+- The pool was not touched: re-probed from `vpt-pi4` (the host that runs `vpt-rtsp`), `smoke` plays (h264 640x360) and the
+  three public candidates still time out on port 554 from `vpt-pi4` and from codebox, so nothing new is vetted
+  (bug-c7c2bb0e, still `wontfix`).
+
 ## Private config (not in the repo)
 
 `~/.config/rtsp-nightly/env`, sourced by the session: `RTSP_CHECK_SERVERS="<label>=<server url>,..."` (one per backend server), `RTSP_LEASE_ENV` (the `vpt-lease` environment of the hosts, default
