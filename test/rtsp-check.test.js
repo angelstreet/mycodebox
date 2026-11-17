@@ -256,12 +256,12 @@ test('run live: a source that dies after it was installed is replaced again in t
     { id: 'expire', kind: 'public', url: 'rtsp://test.example/expire', vetted: '2026-11-16' },
     { id: 'smoke', kind: 'loopback', url: 'rtsp://127.0.0.1:8554/good-smoke', vetted: '2026-11-11', hostsEnv: 'RTSP_LOOPBACK_HOSTS' } ] };
   const w = await world({ pool: POOL2, devices: { DEVICE1: dev('a', 'rtsp://test.example/dead-pub') } });
-  // the expire source answers ok twice (the pick, the post-restart probe) and refuses from the third probe on
+  // the expire source answers ok three times (the pool probe, the pick, the post-restart probe) and refuses from the fourth on
   writeFileSync(w.E.RTSP_CHECK_FFPROBE, `#!/bin/sh
 case "$*" in *stream=index,codec_type*) for a; do f=$a; done; n=$(cat "$f" | tr -dc 0-9); n=\${n:-1}; for pass in program streams; do echo 0,video; i=1; while [ $i -le $n ]; do echo $i,audio; i=$((i+1)); done; done; exit 0;; esac
 for a; do u=$a; done
 n=0; [ -f "${w.state}/expire-n" ] && n=$(cat "${w.state}/expire-n")
-case "$u" in *expire*) n=$((n+1)); echo $n > "${w.state}/expire-n"; if [ "$n" -ge 3 ]; then echo "$u: Connection refused" >&2; exit 1; fi;; esac
+case "$u" in *expire*) n=$((n+1)); echo $n > "${w.state}/expire-n"; if [ "$n" -ge 4 ]; then echo "$u: Connection refused" >&2; exit 1; fi;; esac
 case "$u" in *dead*) echo "$u: Connection refused" >&2; exit 1;; *novideo*) echo '{"streams":[]}';; *) echo '{"streams":[{"codec_name":"h264","width":640,"height":360}]}';; esac
 `);
   w.E.RTSP_INSTALL_VERIFY_SECONDS = '0';
@@ -345,6 +345,20 @@ test('the pool file never holds credentials and only vetted entries are replacem
   for (const s of pool.sources) { assert.ok(!/\/\/[^/]*@/.test(s.url), `${s.id} has credentials`); assert.ok(['loopback', 'public'].includes(s.kind)); }
   assert.ok(pool.maxReplacementsPerNight <= 3);
   assert.ok(existsSync(path.resolve('scripts/agent/rtsp_replace.py')));
+});
+
+test('the report carries the pool\'s own probe status, so a broken pool source is visible without a hand probe (idea bug-c64fb86c)', async () => {
+  const w = await world({ pool: POOL, devices: { DEVICE1: dev('One', 'https://cdn.example/good/one.m3u8') } });
+  const r = await py(REPLACE, [], w.E);
+  const day = new Date().toISOString().slice(0, 10);
+  const rep = JSON.parse(readFileSync(path.join(w.state, 'rtsp-nightly', `report-${day}.json`), 'utf8'));
+  w.close();
+  // the loopback source is probed from the host that runs it, the public one from codebox
+  assert.match(r.stdout, /pool: smoke ok \(from h1\), pub no_connect \(from codebox\)/, r.stdout);
+  assert.deepEqual(rep.pool.map((p) => [p.id, p.status, p.from]), [['smoke', 'ok', 'h1'], ['pub', 'no_connect', 'codebox']]);
+  assert.equal(rep.pool.find((p) => p.id === 'smoke').vetted, '2026-11-11');
+  assert.equal(rep.pool.find((p) => p.id === 'pub').vetted, null);
+  assert.ok(!JSON.stringify(rep.pool).includes(PW), 'no credentials in the pool block');
 });
 
 test('a stream that fails once but plays on the slower re-probe, or shows a frozen picture, is never changed', async () => {
