@@ -6,6 +6,10 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The dashboard answers to the names of this box only** — a browser request whose `Host` is not an IP address, `localhost`, a single-label name, a `*.ts.net` name, this machine's hostname, the host of `PUBLIC_URL` or a name in `GHOSTY_ALLOWED_HOSTS` gets `421` before routing (`host-allow.js`); token clients are not affected. The same-origin rule of the dashboard only means something under a name of the box · area: server
+
+- **Approve and deny follow the calling session; a deploy request is pre-approved only by trusted clients** — a credential-less dashboard-style request from a process inside a tmux pane is that session and may create or cancel V2 tasks but not approve or deny; the `approved` field of a lease deploy request counts only for an owner client, the runner client or a `DEPLOY_AUTO_APPROVE_CLIENTS` client · area: integration-lane
+
 - **A merge approval counts for the session that sends it and for the commit that was shown** — `--approved-by` on the reporter token is honoured when the request comes from a manager session's own pane (the lane reads which tmux session the connection belongs to), and it covers the commit the manager item showed: if the branch moved since, the request comes back for approval with the new diff instead of merging · area: integration
 
 - **A remote bug client acts under its own name, and V2 check ids are plain names** — a report or fix claim sent with a client token is recorded as `mac-<client>` (or `<session>@mac-<client>`), never as a session of this box, and an acceptance check id must match `[A-Za-z0-9][A-Za-z0-9._-]{0,63}` so the verifier's log files always stay in the task's artifact folder · area: api

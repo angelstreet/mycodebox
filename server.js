@@ -169,6 +169,7 @@ import { createReporter, isLoopback, TOKEN_HEADER } from './reporter.js';
 import { createIntegrationLane, createTmuxRestart } from './integration-lane.js';   // round 13: the integration lane (INTEGRATION BLOCK below)
 import { createIntegrationRoutes, PREFIX as INTEGRATION_API } from './integration-routes.js';
 import { createPeerSession } from './peer-session.js';
+import { createHostAllow } from './host-allow.js';
 import { createClaudeIndex, claudeOfPane, minimaxOfPane, codexOfPane, busyChildren, lastActivityOf, leasesOfSession, capView, createParking, readManualNotes, autoParkArchived, transcriptFile, SESSION_CAP } from './parking.js';
 import { actorOf, agentFromArgs, createAlertApi, DEFAULT_ACTOR, interactiveAgentOf, paneBackgroundOf, scriptBusyOf, shouldRefuse } from './api-extras.js';
 import { gitCleanOf } from './git-facts.js';
@@ -2339,7 +2340,11 @@ function originOk(req) {
   try { return new URL(o).host === req.headers.host; } catch { return false; }
 }
 
+// The names this dashboard answers to (host-allow.js). A browser request under any other name is not routed.
+const hostAllow = createHostAllow();
+
 async function handleHttp(req, res) {
+  if (hostAllow.refuses(req)) return json(res, 421, { ok: false, error: 'this dashboard does not answer to that host name (GHOSTY_ALLOWED_HOSTS adds one)' });
   // Tight CORS — bound to Tailscale only anyway, but be explicit.
   res.setHeader('referrer-policy', 'no-referrer');
 
@@ -2362,7 +2367,7 @@ async function handleHttp(req, res) {
   if (p.startsWith('/api/v2/')) {
     if (!v2) return json(res, 404, { ok: false, error: 'V2 engine is off (set GHOSTY_V2=1)' });
     const write = req.method !== 'GET' && req.method !== 'HEAD';
-    const caller = write ? integrationRoutes.callerOf(req) : undefined;
+    const caller = write ? await integrationRoutes.callerOf(req) : undefined;
     if (write && !caller) return json(res, 403, { ok: false, error: 'V2 writes need the dashboard (same origin), a manager client or the loopback reporter token' });
     // Disk low: a new task creates a worktree and writes to the disk, so it is refused (409 `disk_low`).
     // Approvals, cancels and denials are not new work and stay allowed.
@@ -3210,6 +3215,7 @@ const server = http.createServer((req, res) => {
 const wss = new WebSocketServer({ noServer: true });
 
 server.on('upgrade', (req, socket, head) => {
+  if (hostAllow.refuses(req)) { socket.write('HTTP/1.1 421 Misdirected Request\r\n\r\n'); socket.destroy(); return; }
   if (!originOk(req)) { socket.write('HTTP/1.1 403 Forbidden\r\n\r\n'); socket.destroy(); return; }
   const url = new URL(req.url, `http://${req.headers.host}`);
   const p = url.pathname;

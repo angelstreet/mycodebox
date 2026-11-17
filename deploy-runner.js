@@ -11,6 +11,7 @@ import { planCatchUps, gitContains } from './catchup-supersede.js';
 import { mkdir, readFile, writeFile, appendFile, stat, open } from 'node:fs/promises';
 import { createWriteStream, openSync, closeSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { autoApproveClients } from './lease-routes.js';
 
 export const DEFAULT_ENVS = {
   'node1-vpt': { ssh: 'proxmox', cmd: 'bash update_core.sh' },
@@ -247,7 +248,7 @@ export function createDeployRunner({
   backoffBaseMs = BACKOFF_BASE_MS,      // the per-host back-off between two catch-up tries (tests shorten it)
   rolling = process.env.GHOSTY_DEPLOY_ROLLING !== 'off',   // release each finished host of a host deploy at once (rollingTracker)
   // 'registry' is the central client every agent's `vpt-lease deploy request` arrives through (codebox -> registry host); the env replaces the list.
-  approveClients = (process.env.DEPLOY_AUTO_APPROVE_CLIENTS ?? 'registry').split(',').map((x) => x.trim()).filter(Boolean),
+  approveClients = autoApproveClients(),
 } = {}) {
   const envsFile = join(stateDir, 'deploy-envs.json');
   const logDir = join(stateDir, 'deploys');

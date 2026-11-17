@@ -68,6 +68,9 @@ export function clientOf(clients, token) {
 // exemptAgents patterns: an exact agent string, or a prefix ending in '*'. The exemption (deploy agents) binds to the token's client, not to the agent string a request asserts.
 // The deploy runner client: a token that lists exempt (deploy) agents. It may start, finish and cancel any deploy.
 export const isRunner = (client) => (client.exemptAgents || []).length > 0;
+// Clients whose deploy requests may arrive already approved besides owner and runner clients: DEPLOY_AUTO_APPROVE_CLIENTS (comma list, default 'registry',
+// the central client agents' `vpt-lease deploy request` goes through). Read per call so the env can change without a restart.
+export const autoApproveClients = (env = process.env) => (env.DEPLOY_AUTO_APPROVE_CLIENTS ?? 'registry').split(',').map((x) => x.trim()).filter(Boolean);
 // Owner-only routes need a client with `owner: true` in clients.json (lease-token.js add --owner).
 export const OWNER_ONLY = /^\/(owner\/|import$|deploy\/approve$)/;
 // Who is acting, for the logs. A Tailscale-User-Login header on a request the server saw forwarding headers on (viaServe) is recorded as an
@@ -117,6 +120,8 @@ export function createLeaseRoutes({ service, dir, cidrs = process.env.LEASE_ALLO
   // The caller's identity always comes from the token: body fields client / exempt / owner are discarded.
   const post = (path, op, fn = (b) => b) => route('POST', path, ({ body, client, who }) => {
     const { client: _c, exempt: _e, owner: _o, ...b } = fn(body, who);
+    // A deploy request arrives approved (queued at once) only from an owner client, the runner client or an allowlisted client; for any other client the flag is dropped.
+    if (op === 'deploy.request' && !(client.owner || isRunner(client) || autoApproveClients().includes(client.name))) delete b.approved;
     const exempt = op === 'claim' ? exemptFor(client, b.agent) : ['deploy.start', 'deploy.finish', 'deploy.cancel', 'deploy.releaseHosts', 'deploy.progress'].includes(op) ? isRunner(client) : undefined;
     return { op, args: { ...b, client: client.name, ...(exempt === undefined ? {} : { exempt }) } };
   });

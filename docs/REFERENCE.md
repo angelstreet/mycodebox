@@ -125,6 +125,7 @@ PUBLIC_URL=https://<machine>.<tailnet>.ts.net     # notification tap opens /?s=<
 | `NTFY_DONE`   | unset   | `1` also pushes when an agent finishes a turn |
 | `NTFY_URL`    | `https://ntfy.sh` | ntfy server base URL |
 | `PUBLIC_URL`  | unset   | base URL of this app; used as the notification click link (`/?s=<session>`). An https value is also named in the UI's "needs the HTTPS address" hints |
+| `GHOSTY_ALLOWED_HOSTS` | unset | extra host names this dashboard answers to (comma list). Without it: an IP address, `localhost`, a single-label name, a `*.ts.net` name, this machine's hostname and the host of `PUBLIC_URL`. A browser request under any other name gets `421`; a request with an `Authorization` header (lease, integrate clients) is not checked |
 | `LANGFUSE_PUBLIC_URL` | unset | browser-reachable Langfuse URL for the usage sheet's Langfuse button and the manager panel links. The usage button falls back to `LANGFUSE_URL` only when that is not a loopback address; with neither, the button is hidden. The manager panel falls back to `LANGFUSE_URL` as is |
 | `ANDROID_APP_PACKAGE` / `ANDROID_APP_SHA256` | unset | serve `/.well-known/assetlinks.json` for the Android app: package name and signing-cert SHA-256 fingerprint(s) (`XX:..` 32 hex pairs, comma-separated). Both or neither; invalid values log a startup warning and nothing is served. Alternative: put a ready file at `$GHOSTY_STATE_DIR/assetlinks.json`. Read at startup; restart to apply. Unconfigured: 404 |
 | `HEALTH_MS`   | `5000`  | host health sample cadence (CPU, load, RAM, disk) |
@@ -1169,7 +1170,7 @@ on each `VPT_PROGRESS` health ok|skipped, restarts its hold clock (`timeoutMs`) 
 Agents do not run `update_core.sh`; they queue a request in the shared lease registry (`vpt-lease deploy request ...`)
 and wait (`vpt-lease deploy wait <id> --agent A`). `deploy-runner.js` polls the queue every 30 s and shows it on the
 **Platforms page** (approve / cancel, what each request waits on, live log of the running one, a warning when the ref
-differs from the last one deployed). A request without `--approved` waits for one tap there and pushes an alert.
+differs from the last one deployed). A request without `--approved` waits for one tap there and pushes an alert. The `approved` field of an HTTP request body counts only for an owner client, the runner client (one with exempt agents) or a client named in `DEPLOY_AUTO_APPROVE_CLIENTS`; for any other client it is dropped and the request stays `awaiting-approval`.
 The manager sheet keeps only the "Runs deploys" switch and a link to Platforms.
 
 - **Off by default.** The runner only starts deploys when `manager.json` has `"deployRunner": true` (switch in the
@@ -1446,7 +1447,7 @@ for non-GET requests. Store: `$GHOSTY_STATE_DIR/v2`. Writes (create, cancel, app
 only while this process holds the goal-loop controller lease; otherwise 503 `E_NO_CONTROLLER` and nothing is written
 (another live server, or `GHOSTY_V2_WORK_ROOT` unset). Reads always work.
 All bodies are JSON objects, max 64 KB, with unknown fields rejected. Task ids match `[A-Za-z0-9][A-Za-z0-9._-]{0,127}`.
-Writes (POST) need a caller: the dashboard (same-origin `Origin` or `Sec-Fetch-Site`, no token) or a bearer client flagged `manager` may create, cancel, approve and deny; a loopback session with the reporter token may only create and cancel (approve/deny: 403 `E_FORBIDDEN`); anything else is 403. The recorded actor is the real caller (`owner`, `manager:<client>`, `loopback`). A local process can still forge a same-origin `Origin`: Tailscale remains the gate.
+Writes (POST) need a caller: the dashboard (same-origin `Origin` or `Sec-Fetch-Site`, no token) or a bearer client flagged `manager` may create, cancel, approve and deny; a loopback session with the reporter token may only create and cancel (approve/deny: 403 `E_FORBIDDEN`); anything else is 403. The recorded actor is the real caller (`owner`, `manager:<client>`, `loopback`). A credential-less same-origin request whose loopback connection belongs to a process inside a tmux pane (`peerSession`, the same lookup the lane uses for approval claims) is that session: it may create and cancel but not approve or deny, whatever headers it sends, and its actor is the session name. A browser reaching the server through Tailscale Serve has no pane above its peer process and stays the dashboard; when the lookup is not configured or fails, the dashboard case is unchanged.
 Errors are `{ ok:false, error, code }` (400 invalid, 404 not found, 409 conflict or terminal, 413 too large, 503 store failed or no controller).
 
 | Route | Body | Result |

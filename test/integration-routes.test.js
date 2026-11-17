@@ -298,14 +298,23 @@ test('callerOf (V2 writes): same-origin dashboard and manager clients decide; a 
     wf(join(b.stateDir, 'leases', 'clients.json'), JSON.stringify({ clients: [{ name: 'boss', sha256: hashToken(mgr), exemptAgents: [], integrate: true, manager: true }, { name: 'mac', sha256: hashToken(CLIENT), exemptAgents: [], integrate: true }] }));
     const routes = createIntegrationRoutes({ lane: b.lane, stateDir: b.stateDir, isLoopback, reporterOk: (t) => t === REPORTER });
     const req = (headers, remoteAddress = '127.0.0.1') => ({ headers: { host: 'dash.local', ...headers }, socket: { remoteAddress } });
-    assert.deepEqual(routes.callerOf(req({ origin: 'http://dash.local' })), { actor: 'owner', mayDecide: true });
-    assert.deepEqual(routes.callerOf(req({ 'sec-fetch-site': 'same-origin' })), { actor: 'owner', mayDecide: true });
-    assert.equal(routes.callerOf(req({})), null, 'no browser signal, no token: a bare curl from a worker');
-    assert.equal(routes.callerOf(req({ origin: 'http://evil.example' })), null);
-    assert.deepEqual(routes.callerOf(req({ 'x-ghosty-reporter-token': REPORTER, origin: 'http://dash.local' })), { actor: 'loopback', mayDecide: false }, 'the token wins over a same-origin header');
-    assert.equal(routes.callerOf(req({ 'x-ghosty-reporter-token': 'wrong' })), null);
-    assert.deepEqual(routes.callerOf(req({ authorization: `Bearer ${mgr}` })), { actor: 'manager:boss', mayDecide: true });
-    assert.equal(routes.callerOf(req({ authorization: `Bearer ${CLIENT}` })), null, 'an integrate client is not a manager');
+    assert.deepEqual(await routes.callerOf(req({ origin: 'http://dash.local' })), { actor: 'owner', mayDecide: true });
+    assert.deepEqual(await routes.callerOf(req({ 'sec-fetch-site': 'same-origin' })), { actor: 'owner', mayDecide: true });
+    assert.equal(await routes.callerOf(req({})), null, 'no browser signal, no token: a bare curl from a worker');
+    assert.equal(await routes.callerOf(req({ origin: 'http://evil.example' })), null);
+    assert.deepEqual(await routes.callerOf(req({ 'x-ghosty-reporter-token': REPORTER, origin: 'http://dash.local' })), { actor: 'loopback', mayDecide: false }, 'the token wins over a same-origin header');
+    assert.equal(await routes.callerOf(req({ 'x-ghosty-reporter-token': 'wrong' })), null);
+    assert.deepEqual(await routes.callerOf(req({ authorization: `Bearer ${mgr}` })), { actor: 'manager:boss', mayDecide: true });
+    assert.equal(await routes.callerOf(req({ authorization: `Bearer ${CLIENT}` })), null, 'an integrate client is not a manager');
+    // a credential-less same-origin request from a process inside a tmux pane is that session, never the dashboard
+    const inPane = createIntegrationRoutes({ lane: b.lane, stateDir: b.stateDir, isLoopback, reporterOk: (t) => t === REPORTER, peerSession: async () => 'agent-1' });
+    assert.deepEqual(await inPane.callerOf(req({ origin: 'http://dash.local' })), { actor: 'agent-1', mayDecide: false });
+    assert.deepEqual(await inPane.callerOf(req({ 'sec-fetch-site': 'same-origin' })), { actor: 'agent-1', mayDecide: false });
+    assert.equal(await inPane.callerOf(req({})), null, 'still nothing without a browser signal');
+    const noPane = createIntegrationRoutes({ lane: b.lane, stateDir: b.stateDir, isLoopback, reporterOk: (t) => t === REPORTER, peerSession: async () => null });
+    assert.deepEqual(await noPane.callerOf(req({ origin: 'http://dash.local' })), { actor: 'owner', mayDecide: true }, 'a peer outside any pane is the dashboard');
+    const broken = createIntegrationRoutes({ lane: b.lane, stateDir: b.stateDir, isLoopback, reporterOk: (t) => t === REPORTER, peerSession: async () => { throw new Error('ss missing'); } });
+    assert.deepEqual(await broken.callerOf(req({ origin: 'http://dash.local' })), { actor: 'owner', mayDecide: true }, 'an unreadable peer keeps the dashboard working');
   } finally { b.close(); }
 });
 
