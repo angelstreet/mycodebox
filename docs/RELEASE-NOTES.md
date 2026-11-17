@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The nightly's dark-snapshot note now carries the luma numbers that prove it** — a tile whose thumbnail is dark while its live video plays is reported as a note, but the line said "the tile's snapshot was dark but the live video plays" without the two values the run had just read, so the reader had to open `report-<date>.json` to see them. The note now reads "(snapshot luma 27, live luma 94)": the line the night prints is its own evidence (bug-6c8bbe31) · area: rtsp-nightly
+
 - **found-bug checks the proof against the repo the bug belongs to** — the proof gate (`--checked-main`) and the possibly-fixed marks only looked at the dashboard's `origin/main`, so a VirtualPyTest bug could not be filed (its sha was refused) and could be marked fixed by an unrelated dashboard commit. A report now carries `repo` (`--repo`, else the endpoint, else the filer's cwd repo); the server checks that repo's `origin/main` (one fetch on a miss). Dashboard filings keep the same gate · area: found-bug
 - **A replacement the nightly installs is verified before the night ends** — a source can die minutes after it was put in
   place (2026-11-15: the nightly repaired the black channel `vpt-nipogi/DEVICE31` with "RMC Decouverte", whose playlist still

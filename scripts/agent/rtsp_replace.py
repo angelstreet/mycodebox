@@ -344,10 +344,16 @@ def run(mode, timeout=10):
             # (2026-11-13, bug-6b227d92). Say so instead of losing it.
             dark_thumb = cap.get('luma') is not None and cap['luma'] < rc.BLACK_LUMA
             moment = 'clip' if e['kind'] == 'file' else 'channel'
-            row['action'] = (f"note: the tile's snapshot was dark but the live video plays (a dark moment of the {moment}),"
-                             " not changed") if cap['capture'] == 'ok' and dark_thumb else (
-                            'none' if r['status'] == 'ok' or cap['capture'] == 'ok'
-                            else 'report: cannot verify from codebox (no ssh alias, no host snapshot)')
+            if cap['capture'] == 'ok' and dark_thumb:
+                # the two numbers are the proof of the note (bug-6c8bbe31): the reader must not need the JSON for them
+                nums = f"snapshot luma {cap['luma']:.0f}"
+                if cap.get('live_luma') is not None:
+                    nums += f", live luma {cap['live_luma']:.0f}"
+                row['action'] = (f"note: the tile's snapshot was dark but the live video plays (a dark moment of the {moment}),"
+                                 f" not changed ({nums})")
+            else:
+                row['action'] = ('none' if r['status'] == 'ok' or cap['capture'] == 'ok'
+                                 else 'report: cannot verify from codebox (no ssh alias, no host snapshot)')
         elif black_src and capture_mode != 'live':
             row['action'] = "report: the channel's own picture is black (host snapshot and source frame); capture checks are dry, nothing changed"
         elif black_src and budget <= 0:

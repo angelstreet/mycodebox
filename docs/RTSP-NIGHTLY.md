@@ -133,7 +133,9 @@ through the device's own server (the same path the browser uses, the auto-sign t
 The `capture` column reads **both** pictures of a tile (2026-11-13, bug-6b227d92): the thumbnail and the live video. The
 thumbnail alone cannot judge a tile, because a looping clip moves: the thumbnail is one moment of the clip and the live video
 another. So a dark thumbnail alone is reported as a **note** ("the tile's snapshot was dark but the live video plays"), not as a
-broken tile; `black` means both are dark. The live layer is read from the host's newest HLS segment (`segments/output.m3u8`),
+broken tile; `black` means both are dark. The note carries the two numbers that prove it — the thumbnail's luma and the live
+layer's ("snapshot luma 27, live luma 94"), so the line the night prints is its own evidence and the reader does not have to
+open the report for them (bug-6c8bbe31). The live layer is read from the host's newest HLS segment (`segments/output.m3u8`),
 the same bytes the browser's player loads; they are fetched once per device and the audio-track count comes from them too.
 Its luma is the **brightest** picture that segment holds (the 90th percentile over its frames), not its first frame: a
 segment's first frame can be a transition frame and read black while the tile plays. When that segment is dark, the live
