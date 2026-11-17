@@ -2362,7 +2362,7 @@ async function handleHttp(req, res) {
   if (p.startsWith('/api/v2/')) {
     if (!v2) return json(res, 404, { ok: false, error: 'V2 engine is off (set GHOSTY_V2=1)' });
     const write = req.method !== 'GET' && req.method !== 'HEAD';
-    const caller = write ? integrationRoutes.callerOf(req) : undefined;
+    const caller = write ? await integrationRoutes.callerOf(req) : undefined;
     if (write && !caller) return json(res, 403, { ok: false, error: 'V2 writes need the dashboard (same origin), a manager client or the loopback reporter token' });
     // Disk low: a new task creates a worktree and writes to the disk, so it is refused (409 `disk_low`).
     // Approvals, cancels and denials are not new work and stay allowed.

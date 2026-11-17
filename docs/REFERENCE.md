@@ -1169,7 +1169,7 @@ on each `VPT_PROGRESS` health ok|skipped, restarts its hold clock (`timeoutMs`) 
 Agents do not run `update_core.sh`; they queue a request in the shared lease registry (`vpt-lease deploy request ...`)
 and wait (`vpt-lease deploy wait <id> --agent A`). `deploy-runner.js` polls the queue every 30 s and shows it on the
 **Platforms page** (approve / cancel, what each request waits on, live log of the running one, a warning when the ref
-differs from the last one deployed). A request without `--approved` waits for one tap there and pushes an alert.
+differs from the last one deployed). A request without `--approved` waits for one tap there and pushes an alert. The `approved` field of an HTTP request body counts only for an owner client, the runner client (one with exempt agents) or a client named in `DEPLOY_AUTO_APPROVE_CLIENTS`; for any other client it is dropped and the request stays `awaiting-approval`.
 The manager sheet keeps only the "Runs deploys" switch and a link to Platforms.
 
 - **Off by default.** The runner only starts deploys when `manager.json` has `"deployRunner": true` (switch in the
@@ -1446,7 +1446,7 @@ for non-GET requests. Store: `$GHOSTY_STATE_DIR/v2`. Writes (create, cancel, app
 only while this process holds the goal-loop controller lease; otherwise 503 `E_NO_CONTROLLER` and nothing is written
 (another live server, or `GHOSTY_V2_WORK_ROOT` unset). Reads always work.
 All bodies are JSON objects, max 64 KB, with unknown fields rejected. Task ids match `[A-Za-z0-9][A-Za-z0-9._-]{0,127}`.
-Writes (POST) need a caller: the dashboard (same-origin `Origin` or `Sec-Fetch-Site`, no token) or a bearer client flagged `manager` may create, cancel, approve and deny; a loopback session with the reporter token may only create and cancel (approve/deny: 403 `E_FORBIDDEN`); anything else is 403. The recorded actor is the real caller (`owner`, `manager:<client>`, `loopback`). A local process can still forge a same-origin `Origin`: Tailscale remains the gate.
+Writes (POST) need a caller: the dashboard (same-origin `Origin` or `Sec-Fetch-Site`, no token) or a bearer client flagged `manager` may create, cancel, approve and deny; a loopback session with the reporter token may only create and cancel (approve/deny: 403 `E_FORBIDDEN`); anything else is 403. The recorded actor is the real caller (`owner`, `manager:<client>`, `loopback`). A credential-less same-origin request whose loopback connection belongs to a process inside a tmux pane (`peerSession`, the same lookup the lane uses for approval claims) is that session: it may create and cancel but not approve or deny, whatever headers it sends, and its actor is the session name. A browser reaching the server through Tailscale Serve has no pane above its peer process and stays the dashboard; when the lookup is not configured or fails, the dashboard case is unchanged.
 Errors are `{ ok:false, error, code }` (400 invalid, 404 not found, 409 conflict or terminal, 413 too large, 503 store failed or no controller).
 
 | Route | Body | Result |

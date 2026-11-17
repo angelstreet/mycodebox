@@ -14,6 +14,7 @@ const TOKEN = 'tok-mac-0123456789abcdef';   // leak-scan: allow (fake test token
 const TOKEN2 = 'tok-box-0123456789abcdef';
 const DEPLOYER = 'tok-dep-0123456789abcdef';
 const OWNER = 'tok-own-0123456789abcdef';
+const REGISTRY = 'tok-reg-0123456789abcdef';
 
 async function boot(cidrs, opts = {}) {
   const dir = tmp('lease-http-');
@@ -21,6 +22,7 @@ async function boot(cidrs, opts = {}) {
     { name: 'mac', sha256: hashToken(TOKEN) }, { name: 'box', sha256: hashToken(TOKEN2) },
     { name: 'deployer', sha256: hashToken(DEPLOYER), exemptAgents: ['manager:deploy', 'update_core:*'] },
     { name: 'owner', sha256: hashToken(OWNER), owner: true },
+    { name: 'registry', sha256: hashToken(REGISTRY) },
   ] }));
   const service = createLeaseService({ dir, config: { envs: ['env-a'] } });
   const routes = createLeaseRoutes({ service, dir, cidrs, viaServe: opts.viaServe });
@@ -115,7 +117,7 @@ test('the long-poll wait is capped at 30 seconds and a body over the limit is 41
 test('identity comes from the token: body client / exempt / owner are ignored; only the deployer client gets the exemption; owner routes log the caller', async () => {
   const c = await boot();
   try {
-    const d = await c.call('POST', '/deploy/request', { body: { env: 'env-a', scope: 'host', hosts: ['host-1'], ref: 'r', agent: 'a', approved: true } });
+    const d = await c.call('POST', '/deploy/request', { body: { env: 'env-a', scope: 'host', hosts: ['host-1'], ref: 'r', agent: 'a', approved: true }, token: OWNER });   // an owner client's approved flag is honoured
     assert.equal(d.status, 200);
     const spoof = await claim(c, 'manager:deploy', ['host-1'], { exempt: true, client: 'deployer', owner: true });
     assert.equal(spoof.body.code, 'E_DEPLOY_PENDING', 'a mac token cannot claim the exemption by asserting it');
@@ -252,12 +254,12 @@ test('review 4/5/6: HTTP clients cannot touch in-process leases or other clients
   try {
     const inproc = (await c.service.claim({ env: 'env-a', resources: ['host-1/device1'], agent: 'runner' })).lease;
     assert.equal((await c.call('POST', '/release', { body: { id: inproc.id, agent: 'runner' } })).status, 403);
-    const d = (await c.call('POST', '/deploy/request', { body: { env: 'env-a', scope: 'frontend', ref: 'r', agent: 'a', approved: true } })).body.id;   // requested by mac
+    const d = (await c.call('POST', '/deploy/request', { body: { env: 'env-a', scope: 'frontend', ref: 'r', agent: 'a', approved: true }, token: OWNER })).body.id;   // approved by an owner client
     assert.equal((await c.call('POST', '/deploy/start', { body: { id: d }, token: TOKEN2 })).status, 403, 'box did not request it and is not the runner');
     assert.equal((await c.call('POST', '/deploy/cancel', { body: { id: d }, token: TOKEN2 })).status, 403);
     assert.equal((await c.call('POST', '/deploy/start', { body: { id: d, agent: 'manager:deploy' }, token: DEPLOYER })).status, 200, 'the runner client may');
     assert.equal((await claim(c, 'x', ['frontend'], { deploy_id: d }, TOKEN2)).status, 403, 'a stranger cannot join');
-    assert.equal((await claim(c, 'x', ['frontend'], { deploy_id: d })).status, 200, 'the requester can');
+    assert.equal((await claim(c, 'x', ['frontend'], { deploy_id: d }, OWNER)).status, 200, 'the requester can');
     assert.equal((await c.call('POST', '/deploy/finish', { body: { id: d, status: 'done' }, token: TOKEN2 })).status, 403);
     assert.equal((await c.call('POST', '/deploy/finish', { body: { id: d, status: 'done' }, token: DEPLOYER })).status, 200);
   } finally { await c.close(); }
@@ -310,4 +312,32 @@ test('priority over HTTP: claim carries it, a P2 ttl is clamped, a refused renew
     assert.equal(l.body.leases[0].priority, 'P2'); assert.equal(l.body.tickets[0].priority, 'P1');
     assert.equal((await claim(c, 'x', ['host:host-2'], { priority: 'high' })).status, 400);
   } finally { await c.close(); }
+});
+
+test('deploy request: the approved flag from a request body counts only for an owner client, the runner client or an allowlisted client', async () => {
+  const c = await boot();
+  const req = (token, extra = {}) => c.call('POST', '/deploy/request', { body: { env: 'env-a', scope: 'frontend', ref: 'r', agent: 'a', approved: true, ...extra }, token });
+  try {
+    const plain = (await req(TOKEN)).body;
+    assert.equal(plain.deploy.state, 'awaiting-approval', 'an ordinary client cannot pre-approve');
+    assert.equal(plain.deploy.approved, false);
+    assert.equal((await c.call('POST', '/deploy/start', { body: { id: plain.id }, token: TOKEN })).status >= 400, true, 'and cannot start it');
+    assert.equal((await req(OWNER)).body.deploy.state, 'queued', 'an owner client');
+    assert.equal((await req(DEPLOYER)).body.deploy.state, 'queued', 'the runner client');
+    assert.equal((await req(REGISTRY)).body.deploy.state, 'queued', 'a client on the default allowlist');
+    assert.equal((await req(TOKEN, { approved: undefined })).body.deploy.state, 'awaiting-approval', 'no flag, no approval');
+  } finally { await c.close(); }
+});
+
+test('deploy request: DEPLOY_AUTO_APPROVE_CLIENTS replaces the allowlist; in-process callers keep the flag', async () => {
+  const prev = process.env.DEPLOY_AUTO_APPROVE_CLIENTS;
+  process.env.DEPLOY_AUTO_APPROVE_CLIENTS = 'mac';
+  const c = await boot();
+  try {
+    const req = (token) => c.call('POST', '/deploy/request', { body: { env: 'env-a', scope: 'frontend', ref: 'r', agent: 'a', approved: true }, token });
+    assert.equal((await req(TOKEN)).body.deploy.state, 'queued');
+    assert.equal((await req(REGISTRY)).body.deploy.state, 'awaiting-approval', 'registry is no longer listed');
+    const inproc = await c.service.deploy.request({ env: 'env-a', scope: 'frontend', ref: 'r2', agent: 'a', approved: true });
+    assert.equal(inproc.deploy.state, 'queued');
+  } finally { if (prev === undefined) delete process.env.DEPLOY_AUTO_APPROVE_CLIENTS; else process.env.DEPLOY_AUTO_APPROVE_CLIENTS = prev; await c.close(); }
 });

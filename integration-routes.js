@@ -93,9 +93,10 @@ export function createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk
   }
 
   // Who may write to /api/v2 (server.js): a manager client (bearer) or the dashboard (same-origin browser signal, no token) may decide;
-  // a loopback reporter-token session may create/cancel only. -> { actor, mayDecide } | null. A forged Origin from a local process
-  // still passes as the dashboard: the server has no login, Tailscale is the gate.
-  function callerOf(req) {
+  // a loopback reporter-token session may create/cancel only. A credential-less same-origin request whose loopback peer process runs inside a
+  // tmux pane (peerSession) is that session and may not decide either, whatever headers it sends. Unconfigured or failing peerSession: the
+  // dashboard case is unchanged. -> async { actor, mayDecide } | null.
+  async function callerOf(req) {
     const addr = req.socket?.remoteAddress;
     const auth = /^Bearer\s+(\S{8,512})$/i.exec(req.headers.authorization || '');
     if (auth) {
@@ -103,7 +104,12 @@ export function createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk
       return c && c.manager === true ? { actor: `manager:${c.name}`, mayDecide: true } : null;
     }
     if (req.headers['x-ghosty-reporter-token']) return isLoopback(addr) && reporterOk(req.headers['x-ghosty-reporter-token']) ? { actor: 'loopback', mayDecide: false } : null;
-    return originOf(req) === 'same' ? { actor: 'owner', mayDecide: true } : null;
+    if (originOf(req) !== 'same') return null;
+    if (peerSession && isLoopback(addr)) {
+      const session = await Promise.resolve().then(() => peerSession(req)).catch(() => null);
+      if (session) return { actor: String(session), mayDecide: false };
+    }
+    return { actor: 'owner', mayDecide: true };
   }
 
   const clientScriptsVersion = () => { try { return clientScripts.manifest(scriptsDir).version; } catch { return 0; } };

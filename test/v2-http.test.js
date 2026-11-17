@@ -268,8 +268,10 @@ test('caller: the recorded actor is the real caller; approve/deny need mayDecide
   const body = { action_id: p.action_id, sha: SHA_A };
   const post = (verb, caller) => api.handle({ method: 'POST', pathname: `/api/v2/tasks/${id}/${verb}`, readBody: async () => body, caller });
   for (const verb of ['approve', 'deny']) {
-    const r = await post(verb, { actor: 'loopback', mayDecide: false });
-    assert.equal(r.status, 403, verb); assert.equal(r.body.code, 'E_FORBIDDEN');
+    for (const actor of ['loopback', 'agent-1']) {   // a reporter-token caller and a caller resolved to a tmux session
+      const r = await post(verb, { actor, mayDecide: false });
+      assert.equal(r.status, 403, `${verb} ${actor}`); assert.equal(r.body.code, 'E_FORBIDDEN');
+    }
   }
   assert.equal((await store.events(id)).filter((e) => /^approval\./.test(e.kind)).length, 0, 'a session caller wrote nothing');
   const ok = await post('approve', { actor: 'manager:boss', mayDecide: true });
