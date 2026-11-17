@@ -85,6 +85,8 @@ The journal keeps the per-stream check events, not the inventory errors, so a ni
 
 **Pool (2026-11-11): rtsp = loopback smoke only.** Public RTSP on 554 is blocked from codebox and three lab hosts, so no public rtsp source is vetted; a dead public rtsp stream is reported. HLS devices never use this pool.
 
+**The night probes the pool itself (bug-c64fb86c, 2026-11-17).** The pool used to be read only when a stream was down and a replacement was chosen, so a broken pool source showed up nowhere in the night's evidence and every night session re-probed the pool by hand. The run now probes each pool entry on every night and writes it into the report: a `pool` block (`id`, `kind`, `vetted`, `status`, `from`, `url`) next to `streams` and `errors`, and one stdout line (`pool: smoke ok (from vpt-pi4), wowza-bbb timeout (from codebox)`). A loopback entry is probed from the host that runs it (through that host's ssh alias, `RTSP_LOOPBACK_HOSTS`); without an alias it reads `unverified`, never `ok`. The public entries are probed from codebox. **The pool file is still never edited by the nightly**: a candidate that is not reachable from the host that would play it stays unvetted, and a probe that fails is reported, not acted on.
+
 ## Dead HLS channels: restore, else replace from the free lists (owner, 2026-11-11)
 
 `scripts/agent/stream_catalog.py`. The lists (`RTSP_CHANNEL_LISTS`, comma-separated paths or URLs) default to:

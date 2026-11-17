@@ -77,6 +77,23 @@ def candidates(entry, pool, exclude=()):
         yield s
 
 
+def probe_pool(pool, ssh_map, timeout):
+    """Probe the pool's own candidates, so the report says whether the pool still plays (the pool is never edited here).
+
+    A loopback source only exists on the host that runs it: it is probed from there (through that host's ssh alias),
+    the public ones from codebox. Without an alias a loopback source reads 'unverified', never 'ok'."""
+    out = []
+    for s in pool.get('sources', []):
+        ssh, where = None, 'codebox'
+        hosts = [h.strip() for h in (os.environ.get(s.get('hostsEnv') or '') or '').split(',') if h.strip()]
+        if hosts:
+            ssh = ssh_map.get(hosts[0])
+            where = hosts[0] if ssh else f'{hosts[0]} (no ssh alias)'
+        res = rc.check_stream(s['url'], timeout, ssh)
+        out.append({'id': s['id'], 'kind': s.get('kind'), 'vetted': s.get('vetted'), 'status': res['status'], 'from': where, 'url': s['url']})
+    return out
+
+
 def pick_hls(entry, catalog, used_urls, ssh_map, timeout, tries=8, exclude=()):
     """restore (same channel, new URL) else replace (same group, unused on the host); first that plays, probed from the host."""
     ssh = ssh_map.get(entry['host'])
@@ -258,6 +275,7 @@ def run(mode, timeout=10):
     entries, errors, hosts = rc.inventory(rc.parse_pairs(os.environ.get('RTSP_CHECK_SERVERS')), pool)
     results = rc.check_entries(entries, ssh_map, timeout)
     caps = rc.check_captures(entries)  # what the app shows: the tile's snapshot through its server
+    pool_state = probe_pool(pool, ssh_map, timeout)  # does the pool still play? (read-only: the pool is never edited here)
     capture_mode = read_mode('capture-mode')  # the capture-driven repair has its own switch: dry until one clean night
     budget = int(pool.get('maxReplacementsPerNight', 3)) - replaced_today()
     rows = []
@@ -435,7 +453,7 @@ def run(mode, timeout=10):
             journal({'event': 'verify', 'host': e['host'], 'device': e['device'], 'outcome': f"died_again_{outcome}", 'source': s['url'], 'new': s2['url']})
         for e, s, row in installed:
             journal({'event': 'check', 'host': row['host'], 'device': row['device'], 'kind': row['kind'], 'status': row['status'], 'capture': row.get('capture'), 'luma': row.get('luma'), 'action': row['action'], 'source': row['source']})
-    return {'mode': mode, 'streams': rows, 'errors': errors, 'hosts': hosts}
+    return {'mode': mode, 'streams': rows, 'errors': errors, 'hosts': hosts, 'pool': pool_state}
 
 
 def main(argv):
@@ -466,6 +484,8 @@ def main(argv):
     for r in rep['streams']:
         capc[r.get('capture', 'unknown')] = capc.get(r.get('capture', 'unknown'), 0) + 1
     print(f"tile snapshots (what the app shows): {json.dumps(capc)}; capture repairs: {read_mode('capture-mode')}")
+    if rep.get('pool'):
+        print('pool: ' + ', '.join(f"{p['id']} {p['status']} (from {p['from']})" for p in rep['pool']))
     walked = f"{rep['hosts']['walked']} host(s) walked, {rep['hosts']['read']} read"
     if not rep['streams']:
         print('no stream devices found' + (' (inventory errors above)' if rep['errors'] else '') + f' ({walked})')
