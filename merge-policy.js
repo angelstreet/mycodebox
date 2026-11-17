@@ -118,16 +118,13 @@ export const isDocFile = (f) => /\.(?:md|markdown)$/i.test(f) || DOC_NAMES.test(
 const DOC_IMAGE = /^(?:docs\/.*|frontend\/public\/project-pages\/[^/]+)\.(?:png|jpe?g|gif|svg|webp)$/i;
 // Image, video and font files (owner 2026-11-15: the website's 3D Learn cards are 450 WebP frames each). Their added bytes are
 // not text, so the line scan reads none of them and counts them apart (facts.media): they no longer fill the 2 MB scan cap, and
-// a manager approval (--approved-by) lets them merge. Without it they return the request, in one line. Any other binary
+// merge without any approval (owner 2026-11-17: "if i say yes to the agent it must do it without constraint"); they stay
+// listed in facts.media for the journal only. Any other binary
 // (an archive, an executable, a .bin) is still `adds a binary file` with or without approval. A media-named file that git
 // sees as text is scanned like any text file.
 export const MEDIA_EXT = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'mp4', 'webm', 'woff', 'woff2', 'ttf', 'otf'];
 const MEDIA_PATHSPEC = MEDIA_EXT.map((e) => `:(glob)**/*.${e}`);
 const MEDIA_EXCLUDE = MEDIA_EXT.map((e) => `:(exclude,glob)**/*.${e}`);
-export function mediaReason(media) {
-  const n = media.length;
-  return `adds ${n} image/video file${n === 1 ? '' : 's'} (needs --approved-by manager): ${media.slice(0, 3).join(', ')}${n > 3 ? ', ...' : ''}`;
-}
 export const isConvention = (f, conv) => conv.some((c) => f === c || basename(f) === c);
 const SENSITIVE_CONTENT = [
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----/, 'private key'], [/AKIA[0-9A-Z]{16}/, 'cloud access key'], [/ghp_[A-Za-z0-9]{30,}/, 'git host token'],
@@ -651,7 +648,7 @@ export async function gitFacts({ cwd, branch, branchSha = null, target, remote =
 
 export const SENS_TEXT = { secret: 'a secret/credential path', migration: 'a migration', sudoers: 'sudoers', systemd: 'a systemd unit', deploy: 'a CI/deploy/infra path', 'secret-content': 'secret-looking content' };
 // Reasons to escalate; empty = the manager may proceed.
-export function mergeFloor(facts, ev, { optOut = [], conventionFiles = MERGE_DEFAULTS.mergeConventionFiles, approveInfra = false, approveMedia = false, schemaIgnore = [] } = {}) {
+export function mergeFloor(facts, ev, { optOut = [], conventionFiles = MERGE_DEFAULTS.mergeConventionFiles, approveInfra = false, schemaIgnore = [] } = {}) {
   if (!facts) return ['not a git repository or git error'];
   const reasons = [];
   const out = (optOut || []).map(String);
@@ -666,7 +663,6 @@ export function mergeFloor(facts, ev, { optOut = [], conventionFiles = MERGE_DEF
   for (const s of facts.sensitive || []) if (!(approveInfra && s.why === 'deploy')) reasons.push(`touches ${SENS_TEXT[s.why] || 'a sensitive path'}: ${s.file}`);
   if (facts.scanError) reasons.push('diff too large or unreadable to scan');
   for (const f of facts.binary || []) reasons.push(`adds a binary file: ${f}`);
-  if (facts.media?.length && !approveMedia) reasons.push(mediaReason(facts.media));
   for (const r of schemaReasons(facts, { schemaIgnore })) reasons.push(r);
   return reasons;
 }
