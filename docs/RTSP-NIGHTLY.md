@@ -72,7 +72,9 @@ The journal keeps the per-stream check events, not the inventory errors, so a ni
 - Journal `<state>/rtsp-nightly/journal.jsonl` (redacted), daily `report-<date>.json`; `<state>` is `$GHOSTY_STATE_DIR` (default
   `~/.local/state/ghosty`). The report carries `hosts` (`walked`: hosts the servers listed, `read`: hosts whose config
   answered) next to `streams` and `errors`, so a night with no rtsp device says how much was looked at instead of
-  looking like an empty inventory.
+  looking like an empty inventory. A **dry** run writes `report-<date>-dry.json` when the day's live report already exists:
+  a read-only run never destroys the night's evidence, and `rtsp_replace.py` now parses its flags (`--help` prints the usage
+  and exits, an unknown flag is an error and nothing runs).
 - Adding a pool source: probe it from a host that will use it, then set `vetted` to the date. The probe must run on that host: a
   loopback source is only reachable there, so `rtsp_check.py --host <host> <url>` (its ssh alias comes from `RTSP_CHECK_SSH`;
   `--ssh <alias>` names the alias directly) plays it where the host plays it. Without an alias the answer is `unverified`, never `ok`.
@@ -470,6 +472,46 @@ this night and nothing else: no `replace`, no `rolled_back`, no `lease_not_grant
     that was never set up. The 6 `unknown` tiles are the other empty-source devices.
 - The pool was not touched: re-probed from `vpt-pi4` (the host that runs `vpt-rtsp`), `smoke` plays (the only vetted entry) and
   the three public candidates still time out on port 554 from codebox, so nothing new is vetted (bug-c7c2bb0e, still `wontfix`).
+
+### Night of 2026-11-19 (live, run by the nightly session)
+
+103 streams checked, **95 ok, 8 down**, **1 replaced**, 0 rolled back, 0 cameras down, 0 unverified. 15 hosts walked, 15 read,
+**no inventory error** (every server and every host answered the host-config GET). The journal holds 207 `check` events for
+this night (two passes, see below), 1 `replace` and 1 `verify`.
+
+- The 8 down: 8 devices with an empty source (`vpt-nipogi` DEVICE4, 5, 6, 17, 22, 23, 24 and `vpt-pi4` DEVICE2; reported by
+  name, never changed). Nothing else was really down.
+- The 1 replaced: `vpt-nipogi/DEVICE7` ("FR Movie 1 — Cine Thriller by Pluto TV"), a dead HLS channel, was replaced by
+  another channel of the same group and renamed ("FR Movie 1 — Cine 666 by Pluto TV"): full host-config payload, a 0600
+  backup, a read-back diff and a `vpt-stream` restart, all under the host lease. The night verified what it installed 5 min
+  later: the new source still plays.
+- **Two passes, because the first pass's report file was destroyed by a tooling bug of the session's own making.** The first
+  live pass (05:49-05:55 UTC) did the replacement above and wrote the report; a later `rtsp_replace.py --help` call then ran
+  the night **again** in dry mode and overwrote the day's live report with an empty one, because the script looked only for
+  `--mode` and `--apply` and ignored every other flag. The night was therefore run a second time (06:00-06:06 UTC) to write
+  the report again; the second pass changed nothing (the same 8 empty sources, every other stream ok, the replaced channel
+  `ok` with a live tile). The report on disk is the second pass. The script now parses its flags (`--help` prints the usage
+  and exits, an unknown flag is an error and nothing runs) and a **dry** run writes `report-<day>-dry.json` beside the day's
+  live report instead of replacing it.
+- What the app shows (tile snapshots): 95 ok, 1 black, 6 unknown, 1 missing.
+  - **No `multi_audio` tile**: no host runs the old `run_ffmpeg.sh` any more, so no `vpt-stream` restart was needed tonight.
+  - The 1 black is `lenovo-local-low/DEVICE36` ("Low 360p Clip 36"): the tile's snapshot and its live video are dark **and**
+    the clip's own picture is dark too (luma 22), so the black frame is the clip's own, not a dead stream (bug-59664715). The
+    browser confirms it: on hover the tile plays (`readyState` 4, the clock advances 149.2 s → 151.6 s, 640x360, no failed
+    HLS request) and the screenshot shows the clip's own credits frame.
+  - The replaced channel's tile plays in the browser too: `readyState` 4, the clock advances 9.1 s → 13.1 s, 320x180, no
+    failed HLS request; the tile shows the Pluto logo slate the channel plays at that moment (its own picture, a logo card
+    on a dark background — the night read it as a note, "the tile's snapshot was dark but the live video plays (snapshot
+    luma 13, live luma 46)").
+  - The 1 `missing` tile is `vpt-nipogi/DEVICE5`, one of the devices with an empty source; the 6 `unknown` tiles are the other
+    empty-source devices.
+- The pool was not touched: re-probed from `vpt-pi4`, `smoke` plays (the only vetted entry) and the three public candidates
+  still time out on port 554 from codebox, so nothing new is vetted (bug-c7c2bb0e, still `wontfix`).
+- **One observation, not a repair**: the app's tile still shows the *old* title for the renamed device
+  ("FR Movie 1 — Cine Thriller by Pluto TV") while the host's own config (what the nightly writes, and what the UI writes)
+  already holds the new one ("FR Movie 1 — Cine 666 by Pluto TV"). The app's device list comes from the host's heartbeat
+  inventory, not from that config; the rename of 2026-11-15 (`DEVICE31` → "FR Series — TFX (1080p)") did reach the app, so
+  this looks like a refresh lag in the host's device inventory. The tile itself plays (proof above).
 
 ## Private config (not in the repo)
 

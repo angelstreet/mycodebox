@@ -588,3 +588,38 @@ test('a host stream with several audio tracks (the browser player stays black) i
   assert.match(r.stdout, /DEVICE2\s+hls\s+ok -> none\s+ok/);
   assert.equal(w.posts.length, 0);
 });
+
+test('--help runs nothing, an unknown flag is refused, and a dry run never overwrites the live report of the day', async () => {
+  const w = await world({ pool: POOL, devices: {
+    DEVICE1: { ...dev('Ok1', 'rtsp://test.example/good-pub'), DEVICE_MODEL: 'rtsp_video' } } });
+  const day = new Date().toISOString().slice(0, 10);
+  const repDir = path.join(w.state, 'rtsp-nightly');
+  const livePath = path.join(repDir, `report-${day}.json`);
+
+  // --help: the usage, exit 0, and the night does not run (an unknown flag used to be ignored and the
+  // night ran anyway, bug: `--help` ran a dry pass and overwrote the day's live report).
+  const h = await py(REPLACE, ['--help'], w.E);
+  assert.equal(h.code, 0, h.stdout + h.stderr);
+  assert.match(h.stdout, /--mode/, h.stdout);
+  assert.ok(!existsSync(livePath), '--help must not run the night');
+  assert.ok(!existsSync(path.join(repDir, 'journal.jsonl')), '--help must not write the journal');
+
+  // an unknown flag: an error, and still no run
+  const u = await py(REPLACE, ['--mode', 'live', '--nope'], w.E);
+  assert.equal(u.code, 2, u.stdout + u.stderr);
+  assert.ok(!existsSync(livePath), 'an unknown flag must not run the night');
+
+  // the live pass writes the day's report
+  const l = await py(REPLACE, ['--mode', 'live'], w.E);
+  assert.equal(l.code, 0, l.stdout + l.stderr);
+  assert.ok(existsSync(livePath), 'the live pass wrote no report');
+  const live = readFileSync(livePath, 'utf8');
+  assert.equal(JSON.parse(live).mode, 'live');
+
+  // a dry run must not overwrite the day's LIVE report: it gets its own file
+  const d = await py(REPLACE, [], w.E);
+  assert.equal(readFileSync(livePath, 'utf8'), live, 'the dry run overwrote the live report of the day');
+  assert.ok(existsSync(path.join(repDir, `report-${day}-dry.json`)), 'the dry report has no file of its own');
+  assert.equal(JSON.parse(readFileSync(path.join(repDir, `report-${day}-dry.json`), 'utf8')).mode, 'dry');
+  w.close();
+});

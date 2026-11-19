@@ -2,7 +2,7 @@
 """rtsp_replace: the nightly RTSP policy (docs/RTSP-NIGHTLY.md). stdlib only; uses rtsp_check.py.
 
   rtsp_replace.py [--mode dry|live]        check every rtsp device, apply the policy, journal, print the report
-  rtsp_replace.py --apply ENV HOST DEVICE POOL_ID --out FILE   (internal: runs INSIDE the host lease)
+  rtsp_replace.py --apply ENV HOST DEVICE SRC_FILE --out FILE   (internal: runs INSIDE the host lease)
 
 Policy (data: config/rtsp-pool.json); scope: every rtsp_video device and any rtsp:// source:
   ok                          nothing to do
@@ -20,7 +20,7 @@ backup when anything fails. A lease that was refused (the command never ran, not
 died (the host may be half-changed) are two different outcomes in the journal: lease_not_granted / apply_failed.
 Journal: <state>/rtsp-nightly/journal.jsonl, redacted. Default mode is dry: no writes at all.
 """
-import copy, datetime, json, os, subprocess, sys, time
+import argparse, copy, datetime, json, os, subprocess, sys, time
 from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -469,21 +469,39 @@ def run(mode, timeout=10):
     return {'mode': mode, 'streams': rows, 'errors': errors, 'hosts': hosts, 'pool': pool_state}
 
 
+def report_path(day, mode):
+    """Where the day's report goes. A dry run never overwrites the day's LIVE report: a read-only run
+    must not destroy the night's evidence (the report of 2026-11-19 was replaced by an empty dry one
+    this way). A dry run beside a live report gets its own file."""
+    path = os.path.join(STATE, f'report-{day}.json')
+    if mode != 'dry':
+        return path
+    try:
+        with open(path, encoding='utf-8') as f:
+            if json.load(f).get('mode') == 'live':
+                return os.path.join(STATE, f'report-{day}-dry.json')
+    except (OSError, ValueError):
+        pass
+    return path
+
+
 def main(argv):
-    a = list(argv)
-    if '--apply' in a:
-        i = a.index('--apply'); env, host, device, pid = a[i + 1:i + 5]  # pid = the chosen-source JSON file
-        out = a[a.index('--out') + 1]
-        return apply_one(env, host, device, pid, out)
-    mode = os.environ.get('RTSP_NIGHTLY_MODE', 'dry')
-    if '--mode' in a:
-        mode = a[a.index('--mode') + 1]
-    if mode not in ('dry', 'live'):
-        print('mode must be dry or live', file=sys.stderr); return 2
+    # A real parser: an unknown flag used to be ignored and the night ran anyway (bug: `--help` ran a
+    # dry pass and overwrote the day's live report). Now `--help` prints the usage and exits, and an
+    # unknown flag is an error: nothing runs.
+    ap = argparse.ArgumentParser(prog='rtsp_replace.py', description='the nightly RTSP check and replacement policy')
+    ap.add_argument('--mode', choices=('dry', 'live'), default=os.environ.get('RTSP_NIGHTLY_MODE', 'dry'),
+                    help='dry: probe and report only (default); live: apply the policy')
+    ap.add_argument('--apply', nargs=4, metavar=('ENV', 'HOST', 'DEVICE', 'SRC_FILE'), help=argparse.SUPPRESS)
+    ap.add_argument('--out', help=argparse.SUPPRESS)
+    a = ap.parse_args(argv)
+    if a.apply:
+        return apply_one(a.apply[0], a.apply[1], a.apply[2], a.apply[3], a.out)  # pid = the chosen-source JSON file
+    mode = a.mode
     rep = run(mode)
     os.makedirs(STATE, exist_ok=True)
     day = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d')
-    with open(os.path.join(STATE, f'report-{day}.json'), 'w') as f:
+    with open(report_path(day, mode), 'w') as f:
         f.write(rc.redact(json.dumps(rep, indent=2)))
     print(f"mode={mode}\n" + rc.table([{**r, 'status': f"{r['status']} -> {r['action']}"} for r in rep['streams']]) + ''.join(f'\nERROR {e}' for e in rep['errors']))
     bad = [r for r in rep['streams'] if r['status'] not in rc.OK_STATES]
