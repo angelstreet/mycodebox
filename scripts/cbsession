@@ -49,6 +49,31 @@ if [ "$BILL" != sub ]; then
   [ "$PROV" = claude ] || { echo "cbsession: -b applies to -p claude only" >&2; exit 2; }
   [ -s "$KF" ] || { echo "cbsession: billing key $KF not found (one line, chmod 600)" >&2; exit 2; }
 fi
+# Claude account rotation (claude-accounts.js, owner 2026-11-06): a new Claude session starts on the ACTIVE account, like the
+# dashboard's create path does (CLAUDE_CONFIG_DIR + GHOSTY_CLAUDE_ACCOUNT). Without it every session started here ran on the
+# default account and burned its quota while the other seats sat idle (bug-6434d8a9).
+# Only the subscription billing takes an account (an API key is its own billing), and only an account that has a login.
+ACC_ID= ACC_DIR= ACC_EXPORT=
+if [ "$PROV" = claude ] && [ "$BILL" = sub ] && command -v node >/dev/null 2>&1; then
+  ACC="$(node -e '
+    const fs = require("fs"), os = require("os"), path = require("path");
+    const dir = process.env.GHOSTY_STATE_DIR || path.join(os.homedir(), ".local", "state", "ghosty");
+    try {
+      const j = JSON.parse(fs.readFileSync(path.join(dir, "claude-accounts.json"), "utf8"));
+      const a = (j.accounts || []).find((x) => x && x.id === j.active);
+      if (!a || a.id === "default" || !a.configDir) process.exit(0);
+      if (!fs.existsSync(path.join(a.configDir, ".credentials.json"))) process.exit(0);   // no login here: keep the default
+      process.stdout.write(a.id + "\n" + a.configDir);
+    } catch (e) { /* no state file: the default account */ }
+  ' 2>/dev/null || true)"
+  if [ -n "$ACC" ]; then
+    ACC_ID="$(printf '%s\n' "$ACC" | sed -n 1p)"
+    ACC_DIR="$(printf '%s\n' "$ACC" | sed -n 2p)"
+    ACC_EXPORT="
+export CLAUDE_CONFIG_DIR=$(q "$ACC_DIR")
+export GHOSTY_CLAUDE_ACCOUNT=$(q "$ACC_ID")"
+  fi
+fi
 # No workers by default (owner 2026-11-13): a session started by cbsession exports CBSESSION_PARENT (and CBSESSION_WORKERS_OK=1 with -K).
 if [ -n "${CBSESSION_PARENT:-}" ] && [ "${CBSESSION_WORKERS_OK:-}" != 1 ] && [ "$AUTOMATION" = 0 ]; then
   echo "cbsession: refused: session '$CBSESSION_PARENT' was not started with workers allowed (owner 2026-11-13: a session does all the work itself). Do the work yourself; the owner or the brief must say 'workers: allowed' (cbsession -K) first." >&2; exit 2
@@ -291,7 +316,7 @@ esac
 # ~/.local/bin on PATH for every provider: found-bug, integrate, vpt-lease live there (a tmux server started by a service has a bare PATH)
 # VPT_AGENT_NAME = the lease agent name (<host>:<session>, the vpt-lease agent): the virtualpytest MCP entry sends it as X-Agent-Name, so the host
 # lease guard knows which agent drives a device (bug-c6a65805). Same name as the agent's vpt-lease claims.
-printf '#!/usr/bin/env bash\nexport PATH="$HOME/.local/bin:$PATH"\nexport VPT_AGENT_NAME=%s:%s\nexport CBSESSION_PARENT=%s\nexport CBSESSION_WORKERS_OK=%s\ncd %s\n%s\n' "${VPT_AGENT_PREFIX:-$(hostname -s)}" "$NAME" "$NAME" "$([ "$WORKERS" = 1 ] && echo 1 || echo '')" "$(q "$DIR")" "$CMD" > "$L"; chmod +x "$L"
+printf '#!/usr/bin/env bash\nexport PATH="$HOME/.local/bin:$PATH"\nexport VPT_AGENT_NAME=%s:%s\nexport CBSESSION_PARENT=%s\nexport CBSESSION_WORKERS_OK=%s%s\ncd %s\n%s\n' "${VPT_AGENT_PREFIX:-$(hostname -s)}" "$NAME" "$NAME" "$([ "$WORKERS" = 1 ] && echo 1 || echo '')" "$ACC_EXPORT" "$(q "$DIR")" "$CMD" > "$L"; chmod +x "$L"
 if [ "$DRY" = 1 ]; then [ -n "$WTCMD" ] && echo "worktree: $WTCMD"; echo "prompt: $P"; echo "launch: $L"; cat "$L"; exit 0; fi
 
 # Claude: make sure the MCP entries carry the X-Agent-Name header (a no-op once set; best effort, never blocks a start).

@@ -6,6 +6,10 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A session started by cbsession now runs on the active Claude account** — the account rotation only reached the dashboard's create and resume paths, so every session started by `cbsession` (the manager's worker sessions) ran on the default account and burned its quota while the other seats sat idle: the team seats' rate files had not been written for two weeks although one of them was the active account. `cbsession` reads the active account from `claude-accounts.json` and exports the same `CLAUDE_CONFIG_DIR` and `GHOSTY_CLAUDE_ACCOUNT` as the dashboard (bug-6434d8a9) · area: claude-accounts
+
+- **The history of a session loads in the dashboard again** — the pane endpoint refused fewer lines than the server's own pane depth (2000 on this host), so the dashboard's first request (1000 lines) answered 400 and the history of a session never loaded; the floor is now the 1000 lines the dashboard asks for (bug-4f9afc93) · area: server
+
 - **A swapped session is not swapped again, and the owner hears it when every account is used up** — the first live swap (2026-11-19) moved the session to the next account and then moved it once more: the resumed pane replays the whole conversation, so the old "You've hit your weekly limit" sat in the tail again, the tick read it as a new stop, marked the fresh account used up and left the session with no account at all. A limit stop now counts only when it is the agent's last output, so the replay is not a stop; and the notice to the owner ("every Claude account is used up") was never delivered because the push feed item is not a promise and the `.catch()` on it threw instead · area: claude-accounts
 
 - Merge evaluation no longer blocks a branch that deletes or edits prose docs named after credentials or sudoers, and scans only added lines, so a 670-file deletion is readable · area: merge-policy

@@ -1282,7 +1282,10 @@ other conversation data from `~/.claude`, so a conversation resumes on any accou
 sessions; the login (`.credentials.json`, `.claude.json`) is never linked, read or copied. New Claude sessions, resumes
 and crash resumes start as `CLAUDE_CONFIG_DIR=<dir> GHOSTY_CLAUDE_ACCOUNT=<id> claude ...` on the **active** account:
 the first one in list order whose 5 h and weekly windows are under 95 % and that carries no limit mark (list order is
-the preference, so new sessions go back to the first account once its window resets). The status-line script writes
+the preference, so new sessions go back to the first account once its window resets). A session started by
+`scripts/cbsession` reads the same account from `$GHOSTY_STATE_DIR/claude-accounts.json` and exports the same two
+variables (a session on the subscription billing only; an API key is its own billing, and an account without a login is
+not used). The status-line script writes
 each account's windows to `claude-rate-limits.<id>.json` (the default keeps `claude-rate-limits.json`); the `claude`
 quota plan shows the active account and lists all of them. A Claude pane whose tail shows a usage-limit stop
 ("usage limit reached", "5-hour / weekly limit reached", "You've hit your limit", "You've hit your weekly limit · resets Nov 21, 2pm (UTC)")
