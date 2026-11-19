@@ -25,8 +25,11 @@ export const SHARED = ['settings.json', 'CLAUDE.md', 'projects', 'sessions', 'to
 
 // The pane's last lines say Claude stopped on a usage limit. Claude Code has printed several forms over time:
 // "Claude usage limit reached. Your limit will reset at 5pm", "5-hour limit reached ∙ resets 3pm",
-// "Weekly limit reached", "You've hit your limit · resets 4pm".
-const LIMIT_RE = /\b(?:claude(?: ai)? usage limit reached|usage limit reached|(?:5-hour|weekly|session|opus(?: weekly)?|sonnet(?: weekly)?) limit reached|you(?:'|’)ve hit your (?:usage )?limit)\b/i;
+// "Weekly limit reached", "You've hit your limit · resets 4pm", "You've hit your weekly limit · resets Nov 21, 2pm (UTC)".
+// The "hit your ... limit" form names the window or the model before "limit" ("weekly", "usage", "Opus", "5-hour"), so those
+// words belong to the stop: without them the weekly stop of Claude Code 2.x was never seen and no account was swapped
+// (owner, 2026-11-19: sessions sat on the weekly limit for days).
+const LIMIT_RE = /\b(?:claude(?: ai)? usage limit reached|usage limit reached|(?:5-hour|weekly|session|opus(?: weekly)?|sonnet(?: weekly)?) limit reached|you(?:'|’)ve hit your(?: [\w-]+)* limit)\b/i;
 const TAIL = 12;
 export function scanClaudeLimit(lines) {
   const tail = (Array.isArray(lines) ? lines : String(lines || '').split('\n')).map((x) => String(x ?? '')).filter((l) => l.trim()).slice(-TAIL);

@@ -31,6 +31,20 @@ test('scanClaudeLimit: the limit stop forms Claude Code prints, not ordinary tex
   assert.ok(!scanClaudeLimit(['Claude usage limit reached', ...Array.from({ length: 20 }, (_, i) => `line ${i}`)]));
 });
 
+test('scanClaudeLimit: the weekly stop of Claude Code 2.x, with the window or the model named', () => {
+  // the stop that kept sessions parked for days (owner, 2026-11-19): the pane said this, the swap never fired
+  assert.ok(scanClaudeLimit(["  ⎿  You've hit your weekly limit · resets Nov 21, 2pm (UTC)"]));
+  assert.ok(scanClaudeLimit(['You’ve hit your weekly limit · resets Nov 21, 2pm (UTC)']));   // the curly apostrophe
+  assert.ok(scanClaudeLimit(["You've hit your Opus limit"]));
+  assert.ok(scanClaudeLimit(["You've hit your usage limit"]));
+  assert.ok(scanClaudeLimit(["You've hit your 5-hour limit"]));
+  // the stop is still seen when the pane has moved on a few lines
+  assert.ok(scanClaudeLimit(['✻ Brewed for 6s · done 8:04 AM', "  ⎿  You've hit your weekly limit · resets Nov 21, 2pm (UTC)", '❯ ']));
+  // ordinary text that mentions a limit is not a stop
+  assert.ok(!scanClaudeLimit(['we set the rate limit to 40 requests per minute', 'the limit is fine']));
+  assert.ok(!scanClaudeLimit(['the weekly plan has a usage limit of 500 messages', 'nothing is stopped']));
+});
+
 test('accountState: full window or a live mark = used up; expired window and no reading = usable', () => {
   assert.equal(accountState({ windows: windowsOf(rl(LIMIT_PCT, 10), NOW), now: NOW }).exhausted, true);
   assert.equal(accountState({ windows: windowsOf(rl(50, 99), NOW), now: NOW }).exhausted, true);

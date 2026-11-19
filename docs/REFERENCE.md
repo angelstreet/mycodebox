@@ -1261,8 +1261,9 @@ never holds a session. The quota sheet shows each plan's subscription and "unlim
 
 **Usage-limit resume (`quota-resume.js`, owner 2026-10-27).** A session stopped on a provider usage limit (MiniMax
 `× Error  Usage limit reached. Code: 42212 ... Your prompt is preserved.`, the prompt left in the input box) gets ONE
-Enter once its plan's window has reset. Every poll tick, for each session whose pane tail ends on that error with the
-"prompt is preserved" line: only panes whose agent field is mcode/minimax are read (a claude pane quoting the phrases never matches; only the last 8 non-empty lines count), mapped to the `minimax` plan, and the plan must be
+Enter once its plan's window has reset. The stop is read as "usage limit reached" or as the agent's "You've hit your usage limit"
+(`docs/v2/RUNTIME_FORMATS.md`: the words naming the pool belong to the stop). Every poll tick, for each session whose pane tail
+ends on that error with the "prompt is preserved" line: only panes whose agent field is mcode/minimax are read (a claude pane quoting the phrases never matches; only the last 8 non-empty lines count), mapped to the `minimax` plan, and the plan must be
 readable (not `stale`, read within 15 min) with every window under 95 % or already reset. The Enter goes through the
 guarded send path (`by: 'quota-resume'`). Not resumed: a manager session (unless `quotaResumeManagers: true`), a paused or
 held session, a draft typed after the stop (the preserved prompt itself is not a draft), a closed session.
@@ -1284,8 +1285,8 @@ the first one in list order whose 5 h and weekly windows are under 95 % and that
 the preference, so new sessions go back to the first account once its window resets). The status-line script writes
 each account's windows to `claude-rate-limits.<id>.json` (the default keeps `claude-rate-limits.json`); the `claude`
 quota plan shows the active account and lists all of them. A Claude pane whose tail shows a usage-limit stop
-("usage limit reached", "5-hour / weekly limit reached", "You've hit your limit") marks its account used up (until the
-window's reset, else 1 h) and, with `autoSwapSessions` on (default) and another account free, is parked (Escape first;
+("usage limit reached", "5-hour / weekly limit reached", "You've hit your limit", "You've hit your weekly limit · resets Nov 21, 2pm (UTC)")
+marks its account used up (until the window's reset, else 1 h) and, with `autoSwapSessions` on (default) and another account free, is parked (Escape first;
 the limit stop waives the "waiting" and pending-question checks, never the lease, job or attached-terminal ones) and
 resumed on that account, then gets `continue` after 15 s. A manager or paused session, a failed park, or no account
 left is pushed to the owner instead. Each row shows its account; the row's switch button moves a session by hand.

@@ -136,6 +136,9 @@ test('limitStopNote: a Claude limit stop says when it resets, other stops say no
   assert.equal(limitStopNote({ case: 'error', question: "You've hit your limit · resets 2pm (UTC)" }), 'stopped: Claude limit, resets 2pm (UTC)');
   assert.equal(limitStopNote({ case: 'error', question: 'Claude usage limit reached | resets Oct 24, 2pm' }), 'stopped: Claude limit, resets Oct 24, 2pm');
   assert.equal(limitStopNote({ case: 'error', question: "You've hit your limit" }), 'stopped: Claude limit');
+  // the weekly stop of Claude Code 2.x names the window before "limit" (owner, 2026-11-19)
+  assert.equal(limitStopNote({ case: 'error', question: "You've hit your weekly limit · resets Nov 21, 2pm (UTC)" }), 'stopped: Claude limit, resets Nov 21, 2pm (UTC)');
+  assert.equal(limitStopNote({ case: 'error', question: "You've hit your Opus limit" }), 'stopped: Claude limit');
   assert.equal(limitStopNote({ case: 'error', question: 'API Error: 500' }), '');
   assert.equal(limitStopNote({ case: 'continue', question: "You've hit your limit" }), '');
   assert.equal(limitStopNote(null), '');
