@@ -32,6 +32,9 @@ SETTLE = int(os.environ.get('RTSP_SETTLE_SECONDS', '15'))
 # The night verifies what it installed before it ends: a source can die minutes after it was put in place (a CDN
 # whose signed segments expire), and the channel would then stay dead until the next night (bug-80678895).
 INSTALL_VERIFY = int(os.environ.get('RTSP_INSTALL_VERIFY_SECONDS', '300'))
+# The host reports its device list (with the device names) every 30 s. A renamed device shows its new name
+# in the app only once the host has reported it, so the night waits for that report (bug-ee21b77c).
+TITLE_CHECK = int(os.environ.get('RTSP_TITLE_CHECK_SECONDS', '90'))
 AGENT = 'codebox:rtsp-nightly'
 
 
@@ -245,6 +248,43 @@ def lease_cmd(env, host, device, pool_id, out, max_wait=None):
             sys.executable, os.path.abspath(__file__), '--apply', env, host, device, pool_id, '--out', out]  # env = the server label of RTSP_CHECK_SERVERS
 
 
+def same_title(a, b):
+    """Two device titles are the same when they only differ in case or surrounding spaces."""
+    return (a or '').strip().casefold() == (b or '').strip().casefold()
+
+
+def app_device_name(server, host, device, expected=None, timeout=None):
+    """The title the app shows for a device.
+
+    The app's device list comes from the host's heartbeat: the host reports its devices with their names
+    every 30 s and the server serves that list. A device renamed in the host config shows under its new name
+    only once the host reports it, so the night polls until the name shows up (or the timeout is over).
+    -> the name the app shows, None when the host never reported the device.
+    """
+    timeout = TITLE_CHECK if timeout is None else timeout
+    try:
+        token = rc.server_token()
+    except Exception:
+        return None
+    deadline = time.time() + max(0, timeout)
+    while True:
+        name = None
+        try:
+            for h in rc.api(server, '/server/system/getAllHosts', token).get('hosts') or []:
+                if h.get('host_name') != host:
+                    continue
+                for d in h.get('devices') or []:
+                    if str(d.get('device_id') or '').lower() == device.lower():
+                        name = d.get('device_name')
+        except Exception:
+            pass
+        if name and (expected is None or same_title(name, expected)):
+            return name
+        if time.time() >= deadline:
+            return name
+        time.sleep(10)
+
+
 def apply_with_lease(e, s, max_wait=None):
     """Run the apply step inside the host lease. -> (res, detail, cli_missing). res is None when the lease was not
     granted (nothing was touched) or the apply step wrote no result. detail is the whole output (the journal
@@ -447,6 +487,20 @@ def run(mode, timeout=10):
             if st in ('ok', 'unverified', 'frozen'):
                 row['action'] += ' (the new source still plays)'
                 journal({'event': 'verify', 'host': e['host'], 'device': e['device'], 'outcome': 'plays', 'source': s['url']})
+                # The title the app shows for the device comes from the host's device list: a renamed
+                # device is renamed on the tile only once the host has reported the new name
+                # (bug-ee21b77c). Only a device the night really renamed is checked.
+                new_title = (s.get('name') or '').strip()
+                if new_title and not same_title(new_title, e.get('name')):
+                    shown = app_device_name(e['server'], e['host'], e['device'], expected=new_title)
+                    row['app_title'] = shown
+                    if shown and same_title(shown, new_title):
+                        row['action'] += f" (the app shows the new title {shown!r})"
+                        journal({'event': 'verify', 'host': e['host'], 'device': e['device'], 'outcome': 'title_updated', 'name': new_title})
+                    else:
+                        row['action'] += (f" (the app still shows the title {shown!r})" if shown
+                                          else " (the app shows no title for the device)")
+                        journal({'event': 'verify', 'host': e['host'], 'device': e['device'], 'outcome': 'title_stale', 'name': new_title, 'shown': shown})
                 continue
             # the source the night installed is dead again: take the next candidate that plays
             if budget <= 0:

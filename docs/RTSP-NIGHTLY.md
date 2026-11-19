@@ -69,6 +69,12 @@ The journal keeps the per-stream check events, not the inventory errors, so a ni
   that still plays is left alone (the row says "the new source still plays"), a source that is dead is **replaced again** with the
   next candidate that plays (the dead one is never taken again), and the budget still bounds the night. The journal keeps a
   `verify` event per installed source (`plays`, `died_again_replaced`, `died_again`).
+- **The title the app shows is checked too** (`RTSP_TITLE_CHECK_SECONDS`, 90 s): the app's device list comes from the host's
+  heartbeat (the host reports its devices with their names every 30 s), so a device the night renamed shows under its new name
+  only once the host has reported it. After the install check the night reads the title the app shows for the device it renamed
+  and says so in the row ("the app shows the new title …" / "the app still shows the title …"), the report carries it as
+  `app_title` and the journal keeps a `verify` event (`title_updated`, `title_stale`). A device the night did not rename is not
+  checked: its title did not change (bug-ee21b77c, 2026-11-19).
 - Journal `<state>/rtsp-nightly/journal.jsonl` (redacted), daily `report-<date>.json`; `<state>` is `$GHOSTY_STATE_DIR` (default
   `~/.local/state/ghosty`). The report carries `hosts` (`walked`: hosts the servers listed, `read`: hosts whose config
   answered) next to `streams` and `errors`, so a night with no rtsp device says how much was looked at instead of
@@ -516,13 +522,19 @@ this night (two passes, see below), 1 `replace` and 1 `verify`.
   the next ping carries the new name; VirtualPyTest main `9c29d008c2be`, merged 2026-11-19). **Verified live** on the host
   where the rename happened: it was deployed with the fix, a rename through the host config reached the app 25 s later (the
   next ping), and the restore came back with it. The other hosts pick the fix up at their next deploy.
+- **The nightly now checks the title the app shows** (idea bug-ee21b77c, shipped after that night): when the night renames a
+  device it reads back the title the app shows for it and says so in the row ("the app shows the new title …" or "the app still
+  shows the title …"), with `app_title` in the report and a `verify` event (`title_updated` / `title_stale`) in the journal. The
+  night of 2026-11-19 ran before the check existed, so the title of the renamed device was read by hand instead: the app shows
+  "FR Movie 1 — Cine 666 by Pluto TV" for `vpt-nipogi/device7` (the new title), which is what the check reads today.
 
 ## Private config (not in the repo)
 
 `~/.config/rtsp-nightly/env`, sourced by the session: `RTSP_CHECK_SERVERS="<label>=<server url>,..."` (one per backend server), `RTSP_LEASE_ENV` (the `vpt-lease` environment of the hosts, default
 `node1-vpt`: it lists the hosts of every server), `RTSP_CHECK_SSH="<host>=<ssh alias>,..."`, `RTSP_LOOPBACK_HOSTS="<host>,..."` (where the `smoke` source exists), optional `RTSP_CHECK_TOKEN_CMD`
 (default `~/virtualpytest/scripts/agent/auto_sign_token.sh`), `RTSP_POOL_FILE`, `RTSP_SETTLE_SECONDS`, `RTSP_LEASE_MAX_WAIT` (5 min: the first wait for a
-host lease), `RTSP_LEASE_RETRY_MAX_WAIT` (20 min: the end-of-night retry of a repair the first wait did not get), `RTSP_INSTALL_VERIFY_SECONDS` (5 min: the wait before the night verifies what it installed).
+host lease), `RTSP_LEASE_RETRY_MAX_WAIT` (20 min: the end-of-night retry of a repair the first wait did not get), `RTSP_INSTALL_VERIFY_SECONDS` (5 min: the wait before the night verifies what it installed),
+`RTSP_TITLE_CHECK_SECONDS` (90 s: the wait for the host to report the new name of a renamed device).
 
 `RTSP_CHECK_SSH` is what makes the pool usable: a loopback candidate is skipped without an ssh alias to the host that runs it
 (`unverified`, never `ok`), so with it unset every down stream is only reported. The live path also needs `vpt-lease` on the PATH of

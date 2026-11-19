@@ -80,7 +80,7 @@ test('rtsp_check: --host probes a loopback source from that host (alias from RTS
 });
 
 // ---- the replacement run ----
-async function world({ devices, pool, leaseBusy = false, leaseMissing = false, leaseBusyFirst = false, leaseGranted = false, leaseGrantedDead = false, hostConfigFails = false, brokenAfterSave = false, flaky502 = null, snapshots = {} }) {
+async function world({ devices, pool, leaseBusy = false, leaseMissing = false, leaseBusyFirst = false, leaseGranted = false, leaseGrantedDead = false, hostConfigFails = false, brokenAfterSave = false, flaky502 = null, snapshots = {}, appTitles = null }) {
   const { dir, env } = fakes();
   const posts = []; const restarts = []; let reads = 0;
   const server = http.createServer((req, res) => {
@@ -88,7 +88,8 @@ async function world({ devices, pool, leaseBusy = false, leaseMissing = false, l
       const u = new URL(req.url, 'http://x'); const send = (o) => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(o)); };
       if (u.pathname === '/server/system/getAllHosts') {
         if (flaky502 && !flaky502.seen) { flaky502.seen = true; res.statusCode = 502; return send({}); } // one proxy blip
-        return send({ hosts: [{ host_name: 'h1' }] });
+        // appTitles: the device names the app shows for the host (the host reports them with its heartbeat)
+        return send({ hosts: [{ host_name: 'h1', devices: appTitles || [] }] });
       }
       if (u.pathname === '/server/settings/host-config' && req.method === 'GET') {
         // hostConfigFails: the inventory read (1st) succeeds, the apply step's read fails: the lease was granted,
@@ -147,7 +148,7 @@ async function world({ devices, pool, leaseBusy = false, leaseMissing = false, l
   const E = { ...env, PATH: pathV, GHOSTY_STATE_DIR: state, RTSP_POOL_FILE: poolFile, RTSP_CHECK_TOKEN_CMD: path.join(dir, 'tok'),
     RTSP_CHECK_SERVERS: `envA=http://127.0.0.1:${server.address().port}`, RTSP_SETTLE_SECONDS: '0', RTSP_CONFIRM_SECONDS: '0', RTSP_API_RETRY_SECONDS: '0', RTSP_BLACK_RESAMPLE_SECONDS: '0',
     RTSP_SOURCE_LUMA_RESAMPLE_SECONDS: '0', RTSP_CHECK_SSH: 'h1=local', RTSP_LOOPBACK_HOSTS: 'h1',
-    RTSP_INSTALL_VERIFY_SECONDS: '0' };  // the night verifies what it installed: no wait in the tests
+    RTSP_INSTALL_VERIFY_SECONDS: '0', RTSP_TITLE_CHECK_SECONDS: '0' };  // the night verifies what it installed: no wait in the tests
   // the ssh alias must not run ssh in tests: the probe goes through a fake ssh that runs the command locally
   sh(dir, 'ssh', 'shift 5 2>/dev/null; eval "$*"');
   return { E, state, posts, restarts, devices, close: () => server.close() };
@@ -340,6 +341,48 @@ test('a dead HLS channel is restored (same channel, new URL) or replaced (same g
   assert.ok(!/DEVICE5/.test(r.stdout));
   assert.equal(w.posts.length, 2);
   for (const pst of w.posts) assert.equal(Object.keys(pst.devices).length, 7); // full payload every time
+});
+
+test('a renamed device shows its new title in the app once the host has reported it (bug-ee21b77c)', async () => {
+  // The nightly renames the device when it puts another channel of the same group in place. The app shows the
+  // device names the host reports, so the night checks that the new title really shows up (and says so).
+  const w = await world({ pool: POOL, appTitles: [{ device_id: 'device1', device_name: 'FR Music 1 — Other FM (720p)' }], devices: {
+    DEVICE1: { ...dev('FR Music 1 — Gone FM', 'https://cdn.example/dead/gone.m3u8'), DEVICE_MODEL: 'rtsp_video' } } });
+  const dir = path.dirname(w.E.RTSP_POOL_FILE);
+  const inf = (name, group, url) => `#EXTINF:-1 tvg-id="${name.replace(/\W/g, '')}.fr" group-title="${group}",${name}\n${url}\n`;
+  writeFileSync(path.join(dir, 'repo.m3u'), '#EXTM3U\n' + inf('Gone FM (720p)', 'Music', 'https://cdn.example/dead/gone.m3u8')
+    + inf('Other FM (720p)', 'Music', 'https://cdn.example/good/other.m3u8'));
+  w.E.RTSP_CHANNEL_LISTS = path.join(dir, 'repo.m3u');
+  const r = await py(REPLACE, ['--mode', 'live'], w.E);
+  const day = new Date().toISOString().slice(0, 10);
+  const rep = JSON.parse(readFileSync(path.join(w.state, 'rtsp-nightly', `report-${day}.json`), 'utf8'));
+  w.close();
+  assert.match(r.stdout, /the app shows the new title 'FR Music 1 — Other FM \(720p\)'/, r.stdout);
+  const one = rep.streams.find((s) => s.device === 'DEVICE1');
+  assert.equal(one.app_title, 'FR Music 1 — Other FM (720p)', 'the report carries the title the app shows');
+  assert.match(readFileSync(path.join(w.state, 'rtsp-nightly', 'journal.jsonl'), 'utf8'), /"outcome": "title_updated"/);
+});
+
+test('a renamed device whose title the app still shows with the old name is reported, not hidden (bug-ee21b77c)', async () => {
+  // The host has not reported the new name yet (or never will): the night says which title the app shows.
+  const w = await world({ pool: POOL, appTitles: [{ device_id: 'device1', device_name: 'FR Music 1 — Gone FM' }], devices: {
+    DEVICE1: { ...dev('FR Music 1 — Gone FM', 'https://cdn.example/dead/gone.m3u8'), DEVICE_MODEL: 'rtsp_video' } } });
+  const dir = path.dirname(w.E.RTSP_POOL_FILE);
+  const inf = (name, group, url) => `#EXTINF:-1 tvg-id="${name.replace(/\W/g, '')}.fr" group-title="${group}",${name}\n${url}\n`;
+  writeFileSync(path.join(dir, 'repo.m3u'), '#EXTM3U\n' + inf('Gone FM (720p)', 'Music', 'https://cdn.example/dead/gone.m3u8')
+    + inf('Other FM (720p)', 'Music', 'https://cdn.example/good/other.m3u8'));
+  w.E.RTSP_CHANNEL_LISTS = path.join(dir, 'repo.m3u');
+  const r = await py(REPLACE, ['--mode', 'live'], w.E);
+  const day = new Date().toISOString().slice(0, 10);
+  const rep = JSON.parse(readFileSync(path.join(w.state, 'rtsp-nightly', `report-${day}.json`), 'utf8'));
+  w.close();
+  assert.match(r.stdout, /the app still shows the title 'FR Music 1 — Gone FM'/, r.stdout);
+  assert.doesNotMatch(r.stdout, /the app shows the new title/, r.stdout);
+  const one = rep.streams.find((s) => s.device === 'DEVICE1');
+  assert.equal(one.app_title, 'FR Music 1 — Gone FM', 'the report carries the title the app shows');
+  const j = readFileSync(path.join(w.state, 'rtsp-nightly', 'journal.jsonl'), 'utf8');
+  assert.match(j, /"outcome": "title_stale"/);
+  assert.match(j, /"shown": "FR Music 1 — Gone FM"/);
 });
 
 test('the pool file never holds credentials and only vetted entries are replacement candidates', () => {

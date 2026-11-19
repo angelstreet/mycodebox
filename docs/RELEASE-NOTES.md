@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The nightly checks the title the app shows for a device it renamed** — the app's device list comes from the host's heartbeat (the host reports its devices with their names every 30 s), so a device renamed in the host config shows under its new name only once the host has reported it: the night of 2026-11-19 repaired `vpt-nipogi/DEVICE7` and the app kept the old channel title for it, which was filed as an idea (bug-ee21b77c). The night now reads the title the app shows for the device it renamed and says so in the row ("the app shows the new title …" / "the app still shows the title …"), with `app_title` in the report and a `verify` event (`title_updated` / `title_stale`) in the journal · area: rtsp-nightly
+
 - **The nightly reads its own flags, and a dry run cannot overwrite the day's live report** — `rtsp_replace.py` looked only for `--mode` and `--apply` and ignored every other flag, so `--help` started a full dry pass of the night; that pass then wrote the day's `report-<date>.json` with an empty one, and the live report of 2026-11-19 was gone (the night had to run a second time to write it again). The script now parses its flags (`--help` prints the usage and exits, an unknown flag is an error and nothing runs), and a dry run writes `report-<date>-dry.json` beside the day's live report instead of replacing it · area: rtsp-nightly
 
 - **Quota alerts under 95% and refused self-approvals no longer wake the manager alone** — both are deferred like disk alerts (they ride with the next real event); the wake replay now counts deferred events as delivered later, not lost. Replay of 2026-11-11: 410 to 347 wakes, 72.9% to 71.2% no-op, 0 lost actions · area: manager
