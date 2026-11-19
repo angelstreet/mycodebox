@@ -549,6 +549,9 @@ that runs `scripts/agent/rtsp_replace.py`: every rtsp `DEVICE<n>_VIDEO` is probe
 an IP camera is only reported. Default mode `dry`; `<state>/rtsp-nightly/mode` = `live` is the manager's switch. The script parses
 its flags (`--help` prints the usage and exits, an unknown flag is an error and nothing runs) and a **dry** run writes
 `report-<date>-dry.json` beside the day's live report instead of replacing it, so a read-only run never destroys the night's evidence.
+After it installed a replacement it also reads back the title the app shows for the device it renamed
+(`/server/system/getAllHosts` -> `device_name`, the host's heartbeat carries it): the row says "the app shows the new title …" or
+"the app still shows the title …", the report carries `app_title` and the journal a `verify` event (`title_updated` / `title_stale`).
 The report also
 carries the pool's own probe status (a `pool` block, one row per entry: `id`, `vetted`, `status`, the vantage it was probed from),
 so a broken pool source is visible in the night's evidence without a hand probe; the pool file itself is never edited by the
