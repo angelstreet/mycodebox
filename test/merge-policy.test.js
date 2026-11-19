@@ -787,3 +787,21 @@ test('migrationAdditive: a file that calls a function it creates, while applying
   assert.equal(migrationAdditive(f, [fn, 'ALTER TABLE t ADD CONSTRAINT k CHECK (fx() > c);']).additive, false);
   assert.equal(migrationAdditive(f, [fn, 'CREATE TABLE t (c int);', 'CREATE TRIGGER g BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION fx();']).additive, true, 'a trigger wiring is unchanged');
 });
+test('prose docs named after credentials/sudoers are no floor; deleting 700 of them scans fine (untrack-docs-mirror)', async () => {
+  const { sensitivePath } = await import('../merge-policy.js');
+  for (const f of ['frontend/public/docs/bugs/BUG-0051-live-credentials-committed-in-tree.md', 'frontend/public/docs/bugs/BUG-0522-x-sudoers.md', 'docs/password-policy.txt', 'docs/credentials.html', 'docs/secrets.rst']) assert.equal(sensitivePath(f), null, f);
+  for (const f of ['credentials.yaml', 'secrets.json', '.env', 'certs/a.pem', 'a.key']) assert.equal(sensitivePath(f), 'secret', f);
+  for (const f of ['etc/sudoers.d/x', 'sudoers.d/ops', 'ops/ghosty.sudoers', 'etc/sudoers']) assert.equal(sensitivePath(f), 'sudoers', f);
+  // real git: a branch that only deletes many big docs is scannable and clean
+  const docs = {};
+  for (let i = 0; i < 60; i++) docs[`pub/docs/bugs/BUG-${i}-credentials-sudoers.md`] = 'line of text\n'.repeat(4000);
+  const repo = makeRepo({ files: { 'src.js': 'export const a = 1;\n' }, base: { 'src.js': 'export const a = 0;\n', ...docs } });
+  git(repo, 'rm', '-q', '-r', 'pub'); git(repo, 'commit', '-q', '-m', 'untrack');
+  const g = await gitFacts({ cwd: repo, branch: 'feat' });
+  assert.equal(g.scanError, null);
+  assert.deepEqual(g.sensitive, []);
+  // a doc ADDING a literal key-looking secret still blocks
+  const fake = 'AKIA' + 'B'.repeat(16);
+  const r2 = makeRepo({ files: { 'docs/bugs/BUG-1-credentials.md': `key ${fake}\n` } });
+  assert.deepEqual((await gitFacts({ cwd: r2, branch: 'feat' })).sensitive.map((s) => s.why), ['secret-content']);
+});
