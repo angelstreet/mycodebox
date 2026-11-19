@@ -513,8 +513,9 @@ this night (two passes, see below), 1 `replace` and 1 `verify`.
   inventory, not from that config; the rename of 2026-11-15 (`DEVICE31` → "FR Series — TFX (1080p)") did reach the app, so
   this looks like a refresh lag in the host's device inventory. The tile itself plays (proof above). Filed as an idea for
   the VirtualPyTest side: bug-b1938328 — **fixed since** (the host now refreshes the devices it knows after a config save, so
-  the next ping carries the new name; VirtualPyTest main `9c29d008c2be`, merged 2026-11-19). The lab hosts pick the fix up at
-  their next deploy: they still run a 2026-11-08 build.
+  the next ping carries the new name; VirtualPyTest main `9c29d008c2be`, merged 2026-11-19). **Verified live** on the host
+  where the rename happened: it was deployed with the fix, a rename through the host config reached the app 25 s later (the
+  next ping), and the restore came back with it. The other hosts pick the fix up at their next deploy.
 
 ## Private config (not in the repo)
 
