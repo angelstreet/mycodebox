@@ -511,7 +511,8 @@ this night (two passes, see below), 1 `replace` and 1 `verify`.
   ("FR Movie 1 — Cine Thriller by Pluto TV") while the host's own config (what the nightly writes, and what the UI writes)
   already holds the new one ("FR Movie 1 — Cine 666 by Pluto TV"). The app's device list comes from the host's heartbeat
   inventory, not from that config; the rename of 2026-11-15 (`DEVICE31` → "FR Series — TFX (1080p)") did reach the app, so
-  this looks like a refresh lag in the host's device inventory. The tile itself plays (proof above).
+  this looks like a refresh lag in the host's device inventory. The tile itself plays (proof above). Filed as an idea for
+  the VirtualPyTest side: bug-b1938328.
 
 ## Private config (not in the repo)
 
