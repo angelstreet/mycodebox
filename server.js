@@ -2124,7 +2124,7 @@ async function claudeAccountsRefresh() {
   quota.poll().catch(() => {});   // the `claude` plan follows the active account: show the switch now, not at the next minute
   const from = claudeAccounts.byId(r.from), to = claudeAccounts.byId(r.to), st = claudeAccounts.states()[r.from];
   logEvent({ type: 'claude-account-active', from: r.from, to: r.to, why: st?.why || null });
-  await push.record({ title: `New Claude sessions now use ${to?.label || r.to}`, body: st?.exhausted ? `${from?.label || r.from}: ${st.why}` : `${from?.label || r.from} has headroom again`, url: '/', tag: 'claude-account' }).catch(() => {});
+  push.record({ title: `New Claude sessions now use ${to?.label || r.to}`, body: st?.exhausted ? `${from?.label || r.from}: ${st.why}` : `${from?.label || r.from} has headroom again`, url: '/', tag: 'claude-account' });
   return r;
 }
 // Park the Claude session and resume the same conversation on `account`, then say "continue" (the last prompt hit the limit).
@@ -2159,14 +2159,14 @@ async function claudeLimitTick(status) {
     const next = claudeAccounts.nextFor(acct);
     const label = (id) => claudeAccounts.byId(id)?.label || id;
     const url = `/?s=${encodeURIComponent(name)}`;
-    if (!next) { await push.record({ title: `Every Claude account is used up: ${name} waits`, body: `${label(acct)} hit its limit and no other account has headroom`, url, tag: 'claude-account' }).catch(() => {}); continue; }
+    if (!next) { push.record({ title: `Every Claude account is used up: ${name} waits`, body: `${label(acct)} hit its limit and no other account has headroom`, url, tag: 'claude-account' }); continue; }
     const why = !claudeAccounts.config().autoSwapSessions ? 'automatic switch is off' : managers.has(name) ? 'manager session' : sessionMeta.isPaused(name) ? 'paused' : null;
-    if (why) { await push.record({ title: `${name} hit the ${label(acct)} limit`, body: `${label(next)} has headroom; not switched (${why}). Use "Switch account" on the card.`, url, tag: 'claude-account' }).catch(() => {}); continue; }
+    if (why) { push.record({ title: `${name} hit the ${label(acct)} limit`, body: `${label(next)} has headroom; not switched (${why}). Use "Switch account" on the card.`, url, tag: 'claude-account' }); continue; }
     try {
       await swapClaudeAccount(name, next, 'claude-accounts', { limitStop: true });
       await managerEvents.record({ key: `health:claude-account-swap:${name}`, kind: 'health', title: `session moved to ${label(next)}: ${name}`, body: `${label(acct)} hit its usage limit; same conversation resumed on ${label(next)}` });
     } catch (e) {
-      await push.record({ title: `${name} hit the ${label(acct)} limit, switch failed`, body: `to ${label(next)}: ${String(e.message).slice(0, 250)}`, url, tag: 'claude-account' }).catch(() => {});
+      push.record({ title: `${name} hit the ${label(acct)} limit, switch failed`, body: `to ${label(next)}: ${String(e.message).slice(0, 250)}`, url, tag: 'claude-account' });
     }
   }
 }

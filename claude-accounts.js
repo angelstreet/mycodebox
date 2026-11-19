@@ -30,10 +30,20 @@ export const SHARED = ['settings.json', 'CLAUDE.md', 'projects', 'sessions', 'to
 // words belong to the stop: without them the weekly stop of Claude Code 2.x was never seen and no account was swapped
 // (owner, 2026-11-19: sessions sat on the weekly limit for days).
 const LIMIT_RE = /\b(?:claude(?: ai)? usage limit reached|usage limit reached|(?:5-hour|weekly|session|opus(?: weekly)?|sonnet(?: weekly)?) limit reached|you(?:'|’)ve hit your(?: [\w-]+)* limit)\b/i;
+// Claude Code's own output lines: a message ("●"), a tool result or error ("⎿"), a spinner ("◐"). The user's own lines
+// start with "❯" and the UI (the limit menu, the status bar) carries none of them.
+const AGENT_OUT_RE = /^\s*[●⏺⎿◐]/;
 const TAIL = 12;
 export function scanClaudeLimit(lines) {
   const tail = (Array.isArray(lines) ? lines : String(lines || '').split('\n')).map((x) => String(x ?? '')).filter((l) => l.trim()).slice(-TAIL);
-  return tail.some((l) => LIMIT_RE.test(l));
+  let stop = -1;
+  for (let i = tail.length - 1; i >= 0; i--) if (LIMIT_RE.test(tail[i])) { stop = i; break; }
+  if (stop < 0) return false;
+  // The stop must be the agent's last output. A resumed pane replays the whole conversation, so the old stop sits above
+  // the park's "/exit" and "Catch you later!": that replay is not a new stop and must not swap the session a second time
+  // (owner, 2026-11-19: the swap marked the fresh account used up and killed the session).
+  for (let i = stop + 1; i < tail.length; i++) if (AGENT_OUT_RE.test(tail[i])) return false;
+  return true;
 }
 
 const shq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;

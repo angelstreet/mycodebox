@@ -1288,7 +1288,9 @@ quota plan shows the active account and lists all of them. A Claude pane whose t
 ("usage limit reached", "5-hour / weekly limit reached", "You've hit your limit", "You've hit your weekly limit · resets Nov 21, 2pm (UTC)")
 marks its account used up (until the window's reset, else 1 h) and, with `autoSwapSessions` on (default) and another account free, is parked (Escape first;
 the limit stop waives the "waiting" and pending-question checks, never the lease, job or attached-terminal ones) and
-resumed on that account, then gets `continue` after 15 s. A manager or paused session, a failed park, or no account
+resumed on that account, then gets `continue` after 15 s. The stop must be the agent's last output: a resumed pane replays the
+whole conversation, so the old stop sits above the park's "/exit" and "Catch you later!", and that replay is not a new stop (it must not
+swap the session a second time). A manager or paused session, a failed park, or no account
 left is pushed to the owner instead. Each row shows its account; the row's switch button moves a session by hand.
 State: `$GHOSTY_STATE_DIR/claude-accounts.json`. API: `GET/POST /api/claude-accounts`, `POST /api/claude-accounts/settings`
 `{active?, auto?, autoSwapSessions?, order?, clearMark?}`, `DELETE /api/claude-accounts/:id`,

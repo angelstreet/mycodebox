@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A swapped session is not swapped again, and the owner hears it when every account is used up** — the first live swap (2026-11-19) moved the session to the next account and then moved it once more: the resumed pane replays the whole conversation, so the old "You've hit your weekly limit" sat in the tail again, the tick read it as a new stop, marked the fresh account used up and left the session with no account at all. A limit stop now counts only when it is the agent's last output, so the replay is not a stop; and the notice to the owner ("every Claude account is used up") was never delivered because the push feed item is not a promise and the `.catch()` on it threw instead · area: claude-accounts
+
 - Merge evaluation no longer blocks a branch that deletes or edits prose docs named after credentials or sudoers, and scans only added lines, so a 670-file deletion is readable · area: merge-policy
 
 - **A session stopped on "You've hit your weekly limit" is now seen, so the account is marked and the session is moved** — the limit-stop regex of the Claude account rotation only knew "you've hit your limit", while Claude Code 2.x prints "You've hit your weekly limit · resets Nov 21, 2pm (UTC)": the stop was invisible, no account was marked used up and no session was swapped, so sessions sat on the weekly limit for days (the `marks` stayed empty). The words naming the window or the model ("weekly", "usage", "Opus", "5-hour") are now part of the stop; the same wording is read in the card's limit note and in the usage-limit resume of the agent ("You've hit your usage limit"), which names its pool the same way · area: claude-accounts

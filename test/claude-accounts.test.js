@@ -45,6 +45,39 @@ test('scanClaudeLimit: the weekly stop of Claude Code 2.x, with the window or th
   assert.ok(!scanClaudeLimit(['the weekly plan has a usage limit of 500 messages', 'nothing is stopped']));
 });
 
+test('scanClaudeLimit: a resumed pane replays the old stop, and that replay is not a new stop', () => {
+  // after a swap the pane shows the whole conversation again: the old stop sits above the park's farewell
+  // (owner, 2026-11-19: the replay fired a second swap, marked the fresh account used up and killed the session)
+  assert.ok(!scanClaudeLimit([
+    '✻ Cogitated for 20s · done 2:40 PM',
+    "  ⎿  You've hit your weekly limit · resets Nov 21, 2pm (UTC)",
+    '     /usage-credits to finish what you’re working on.',
+    '❯ /exit',
+    '  ⎿  Catch you later!',
+    '  /remote-control is active · Continue here, on your phone, or at',
+    '  https://claude.ai/code/session_0123456789abcdef',
+  ]));
+  // the agent's own output after the stop means it moved on: it is not stopped
+  assert.ok(!scanClaudeLimit([
+    "  ⎿  You've hit your weekly limit · resets Nov 21, 2pm (UTC)",
+    '❯ Try again',
+    '● Bash(curl -s http://127.0.0.1:7777/api/bugs)',
+    '  ⎿  Error: Exit code 1',
+  ]));
+  // the stop is still the stop when the user opened the rate-limit menu below it
+  assert.ok(scanClaudeLimit([
+    '✻ Cogitated for 20s · done 2:40 PM',
+    '❯ Time box reached (120 min): write Verification: as it stands',
+    "  ⎿  You've hit your weekly limit · resets Nov 21, 2pm (UTC)",
+    '     /usage-credits to finish what you’re working on.',
+    '❯ /rate-limit-options',
+    '  What do you want to do?',
+    '  ❯ 1. Stop and wait for limit to reset',
+    '    2. Wait here, then continue automatically at Nov 21, 2pm',
+    '  Enter to confirm · Esc to cancel',
+  ]));
+});
+
 test('accountState: full window or a live mark = used up; expired window and no reading = usable', () => {
   assert.equal(accountState({ windows: windowsOf(rl(LIMIT_PCT, 10), NOW), now: NOW }).exhausted, true);
   assert.equal(accountState({ windows: windowsOf(rl(50, 99), NOW), now: NOW }).exhausted, true);
