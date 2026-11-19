@@ -75,6 +75,9 @@ The journal keeps the per-stream check events, not the inventory errors, so a ni
   and says so in the row ("the app shows the new title …" / "the app still shows the title …"), the report carries it as
   `app_title` and the journal keeps a `verify` event (`title_updated`, `title_stale`). A device the night did not rename is not
   checked: its title did not change (bug-ee21b77c, 2026-11-19).
+- **The host side follows too**: since BUG-4417 (VirtualPyTest, 2026-11-19) the host re-reads its own `.env` on a slow tick
+  (`HOST_CONFIG_RELOAD_INTERVAL_SECONDS`, 2 min), so a name written straight into the host's file is picked up without a restart
+  and the tile title follows about a minute later. That is the title the night's check reads.
 - Journal `<state>/rtsp-nightly/journal.jsonl` (redacted), daily `report-<date>.json`; `<state>` is `$GHOSTY_STATE_DIR` (default
   `~/.local/state/ghosty`). The report carries `hosts` (`walked`: hosts the servers listed, `read`: hosts whose config
   answered) next to `streams` and `errors`, so a night with no rtsp device says how much was looked at instead of
