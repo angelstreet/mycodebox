@@ -147,6 +147,7 @@ const INFRA_PATHS = [
 // added lines of scanRange (why 'secret-content'), so nothing is judged on its name alone. Extensions, not directories: a key
 // or .pem file keeps the floor above whatever it is called.
 const SOURCE_EXT = /\.(?:[cm]?[jt]sx?|mts|cts|py|go|rs|java|rb|php|pl|sh|bash|zsh|ps1|psm1|bat|cmd|c|cc|cpp|cxx|h|hpp|cs|kt|kts|swift|scala|vue|svelte|dart|ex|exs|erl|hs|lua|r)$/i;
+const PROSE_EXT = /\.(?:md|markdown|txt|html?|rst)$/i;
 export function sensitivePath(f) {
   const segs = f.split('/'), base = segs[segs.length - 1], lower = f.toLowerCase();
   const template = /\.(?:example|sample|template)$/i.test(base);   // .env.server.example is a template: not a secret by name (content is still scanned)
@@ -154,12 +155,14 @@ export function sensitivePath(f) {
   if (/\.(?:pem|key|p12|pfx|jks)$/i.test(base) || /^id_(?:rsa|ed25519|ecdsa|dsa)/.test(base)) return 'secret';
   // Data artefacts keep the name rule: a secrets.json, credentials.yaml or my-secrets/a.txt STORES the credential, and unlike
   // a source file there is no code to scan. Everything below this line (migration, sudoers, systemd, deploy) is untouched.
-  if (!SOURCE_EXT.test(base) && segs.some((s) => /secret|credential|password/i.test(s))) return 'secret';
+  // Prose docs (.md .txt .html .rst) are no store either: BUG-0051-...-live-credentials-committed-in-tree.md describes a bug (a literal secret
+  // in an added line is still caught by the content scan). Data files (secrets.json, credentials.yaml) keep the floor.
+  if (!SOURCE_EXT.test(base) && segs.some((s, i) => /secret|credential|password/i.test(s) && !(PROSE_EXT.test(base) && i === segs.length - 1))) return 'secret';   // a prose doc is exempt only for its own file name, a my-secrets/ dir still floors it
   // The runner skips <name>_rollback.sql in a migrations dir (platform_update/migrations.py, upgrade_notes.py: "do not apply"), so the file
   // is never run on a database by the pipeline. Only that exact suffix: _down.sql is NOT skipped by the runner and stays a migration.
   if (/(^|\/)migrations?\/(?:[^/]+\/)*[^/]+_rollback\.sql$/.test(lower)) return null;
   if (/(^|\/)(?:migrations?|migrate|alembic|flyway|liquibase)\//.test(lower) || /(^|\/)alembic\.ini$/.test(lower) || /(^|\/)db\/(?:migrate|migrations?|schema\.rb|structure\.sql)/.test(lower) || /\.sql$/.test(lower)) return 'migration';
-  if (/sudoers/.test(lower)) return 'sudoers';
+  if (/sudoers/.test(lower) && !PROSE_EXT.test(base)) return 'sudoers';   // a doc named after sudoers (BUG-0522-...-sudoers.md) is prose; sudoers.d/ dirs and *.sudoers stay floored
   // A unit / timer file in a repo is text: the merge installs nothing (installing is the routine host-unit class, owner 2026-10-26,
   // host-unit-routine.js). Only this product's own service and manager units stay a floor: they have their own restart procedure.
   if (/\.(service|timer|socket)$/.test(lower) || /(^|\/)systemd\//.test(lower)) return /^ghosty-(?:sessions|manager)/.test(base) ? 'systemd' : null;
@@ -574,10 +577,17 @@ export async function scanRange(repo, spec, conventionFiles = MERGE_DEFAULTS.mer
     if (!m) continue;
     if (m[1] === '-' && m[2] === '-') { if (!DOC_IMAGE.test(m[3])) out.media.push(m[3]); } else textMedia.push(m[3]);
   }
-  const diff = await git(repo, ['diff', '--no-color', '--no-ext-diff', '--no-textconv', '-U0', spec, '--', '.', ...MEDIA_EXCLUDE], { max: 2 * 1024 * 1024 });
+  // deleted files are left out (--diff-filter=d): only added lines can introduce a secret, so a deletion-only diff of any size is
+  // scannable. Deleted migration files are read apart below (their removed lines feed migrationRemoved).
+  const diff = await git(repo, ['diff', '--no-color', '--no-ext-diff', '--no-textconv', '--diff-filter=d', '-U0', spec, '--', '.', ...MEDIA_EXCLUDE], { max: 2 * 1024 * 1024 });
+  if (out.migrationDeleted.length && diff.code === 0 && !diff.truncated) {
+    const dm = await git(repo, ['diff', '--no-color', '--no-ext-diff', '--no-textconv', '--diff-filter=D', '-U0', spec, '--', ...out.migrationDeleted.map((f) => `:(literal)${f}`)], { max: 2 * 1024 * 1024 - diff.out.length });
+    if (dm.code !== 0 || dm.truncated || dm.timedOut) Object.assign(diff, { code: dm.code || -1, truncated: !!dm.truncated, timedOut: !!dm.timedOut, err: dm.err });
+    else diff.out += '\n' + dm.out;
+  }
   // an exclude pathspec wins over an include, so media-named text files are read in their own diff and scanned like the rest
   if (textMedia.length && diff.code === 0 && !diff.truncated) {
-    const tm = await git(repo, ['diff', '--no-color', '--no-ext-diff', '--no-textconv', '-U0', spec, '--', ...textMedia.map((f) => `:(literal)${f}`)], { max: 2 * 1024 * 1024 - diff.out.length });
+    const tm = await git(repo, ['diff', '--no-color', '--no-ext-diff', '--no-textconv', '--diff-filter=d', '-U0', spec, '--', ...textMedia.map((f) => `:(literal)${f}`)], { max: 2 * 1024 * 1024 - diff.out.length });
     if (tm.code !== 0 || tm.truncated || tm.timedOut) Object.assign(diff, { code: tm.code || -1, truncated: !!tm.truncated, timedOut: !!tm.timedOut, err: tm.err });
     else diff.out += '\n' + tm.out;
   }
