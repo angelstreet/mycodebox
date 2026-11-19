@@ -546,7 +546,10 @@ Every tick (also healthy ones) it first removes stale test leftovers: directorie
 **Nightly RTSP check (owner, 2026-11-11).** `systemd/rtsp-nightly.timer` (05:45 UTC) starts a MiniMax session through `scripts/rtsp-nightly/run.sh`
 that runs `scripts/agent/rtsp_replace.py`: every rtsp `DEVICE<n>_VIDEO` is probed (`rtsp_check.py`); a dead public test stream or loopback
 `smoke` source is replaced from the vetted `config/rtsp-pool.json` (host lease, full host-config payload, backup, rollback, at most 3 a night),
-an IP camera is only reported. Default mode `dry`; `<state>/rtsp-nightly/mode` = `live` is the manager's switch. The report also
+an IP camera is only reported. Default mode `dry`; `<state>/rtsp-nightly/mode` = `live` is the manager's switch. The script parses
+its flags (`--help` prints the usage and exits, an unknown flag is an error and nothing runs) and a **dry** run writes
+`report-<date>-dry.json` beside the day's live report instead of replacing it, so a read-only run never destroys the night's evidence.
+The report also
 carries the pool's own probe status (a `pool` block, one row per entry: `id`, `vetted`, `status`, the vantage it was probed from),
 so a broken pool source is visible in the night's evidence without a hand probe; the pool file itself is never edited by the
 nightly. Details, install and rollback: [RTSP-NIGHTLY](RTSP-NIGHTLY.md).
