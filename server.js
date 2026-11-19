@@ -148,6 +148,7 @@ import { createSessionMeta } from './session-meta.js';
 import { goneCwd, projectCandidates } from './cwd-gone.js';
 import { pickableProject, launchArgs, codexModels, CLAUDE_MODELS, MINIMAX_MODELS, DEFAULT_MODELS } from './new-session.js';
 import { createSessionHistory } from './session-history.js';
+import { paneLinesOk } from './pane-lines.js';
 import { createHistoryView } from './history-view.js';
 import { createQuota, defaults as quotaDefaults } from './quota.js';
 import { createClaudeAccounts, rateFile as claudeRateFile, accountOfPid, scanClaudeLimit, DEFAULT_ID as CLAUDE_DEFAULT_ACCOUNT } from './claude-accounts.js';
@@ -2689,7 +2690,7 @@ async function handleHttp(req, res) {
   if (req.method === 'GET' && p.startsWith('/api/pane/')) {
     const session = decodeURIComponent(p.slice('/api/pane/'.length));
     const lines = Number(url.searchParams.get('lines') || PANE_LINES);
-    if (!Number.isInteger(lines) || lines < PANE_LINES || lines > 10000) return json(res, 400, { ok: false, error: 'lines 1000-10000 required' });
+    if (!paneLinesOk(lines)) return json(res, 400, { ok: false, error: 'lines 1000-10000 required' });
     try { return json(res, 200, { ok: true, pane: await capturePane(session, lines), lines }); }
     catch (err) { return json(res, err.status || 500, { ok: false, error: err.message }); }
   }

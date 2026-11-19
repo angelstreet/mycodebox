@@ -107,3 +107,41 @@ test('no workers by default: prompt rule, -K opt-in, refusal from a session with
   assert.equal(go({ CBSESSION_PARENT: 'boss', CBSESSION_WORKERS_OK: '1' }, '-x', '-n', 'cb-c2', '-d', work, '-t', 'x').status, 0);
   assert.equal(go({ CBSESSION_PARENT: 'boss' }, '-x', '-A', '-n', 'cb-c3', '-d', work, '-t', 'x').status, 0);
 });
+
+test('a claude session starts on the active Claude account (the rotation reaches cbsession)', () => {
+  // bug-6434d8a9: without this every session started here ran on the default account and burned its quota
+  const state = path.join(home, 'state');
+  const acct = path.join(home, '.claude-accounts', 'team1');
+  fs.mkdirSync(acct, { recursive: true });
+  fs.writeFileSync(path.join(acct, '.credentials.json'), '{}');
+  const accountsFile = path.join(state, 'claude-accounts.json');
+  fs.mkdirSync(state, { recursive: true });
+  fs.writeFileSync(accountsFile, JSON.stringify({ active: 'team1', accounts: [{ id: 'default' }, { id: 'team1', configDir: acct }] }));
+  let r = run('-x', '-n', 'cb-acct', '-d', work, '-t', 'x');
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(launch('cb-acct'), new RegExp(`export CLAUDE_CONFIG_DIR=${acct}\\n`));
+  assert.match(launch('cb-acct'), /export GHOSTY_CLAUDE_ACCOUNT=team1\n/);
+  // the default account: nothing to export, as before
+  fs.writeFileSync(accountsFile, JSON.stringify({ active: 'default', accounts: [{ id: 'default' }] }));
+  r = run('-x', '-n', 'cb-def', '-d', work, '-t', 'x');
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(!launch('cb-def').includes('CLAUDE_CONFIG_DIR'), 'the default account needs no config dir');
+  // an account without a login is not used: the session stays on the default account
+  const noLogin = path.join(home, '.claude-accounts', 'nologin');
+  fs.mkdirSync(noLogin, { recursive: true });
+  fs.writeFileSync(accountsFile, JSON.stringify({ active: 'team1', accounts: [{ id: 'default' }, { id: 'team1', configDir: noLogin }] }));
+  r = run('-x', '-n', 'cb-nologin', '-d', work, '-t', 'x');
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(!launch('cb-nologin').includes('CLAUDE_CONFIG_DIR'), 'no login, no account');
+  // an API key is its own billing: no account either
+  const kd = path.join(home, '.config', 'anthropic'); fs.mkdirSync(kd, { recursive: true });
+  fs.writeFileSync(path.join(kd, 'acckey.key'), 'sk-ant-fake\n', { mode: 0o600 });
+  fs.writeFileSync(accountsFile, JSON.stringify({ active: 'team1', accounts: [{ id: 'default' }, { id: 'team1', configDir: acct }] }));
+  r = run('-x', '-n', 'cb-key', '-d', work, '-b', 'acckey', '-t', 'x');
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(!launch('cb-key').includes('CLAUDE_CONFIG_DIR'), 'the API key billing keeps the default account');
+  // another provider is not a Claude session
+  r = run('-x', '-n', 'cb-mmacct', '-d', work, '-p', 'minimax', '-t', 'x');
+  assert.ok(!launch('cb-mmacct').includes('CLAUDE_CONFIG_DIR'));
+  fs.rmSync(accountsFile, { force: true });
+});
