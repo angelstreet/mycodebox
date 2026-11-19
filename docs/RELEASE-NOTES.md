@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The nightly reads its own flags, and a dry run cannot overwrite the day's live report** — `rtsp_replace.py` looked only for `--mode` and `--apply` and ignored every other flag, so `--help` started a full dry pass of the night; that pass then wrote the day's `report-<date>.json` with an empty one, and the live report of 2026-11-19 was gone (the night had to run a second time to write it again). The script now parses its flags (`--help` prints the usage and exits, an unknown flag is an error and nothing runs), and a dry run writes `report-<date>-dry.json` beside the day's live report instead of replacing it · area: rtsp-nightly
+
 - **Quota alerts under 95% and refused self-approvals no longer wake the manager alone** — both are deferred like disk alerts (they ride with the next real event); the wake replay now counts deferred events as delivered later, not lost. Replay of 2026-11-11: 410 to 347 wakes, 72.9% to 71.2% no-op, 0 lost actions · area: manager
 
 - **The dashboard answers to the names of this box only** — a browser request whose `Host` is not an IP address, `localhost`, a single-label name, a `*.ts.net` name, this machine's hostname, the host of `PUBLIC_URL` or a name in `GHOSTY_ALLOWED_HOSTS` gets `421` before routing (`host-allow.js`); token clients are not affected. The same-origin rule of the dashboard only means something under a name of the box · area: server
