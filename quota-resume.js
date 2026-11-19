@@ -11,7 +11,9 @@ export const QUOTA_MAX_AGE_MS = 15 * 60e3;    // quota.js polls every 5 min: thr
 export const REPEAT_MS = 10 * 60e3;           // a limit hit again this soon after a resume backs off to the next reset
 const WINDOW_MS = 5 * 3600e3;
 const TAIL = 8;    // the stop sits right above the input box; older output may quote the phrases
-const LIMIT_RE = /\busage limit reached\b/i;
+// The MiniMax stop is "Usage limit reached ... Your prompt is preserved."; the agent also says "You've hit your usage limit"
+// (docs/v2/RUNTIME_FORMATS.md), which names the pool before "limit" and is read here too (owner, 2026-11-19).
+const LIMIT_RE = /\busage limit reached\b|hit your(?: [\w-]+)* limit/i;
 const PRESERVED_RE = /prompt is preserved/i;
 const LOGIN_RE = /Sign in to MiniMax|Run \/login\b/i;
 

@@ -17,6 +17,14 @@ test('scanLimit tells a limit stop with a preserved prompt from a login stop and
   assert.equal(scanLimit(['all good', '> ']).kind, null);
 });
 
+test('scanLimit: the "hit your ... limit" stop of the agent is a limit stop too', () => {
+  // docs/v2/RUNTIME_FORMATS.md: the quota stop arrives as "You've hit your usage limit … try again at <local time>"
+  assert.deepEqual(scanLimit(['× Error  You’ve hit your usage limit. Upgrade or try again at 11:59 PM.']), { kind: 'limit', preserved: false });
+  assert.deepEqual(scanLimit(["You've hit your usage limit ... Your prompt is preserved."]), { kind: 'limit', preserved: true });
+  // ordinary text that mentions a limit is not a stop
+  assert.equal(scanLimit(['we raised the rate limit to 40', '> ']).kind, null);
+});
+
 test('window reset (reading under the limit or expired): resume', () => {
   assert.equal(dec().ok, true);
   assert.equal(dec({ plan: plan({}, [win({ usedPercent: 0, expired: true })]) }).ok, true);

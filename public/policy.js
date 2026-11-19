@@ -95,7 +95,8 @@ export function suggestAgent(priority, quota, config) {
 export function limitStopNote(stall) {
   if (!stall || stall.case !== 'error') return '';
   const q = String(stall.question || '');
-  if (!/\b(?:hit your|usage) limit|\blimit reached\b/i.test(q)) return '';
+  // "hit your ... limit" names the window or the model before "limit" ("weekly", "usage", "Opus"): those words are part of the stop.
+  if (!/\b(?:hit your(?: [\w-]+)* limit|usage limit|limit reached)\b/i.test(q)) return '';
   const m = q.match(/resets?\s+(?:at\s+)?([^()\n]+?)(?:\s*\(([^)]+)\))?\s*$/i);
   return m ? `stopped: Claude limit, resets ${m[1].trim()}${m[2] ? ` (${m[2]})` : ''}` : 'stopped: Claude limit';
 }
