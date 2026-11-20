@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The docked session list gives the name more of the row** — the agent column is 62 px (was 92) and the time column 38 px (was 46), and the empty priority slot no longer takes a gap, so the name keeps about 40 px more before it is cut · area: dashboard
+
 - **The left session list gives its width to the name** — the priority badge and the reporter bolt are gone from each row of the left list (the priority is still set on the card and the header), so a long session name is cut later · area: dashboard
 
 - **The nightly RTSP session shows under virtualpytest** — the dashboard groups a session by the git repo of its folder, and the nightly started in a mycodebox worktree, so a VirtualPyTest stream check sat under MYCODEBOX. `run.sh` now starts it from a `~/virtualpytest` worktree and the prompt reads and runs the tool by its absolute `~/ghosty-sessions` path · area: rtsp-nightly
