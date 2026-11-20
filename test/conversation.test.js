@@ -8,6 +8,7 @@ const sample = [
   L({ type: 'user', message: { content: 'fix the bug\nplease' } }),
   L({ type: 'user', isMeta: true, message: { content: 'meta' } }),
   L({ type: 'user', message: { content: [{ type: 'text', text: '<system-reminder>hidden</system-reminder>' }] } }),
+  L({ type: 'user', message: { content: '<task-notification>\n<task-id>b1</task-id>\n</task-notification>' } }),
   L({ type: 'assistant', message: { content: [{ type: 'text', text: 'Looking.' }, { type: 'tool_use', name: 'Bash', input: { command: 'npm test' } }] } }),
   L({ type: 'user', message: { content: [{ type: 'tool_result', content: 'ok' }] } }),
   L({ type: 'assistant', isSidechain: true, message: { content: [{ type: 'text', text: 'side' }] } }),

@@ -496,6 +496,8 @@ function layoutTerm(session) {
       if (term.options.fontSize !== f) term.options.fontSize = f;
     }
     p = propose() || p;
+    // the reader uses the terminal's actual text size (it shrinks to fit the pane), so both views read alike (owner 2026-11-20)
+    { const cellEl = host.closest('.cell'); if (cellEl) cellEl.style.setProperty('--tfa', String(term.options.fontSize)); }
   }
   // A freshly opened card whose pane is not at the card's width yet (we are about to resize it): keep it invisible for that moment (at most
   // 1.8 s) instead of showing the old width, then re-wrapping. Fades in once the size is settled.
