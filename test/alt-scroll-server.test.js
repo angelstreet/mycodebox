@@ -76,7 +76,7 @@ test('scroll: wheel notches to a mouse-tracking fullscreen app, PageUp to one wi
   r = await scroll('mouse', { dir: 'up', n: 1e6 });
   assert.equal(r.body.notches, 60, 'capped');
   await scroll('mouse', { dir: 'bottom' });
-  assert.equal(status('mouse'), 'off=0', 'bottom is PageDown x12');
+  assert.equal(status('mouse'), 'off=0', 'bottom is ctrl+End');
 
   assert.equal(status('keys'), 'off=0');
   r = await scroll('keys', { dir: 'up', n: 5 });

@@ -2884,5 +2884,6 @@ body.reading #diskBanner{ display:none !important; }
 .cell.rd-on .reader p{ margin:0 0 1em; }
 .cell.rd-on .reader .rh{ font-size:calc(var(--tf, 12) * 1px); }
 .cell.rd-on .reader code{ font-size:inherit; }
-.cell.rd-on .reader .rq{ margin:1.2em 0 1em; padding:6px 10px; border-left:2px solid #85837b; background:rgba(255,255,255,.05); color:#e6e8ee; white-space:pre-wrap; overflow-wrap:anywhere; }
-.cell.rd-on .reader .rq::before{ content:'> '; color:#85837b; }
+.cell.rd-on .reader .rq{ margin:1.6em 0 1em; padding:8px 12px 9px; border-left:3px solid #e89a4a; border-radius:0 8px 8px 0; background:rgba(232,154,74,.12); color:#fff; white-space:pre-wrap; overflow-wrap:anywhere; }
+/* the owner's message is labelled, the AI's answer is the plain text that follows (owner 2026-11-20: "I cannot tell my questions from the AI's answers") */
+.cell.rd-on .reader .rq::before{ content:'You'; display:block; margin-bottom:3px; font-weight:700; font-size:.85em; letter-spacing:.04em; color:#e89a4a; }

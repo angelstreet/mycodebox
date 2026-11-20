@@ -1,5 +1,5 @@
 // A stand-in for Claude Code's fullscreen TUI: alternate screen, SGR mouse tracking, a 300-line transcript it scrolls itself
-// (wheel = 3 lines, PageUp / PageDown = a page; NO_MOUSE=1: no mouse tracking). Any other input byte is logged to STRAY_LOG: a scroll must never type text.
+// (wheel = 3 lines, PageUp / PageDown = a page, ctrl+End = the bottom; NO_MOUSE=1: no mouse tracking). Any other input byte is logged to STRAY_LOG: a scroll must never type text.
 import fs from 'node:fs';
 
 const N = 300, STEP = 3;
@@ -22,7 +22,7 @@ process.stdin.on('data', (buf) => {
   let s = buf.toString('latin1');
   const page = size().rows - 2;
   s = s.replace(/\x1b\[<(\d+);\d+;\d+[Mm]/g, (_, b) => { if (b === '64') off += STEP; else if (b === '65') off -= STEP; return ''; });
-  s = s.replace(/\x1b\[5~/g, () => { off += page; return ''; }).replace(/\x1b\[6~/g, () => { off -= page; return ''; });
+  s = s.replace(/\x1b\[5~/g, () => { off += page; return ''; }).replace(/\x1b\[6~/g, () => { off -= page; return ''; }).replace(/\x1b\[1;5F/g, () => { off = 0; return ''; });   // ctrl+End: jump to the bottom, as Claude Code
   if (s) fs.appendFileSync(stray, s);
   draw();
 });
