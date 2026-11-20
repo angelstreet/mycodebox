@@ -33,3 +33,25 @@ test('the real box as captured on 2026-11-20 (✕ close mark, dim colour codes) 
     '╰────────────────────╯', '', '── session ─', '❯ '].join('\n');
   assert.deepEqual(stripResizeHint(text).split('\n'), ['', '', '', 'reply', '', '── session ─', '❯ ']);
 });
+
+import { stripDiffPanel } from '../public/pane-hints.js';
+test('the diff side panel is cut off at its border; the conversation on the left is kept, colours reset at the cut', () => {
+  const L = (left, right) => left + ' '.repeat(20 - left.replace(/\x1b\[[0-9;]*m/g, '').length) + '│' + right;   // the border at visible column 20
+  const text = ['above the panel',
+    ''.padEnd(20) + '                     ✕',
+    L('Limit of the', '   /diff to close  source: Current ▾'),
+    L('\x1b[1mbold\x1b[0m text', ''),
+    L('more text', '   No changes this session'),
+    'prompt line ─────────────', '❯ '].join('\n');
+  const out = stripDiffPanel(text).split('\n');
+  assert.equal(out[0], 'above the panel');
+  assert.equal(out[2], 'Limit of the\x1b[0m');
+  assert.equal(out[3], '\x1b[1mbold\x1b[0m text\x1b[0m');
+  assert.equal(out[4], 'more text\x1b[0m');
+  assert.ok(!out.join('\n').includes('diff to close') && !out.join('\n').includes('No changes'));
+  assert.equal(out[5], 'prompt line ─────────────'); assert.equal(out.length, 7);
+});
+test('no diff panel: the text is returned as it is', () => {
+  const t = 'a │ b\n/diff is a command';
+  assert.equal(stripDiffPanel(t), t);
+});

@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The card shows only the conversation: Claude Code's diff side panel is cut off, and your messages are bubbles as in the Claude app** — a session where `/diff` was opened draws a diff panel in the right third of a wide pane ("/diff to close", "No changes this session"); the Claude app never shows it, and on the dashboard it took reading space. Each row of the panel is now cut at its border column (`stripDiffPanel`, pane-hints.js). In the reader, your messages are right-aligned gray bubbles, the AI's answers plain text on the left · area: dashboard
+
 - **The resize-hint box is really gone** — Claude Code draws its close mark as ✕ (U+2715), not ×, so the box's top border was never matched and stayed above the prompt; both marks are matched now (test built from the captured pane) · area: dashboard
 
 - **Your messages stand out in the reader, and the resize-hint box no longer leaves a hole above the prompt** — in the conversation view each owner message is an orange-barred, tinted block labelled "You", so it is not mistaken for the AI's answer (harness notices such as `<task-notification>` are no longer shown as yours). The reader now uses the terminal's actual text size and line spacing (the terminal shrinks its font to fit the pane; the reader stayed bigger), at least 11 px. Claude Code's "Resize your terminal…" box is removed whole (its wrapped top border, the wrapped hint, or the bordered box with its × alone), and the rows it took go to the top of the screen instead of sitting empty between the text and the prompt · area: dashboard

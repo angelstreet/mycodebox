@@ -26,3 +26,33 @@ export function stripResizeHint(text) {
   }
   return lines.join('\n');
 }
+
+// Claude Code's diff side panel (opened by /diff; the Claude app never shows it): on a wide pane it takes the right third of the screen,
+// "/diff to close  source: Current" on top and often "No changes this session". The dashboard shows the conversation only (owner 2026-11-20):
+// every row of the panel block is cut at the panel's left border column. Colour codes are kept up to the cut, then reset.
+const PANEL = /\/diff to close/;
+const ESC = /^\x1b\[[0-9;?]*[ -/]*[@-~]/;
+function cutAt(line, col) {   // the line's visible text up to column `col` (escape codes do not count), then a colour reset
+  let out = '', vis = 0;
+  for (let i = 0; i < line.length && vis < col;) {
+    const m = ESC.exec(line.slice(i));
+    if (m) { out += m[0]; i += m[0].length; continue; }
+    const ch = String.fromCodePoint(line.codePointAt(i));
+    out += ch; i += ch.length; vis += 1;
+  }
+  return `${out.replace(/\s+$/, '')}\x1b[0m`;
+}
+export function stripDiffPanel(text) {
+  if (!text || !PANEL.test(plain(text))) return text;
+  const lines = text.split('\n');
+  const h = lines.findIndex((l) => PANEL.test(plain(l)));
+  const hp = [...plain(lines[h])];
+  let col = -1; for (let k = hp.length - 1; k > 0; k--) if (hp[k] === '│' && PANEL.test(hp.slice(k).join(''))) { col = k; break; }   // the border just left of the header
+  if (col < 0) return text;
+  const isRow = (l) => [...plain(l)][col] === '│';
+  let a = h, b = h;
+  while (a - 1 >= 0 && (isRow(lines[a - 1]) || /[×✕]/.test(plain(lines[a - 1]).slice(col)))) a--;
+  while (b + 1 < lines.length && isRow(lines[b + 1])) b++;
+  for (let i = a; i <= b; i++) lines[i] = cutAt(lines[i], col);
+  return lines.join('\n');
+}
