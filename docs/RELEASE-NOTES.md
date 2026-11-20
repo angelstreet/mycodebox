@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The reader looks like the Claude Code app, and a Mac session opens in it** — the reader (the `Aa` view) now uses the app's reading style: 15 px sans text in `#efefef` on a `#191919` page, in a 730 px centred column. A `mac:` session has no terminal, so its card is always the reader and `GET /api/reply/mac:<name>` returns the text of its last stop · area: dashboard
+
 - **A Mac session's card is no longer blank** — a `mac:` session has no tmux pane, so its terminal card showed nothing at all; the card (and `GET /api/pane/mac:<name>`) now shows where the session runs (machine, project, folder, Remote Control link) and the text of its last stop, and follows each new stop · area: dashboard
 
 - **The docked session list gives the name more of the row** — the agent column is 62 px (was 92) and the time column 38 px (was 46), and the empty priority slot no longer takes a gap, so the name keeps about 40 px more before it is cut · area: dashboard

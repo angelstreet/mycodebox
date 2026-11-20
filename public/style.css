@@ -6,6 +6,10 @@
      the text content for readability ... they dont use the full area"). 820px is what
      the reader already used, and what the VirtualPyTest agent chat uses. */
   --measure:    820px;
+  /* the reader copies the Claude Code app's reading view (owner 2026-11-20, from a screenshot): sans 15px, near-black #191919 page, #efefef text, a ~730px column */
+  --reader-measure: 730px;
+  --reader-bg:  #191919;
+  --reader-ink: #efefef;
   /* warm grey, not near-black, with softer grey text: the Claude Code app's dark palette reads better (owner 2026-11-06) */
   --bg:        #262624;
   --bg-2:      #1f1e1d;
@@ -340,9 +344,9 @@ body{ display:flex; flex-direction:column; }
 .cell.rd-on .reader{
   display:block; flex:1; min-height:0; overflow-y:auto; overflow-x:hidden;
   /* reading column: text capped at --measure and centred (same as the VirtualPyTest agent chat); the scrollbar stays at the edge */
-  padding:12px max(14px, calc((100% - var(--measure)) / 2)) 16px; background:var(--bg-term);
+  padding:14px max(14px, calc((100% - var(--reader-measure)) / 2)) 18px; background:var(--reader-bg);
   font-family:system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  font-size:calc(var(--tf, 12) * 1px + 2px); line-height:1.55; color:var(--ink); user-select:text; -webkit-user-select:text;
+  font-size:calc(var(--tf, 12) * 1px + 3px); line-height:1.55; color:var(--reader-ink); user-select:text; -webkit-user-select:text;
   overscroll-behavior:contain; touch-action:pan-y; -webkit-overflow-scrolling:touch;
 }
 .cell.rd-on .b{ display:none; }

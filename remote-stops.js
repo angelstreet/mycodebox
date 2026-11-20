@@ -287,6 +287,7 @@ export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goa
     for (const [name, s] of sessions) if (t - s.lastSeen > SESSION_TTL_MS) { if (s.open) resolve(s.open, 'none', { reason: 'session gone' }); sessions.delete(name); manager.forget(name); }
   }
   const names = () => { sweep(); return [...sessions.keys()]; };
+  const lastText = (name) => { const t = sessions.get(name)?.last?.text; return t ? String(t) : null; };
   // A Mac session has no tmux pane: the dashboard card shows this text instead (its last stop, with where it runs), so the card is never blank.
   function paneText(name) {
     const s = sessions.get(name);
@@ -381,5 +382,5 @@ export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goa
     const hits = [...sessions.values()].filter((s) => s.client === clientName && s.name.startsWith(pre) && /^[A-Za-z0-9._]{1,6}(@.*)?$/.test(s.name.slice(pre.length)));
     return hits.length === 1 ? hits[0].name : null;
   }
-  return { handle, deliver, deliverKey, resolveFor, paneText, owns: (n) => String(n).startsWith(manager.REMOTE_PREFIX) && sessions.has(n), names, statusRows, config, _sessions: sessions };
+  return { handle, deliver, deliverKey, resolveFor, paneText, lastText, owns: (n) => String(n).startsWith(manager.REMOTE_PREFIX) && sessions.has(n), names, statusRows, config, _sessions: sessions };
 }
