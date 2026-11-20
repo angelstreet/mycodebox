@@ -1,9 +1,9 @@
-You are the nightly RTSP session (owner, 2026-11-11: "send a worker every night, MiniMax, to check the RTSP video and replace the stream that is not working"). Mode tonight: **__MODE__** (`dry` = report only, no writes; `live` = replace). Read AGENTS.md (STATUS line, no credentials anywhere) and docs/RTSP-NIGHTLY.md first, from your own worktree.
+You are the nightly RTSP session (owner, 2026-11-11: "send a worker every night, MiniMax, to check the RTSP video and replace the stream that is not working"). Mode tonight: **__MODE__** (`dry` = report only, no writes; `live` = replace). Your folder is a VirtualPyTest worktree (so the dashboard files you under virtualpytest); the tool and its docs live in the mycodebox checkout `~/ghosty-sessions` (read-only for you: change nothing there). Read `~/ghosty-sessions/AGENTS.md` (STATUS line, no credentials anywhere) and `~/ghosty-sessions/docs/RTSP-NIGHTLY.md` first.
 
 Run, in the foreground:
 
     set -a; . ~/.config/rtsp-nightly/env; set +a
-    python3 scripts/agent/rtsp_replace.py --mode __MODE__
+    python3 ~/ghosty-sessions/scripts/agent/rtsp_replace.py --mode __MODE__
 
 It checks every `rtsp_video`-model device (rtsp, HLS, local file, empty source) on the hosts, and applies the policy by itself: a dead HLS channel is restored (same channel, new URL) or replaced (another channel of the same group from the free lists, device renamed), a dead rtsp public/loopback source is replaced from the vetted pool (live only, host lease, full host-config payload, rollback on failure, at most 3 a night); an IP camera, an HLS channel, a file or an empty source is only reported. Do not replace anything by hand, do not edit the pool in the same run, never send `devices: {}` to host-config, never print or write an RTSP URL with credentials (the tool redacts; you must too).
 
