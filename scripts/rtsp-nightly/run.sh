@@ -1,6 +1,7 @@
 #!/bin/bash
 # Nightly RTSP check + replace (owner, 2026-11-11): starts one MiniMax session that runs scripts/agent/rtsp_replace.py
-# and follows docs/RTSP-NIGHTLY.md. Started by ~/.config/systemd/user/rtsp-nightly.timer (systemd/rtsp-nightly.*).
+# and follows docs/RTSP-NIGHTLY.md. The session starts in a ~/virtualpytest worktree (owner 2026-11-20: it checks VirtualPyTest
+# streams, so the dashboard groups it under virtualpytest); the tool and doc are read from the ~/ghosty-sessions checkout. Started by ~/.config/systemd/user/rtsp-nightly.timer (systemd/rtsp-nightly.*).
 #
 # Mode: `dry` (report only, no writes) unless <state>/rtsp-nightly/mode says `live`. The owner/manager flips it:
 #   echo live > ~/.local/state/ghosty/rtsp-nightly/mode      (back: echo dry > ...)
@@ -21,4 +22,4 @@ PROMPT=$(mktemp "$STATE/prompt-XXXXXX.md")
 { sed "s/__MODE__/$MODE/g" "$HERE/prompt.md"; } > "$PROMPT"
 # Name with the time: a second run on one day (a retry, a manual trigger) found the morning session still open and cbsession
 # refused to start ("tmux session ... already exists").
-exec cbsession -n "rtsp-nightly-$(date -u +%Y%m%d-%H%M)" -d "$HOME/ghosty-sessions" -p minimax -A -f "$PROMPT"
+exec cbsession -n "rtsp-nightly-$(date -u +%Y%m%d-%H%M)" -d "$HOME/virtualpytest" -p minimax -A -f "$PROMPT"
