@@ -50,7 +50,6 @@ test('planPaint: a change in the visible rows is in place, with no clear and no 
 test('planPaint: a history line changed, or lines scrolled, is a full repaint', () => {
   const a = lines(100), b = a.slice(); b[3] = 'edited in the scrollback';
   assert.equal(planPaint(text(a), text(b), 24).mode, 'full');
-  assert.equal(planPaint(text(a), text(lines(101)), 24).mode, 'full', 'one more line scrolls everything');
   assert.equal(planPaint(text(lines(30)), text(lines(29)), 24).mode, 'full');
 });
 
@@ -76,4 +75,32 @@ test('planPaint: the head SGR codes are replayed so the first in-place row keeps
   const plan = planPaint(text(a), text(b), 24);
   assert.equal(plan.mode, 'inplace');
   assert.ok(plan.data.includes('\x1b[1;31m'), 'carried');
+});
+
+test('planPaint: new output scrolled k lines into the history -> append, scrollback kept, same result as a full repaint', () => {
+  const rows = 24;
+  const cases = [
+    [lines(100), lines(101)],                                   // one new line
+    [lines(100), lines(140)],                                   // 40 new lines in one tick (more than a screen)
+    [lines(1024), lines(1030).slice(6)],                         // capture window full: the head drops out as the tail grows
+    [lines(100), lines(103, (i) => (i >= 97 ? `tick ${i}` : `line ${i}`))],   // new lines and a ticking screen
+  ];
+  for (const [a, b] of cases) {
+    const plan = planPaint(text(a), text(b), rows);
+    assert.equal(plan.mode, 'append', `${a.length}->${b.length}`);
+    assert.ok(!/\x1b\[[23]J/.test(plan.data), 'no 2J / 3J: the scrollback is never wiped');
+    const t = term(rows); t.write(FULL + text(a));
+    const backBefore = t.back.slice();
+    t.write(plan.data);
+    const ref = term(rows); ref.write(FULL + text(b));
+    assert.deepEqual(t.screen, ref.screen, 'screen equals the full repaint');
+    assert.deepEqual(t.back.slice(0, backBefore.length), backBefore, 'old scrollback untouched');
+    assert.deepEqual(t.back.slice(-ref.back.length), ref.back, 'history ends like the full repaint');
+  }
+});
+
+test('planPaint: a changed history line or a shrunk history is still a full repaint, never a wrong append', () => {
+  const a = lines(100), b = lines(101); b[50] = 'rewritten';
+  assert.equal(planPaint(text(a), text(b), 24).mode, 'full');
+  assert.equal(planPaint(text(lines(100)), text(lines(90)), 24).mode, 'full');
 });

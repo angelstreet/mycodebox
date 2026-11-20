@@ -15,7 +15,7 @@
 //   GET  /api/sessions?full=1   → same, plus `reply` text per session
 //   GET  /api/reply/:session    → {reply, replyHash}: agent's last reply block, plain text
 //   POST /api/resize/:session   → {cols, rows} resize a detached session's window
-//   POST /api/scroll/:session   → {dir: up|down|top|bottom} PageUp/PageDown to a pane in the alternate screen (no tmux scrollback; Claude Code fullscreen); 409 when the pane has scrollback
+//   POST /api/scroll/:session   → {dir: up|down|top|bottom, n?} to a pane in the alternate screen (no tmux scrollback; Claude Code fullscreen): n SGR wheel notches when the app tracks the mouse, else PageUp/PageDown; answers once redrawn and pushes the pane to open cards; 409 when the pane has scrollback
 //   POST /api/sessions          → {name, agent, cwd, priority?, model?, prompt?} create a tmux session + start the agent
 //   DELETE /api/sessions/:name?confirm=<name> → kill session
 //   POST /api/sessions/:name/park   → record the conversation (Claude id / Codex id / MiniMax cwd), quit the agent (/exit, /quit), kill the tmux session (refuses when not idle / lease held / job running)
@@ -150,7 +150,7 @@ import { goneCwd, projectCandidates } from './cwd-gone.js';
 import { pickableProject, launchArgs, codexModels, CLAUDE_MODELS, MINIMAX_MODELS, DEFAULT_MODELS } from './new-session.js';
 import { createSessionHistory } from './session-history.js';
 import { paneLinesOk } from './pane-lines.js';
-import { scrollPlan, altScrollApplies } from './alt-scroll.js';
+import { scrollPlan, wheelPlan, altScrollApplies } from './alt-scroll.js';
 import { createHistoryView } from './history-view.js';
 import { createQuota, defaults as quotaDefaults } from './quota.js';
 import { createClaudeAccounts, rateFile as claudeRateFile, accountOfPid, scanClaudeLimit, DEFAULT_ID as CLAUDE_DEFAULT_ACCOUNT } from './claude-accounts.js';
@@ -2700,8 +2700,30 @@ async function handleHttp(req, res) {
       if (!(await sessionExists(session))) throw httpError(404, 'no such session');
       if (!lastSnapshots.get(session)?.alt) return json(res, 409, { ok: false, error: 'pane has scrollback: scroll the terminal' });
       await assertAgentPane(session, actorOf(body));
-      for (let i = 0; i < plan.count; i++) await exec(TMUX, ['send-keys', '-t', tgt(session), plan.key]);
-      return json(res, 200, { ok: true, dir: body.dir });
+      const snap = lastSnapshots.get(session);
+      const depth = snap.depth || PANE_LINES;
+      const before = await capturePane(session, depth).catch(() => snap.pane);   // fresh: the tick's copy can be up to 1 s old
+      // up / down with SGR mouse tracking on (Claude Code fullscreen): `n` real wheel notches, a few lines each, so the text follows the
+      // wheel or finger. tmux checks the flags itself at send time (if-shell -F): an app that just left mouse mode gets PageUp/PageDown,
+      // never the raw bytes as typed text. top / bottom and apps without mouse tracking keep PageUp / PageDown.
+      const wheel = wheelPlan(body.dir, body.n, { cols: snap.cols, rows: snap.rows });
+      const keys = Array.from({ length: plan.count }, () => plan.key).join(' ');
+      // The nested commands name their target themselves (with no client attached they would not inherit if-shell's -t); session names
+      // outside the plain set fall back to PageUp / PageDown rather than quoting them into a tmux command line.
+      const t = /^[\w.@+-]+$/.test(session) ? `'${tgt(session)}'` : null;
+      if (wheel && t) await exec(TMUX, ['if-shell', '-F', '-t', tgt(session), '#{&&:#{alternate_on},#{mouse_sgr_flag}}', `send-keys -t ${t} -H ${wheel.hex.join(' ')}`, `send-keys -t ${t} ${keys}`]);
+      else await exec(TMUX, ['send-keys', '-t', tgt(session), ...keys.split(' ')]);
+      // Answer with the scrolled pane as soon as the app has redrawn (polled for up to ~200 ms) and push it to every open card now, instead
+      // of on the next 1 s tick: that tick was most of the lag between the wheel and the text moving (bug scroll-not-fluid). The snapshot
+      // is stored like the tick's own, so the tick does not see the scroll as a change, and a scroll is not counted as activity.
+      let pane = before;
+      for (let i = 0; i < 8 && pane === before; i++) { await new Promise((r) => setTimeout(r, i ? 25 : 15)); pane = await capturePane(session, depth).catch(() => before); }
+      if (pane !== before) {
+        const cur = lastSnapshots.get(session) || snap;
+        lastSnapshots.set(session, { ...cur, pane, act: activityText(pane) });
+        broadcast(session, { type: 'snapshot', session, pane, cols: cur.cols, rows: cur.rows, alt: !!cur.alt });
+      }
+      return json(res, 200, { ok: true, dir: body.dir, notches: wheel ? wheel.notches : 0, changed: pane !== before });
     } catch (err) { return json(res, err.status || 500, { ok: false, error: err.message }); }
   }
   if (req.method === 'GET' && p.startsWith('/api/pane/')) {
