@@ -28,6 +28,21 @@ test('findSessionFile finds <id>.jsonl under any project dir, refuses a bad id',
   assert.equal(await findSessionFile('../etc/passwd', [root]), null);
   assert.equal(await findSessionFile('00000000-0000', [root]), null);
   assert.match(await readConversation(path.join(root, '-proj-a', 'abcdef12-3456.jsonl')), /Done\.$/);
-  assert.match(await readConversation(path.join(root, '-proj-a', 'abcdef12-3456.jsonl'), 120), /Done\./);   // a tail: cut line skipped
+  assert.equal(await readConversation(path.join(root, '-proj-a', 'abcdef12-3456.jsonl'), { maxChars: 3 }), 'Done.');   // newest first, stops once enough text
+  fs.rmSync(root, { recursive: true });
+});
+
+test('a prompt sent while the agent worked (queued_command) is the owner\'s; big tool results are skipped unparsed', async () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'convo-')));
+  const f = path.join(root, 's.jsonl');
+  const big = 'x'.repeat(5 * 1024 * 1024);   // bigger than one read chunk: the backwards reader must carry it across chunks
+  fs.writeFileSync(f, [
+    L({ type: 'assistant', message: { content: [{ type: 'text', text: 'First.' }] } }),
+    L({ type: 'user', message: { content: [{ type: 'tool_result', content: big }] } }),
+    L({ type: 'attachment', attachment: { type: 'queued_command', prompt: 'and the reader?' } }),
+    L({ type: 'queue-operation', operation: 'enqueue', content: 'and the reader?' }),
+    L({ type: 'assistant', message: { content: [{ type: 'text', text: 'Last.' }] } }),
+  ].join('\n') + '\n');
+  assert.equal(await readConversation(f), 'First.\n\n> and the reader?\n\nLast.');
   fs.rmSync(root, { recursive: true });
 });

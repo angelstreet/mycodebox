@@ -2885,5 +2885,10 @@ body.reading #diskBanner{ display:none !important; }
 .cell.rd-on .reader .rh{ font-size:inherit; }
 .cell.rd-on .reader pre{ font-size:inherit; line-height:1.34; }
 .cell.rd-on .reader code{ font-size:inherit; }
-.cell.rd-on .reader .rq{ width:fit-content; max-width:85%; margin:1.6em 0 1.2em auto; padding:8px 14px; border-radius:14px; background:#34332f; color:#f2f1ec; white-space:pre-wrap; overflow-wrap:anywhere; }
-/* the owner's message is a right-aligned bubble, as in the Claude app; the AI's answer is the plain text on the left (owner 2026-11-20) */
+.cell.rd-on .reader .rq{ margin:1.4em 0 1.2em; padding:2px 6px 2px 2ch; text-indent:-2ch; background:#3a3a3a; color:#fff; white-space:pre-wrap; overflow-wrap:anywhere; }
+.cell.rd-on .reader .rq::before{ content:'❯ '; color:#949494; }
+/* the owner's message looks as in the terminal: ❯ and a gray background behind the text (owner 2026-11-20); the AI's answer is plain text */
+/* the reader's text column is the terminal's: same left edge and width as .b (max-width --measure, padding 6px left / 16px right) */
+@media (min-width: 1100px){
+  .view-card .card-pane .cell.rd-on .reader{ padding-left:max(14px, calc((100% - var(--measure)) / 2 + 6px)); padding-right:max(18px, calc((100% - var(--measure)) / 2 + 16px)); }
+}

@@ -25,36 +25,70 @@ function accountRoots(home) { try { return readdirSync(join(home, '.claude-accou
 const strip = (s) => String(s).replace(/<(system-reminder|task-notification|cross-session-message)[^>]*>[\s\S]*?<\/\1>/g, '').replace(/<(command-[a-z-]+|local-command-[a-z-]+)>[\s\S]*?<\/\1>/g, '').trim();
 function blocks(content) { return typeof content === 'string' ? [{ type: 'text', text: content }] : Array.isArray(content) ? content : []; }
 
-// jsonl text -> markdown-ish text for the reader: "> prompt", the reply text, the progress updates the terminal shows ("updates" thinking),
-// one `tool` line per tool call. Other thinking is never shown (the terminal does not show it either).
+// One session-file record -> the reader's text pieces: "> prompt" (also a prompt sent while the agent worked: a queued_command attachment),
+// the reply text, the progress updates the terminal shows ("updates" thinking, marked "· summary"), one `tool` line per tool call.
+// Other thinking is never shown (the terminal does not show it either).
+export function renderRecord(o) {
+  const out = [];
+  if (!o || o.isSidechain || o.isMeta) return out;
+  if (o.type === 'attachment' && o.attachment?.type === 'queued_command' && typeof o.attachment.prompt === 'string') {
+    const t = strip(o.attachment.prompt); if (t) out.push(t.split('\n').map((l) => `> ${l}`).join('\n'));
+    return out;
+  }
+  if (o.type !== 'user' && o.type !== 'assistant') return out;
+  for (const b of blocks(o.message?.content)) {
+    if (b.type === 'text') {
+      const t = strip(b.text); if (!t) continue;
+      out.push(o.type === 'user' ? t.split('\n').map((l) => `> ${l}`).join('\n') : t);
+    } else if (b.type === 'thinking' && o.type === 'assistant' && o.thinkingDisplay === 'updates') {
+      const t = strip(b.thinking || ''); if (t) out.push(`${t} · summary`);
+    } else if (b.type === 'tool_use' && o.type === 'assistant') {
+      const arg = b.input && (b.input.command || b.input.file_path || b.input.pattern || b.input.description || b.input.prompt || b.input.url || '');
+      out.push(`\`${b.name}${arg ? ' ' + String(arg).replace(/\s+/g, ' ').slice(0, 100) : ''}\``);
+    }
+  }
+  return out;
+}
+// A cheap look before JSON.parse: tool results (screenshots, file dumps) are most of a session file's bytes and never shown.
+const worth = (line) => line.includes('"queued_command"') || line.includes('"type":"assistant"') || (line.includes('"type":"user"') && !line.includes('"tool_result"'));
+
 export function renderConversation(jsonl) {
   const out = [];
   for (const line of String(jsonl).split('\n')) {
-    if (!line.trim()) continue;
-    let o; try { o = JSON.parse(line); } catch { continue; }   // the first line of a tail may be cut
-    if ((o.type !== 'user' && o.type !== 'assistant') || o.isSidechain || o.isMeta) continue;
-    for (const b of blocks(o.message?.content)) {
-      if (b.type === 'text') {
-        const t = strip(b.text); if (!t) continue;
-        out.push(o.type === 'user' ? t.split('\n').map((l) => `> ${l}`).join('\n') : t);
-      } else if (b.type === 'thinking' && o.type === 'assistant' && o.thinkingDisplay === 'updates') {
-        // "updates" mode: Claude Code prints these progress lines in the terminal (marked "· summary"), so the reader shows them too
-        const t = strip(b.thinking || ''); if (t) out.push(`${t} · summary`);
-      } else if (b.type === 'tool_use' && o.type === 'assistant') {
-        const arg = b.input && (b.input.command || b.input.file_path || b.input.pattern || b.input.description || b.input.prompt || b.input.url || '');
-        out.push(`\`${b.name}${arg ? ' ' + String(arg).replace(/\s+/g, ' ').slice(0, 100) : ''}\``);
-      }
-    }
+    if (!line.trim() || !worth(line)) continue;
+    let o; try { o = JSON.parse(line); } catch { continue; }
+    out.push(...renderRecord(o));
   }
   return out.join('\n\n');
 }
 
-export async function readConversation(file, maxBytes = TAIL_BYTES) {
+export const MAX_CHARS = 200_000;          // enough conversation for a long scroll back
+export const MAX_SCAN = 96 * 1024 * 1024;  // never read more than this from the end of the file
+const CHUNK = 4 * 1024 * 1024;
+// The newest part of the conversation: the file is read backwards in chunks until MAX_CHARS of text are found (a session file is mostly
+// tool output: 3 MB from the end held 2 kB of conversation in a 20 MB file) or MAX_SCAN bytes were read.
+export async function readConversation(file, { maxChars = MAX_CHARS, maxScan = MAX_SCAN } = {}) {
   const fh = await fsp.open(file, 'r');
   try {
-    const { size } = await fh.stat(); const start = Math.max(0, size - maxBytes);
-    const buf = Buffer.alloc(size - start); await fh.read(buf, 0, buf.length, start);
-    let text = buf.toString('utf8'); if (start > 0) text = text.slice(text.indexOf('\n') + 1);
-    return renderConversation(text);
+    const { size } = await fh.stat();
+    let pos = size, carry = Buffer.alloc(0), chars = 0;
+    const pieces = [];   // newest first
+    while (pos > 0 && size - pos < maxScan && chars < maxChars) {
+      const start = Math.max(0, pos - CHUNK);
+      const buf = Buffer.alloc(pos - start); await fh.read(buf, 0, buf.length, start);
+      let data = Buffer.concat([buf, carry]);
+      let nl = start > 0 ? data.indexOf(0x0a) : -1;   // the first line may continue in the previous chunk
+      carry = nl >= 0 ? data.subarray(0, nl) : Buffer.alloc(0);
+      const lines = data.subarray(nl + 1).toString('utf8').split('\n');
+      for (let i = lines.length - 1; i >= 0 && chars < maxChars; i--) {
+        const line = lines[i];
+        if (!line || !worth(line)) continue;
+        let o; try { o = JSON.parse(line); } catch { continue; }
+        const r = renderRecord(o);
+        for (let k = r.length - 1; k >= 0; k--) { pieces.push(r[k]); chars += r[k].length + 2; }
+      }
+      pos = start;
+    }
+    return pieces.reverse().join('\n\n');
   } finally { await fh.close(); }
 }
