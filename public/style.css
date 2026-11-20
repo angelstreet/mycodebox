@@ -2874,3 +2874,6 @@ body.reading #diskBanner{ display:none !important; }
 /* the reader's own bar is replaced by .cbar (always visible at the card's edge) */
 .cell.rd-on .reader{ scrollbar-width:none; }
 .cell.rd-on .reader::-webkit-scrollbar{ display:none; }
+
+/* narrow screens: the jump arrows sit left of the card's scrollbar (.cbar, 12 px at the edge), not over its thumb */
+@media (max-width: 1099px){ .cell > .jump{ right:22px; } }
