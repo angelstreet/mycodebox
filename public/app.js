@@ -654,15 +654,6 @@ async function altPump(session) {
   if (e.altQ) altPump(session);
 }
 const wheelPx = (ev) => ev.deltaY * (ev.deltaMode === 1 ? 16 : ev.deltaMode === 2 ? 400 : 1);
-// Scrolling a fullscreen session's terminal opens its reader, which holds the whole conversation and scrolls locally (no request per step).
-// The live screen is one tap away (the >_ button). Not persisted: the next card keeps the reader / terminal choice the user made.
-function altToReader(session) {
-  if (state.reader) return false;
-  state.reader = true;
-  for (const c of els.cardPane.children) syncCell(c);
-  return true;
-}
-
 function bindAltScroll(session, host) {
   let wheel = 0, ty = null, tacc = 0;
   let px = 16;
@@ -672,7 +663,6 @@ function bindAltScroll(session, host) {
     if (entry) entry.scrollAt = Date.now();
     if (!entry?.alt) return;
     e.preventDefault(); e.stopPropagation();
-    if (altToReader(session)) return;
     px = altRowPx(session);
     wheel += wheelPx(e);
     const k = notches(wheel);
@@ -685,7 +675,6 @@ function bindAltScroll(session, host) {
     if (!entry?.alt || ty == null) return;
     const y = e.touches[0].clientY; tacc += y - ty; ty = y;
     e.preventDefault();
-    if (altToReader(session)) return;
     px = altRowPx(session);
     const k = notches(tacc);   // finger down = older, like a list
     if (k) { altScroll(session, k > 0 ? 'up' : 'down', Math.abs(k)); tacc -= k * px; }
@@ -698,7 +687,7 @@ function bindAltScroll(session, host) {
 //  - a terminal with scrollback: xterm's real viewportY / baseY;
 //  - a fullscreen (alternate-screen) terminal: there is no scrollback and the app's position cannot be read, so the thumb is an ESTIMATE:
 //    at the bottom (live screen) unless Claude Code is showing "Jump to bottom" in the pane (it does that only while scrolled up), then it
-//    sits near the top. Scrolling such a card opens the reader (altToReader), whose bar is real.
+//    sits near the top. The card never changes view by itself: the reader / terminal choice is the user's (the >_ button).
 // Thumb: >= 28 px, bright on a visible track; drag it or tap the track to jump (reader / scrollback terminal).
 const SBAR_PX = 12;
 function ensureBar(cell) {
@@ -719,7 +708,7 @@ function ensureBar(cell) {
   bar.addEventListener('pointerdown', (ev) => {
     ev.preventDefault(); ev.stopPropagation();
     const m = metrics();
-    if (m && !m.draggable && m.kind === 'alt') { altToReader(cell.dataset.session); return; }
+    if (m && !m.draggable) return;
     bar.setPointerCapture(ev.pointerId); jump(ev);
     const mv = (e) => jump(e), up = () => { bar.removeEventListener('pointermove', mv); bar.removeEventListener('pointerup', up); bar.removeEventListener('pointercancel', up); };
     bar.addEventListener('pointermove', mv); bar.addEventListener('pointerup', up); bar.addEventListener('pointercancel', up);
@@ -2249,7 +2238,6 @@ function jumpTo(cell, name, where) {
     return;
   }
   const e = state.terms.get(name);
-  if (e?.alt && altToReader(name)) { const r = cell.querySelector('.reader'); if (r) r.scrollTop = where === 'top' ? 0 : r.scrollHeight; return; }
   if (e?.alt) { altScroll(name, where); return; }
   const term = e?.term;
   if (!term) return;
@@ -2485,10 +2473,17 @@ function toggleReader() {
 // "earlier conversation": the whole captured history (prompts, replies, tool names) instead of just the last reply
 function loadTranscript(n, c) {
   return fetch(`/api/transcript/${encodeURIComponent(n)}`).then((r) => r.ok ? r.json() : Promise.reject(r.status))
-    .then((d) => { c.full = d.text || ''; }).catch(() => {});
+    .then((d) => { c.full = d.text || ''; c.fullAt = Date.now(); }).catch(() => {});
 }
 function syncReader(cell, n) {
   const st = state.status[n] || {};
+  // The whole conversation is shown (a fullscreen session, or "earlier conversation"): keep it in step with the terminal while the agent
+  // writes. The reply hash only moves at the end of a reply, so without this the reader lagged a working turn behind the screen.
+  { const c0 = state.replies.get(n);
+    if (c0 && c0.full != null && !c0.fullBusy && Date.now() - (c0.fullAt || 0) > 5000) {
+      c0.fullBusy = true;
+      loadTranscript(n, c0).finally(() => { c0.fullBusy = false; c0.fullAt = Date.now(); const cur = els.cardPane.querySelector(`[data-session="${cssEscape(n)}"]`); if (cur) paintReader(cur, n); });
+    } }
   const hash = st.replyHash ?? '';
   let c = state.replies.get(n);
   const now = Date.now();

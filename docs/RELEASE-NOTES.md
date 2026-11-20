@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A card no longer switches between reader and terminal by itself** — scrolling a fullscreen session's terminal switched the card to the reader without saving it, so the next reload (every deploy) flipped it back to the terminal: views changed under the owner. Now only the `>_` button changes the view; a fullscreen terminal scrolls the live screen, the reader scrolls the conversation locally, and an open reader showing the whole conversation reloads it every 5 s so it keeps up with a working agent (it lagged a turn behind the screen) · area: dashboard
+
 - **The jump arrows no longer cover the scrollbar thumb on a phone** — on narrow screens the ⤒ ⤓ buttons sit 22 px from the card's edge, left of the 12 px scrollbar · area: dashboard
 
 - **The card's scrollbar is a visible bar with a moving thumb at the card's right edge** — the first bar was an empty faint track inside the text column for fullscreen sessions and nothing moved. Now one bar per card sits at the card's right edge, a bright thumb (at least 28 px) on a visible track that follows the reader, a terminal with scrollback, or a fullscreen terminal (there the thumb is an estimate: the app's position cannot be read, so it is at the bottom unless Claude Code shows "Jump to bottom"; the first scroll opens the reader, whose thumb is real). Drag the thumb or tap the track to jump. A fullscreen session's conversation is preloaded so the first scroll is instant · area: dashboard
