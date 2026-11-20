@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The resize-hint box is really gone** — Claude Code draws its close mark as ✕ (U+2715), not ×, so the box's top border was never matched and stayed above the prompt; both marks are matched now (test built from the captured pane) · area: dashboard
+
 - **Your messages stand out in the reader, and the resize-hint box no longer leaves a hole above the prompt** — in the conversation view each owner message is an orange-barred, tinted block labelled "You", so it is not mistaken for the AI's answer (harness notices such as `<task-notification>` are no longer shown as yours). The reader now uses the terminal's actual text size and line spacing (the terminal shrinks its font to fit the pane; the reader stayed bigger), at least 11 px. Claude Code's "Resize your terminal…" box is removed whole (its wrapped top border, the wrapped hint, or the bordered box with its × alone), and the rows it took go to the top of the screen instead of sitting empty between the text and the prompt · area: dashboard
 
 - **A gray scrollbar that follows the scroll, and a reader in the terminal's style** — the thumb is solid gray (at least 40 px) on a visible track; on a fullscreen terminal it moves with every wheel / touch step (an estimate over the conversation's length, reset when Claude Code leaves its "Jump to bottom" / "new messages (ctrl+End)" hint) and ⤓ sends ctrl+End, Claude Code's own jump to the bottom. The reader uses the terminal's font, size and colours, with the owner's prompts as a highlighted `>` block and Claude Code's progress lines marked `· summary`, as in the terminal · area: dashboard
