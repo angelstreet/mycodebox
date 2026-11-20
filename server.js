@@ -2579,7 +2579,8 @@ async function handleHttp(req, res) {
     const session = decodeURIComponent(p.slice('/api/reply/'.length));
     const t = track.get(session);
     let reply = t ? t.reply : null;
-    if (!t) {
+    if (remote.owns(session)) reply = remote.lastText(session);   // a Mac session: its last stop is the reply
+    else if (!t) {
       try {
         const lines = plainLines(await capturePane(session));
         reply = replyOf(lines, bodyEnd(lines));
