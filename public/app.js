@@ -496,6 +496,8 @@ function layoutTerm(session) {
       if (term.options.fontSize !== f) term.options.fontSize = f;
     }
     p = propose() || p;
+    // the reader uses the terminal's actual text size (it shrinks to fit the pane), so both views read alike (owner 2026-11-20)
+    { const cellEl = host.closest('.cell'); if (cellEl) cellEl.style.setProperty('--tfa', String(term.options.fontSize)); }
   }
   // A freshly opened card whose pane is not at the card's width yet (we are about to resize it): keep it invisible for that moment (at most
   // 1.8 s) instead of showing the old width, then re-wrapping. Fades in once the size is settled.
@@ -636,7 +638,8 @@ const altRowPx = (session) => { const e = state.terms.get(session); const h = e?
 function altScroll(session, dir, n = 1) {
   const e = state.terms.get(session);
   if (!e) return;
-  if (dir === 'top' || dir === 'bottom') { e.altQ = 0; altPost(session, dir, 1); return; }
+  if (dir === 'top' || dir === 'bottom') { e.altQ = 0; e.altUp = dir === 'top' ? 1e9 : 0; altPost(session, dir, 1); return; }
+  e.altUp = Math.max(0, (e.altUp || 0) + (dir === 'up' ? n : -n));   // the scrollbar's estimate: rows scrolled up from the live end
   e.altQ = (e.altQ || 0) + (dir === 'up' ? n : -n);
   altPump(session);
 }
@@ -686,8 +689,7 @@ function bindAltScroll(session, host) {
 //  - the reader: real scrollTop / scrollHeight;
 //  - a terminal with scrollback: xterm's real viewportY / baseY;
 //  - a fullscreen (alternate-screen) terminal: there is no scrollback and the app's position cannot be read, so the thumb is an ESTIMATE:
-//    at the bottom (live screen) unless Claude Code is showing "Jump to bottom" in the pane (it does that only while scrolled up), then it
-//    sits near the top. The card never changes view by itself: the reader / terminal choice is the user's (the >_ button).
+//    the notches sent up over the conversation's length (barMetrics), snapped to the bottom whenever Claude Code stops showing "Jump to bottom". The card never changes view by itself: the reader / terminal choice is the user's (the >_ button).
 // Thumb: >= 28 px, bright on a visible track; drag it or tap the track to jump (reader / scrollback terminal).
 const SBAR_PX = 12;
 function ensureBar(cell) {
@@ -728,8 +730,14 @@ function barMetrics(cell) {
   const entry = state.terms.get(name); const host = entry?.host; if (!entry || !host || !host.isConnected) return null;
   const b = entry.term.buffer.active;
   if (entry.alt) {
-    const scrolled = /Jump to bottom/i.test(entry.lastPane || '');
-    return { kind: 'alt', entry, top: host.offsetTop, size: host.clientHeight, pos: scrolled ? 0.15 : 1, frac: 0.2, draggable: false };
+    // ESTIMATE (the app's position cannot be read): rows scrolled up = the wheel / touch notches sent (one row each), over the conversation's
+    // length in rows (the loaded conversation's lines, at least two screens). At the live end ("Jump to bottom" gone) it snaps to the bottom.
+    const scrolled = /Jump to bottom|new messages? \(ctrl\+End\)/i.test(entry.lastPane || '');   // Claude Code's hints while scrolled up
+    if (!scrolled && Date.now() - (entry.scrollAt || 0) > 2500) entry.altUp = 0;   // not while the app is still redrawing after a scroll
+    const rows = entry.term.rows || 24, full = state.replies.get(name)?.full;
+    const total = Math.max(rows * 2, full ? Math.round(full.split('\n').length * 1.4) : 0);
+    const up = Math.min(total, entry.altUp || (scrolled ? rows : 0));
+    return { kind: 'alt', entry, top: host.offsetTop, size: host.clientHeight, pos: 1 - up / total, frac: rows / (total + rows), draggable: false };
   }
   return { kind: 'term', entry, top: host.offsetTop, size: host.clientHeight, pos: b.baseY > 0 ? b.viewportY / b.baseY : 1, frac: b.baseY + entry.term.rows ? entry.term.rows / (b.baseY + entry.term.rows) : 1, draggable: b.baseY > 0 };
 }
@@ -2642,7 +2650,7 @@ function renderReply(text) {
   const lines = String(text).replace(/\t/g, '    ').split('\n');
   const out = [];
   let para = [], code = null, fence = false;
-  const flushPara = () => { if (para.length) { out.push(`<p>${para.join('<br>')}</p>`); para = []; } };
+  const flushPara = () => { if (para.length) { out.push(para.prompt ? `<div class="rq">${para.join('<br>')}</div>` : `<p>${para.join('<br>')}</p>`); para = []; } };
   const flushCode = () => { if (code) { out.push(`<pre>${escapeHtml(code.join('\n'))}</pre>`); code = null; } };
   for (let li = 0; li < lines.length; li++) {
     const raw = lines[li];
@@ -2662,6 +2670,9 @@ function renderReply(text) {
     if (/^ {4,}\S/.test(line)) { flushPara(); (code ||= []).push(line.slice(4)); continue; }
     if (code) { if (!line.trim()) { code.push(''); continue; } flushCode(); }
     if (!line.trim()) { flushPara(); continue; }
+    // "> " lines are the owner's prompts (the conversation view): one highlighted block, like the prompt in the terminal
+    if (/^> ?/.test(line)) { if (!para.prompt) { flushPara(); para.prompt = true; } para.push(inlineMd(line.replace(/^> ?/, ''))); continue; }
+    if (para.prompt) flushPara();
     const h = /^(#{1,4})\s+(.*)$/.exec(line);
     if (h) { flushPara(); out.push(`<div class="rh">${inlineMd(h[2])}</div>`); continue; }
     // tmux hard-wraps at the pane width (can be ~20 cols): glue wrapped lines back together,

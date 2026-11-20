@@ -422,10 +422,10 @@ body{ display:flex; flex-direction:column; }
 .cell .xterm-viewport{ scrollbar-width:none; }
 .cell .xterm-viewport::-webkit-scrollbar{ display:none; }
 .cell .b{ padding-right:16px; }
-.cell .cbar{ position:absolute; right:2px; width:12px; border-radius:6px; background:rgba(255,255,255,.14); z-index:6; touch-action:none; cursor:pointer; }
-.cell .cthumb{ position:absolute; left:1px; right:1px; top:0; min-height:28px; border-radius:5px; background:rgba(235,236,240,.72); box-shadow:0 0 0 1px rgba(0,0,0,.35); }
-.cell .cbar:hover .cthumb{ background:rgba(255,255,255,.92); }
-.cell .cbar.est .cthumb{ background:rgba(235,236,240,.5); }
+.cell .cbar{ position:absolute; right:2px; width:12px; border-radius:6px; background:#333331; z-index:6; touch-action:none; cursor:pointer; }
+.cell .cthumb{ position:absolute; left:2px; right:2px; top:0; min-height:40px; border-radius:4px; background:#8e8c86; }
+.cell .cbar:hover .cthumb{ background:#b0aea6; }
+.cell .cbar.est .cthumb{ background:#7a7872; }
 
 /* Zen / true-fullscreen: double-tap the card body in card mode to hide the header so
    the terminal or reader gets the full vertical space. Tapping the header (now collapsed)
@@ -2877,3 +2877,14 @@ body.reading #diskBanner{ display:none !important; }
 
 /* narrow screens: the jump arrows sit left of the card's scrollbar (.cbar, 12 px at the edge), not over its thumb */
 @media (max-width: 1099px){ .cell > .jump{ right:22px; } }
+
+/* the reader looks like the terminal (owner 2026-11-20): same font, size and colours, but wrapped to the card, spaced between messages,
+   the owner's prompts as a highlighted block like the terminal's prompt line, selectable text */
+.cell.rd-on .reader{ font-family:'JetBrains Mono', monospace; font-size:max(11px, calc(var(--tfa, var(--tf, 12)) * 1px)); line-height:1.34; color:#dddbd2; background:var(--bg-term); }
+.cell.rd-on .reader p{ margin:0 0 1.2em; }
+.cell.rd-on .reader .rh{ font-size:inherit; }
+.cell.rd-on .reader pre{ font-size:inherit; line-height:1.34; }
+.cell.rd-on .reader code{ font-size:inherit; }
+.cell.rd-on .reader .rq{ margin:1.6em 0 1em; padding:8px 12px 9px; border-left:3px solid #e89a4a; border-radius:0 8px 8px 0; background:rgba(232,154,74,.12); color:#fff; white-space:pre-wrap; overflow-wrap:anywhere; }
+/* the owner's message is labelled, the AI's answer is the plain text that follows (owner 2026-11-20: "I cannot tell my questions from the AI's answers") */
+.cell.rd-on .reader .rq::before{ content:'You'; display:block; margin-bottom:3px; font-weight:700; font-size:.85em; letter-spacing:.04em; color:#e89a4a; }

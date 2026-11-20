@@ -8,6 +8,7 @@ const sample = [
   L({ type: 'user', message: { content: 'fix the bug\nplease' } }),
   L({ type: 'user', isMeta: true, message: { content: 'meta' } }),
   L({ type: 'user', message: { content: [{ type: 'text', text: '<system-reminder>hidden</system-reminder>' }] } }),
+  L({ type: 'user', message: { content: '<task-notification>\n<task-id>b1</task-id>\n</task-notification>' } }),
   L({ type: 'assistant', message: { content: [{ type: 'text', text: 'Looking.' }, { type: 'tool_use', name: 'Bash', input: { command: 'npm test' } }] } }),
   L({ type: 'user', message: { content: [{ type: 'tool_result', content: 'ok' }] } }),
   L({ type: 'assistant', isSidechain: true, message: { content: [{ type: 'text', text: 'side' }] } }),
@@ -18,7 +19,7 @@ const sample = [
 ].join('\n');
 
 test('renderConversation: prompts quoted, replies and tool lines kept, terminal progress updates kept; meta / sidechain / reminders / results / other thinking dropped', () => {
-  assert.equal(renderConversation(sample), '> fix the bug\n> please\n\nLooking.\n\n`Bash npm test`\n\n_Wave 1 holds._\n\nDone.');
+  assert.equal(renderConversation(sample), '> fix the bug\n> please\n\nLooking.\n\n`Bash npm test`\n\nWave 1 holds. · summary\n\nDone.');
 });
 test('findSessionFile finds <id>.jsonl under any project dir, refuses a bad id', async () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'convo-')));

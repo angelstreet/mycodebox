@@ -21,7 +21,8 @@ export async function findSessionFile(id, roots = defaultRoots()) {
 export function defaultRoots(home = homedir()) { return [join(home, '.claude', 'projects'), ...accountRoots(home)]; }
 function accountRoots(home) { try { return readdirSync(join(home, '.claude-accounts')).map((a) => join(home, '.claude-accounts', a, 'projects')); } catch { return []; } }
 
-const strip = (s) => String(s).replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').replace(/<(command-[a-z-]+|local-command-[a-z-]+)>[\s\S]*?<\/\1>/g, '').trim();
+// harness notices are not the owner's words: a <task-notification> or <system-reminder> in a user turn is dropped, never shown as "You"
+const strip = (s) => String(s).replace(/<(system-reminder|task-notification|cross-session-message)[^>]*>[\s\S]*?<\/\1>/g, '').replace(/<(command-[a-z-]+|local-command-[a-z-]+)>[\s\S]*?<\/\1>/g, '').trim();
 function blocks(content) { return typeof content === 'string' ? [{ type: 'text', text: content }] : Array.isArray(content) ? content : []; }
 
 // jsonl text -> markdown-ish text for the reader: "> prompt", the reply text, the progress updates the terminal shows ("updates" thinking),
@@ -38,7 +39,7 @@ export function renderConversation(jsonl) {
         out.push(o.type === 'user' ? t.split('\n').map((l) => `> ${l}`).join('\n') : t);
       } else if (b.type === 'thinking' && o.type === 'assistant' && o.thinkingDisplay === 'updates') {
         // "updates" mode: Claude Code prints these progress lines in the terminal (marked "· summary"), so the reader shows them too
-        const t = strip(b.thinking || ''); if (t) out.push(`_${t.replace(/_/g, '\\_')}_`);
+        const t = strip(b.thinking || ''); if (t) out.push(`${t} · summary`);
       } else if (b.type === 'tool_use' && o.type === 'assistant') {
         const arg = b.input && (b.input.command || b.input.file_path || b.input.pattern || b.input.description || b.input.prompt || b.input.url || '');
         out.push(`\`${b.name}${arg ? ' ' + String(arg).replace(/\s+/g, ' ').slice(0, 100) : ''}\``);
