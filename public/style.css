@@ -8,14 +8,14 @@
   --measure:    820px;
   /* the reader copies the Claude Code app's reading view (owner 2026-11-20, from a screenshot): sans 15px, near-black #191919 page, #efefef text, a ~730px column */
   --reader-measure: 730px;
-  --reader-bg:  #191919;
+  --reader-bg:  var(--bg-term);
   --reader-ink: #efefef;
   /* warm grey, not near-black, with softer grey text: the Claude Code app's dark palette reads better (owner 2026-11-06) */
-  --bg:        #262624;
-  --bg-2:      #1f1e1d;
-  --bg-3:      #34332f;
-  --bg-term:   #262624;
-  --bg-in:     #1a1918;   /* inputs and the grid backdrop: one step below the panel */
+  --bg:        #191919;   /* owner 2026-11-20: the Claude Code app's near-black page (#191919), its sidebar a step lighter (#1f1f1f) */
+  --bg-2:      #1f1f1f;
+  --bg-3:      #2b2b2a;
+  --bg-term:   #191919;
+  --bg-in:     #141414;   /* inputs and the grid backdrop: one step below the panel */
   --line:      rgba(255,255,255,0.08);
   --line-2:    rgba(255,255,255,0.15);
   --ink:       #e3e1d8;

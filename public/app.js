@@ -420,9 +420,9 @@ function getTerm(session) {
     disableStdin: true,
     allowProposedApi: true,
     theme: {
-      background: '#262624', foreground: '#dddbd2', cursor: '#6ed1c0',
-      cursorAccent:'#262624', selectionBackground: 'rgba(232,154,74,0.25)',
-      black:'#262624', red:'#ff7a7a', green:'#4ec07a', yellow:'#e89a4a',
+      background: '#191919', foreground: '#e6e6e6', cursor: '#6ed1c0',
+      cursorAccent:'#191919', selectionBackground: 'rgba(232,154,74,0.25)',
+      black:'#191919', red:'#ff7a7a', green:'#4ec07a', yellow:'#e89a4a',
       blue:'#7aa7ff', magenta:'#c08cf0', cyan:'#6ed1c0', white:'#e6e8ee',
       brightBlack:'#85837b', brightRed:'#ff9a9a', brightGreen:'#7ed99a',
       brightYellow:'#ffc4a0', brightBlue:'#9ab1ff', brightMagenta:'#d4adff',
