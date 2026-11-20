@@ -1245,7 +1245,7 @@ button.prio{ cursor:pointer; }
 .rdychip{ flex-shrink:0; height:20px; padding:0 6px; margin-left:4px; border-radius:6px; font-size:10.5px; font-weight:600; line-height:20px; background:rgba(80,180,120,0.16); color:var(--ink-2); border:1px solid rgba(80,180,120,0.5); text-decoration:none; white-space:nowrap; }
 .cell .h .pr, .row-item .l1 .pr, .session-list .sub .pr{ display:inline-flex; flex-shrink:0; }
 /* owner 2026-11-20: the left list gives the width to the name: no priority badge, no reporter bolt (priority stays on the card and header) */
-.session-list .sub .pr .prio, .session-list .sub .rp{ display:none; }
+.session-list .sub .pr .prio, .session-list .sub .rp, .session-list .sub .pp, .session-list .sub .rdychip{ display:none !important; }   /* owner 2026-11-20: no held / paused / ready / RC pills in the left list either: the dot shows the state, the card carries the detail */
 .session-list .sub .pr{ width:auto; }
 .session-list .sub .pr .prio{ height:15px; min-width:20px; padding:0 4px; font-size:9.5px; }
 .session-list .sub .sst, .session-list .sub .ag{ min-width:0; overflow:hidden; text-overflow:ellipsis; }
