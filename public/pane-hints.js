@@ -6,11 +6,11 @@
 const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
 const plain = (l) => l.replace(ANSI, '');
 const HINT = /Resize your terminal to at least \d+/;   // the rest ("columns ...") may be wrapped onto the next line
-const BORDER = /^\s*[╭╮╰╯┌┐└┘─┄╌×x ]+\s*$/;                          // a border-only line (top or bottom, or a wrapped piece of it)
+const BORDER = /^\s*[╭╮╰╯┌┐└┘─┄╌×✕x ]+\s*$/;   // ✕ (U+2715) is the close mark Claude Code draws, × kept for older builds                          // a border-only line (top or bottom, or a wrapped piece of it)
 const REST = /^\s*(?:│\s*)?(?:columns to show the diff panel|to show the diff panel|diff panel|show the diff panel)?\s*│?\s*$/;   // the hint's wrapped tail or an empty box row
 
 // text: the pane (history + screen); the removed rows come back as empty lines at its very top.
-const isBox = (l) => { const p = plain(l); return HINT.test(p) || (p.includes('×') && BORDER.test(p) && /[╭┌]/.test(p + '╭') && /─{3,}/.test(p)); };   // the hint, or the box's own top border (its × close mark) drawn without it
+const isBox = (l) => { const p = plain(l); return HINT.test(p) || (/[×✕]/.test(p) && BORDER.test(p) && /[╭┌]/.test(p + '╭') && /─{3,}/.test(p)); };   // the hint, or the box's own top border (its × close mark) drawn without it
 export function stripResizeHint(text) {
   if (!text || !text.split('\n').some(isBox)) return text;
   let lines = text.split('\n');

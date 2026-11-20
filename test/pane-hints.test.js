@@ -25,3 +25,11 @@ test('colour codes around the hint do not hide it, other text is untouched', () 
   const plain = 'nothing to hide\n╭──╮\n│ other box │\n╰──╯';
   assert.equal(stripResizeHint(plain), plain);
 });
+
+test('the real box as captured on 2026-11-20 (✕ close mark, dim colour codes) goes whole', () => {
+  const text = ['reply',
+    '\x1b[2m╭──────────────────\x1b[0m\x1b[38;5;246m\x1b[49m✕\x1b[2m\x1b[39m─╮',
+    '│\x1b[0m\x1b[39m\x1b[49m \x1b[38;5;246mResize your terminal to at least 110 columns to show the diff panel\x1b[39m   \x1b[2m│',
+    '╰────────────────────╯', '', '── session ─', '❯ '].join('\n');
+  assert.deepEqual(stripResizeHint(text).split('\n'), ['', '', '', 'reply', '', '── session ─', '❯ ']);
+});
