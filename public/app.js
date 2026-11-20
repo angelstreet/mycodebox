@@ -416,6 +416,7 @@ function getTerm(session) {
     cursorStyle: 'bar',
     convertEol: true,
     scrollback: 10000,
+    smoothScrollDuration: 100,   // a wheel notch glides over ~6 frames instead of jumping 100 px in one (bug scroll-not-fluid)
     disableStdin: true,
     allowProposedApi: true,
     theme: {
@@ -445,8 +446,10 @@ function flushTerm(session) {
   const e = state.terms.get(session);
   if (e && e.held) { e.held = false; paintTerm(session, true); }
 }
+// Mouse only: a finger on the card is a scroll drag, and holding repaints for it froze a scrolled fullscreen pane until the finger lifted
+// (bug scroll-not-fluid: 7 scroll requests in a 2 s drag, the text moved once, at the end).
 document.addEventListener('pointerdown', (ev) => {
-  if (ev.button !== 0) return;
+  if (ev.button !== 0 || ev.pointerType !== 'mouse') return;
   for (const e of state.terms.values()) if (e.term.element?.contains(ev.target)) { e.selecting = true; return; }
 }, true);
 function endSelecting() {
@@ -509,6 +512,8 @@ function layoutTerm(session) {
   scheduleFit(session);
   const key = `${cols}x${rows}`;
   if (term.cols === cols && term.rows === rows) { entry.laidOut = key; return false; }
+  // A resize can drop xterm's viewport to the bottom: remember where the reader was, the full repaint that follows puts them back.
+  { const b = term.buffer.active; if (b.viewportY < b.baseY) entry.keepFromBottom = b.baseY - b.viewportY; }
   try { term.resize(cols, rows); } catch { return false; }
   entry.laidOut = key;
   return true;
@@ -619,28 +624,94 @@ function relayoutTerm(session) {
 }
 
 // A pane in tmux's alternate screen (Claude Code fullscreen) has no scrollback to show: the wheel, a touch drag and the jump buttons
-// are forwarded to the app as PageUp / PageDown (POST /api/scroll, alt-scroll.js). bug: lol-first-waves could not be scrolled.
-let altBusy = 0;
-function altScroll(session, dir) {
-  const now = Date.now();
-  if (dir === 'up' || dir === 'down') { if (now - altBusy < 150) return; altBusy = now; }
-  fetch(`/api/scroll/${encodeURIComponent(session)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ dir }) }).catch(() => {});
+// are forwarded to the app (POST /api/scroll, alt-scroll.js): wheel notches of a few lines when the app tracks the mouse (Claude Code),
+// else PageUp / PageDown. bug: lol-first-waves could not be scrolled.
+// Fluid, not request-per-step (bug scroll-not-fluid): every pixel of wheel or finger counts (the remainder is kept, nothing is dropped by
+// a throttle), one request is on its way at a time and what gathered meanwhile goes in the next one as `n` notches; the server answers
+// once the app has redrawn and pushes the new pane at once, so the text moves in about one round trip instead of on the next 1 s tick.
+// Claude Code scrolls one line per wheel notch: one notch per text row of travel, so the text follows the finger and a 100 px mouse
+// notch moves about as far as it does in a normal card.
+const altRowPx = (session) => { const e = state.terms.get(session); const h = e?.host?.clientHeight, r = e?.term?.rows; return h && r ? Math.max(8, h / r) : 16; };
+function altScroll(session, dir, n = 1) {
+  const e = state.terms.get(session);
+  if (!e) return;
+  if (dir === 'top' || dir === 'bottom') { e.altQ = 0; altPost(session, dir, 1); return; }
+  e.altQ = (e.altQ || 0) + (dir === 'up' ? n : -n);
+  altPump(session);
 }
+function altPost(session, dir, n) {
+  return fetch(`/api/scroll/${encodeURIComponent(session)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ dir, n }) }).catch(() => {});
+}
+const ALT_MAX_NOTCHES = 60;   // = MAX_NOTCHES in alt-scroll.js
+async function altPump(session) {
+  const e = state.terms.get(session);
+  if (!e || e.altBusy || !e.altQ) return;
+  const n = Math.min(ALT_MAX_NOTCHES, Math.abs(e.altQ)), dir = e.altQ > 0 ? 'up' : 'down';
+  e.altQ -= Math.sign(e.altQ) * n;
+  e.altBusy = true;
+  try { await altPost(session, dir, n); } finally { e.altBusy = false; }
+  if (e.altQ) altPump(session);
+}
+const wheelPx = (ev) => ev.deltaY * (ev.deltaMode === 1 ? 16 : ev.deltaMode === 2 ? 400 : 1);
 function bindAltScroll(session, host) {
   let wheel = 0, ty = null, tacc = 0;
+  let px = 16;
+  const notches = (acc) => Math.trunc(acc / px);
   host.addEventListener('wheel', (e) => {
-    if (!state.terms.get(session)?.alt) return;
+    const entry = state.terms.get(session);
+    if (entry) entry.scrollAt = Date.now();
+    if (!entry?.alt) return;
     e.preventDefault(); e.stopPropagation();
-    wheel += e.deltaY;
-    if (Math.abs(wheel) >= 40) { altScroll(session, wheel < 0 ? 'up' : 'down'); wheel = 0; }
+    px = altRowPx(session);
+    wheel += wheelPx(e);
+    const k = notches(wheel);
+    if (k) { altScroll(session, k < 0 ? 'up' : 'down', Math.abs(k)); wheel -= k * px; }
   }, { capture: true, passive: false });
   host.addEventListener('touchstart', (e) => { ty = e.touches[0]?.clientY ?? null; tacc = 0; }, { capture: true, passive: true });
   host.addEventListener('touchmove', (e) => {
-    if (!state.terms.get(session)?.alt || ty == null) return;
+    const entry = state.terms.get(session);
+    if (entry) entry.scrollAt = Date.now();
+    if (!entry?.alt || ty == null) return;
     const y = e.touches[0].clientY; tacc += y - ty; ty = y;
     e.preventDefault();
-    if (Math.abs(tacc) >= 40) { altScroll(session, tacc > 0 ? 'up' : 'down'); tacc = 0; }   // finger down = older, like a list
+    px = altRowPx(session);
+    const k = notches(tacc);   // finger down = older, like a list
+    if (k) { altScroll(session, k > 0 ? 'up' : 'down', Math.abs(k)); tacc -= k * px; }
   }, { capture: true, passive: false });
+}
+
+// Always-visible scrollbar on the right edge of a card (owner 2026-11-20), drawn by us in the card's right gutter: xterm's own bar painted over
+// the last columns of text and is hidden on phones. A pane with scrollback gets a real thumb (drag it, or tap the track). A pane in tmux's
+// alternate screen has no scrollback to measure, so it gets the track only, honestly: the wheel / drag / jump arrows scroll the app.
+function bindScrollbar(session) {
+  const entry = state.terms.get(session);
+  const el = entry?.term?.element;
+  if (!el || entry.sbar) return;
+  const bar = document.createElement('div'); bar.className = 'sbar';
+  const thumb = document.createElement('div'); thumb.className = 'sthumb'; bar.appendChild(thumb);
+  el.appendChild(bar); entry.sbar = bar;
+  const sync = () => {
+    const b = entry.term.buffer.active, total = b.baseY + entry.term.rows;
+    bar.classList.toggle('noscroll', !!entry.alt || b.baseY <= 0);
+    if (entry.alt || b.baseY <= 0) return;
+    const H = bar.clientHeight, th = Math.max(28, Math.round(H * entry.term.rows / total));
+    thumb.style.height = th + 'px';
+    thumb.style.transform = `translateY(${Math.round((H - th) * (b.viewportY / b.baseY))}px)`;
+  };
+  entry.sbarSync = sync;
+  entry.term.onScroll(sync); entry.term.onWriteParsed?.(sync); entry.term.onResize?.(sync);
+  const toLine = (ev) => {
+    const r = bar.getBoundingClientRect(), b = entry.term.buffer.active;
+    const f = Math.min(1, Math.max(0, (ev.clientY - r.top) / r.height));
+    entry.term.scrollToLine(Math.round(f * b.baseY));
+  };
+  bar.addEventListener('pointerdown', (ev) => {
+    if (entry.alt || entry.term.buffer.active.baseY <= 0) return;
+    ev.preventDefault(); ev.stopPropagation(); bar.setPointerCapture(ev.pointerId); toLine(ev);
+    const mv = (e) => toLine(e), up = () => { bar.removeEventListener('pointermove', mv); bar.removeEventListener('pointerup', up); bar.removeEventListener('pointercancel', up); };
+    bar.addEventListener('pointermove', mv); bar.addEventListener('pointerup', up); bar.addEventListener('pointercancel', up);
+  });
+  sync();
 }
 
 function mountTerm(session, host) {
@@ -669,6 +740,7 @@ function mountTerm(session, host) {
   if (entry.host !== host) {
     entry.host = host;
     bindAltScroll(session, host);
+    bindScrollbar(session);
     if (entry.ro) entry.ro.disconnect();
     if (typeof ResizeObserver !== 'undefined') {
       let raf = 0;
@@ -692,21 +764,34 @@ function paintTerm(session, force) {
   const { term } = entry;
   if (entry.selecting || term.hasSelection()) { entry.held = true; return; }
   const buf = term.buffer.active;
-  const atBottom = buf.viewportY >= buf.baseY;
-  const fromBottom = buf.baseY - buf.viewportY;
+  const kept = entry.keepFromBottom || 0;
+  const atBottom = !kept && buf.viewportY >= buf.baseY;
+  const fromBottom = kept || buf.baseY - buf.viewportY;
   const text = closeBgAtNewlines(entry.lastPane.replace(/\n+$/, ''));
   // Only rows of the visible screen changed (the usual tick of a live session): overwrite them in place, no clear, no blink, scroll untouched.
   // A resize, a changed history line or a changed line count is a full repaint; so is every 60th paint, as a cheap guard against drift.
+  // The drift guard (a full repaint every 60th paint) waits while the reader is scrolled up: it is exactly the jump they would see.
   const grid = `${term.cols}x${term.rows}`;
-  const painted = entry.painted && entry.painted.grid === grid && entry.painted.n < 60 ? entry.painted : null;
+  const painted = entry.painted && entry.painted.grid === grid && (entry.painted.n < 60 || !atBottom) ? entry.painted : null;
   const plan = force ? { mode: 'full' } : planPaint(painted && painted.text, text, term.rows);
   if (plan.mode === 'skip') return;
-  if (plan.mode === 'inplace') { term.write(plan.data); entry.painted = { grid, text, n: painted.n + 1 }; return; }
+  if (plan.mode === 'inplace' || plan.mode === 'append') { term.write(plan.data); entry.painted = { grid, text, n: painted.n + 1 }; return; }
+  // A full repaint (a history line changed) while the reader is scrolling: wait until the wheel / finger has been still for a moment.
+  if (!force && !atBottom && Date.now() - (entry.scrollAt || 0) < 1200) {
+    clearTimeout(entry.deferTimer);
+    entry.deferTimer = setTimeout(() => paintTerm(session), 1300);
+    return;
+  }
   entry.painted = { grid, text, n: 0 };
+  entry.keepFromBottom = 0;
   term.write('\x1b[?25l\x1b[3J\x1b[2J\x1b[H' + text, () => {
     const b = term.buffer.active;
+    // Put the reader back at once: with smooth scrolling on, the restore glided from the top of the rewritten buffer (a 2 500 px sweep).
+    const smooth = term.options.smoothScrollDuration;
+    if (smooth) term.options.smoothScrollDuration = 0;
     if (atBottom) term.scrollToBottom();
     else term.scrollToLine(Math.max(0, b.baseY - fromBottom));
+    if (smooth) term.options.smoothScrollDuration = smooth;
   });
 }
 
@@ -762,7 +847,7 @@ function connectSession(session) {
       const msg = JSON.parse(ev.data);
       if (msg.type === 'snapshot') {
         const entry = state.terms.get(msg.session);
-        if (entry) entry.alt = !!msg.alt;   // alternate screen, no scrollback: the wheel goes to the app (altScroll)
+        if (entry) { entry.alt = !!msg.alt; entry.sbarSync?.(); }   // alternate screen, no scrollback: the wheel goes to the app (altScroll)
         if (entry?.historyLines > 1000) {
           fetch(`/api/pane/${encodeURIComponent(msg.session)}?lines=${entry.historyLines}`)
             .then((r) => r.ok ? r.json() : null).then((d) => { if (d) writeToTerm(msg.session, d.pane, { cols: msg.cols, rows: msg.rows }); }).catch(() => {});
