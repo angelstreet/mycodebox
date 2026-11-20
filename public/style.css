@@ -2873,7 +2873,7 @@ body.reading #diskBanner{ display:none !important; }
 #askPopup .ap-free-go { flex:0 0 auto; width:auto; min-height:40px; padding:0 16px; }
 
 /* the reader's scrollbar: always visible, 10 px, light thumb on a faint track (owner 2026-11-20); phones otherwise overlay-hide it */
-.cell.rd-on .reader{ scrollbar-width:auto; scrollbar-color:rgba(230,232,238,.55) rgba(255,255,255,.07); }
-.cell.rd-on .reader::-webkit-scrollbar{ width:10px; }
+/* no scrollbar-width / scrollbar-color here: in Chrome they win over ::-webkit-scrollbar and bring back the overlay bar that phones hide */
+.cell.rd-on .reader::-webkit-scrollbar{ width:12px; -webkit-appearance:none; }
 .cell.rd-on .reader::-webkit-scrollbar-track{ background:rgba(255,255,255,.07); border-radius:5px; }
 .cell.rd-on .reader::-webkit-scrollbar-thumb{ background:rgba(230,232,238,.55); border-radius:5px; min-height:28px; }

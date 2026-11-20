@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The reader's scrollbar is always on in Chrome and on phones** — `scrollbar-width` / `scrollbar-color` on the reader beat the `::-webkit-scrollbar` rules and brought back the overlay bar that hides when idle; only the 12 px `::-webkit-scrollbar` bar is left, so it stays visible · area: dashboard
+
 - **The whole dashboard uses the Claude Code app's dark look** — the page and the terminal card are near-black (`#191919`, the sidebar and panels `#1f1f1f`) with `#e6e6e6` terminal text, not only the reader view (`Aa`); the browser theme colour follows · area: dashboard
 
 - **The phone list shows every session in one line** — on a phone the NEEDS YOU, DEPLOY and LEASES strips and the repo line under each name are gone, so the list gets the height and a session is one row (the red dot, the "N need you" button and the lease and platform buttons still carry that information) · area: dashboard
