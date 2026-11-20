@@ -15,6 +15,8 @@ test('the wide-window --measure cap does not include the reader (it pads itself 
   assert.ok(!/cell > \.reader/.test(rule), '.reader is not capped');
 });
 
-test('the reader pads itself to the measure', () => {
-  assert.match(css, /\.cell\.rd-on \.reader\{[^}]*padding:12px max\(14px, calc\(\(100% - var\(--measure\)\) \/ 2\)\) 16px/);
+// owner 2026-11-20: the reader copies the Claude Code app's reading view (a ~730px column), so it has its own measure, narrower than the terminal's
+test('the reader pads itself to its own measure (--reader-measure, the Claude Code app look)', () => {
+  assert.match(css, /\.cell\.rd-on \.reader\{[^}]*padding:14px max\(14px, calc\(\(100% - var\(--reader-measure\)\) \/ 2\)\) 18px/);
+  assert.match(css, /--reader-measure:\s*730px/);
 });

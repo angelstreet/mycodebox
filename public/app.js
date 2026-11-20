@@ -2197,7 +2197,7 @@ function syncCell(cell) {
   const s = listStateOf(n);
   const inCard = cell.parentElement === els.cardPane;
   const docOn = cell.classList.contains('doc-on');   // the task document can be open in a grid card too
-  cell.className = `cell ${s}${n === state.active ? ' focus' : ''}${inCard && state.reader ? ' rd-on' : ''}${docOn ? ' doc-on' : ''}`;
+  cell.className = `cell ${s}${n === state.active ? ' focus' : ''}${inCard && readerOn(n) ? ' rd-on' : ''}${docOn ? ' doc-on' : ''}`;
   const ob = cell.querySelector('.open');   // expand in a grid / list (opens the card); in the card: expand = read full screen, shrink = leave it
   if (ob) {
     const ic = inCard && state.reading ? 'shrink' : 'expand';
@@ -2241,7 +2241,7 @@ function syncCell(cell) {
     const order = byUrgency(visibleSessions()), i = order.findIndex((x) => x.name === n);
     pos.textContent = order.length > 1 && i >= 0 ? `${i + 1} / ${order.length}` : '';
   } else pos.textContent = '';
-  if (inCard && state.reader) syncReader(cell, n);
+  if (inCard && readerOn(n)) syncReader(cell, n);
 }
 
 // ---------- meta (repo / branch / ctx / activity) ----------
@@ -2307,6 +2307,7 @@ function rowChipsHtml(n) {
 // ---------- reader (rendered last reply) ----------
 const LS_READER = 'ghosty.reader';
 state.reader = false;
+function readerOn(n) { return state.reader || String(n).startsWith('mac:'); }   // a Mac session has no terminal: its card is always the reader
 state.replies = new Map();     // session -> { hash, at, text, failed, busy }
 function toggleReader() {
   state.reader = !state.reader;

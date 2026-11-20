@@ -35,11 +35,13 @@ test('the reading column is centred, not left-aligned', () => {
   assert.match(wide, /margin-inline:\s*auto/i, 'the capped column must be centred');
 });
 
-test('the reader uses the same measure as the terminal', () => {
+// owner 2026-11-20: the reader has its own tunable measure (the Claude Code app's ~730px column)
+test('the reader centres against its own tunable measure, not a hard-coded width', () => {
   const reader = css.match(/\.cell\.rd-on \.reader\{([\s\S]*?)\n\}/);
   assert.ok(reader, 'the reader base rule must exist');
-  assert.match(reader[1], /calc\(\(100%\s*-\s*var\(--measure\)\)\s*\/\s*2\)/i,
-    'the reader must centre against the shared measure, not a hard-coded 820px');
+  assert.match(reader[1], /calc\(\(100%\s*-\s*var\(--reader-measure\)\)\s*\/\s*2\)/i,
+    'the reader must centre against --reader-measure, not a hard-coded width');
+  assert.match(css, /--reader-measure:\s*\d+px/i, '--reader-measure must be defined once as a px width');
 });
 
 test('the measure is a single tunable value', () => {
