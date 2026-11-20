@@ -12,6 +12,7 @@ import { platformsBlocks } from '/platforms-view.js';
 import { stripSentEcho } from '/sent-echo.js';
 import { closeBgAtNewlines } from '/term-sgr.js';
 import { planPaint } from '/term-paint.js';
+import { stripResizeHint } from '/pane-hints.js';
 import { fitAction, fitSatisfied } from '/fit-policy.js';
 import { fitFont, canShrinkFont, isSettling } from '/fit-font.js';
 import { registerUrlLinks } from '/term-links.js';
@@ -778,7 +779,7 @@ function paintTerm(session, force) {
   const kept = entry.keepFromBottom || 0;
   const atBottom = !kept && buf.viewportY >= buf.baseY;
   const fromBottom = kept || buf.baseY - buf.viewportY;
-  const text = closeBgAtNewlines(entry.lastPane.replace(/\n+$/, ''));
+  const text = closeBgAtNewlines(stripResizeHint(entry.lastPane).replace(/\n+$/, ''));
   // Only rows of the visible screen changed (the usual tick of a live session): overwrite them in place, no clear, no blink, scroll untouched.
   // A resize, a changed history line or a changed line count is a full repaint; so is every 60th paint, as a cheap guard against drift.
   // The drift guard (a full repaint every 60th paint) waits while the reader is scrolled up: it is exactly the jump they would see.

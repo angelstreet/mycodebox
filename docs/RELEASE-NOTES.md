@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The "Resize your terminal to at least 110 columns" box is hidden on the cards** — Claude Code prints that hint in its own pane when the card is narrow; the dashboard now blanks the three lines of the box before painting, so it no longer sits above the prompt · area: dashboard
+
 - **The server records its own event-loop lag** — on 2026-11-20 the page's API calls hung for 15 s while curl answered in 4 ms and nothing recorded whether the loop stalled (the 13:10 stall stays unexplained, not reproducible). A 100 ms timer now measures how late it fires: the 20 worst lags with timestamps are in `GET /api/health` (`eventLoop`), and every lag of 500 ms or more is one line in `<state>/event-loop-lag.jsonl` (`event-loop-lag.js`). Open for the owner, no blocker: look at the new always-on scrollbar of the card and the reader on a real phone · area: server
 
 - **A fullscreen session is recognised when its card opens** — the deeper capture sent on opening a card carried no `alt` flag, so the card saw the session as having scrollback a moment after the first snapshot and the wheel did nothing (lol-first-waves-opus); the flag now travels with it · area: dashboard
