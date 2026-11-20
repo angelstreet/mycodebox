@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The phone list shows every session in one line** — on a phone the NEEDS YOU, DEPLOY and LEASES strips and the repo line under each name are gone, so the list gets the height and a session is one row (the red dot, the "N need you" button and the lease and platform buttons still carry that information) · area: dashboard
+
 - **Scrolling a session card is fluid, and every card shows a scrollbar** — a fullscreen Claude Code pane now gets real wheel notches (a line each, batched while a request is in flight; the server answers as soon as the app redrew and pushes the pane at once instead of on the next 1 s tick), a finger drag no longer freezes the repaint until it lifts, a scrolled-up reader is no longer yanked back by the 1 Hz repaint (only new history lines are appended, no 11 000 px jump), and wheel notches glide (`smoothScrollDuration`). Every card has a visible 10 px scrollbar in the right gutter (xterm's own bar painted over the last columns): a draggable thumb for panes with scrollback, the track only for the alternate screen, where the app's length is unknown; the reader's bar is always on too · area: dashboard
 
 - **The phone list shows the session name first** — a list row on a phone no longer carries the struck-through account label, the model text, the reporter bolt or the activity line, which wrapped the row and cut the name to "man…"; the name now takes the width · area: dashboard
