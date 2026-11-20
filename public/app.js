@@ -692,39 +692,73 @@ function bindAltScroll(session, host) {
   }, { capture: true, passive: false });
 }
 
-// Always-visible scrollbar on the right edge of a card (owner 2026-11-20), drawn by us in the card's right gutter: xterm's own bar painted over
-// the last columns of text and is hidden on phones. A pane with scrollback gets a real thumb (drag it, or tap the track). A pane in tmux's
-// alternate screen has no scrollback to measure, so it gets the track only, honestly: the wheel / drag / jump arrows scroll the app.
-function bindScrollbar(session) {
-  const entry = state.terms.get(session);
-  const el = entry?.term?.element;
-  if (!el || entry.sbar) return;
-  const bar = document.createElement('div'); bar.className = 'sbar';
-  const thumb = document.createElement('div'); thumb.className = 'sthumb'; bar.appendChild(thumb);
-  el.appendChild(bar); entry.sbar = bar;
-  const sync = () => {
-    const b = entry.term.buffer.active, total = b.baseY + entry.term.rows;
-    bar.classList.toggle('noscroll', !!entry.alt || b.baseY <= 0);
-    if (entry.alt || b.baseY <= 0) return;
-    const H = bar.clientHeight, th = Math.max(28, Math.round(H * entry.term.rows / total));
-    thumb.style.height = th + 'px';
-    thumb.style.transform = `translateY(${Math.round((H - th) * (b.viewportY / b.baseY))}px)`;
-  };
-  entry.sbarSync = sync;
-  entry.term.onScroll(sync); entry.term.onWriteParsed?.(sync); entry.term.onResize?.(sync);
-  const toLine = (ev) => {
-    const r = bar.getBoundingClientRect(), b = entry.term.buffer.active;
-    const f = Math.min(1, Math.max(0, (ev.clientY - r.top) / r.height));
-    entry.term.scrollToLine(Math.round(f * b.baseY));
+// Always-visible scrollbar at the RIGHT EDGE OF THE CARD (the .cell, not the text column), one per card, drawn by us: native bars are overlay
+// bars that hide when idle (phones, macOS) and xterm's own painted over the text. It follows whatever body the card shows:
+//  - the reader: real scrollTop / scrollHeight;
+//  - a terminal with scrollback: xterm's real viewportY / baseY;
+//  - a fullscreen (alternate-screen) terminal: there is no scrollback and the app's position cannot be read, so the thumb is an ESTIMATE:
+//    at the bottom (live screen) unless Claude Code is showing "Jump to bottom" in the pane (it does that only while scrolled up), then it
+//    sits near the top. Scrolling such a card opens the reader (altToReader), whose bar is real.
+// Thumb: >= 28 px, bright on a visible track; drag it or tap the track to jump (reader / scrollback terminal).
+const SBAR_PX = 12;
+function ensureBar(cell) {
+  let bar = cell._sbar;
+  if (bar && bar.isConnected) return bar;
+  bar = document.createElement('div'); bar.className = 'cbar';
+  const thumb = document.createElement('div'); thumb.className = 'cthumb'; bar.appendChild(thumb);
+  cell.appendChild(bar); cell._sbar = bar;
+  const metrics = () => barMetrics(cell);
+  const toFrac = (ev) => { const r = bar.getBoundingClientRect(); return Math.min(1, Math.max(0, (ev.clientY - r.top) / r.height)); };
+  const jump = (ev) => {
+    const m = metrics(); if (!m || !m.draggable) return;
+    const f = toFrac(ev);
+    if (m.kind === 'reader') m.el.scrollTop = f * (m.el.scrollHeight - m.el.clientHeight);
+    else m.entry.term.scrollToLine(Math.round(f * m.entry.term.buffer.active.baseY));
+    updateBar(cell);
   };
   bar.addEventListener('pointerdown', (ev) => {
-    if (entry.alt || entry.term.buffer.active.baseY <= 0) return;
-    ev.preventDefault(); ev.stopPropagation(); bar.setPointerCapture(ev.pointerId); toLine(ev);
-    const mv = (e) => toLine(e), up = () => { bar.removeEventListener('pointermove', mv); bar.removeEventListener('pointerup', up); bar.removeEventListener('pointercancel', up); };
+    ev.preventDefault(); ev.stopPropagation();
+    const m = metrics();
+    if (m && !m.draggable && m.kind === 'alt') { altToReader(cell.dataset.session); return; }
+    bar.setPointerCapture(ev.pointerId); jump(ev);
+    const mv = (e) => jump(e), up = () => { bar.removeEventListener('pointermove', mv); bar.removeEventListener('pointerup', up); bar.removeEventListener('pointercancel', up); };
     bar.addEventListener('pointermove', mv); bar.addEventListener('pointerup', up); bar.addEventListener('pointercancel', up);
   });
-  sync();
+  return bar;
 }
+// -> { kind, el, entry, top, size, pos (0 top .. 1 bottom), frac (thumb length / track), draggable } or null (nothing to show)
+function barMetrics(cell) {
+  const name = cell.dataset.session; if (!name) return null;
+  const rd = cell.classList.contains('rd-on'), doc = cell.classList.contains('doc-on');
+  if (doc) return null;
+  if (rd) {
+    const el = cell.querySelector('.reader'); if (!el) return null;
+    const over = el.scrollHeight - el.clientHeight;
+    return { kind: 'reader', el, top: el.offsetTop, size: el.clientHeight, pos: over > 0 ? el.scrollTop / over : 1, frac: el.scrollHeight ? el.clientHeight / el.scrollHeight : 1, draggable: over > 1 };
+  }
+  const entry = state.terms.get(name); const host = entry?.host; if (!entry || !host || !host.isConnected) return null;
+  const b = entry.term.buffer.active;
+  if (entry.alt) {
+    const scrolled = /Jump to bottom/i.test(entry.lastPane || '');
+    return { kind: 'alt', entry, top: host.offsetTop, size: host.clientHeight, pos: scrolled ? 0.15 : 1, frac: 0.2, draggable: false };
+  }
+  return { kind: 'term', entry, top: host.offsetTop, size: host.clientHeight, pos: b.baseY > 0 ? b.viewportY / b.baseY : 1, frac: b.baseY + entry.term.rows ? entry.term.rows / (b.baseY + entry.term.rows) : 1, draggable: b.baseY > 0 };
+}
+function updateBar(cell) {
+  const m = barMetrics(cell);
+  const bar = cell._sbar || (m ? ensureBar(cell) : null);
+  if (!bar) return;
+  if (!m || m.size <= 0) { bar.style.display = 'none'; return; }
+  bar.style.display = '';
+  bar.style.top = `${m.top}px`; bar.style.height = `${m.size}px`;
+  const th = Math.max(28, Math.round(m.size * Math.min(1, m.frac)));
+  const thumb = bar.firstChild;
+  thumb.style.height = `${th}px`;
+  thumb.style.transform = `translateY(${Math.round((m.size - th) * Math.min(1, Math.max(0, m.pos)))}px)`;
+  bar.classList.toggle('est', m.kind === 'alt');
+}
+function updateBars() { for (const cell of document.querySelectorAll('.cell[data-session]')) { try { updateBar(cell); } catch { /* a card mid-render */ } } }
+setInterval(updateBars, 100);   // cheap: a handful of layout reads; follows wheel, touch, drag, repaint, resize and reader / terminal switches alike
 
 function mountTerm(session, host) {
   if (!host) return;
@@ -752,7 +786,6 @@ function mountTerm(session, host) {
   if (entry.host !== host) {
     entry.host = host;
     bindAltScroll(session, host);
-    bindScrollbar(session);
     if (entry.ro) entry.ro.disconnect();
     if (typeof ResizeObserver !== 'undefined') {
       let raf = 0;
@@ -859,7 +892,13 @@ function connectSession(session) {
       const msg = JSON.parse(ev.data);
       if (msg.type === 'snapshot') {
         const entry = state.terms.get(msg.session);
-        if (entry) { entry.alt = !!msg.alt; entry.sbarSync?.(); }   // alternate screen, no scrollback: the wheel goes to the app (altScroll)
+        if (entry) entry.alt = !!msg.alt;
+        if (entry?.alt && !entry.preloaded) {   // a fullscreen session: have its whole conversation ready before the first scroll (the reader shows it, scrolls locally)
+          entry.preloaded = true;
+          const c = state.replies.get(msg.session) || { hash: null, at: 0, text: '' };
+          state.replies.set(msg.session, c);
+          if (!c.autoFull) { c.autoFull = true; loadTranscript(msg.session, c); }
+        }   // alternate screen, no scrollback: the wheel goes to the app (altScroll)
         if (entry?.historyLines > 1000) {
           fetch(`/api/pane/${encodeURIComponent(msg.session)}?lines=${entry.historyLines}`)
             .then((r) => r.ok ? r.json() : null).then((d) => { if (d) writeToTerm(msg.session, d.pane, { cols: msg.cols, rows: msg.rows }); }).catch(() => {});
