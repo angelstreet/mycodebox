@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **Sessions in the alternate screen scroll again** — a Claude Code session in fullscreen mode (lol-first-waves and others) runs in tmux's alternate screen, which keeps no scrollback (`history_size` 0), so the card had nothing to scroll: the wheel, a touch drag and the ⤒ ⤓ buttons did nothing. The snapshot now carries `alt`, and for such a pane the card sends the wheel, touch drag and jump buttons to the app as PageUp / PageDown through the new `POST /api/scroll/<session>` (`alt-scroll.js`); panes with scrollback scroll as before · area: dashboard
+
 - **A Mac session's card is no longer blank** — a `mac:` session has no tmux pane, so its terminal card showed nothing at all; the card (and `GET /api/pane/mac:<name>`) now shows where the session runs (machine, project, folder, Remote Control link) and the text of its last stop, and follows each new stop · area: dashboard
 
 - **The docked session list gives the name more of the row** — the agent column is 62 px (was 92) and the time column 38 px (was 46), and the empty priority slot no longer takes a gap, so the name keeps about 40 px more before it is cut · area: dashboard
