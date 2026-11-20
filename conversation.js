@@ -38,7 +38,7 @@ export function renderConversation(jsonl) {
         out.push(o.type === 'user' ? t.split('\n').map((l) => `> ${l}`).join('\n') : t);
       } else if (b.type === 'thinking' && o.type === 'assistant' && o.thinkingDisplay === 'updates') {
         // "updates" mode: Claude Code prints these progress lines in the terminal (marked "· summary"), so the reader shows them too
-        const t = strip(b.thinking || ''); if (t) out.push(`_${t.replace(/_/g, '\\_')}_`);
+        const t = strip(b.thinking || ''); if (t) out.push(`${t} · summary`);
       } else if (b.type === 'tool_use' && o.type === 'assistant') {
         const arg = b.input && (b.input.command || b.input.file_path || b.input.pattern || b.input.description || b.input.prompt || b.input.url || '');
         out.push(`\`${b.name}${arg ? ' ' + String(arg).replace(/\s+/g, ' ').slice(0, 100) : ''}\``);

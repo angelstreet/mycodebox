@@ -2,7 +2,7 @@
 // capture-pane has no scrollback there (history_size 0), so the dashboard's terminal has nothing to scroll: the app keeps
 // the transcript itself and scrolls it. An app with SGR mouse tracking on (Claude Code fullscreen) gets real wheel events,
 // one line each in Claude Code, so a wheel / touch drag moves the text line by line; any other alternate-screen app gets PageUp / PageDown.
-export const SCROLL_PAGES = { up: ['PageUp', 1], down: ['PageDown', 1], top: ['PageUp', 12], bottom: ['PageDown', 12] };
+export const SCROLL_PAGES = { up: ['PageUp', 1], down: ['PageDown', 1], top: ['PageUp', 12], bottom: ['C-End', 1] };   // ctrl+End: Claude Code's own "Jump to bottom"
 export const MAX_NOTCHES = 60;   // wheel notches in one request (the client batches what it gathered while the last one was on its way)
 
 // -> { key, count } or null when `dir` is not a scroll direction

@@ -7,7 +7,7 @@ test('scrollPlan maps the four directions to PageUp / PageDown', () => {
   assert.deepEqual(scrollPlan('down'), { key: 'PageDown', count: 1 });
   assert.equal(scrollPlan('top').key, 'PageUp');
   assert.ok(scrollPlan('top').count > 1);
-  assert.equal(scrollPlan('bottom').key, 'PageDown');
+  assert.equal(scrollPlan('bottom').key, 'C-End');
 });
 test('scrollPlan refuses anything else (no arbitrary keys, no prototype names)', () => {
   for (const d of ['', 'x', 'Enter', 'toString', '__proto__', undefined, null, 5]) assert.equal(scrollPlan(d), null);
