@@ -1565,6 +1565,11 @@ a.sbtn{ display:inline-flex; align-items:center; justify-content:center; text-de
      activity line in a list row: they wrapped the row and cut the name to "man…" / "stb-co…". The card keeps them. */
   .row-item .l1 .ag .agent-acct, .row-item .l1 .ag .agent-model, .row-item .l1 .ag .rp, .row-item .last{ display:none; }
   .row-item .l1{ flex-wrap:nowrap; }
+  /* owner 2026-11-20: on a phone show every session in one line, and give the height to the list: no NEEDS YOU / DEPLOY / LEASES strips
+     (the red dots, the "N need you" button, the lease and platform buttons carry them) and no repo chip line under the name */
+  #alertRow, #attention, #deployBanner, #leaseBar{ display:none !important; }
+  .row-item .meta, .row-item .apill{ display:none; }
+  .row-item{ padding-top:9px; padding-bottom:9px; }
   .row-item .l1 .name{ flex:1 1 auto; min-width:0; }
 }
 
