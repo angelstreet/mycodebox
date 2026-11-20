@@ -12,11 +12,13 @@ const sample = [
   L({ type: 'user', message: { content: [{ type: 'tool_result', content: 'ok' }] } }),
   L({ type: 'assistant', isSidechain: true, message: { content: [{ type: 'text', text: 'side' }] } }),
   L({ type: 'attachment' }), 'not json',
+  L({ type: 'assistant', message: { content: [{ type: 'thinking', thinking: 'private reasoning' }] } }),
+  L({ type: 'assistant', thinkingDisplay: 'updates', message: { content: [{ type: 'thinking', thinking: 'Wave 1 holds.' }] } }),
   L({ type: 'assistant', message: { content: [{ type: 'text', text: 'Done.' }] } }),
 ].join('\n');
 
-test('renderConversation: prompts quoted, replies and tool lines kept, meta / sidechain / reminders / results dropped', () => {
-  assert.equal(renderConversation(sample), '> fix the bug\n> please\n\nLooking.\n\n`Bash npm test`\n\nDone.');
+test('renderConversation: prompts quoted, replies and tool lines kept, terminal progress updates kept; meta / sidechain / reminders / results / other thinking dropped', () => {
+  assert.equal(renderConversation(sample), '> fix the bug\n> please\n\nLooking.\n\n`Bash npm test`\n\n_Wave 1 holds._\n\nDone.');
 });
 test('findSessionFile finds <id>.jsonl under any project dir, refuses a bad id', async () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'convo-')));
