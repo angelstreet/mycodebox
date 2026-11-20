@@ -4,7 +4,7 @@
 //
 // Routes
 //   GET  /api/sessions          → list tmux sessions + status pill
-//   GET  /ws/:session           → WebSocket: streams pane content (1 Hz tick)
+//   GET  /ws/:session           → WebSocket: streams pane content (1 Hz tick); snapshot carries alt (alternate screen, no scrollback)
 //   POST /api/send/:session     → body {keys: "..."} → tmux send-keys + Enter
 //                                 {…, when: "idle"}: a working pane, a typed draft, a held or a paused session queues the message
 //                                 instead ({ok, queued, id}); the poll loop delivers it at the next idle moment (send-queue.js)
@@ -15,6 +15,7 @@
 //   GET  /api/sessions?full=1   → same, plus `reply` text per session
 //   GET  /api/reply/:session    → {reply, replyHash}: agent's last reply block, plain text
 //   POST /api/resize/:session   → {cols, rows} resize a detached session's window
+//   POST /api/scroll/:session   → {dir: up|down|top|bottom} PageUp/PageDown to a pane in the alternate screen (no tmux scrollback; Claude Code fullscreen); 409 when the pane has scrollback
 //   POST /api/sessions          → {name, agent, cwd, priority?, model?, prompt?} create a tmux session + start the agent
 //   DELETE /api/sessions/:name?confirm=<name> → kill session
 //   POST /api/sessions/:name/park   → record the conversation (Claude id / Codex id / MiniMax cwd), quit the agent (/exit, /quit), kill the tmux session (refuses when not idle / lease held / job running)
