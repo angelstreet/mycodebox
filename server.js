@@ -12,6 +12,7 @@
 //   DELETE /api/send-queue/:id[?by=] → cancel one queued message
 //   GET  /api/snapshot/:session → last full pane snapshot (for first paint)
 //                                 each stopped agent also has `lastTurn` {at, elapsedMs, tokens{in,out,cacheRead,cacheWrite,total}, status, info, line, source} (turn-meter.js; null parts = unknown)
+//   GET  /api/health            → {ok, sessions, port, eventLoop: {worst lags with timestamps, stalls}}; every lag >= 500 ms is also a line in <state>/event-loop-lag.jsonl
 //   GET  /api/sessions?full=1   → same, plus `reply` text per session
 //   GET  /api/reply/:session    → {reply, replyHash}: agent's last reply block, plain text
 //   POST /api/resize/:session   → {cols, rows} resize a detached session's window
@@ -139,6 +140,7 @@ import { basename, dirname, extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { sampleHealth } from './health.js';
+import { createLagMonitor } from './event-loop-lag.js';
 import { createDiskGuard, topHomeConsumers, topLine } from './disk-guard.js';
 import { createPush, createAlerts, tierConfig, isQuietHours } from './push.js';
 import { launchConfig, launchWarnings } from './launch-config.js';
@@ -1477,6 +1479,9 @@ const HEALTH_DISKS = (process.env.HEALTH_DISKS || '/').split(',').map((d) => d.t
 const DISK_ALERT_REPEAT_MS = 6 * 3600 * 1000;   // remind every 6 h while a disk stays critical
 const DISK_PUSH_PCT = Number(process.env.GHOSTY_DISK_PUSH_PCT || 90);
 let health = null;
+// Event-loop lag: the worst lags with timestamps in /api/health, a journal line (<state>/event-loop-lag.jsonl) for each of 500 ms or more.
+const lagMonitor = createLagMonitor({ onSpike: (rec) => { appendJsonLine(join(STATE_DIR, 'event-loop-lag.jsonl'), { type: 'event-loop-lag', ...rec }); console.warn(`[event-loop] stalled ${rec.lagMs} ms`); } });
+lagMonitor.start();
 // The disk push names the 5 biggest consumers of $HOME (disk-guard.js topHomeConsumers, one slow du: cached 30 min, one in flight).
 let topCache = { at: 0, line: '' }, topBusy = null;
 function refreshTop() {
@@ -3088,7 +3093,7 @@ async function handleHttp(req, res) {
   }
   if (req.method === 'GET' && p === '/api/health') {
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, sessions: lastSnapshots.size, port: PORT }));
+    res.end(JSON.stringify({ ok: true, sessions: lastSnapshots.size, port: PORT, eventLoop: lagMonitor.snapshot() }));
     return;
   }
 
