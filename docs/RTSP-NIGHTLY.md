@@ -557,6 +557,18 @@ this night (the source the night installed is checked again at the end of the ni
     run reads `ok` (luma 213, live layer 199).
   - The 1 `missing` tile is `vpt-nipogi/DEVICE5`, one of the devices with an empty source; the 6 `unknown` tiles are the other
     empty-source devices.
+- **Every tile was opened in the browser too, not only the one the night replaced.** All 103 devices are accounted for: 96 tiles
+  hovered one by one (the host and the capture read from the stream URL inside the tile's own `<video>`, so no tile is guessed
+  from its title), 1 device with no tile at all (`vpt-nipogi/DEVICE5`: an empty source, no name, no snapshot) and 6 without a
+  capture path (no tile by definition). **95 of the 96 play in the browser**: `readyState` 4, the clock advancing, no failed HLS
+  request, and a picture that is not black (the picture area reads 19-164; the darkest are a looping clip's own dark frame, the
+  clip's own picture as the night measures it).
+  - **The 1 that does not is `vpt-lenovo5/DEVICE1` (BFM2)**: `readyState` 1 and a black picture area while the clock runs, with
+    the host snapshot bright and the source playing. That is **bug-c54ea30f** (the audio drifts minutes ahead of the video, still
+    `open`, filed 2026-11-12 as `large`: the drift mechanism is not identified, and a fix needs a `run_ffmpeg.sh` change plus a
+    soak across ad breaks). The nightly changes nothing here: the source plays and the fault is in the browser layer. A
+    `vpt-stream` restart under the host lease realigns the A/V for a while (the gap regrows about 60 s/h), but that would mask
+    the filed bug instead of fixing it, so it is left to the bug's owner.
 - The pool was not touched: re-probed, `smoke` plays (the only vetted entry, from `vpt-pi4`) and the three public candidates still
   time out on port 554 from codebox, so nothing new is vetted (bug-c7c2bb0e, still `wontfix`).
 
