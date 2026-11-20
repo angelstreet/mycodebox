@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A fullscreen session is recognised when its card opens** — the deeper capture sent on opening a card carried no `alt` flag, so the card saw the session as having scrollback a moment after the first snapshot and the wheel did nothing (lol-first-waves-opus); the flag now travels with it · area: dashboard
+
 - **A fullscreen session scrolls locally: its conversation is loaded into the card** — scrolling a Claude Code fullscreen session (alternate screen, no tmux scrollback) used a server request per step and felt sticky; now the first scroll opens the card's reader, which holds the whole conversation read from Claude's own session file (the newest ~3 MB; `GET /api/transcript/<session>` now answers from it, `conversation.js`) and scrolls in the browser with no request. The live screen is one tap away (`>_`) · area: dashboard
 
 - **The reader's scrollbar is always on in Chrome and on phones** — `scrollbar-width` / `scrollbar-color` on the reader beat the `::-webkit-scrollbar` rules and brought back the overlay bar that hides when idle; only the 12 px `::-webkit-scrollbar` bar is left, so it stays visible · area: dashboard
