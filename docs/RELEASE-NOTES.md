@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The phone list shows the session name first** — a list row on a phone no longer carries the struck-through account label, the model text, the reporter bolt or the activity line, which wrapped the row and cut the name to "man…"; the name now takes the width · area: dashboard
+
 - **No pills in the left session list** — the held / paused / ready / Remote Control chips no longer sit in a row of the left list (they pushed the agent badge and the time onto a second line); the session card and its header still show them · area: dashboard
 
 - **Sessions in the alternate screen scroll again** — a Claude Code session in fullscreen mode (lol-first-waves and others) runs in tmux's alternate screen, which keeps no scrollback (`history_size` 0), so the card had nothing to scroll: the wheel, a touch drag and the ⤒ ⤓ buttons did nothing. The snapshot now carries `alt`, and for such a pane the card sends the wheel, touch drag and jump buttons to the app as PageUp / PageDown through the new `POST /api/scroll/<session>` (`alt-scroll.js`); panes with scrollback scroll as before · area: dashboard

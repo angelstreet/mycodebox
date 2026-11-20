@@ -1554,6 +1554,11 @@ a.sbtn{ display:inline-flex; align-items:center; justify-content:center; text-de
   .row-item .l1 .rn,
   .row-item .l1 .pp,
   .row-item .l1 .pz{ display:none; }
+  /* owner 2026-11-20 (phone screenshot): the session name is what matters. No struck-through account label, model text, reporter bolt or
+     activity line in a list row: they wrapped the row and cut the name to "man…" / "stb-co…". The card keeps them. */
+  .row-item .l1 .ag .agent-acct, .row-item .l1 .ag .agent-model, .row-item .l1 .ag .rp, .row-item .last{ display:none; }
+  .row-item .l1{ flex-wrap:nowrap; }
+  .row-item .l1 .name{ flex:1 1 auto; min-width:0; }
 }
 
 /* Jev & AI tab, decisions page */
@@ -1907,6 +1912,8 @@ svg.spin{ animation:spin 1.3s linear infinite; }
   #askPopupPill { right: 10px; bottom: calc(var(--ask-bottom, 0px) + 10px); }
 }
 
+/* owner 2026-11-20: no "asks you" band on a card, the NEEDS YOU strip already says it and opens the same popup */
+.cell .ask{ display:none !important; }
 /* "asks you" chip on each card: a one-line button that opens the popup on that session. */
 .cell .askchip {
   display: inline-flex; align-items: center; gap: 5px;
