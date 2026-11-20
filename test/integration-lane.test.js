@@ -246,21 +246,21 @@ test('a conflict outside union and regenerate files still returns the request', 
 });
 
 test('sensitive file: returned by the merge floor, nothing merged', async () => {
-  const w = makeWorld(); w.branch('feat', { 'config/credentials.txt': 'x\n' });
+  const w = makeWorld(); w.branch('feat', { 'config/credentials.json': 'x\n' });
   const before = w.main();
   const { lane } = mk(w);
   const r = await go(lane, { branch: 'feat' });
-  assert.equal(r.state, 'returned'); assert.match(r.reason, /merge evaluation:.*credentials\.txt/);
+  assert.equal(r.state, 'returned'); assert.match(r.reason, /merge evaluation:.*credentials\.json/);
   assert.equal(w.main(), before);
 });
 
 test('the floor judges the exact commit that is merged, not a same-named local branch of the lane clone', async () => {
-  const w = makeWorld(); w.branch('feat', { 'config/credentials.txt': 'x\n' });
+  const w = makeWorld(); w.branch('feat', { 'config/credentials.json': 'x\n' });
   git(w.lane, 'fetch', '-q', 'origin'); git(w.lane, 'checkout', '-q', '-b', 'feat', 'origin/main'); commit(w.lane, { 'harmless.js': 'ok\n' }, 'local');
   const before = w.main();
   const { lane } = mk(w);
   const r = await go(lane, { branch: 'feat' });
-  assert.equal(r.state, 'returned', JSON.stringify(r)); assert.match(r.reason, /credentials\.txt/); assert.equal(w.main(), before);
+  assert.equal(r.state, 'returned', JSON.stringify(r)); assert.match(r.reason, /credentials\.json/); assert.equal(w.main(), before);
 });
 
 test('branch missing, or the target itself: returned / refused', async () => {
