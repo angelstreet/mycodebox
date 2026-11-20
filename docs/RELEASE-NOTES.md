@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The card's scrollbar is a visible bar with a moving thumb at the card's right edge** — the first bar was an empty faint track inside the text column for fullscreen sessions and nothing moved. Now one bar per card sits at the card's right edge, a bright thumb (at least 28 px) on a visible track that follows the reader, a terminal with scrollback, or a fullscreen terminal (there the thumb is an estimate: the app's position cannot be read, so it is at the bottom unless Claude Code shows "Jump to bottom"; the first scroll opens the reader, whose thumb is real). Drag the thumb or tap the track to jump. A fullscreen session's conversation is preloaded so the first scroll is instant · area: dashboard
+
 - **The "Resize your terminal to at least 110 columns" box is hidden on the cards** — Claude Code prints that hint in its own pane when the card is narrow; the dashboard now blanks the three lines of the box before painting, so it no longer sits above the prompt · area: dashboard
 
 - **The server records its own event-loop lag** — on 2026-11-20 the page's API calls hung for 15 s while curl answered in 4 ms and nothing recorded whether the loop stalled (the 13:10 stall stays unexplained, not reproducible). A 100 ms timer now measures how late it fires: the 20 worst lags with timestamps are in `GET /api/health` (`eventLoop`), and every lag of 500 ms or more is one line in `<state>/event-loop-lag.jsonl` (`event-loop-lag.js`). Open for the owner, no blocker: look at the new always-on scrollbar of the card and the reader on a real phone · area: server

@@ -417,16 +417,15 @@ body{ display:flex; flex-direction:column; }
 }
 .cell .xterm{ height:100% !important; padding:0; }
 .cell .xterm-viewport{ background:transparent !important; }
-/* xterm's own scrollbar is hidden (it painted over the last columns of text, and phones overlay-hide it); .sbar is ours: always visible, 10 px,
-   in the gutter right of the text (padding-right of .b), thumb for panes with scrollback, track only for the alternate screen (app.js bindScrollbar) */
+/* xterm's own scrollbar is hidden (it painted over the last columns of text); the card's scrollbar is .cbar, ours (app.js ensureBar): at the card's
+   right edge, always visible, a bright thumb on a visible track. The native reader bar is hidden too, .cbar replaces it. */
 .cell .xterm-viewport{ scrollbar-width:none; }
 .cell .xterm-viewport::-webkit-scrollbar{ display:none; }
-.cell .b{ padding-right:14px; }
-.cell .xterm .sbar{ position:absolute; top:0; bottom:0; right:-13px; width:10px; border-radius:5px; background:rgba(255,255,255,.07); z-index:5; touch-action:none; cursor:pointer; }
-.cell .xterm .sthumb{ position:absolute; left:1px; right:1px; top:0; min-height:28px; border-radius:4px; background:rgba(230,232,238,.55); }
-.cell .xterm .sbar.noscroll .sthumb{ display:none; }
-.cell .xterm .sbar:hover .sthumb{ background:rgba(230,232,238,.8); }
-@media (pointer: coarse){ .cell .xterm .sbar{ width:12px; right:-14px; } }
+.cell .b{ padding-right:16px; }
+.cell .cbar{ position:absolute; right:2px; width:12px; border-radius:6px; background:rgba(255,255,255,.14); z-index:6; touch-action:none; cursor:pointer; }
+.cell .cthumb{ position:absolute; left:1px; right:1px; top:0; min-height:28px; border-radius:5px; background:rgba(235,236,240,.72); box-shadow:0 0 0 1px rgba(0,0,0,.35); }
+.cell .cbar:hover .cthumb{ background:rgba(255,255,255,.92); }
+.cell .cbar.est .cthumb{ background:rgba(235,236,240,.5); }
 
 /* Zen / true-fullscreen: double-tap the card body in card mode to hide the header so
    the terminal or reader gets the full vertical space. Tapping the header (now collapsed)
@@ -2872,8 +2871,6 @@ body.reading #diskBanner{ display:none !important; }
 #askPopup .ap-free-in:focus { outline:none; border-color:var(--accent); }
 #askPopup .ap-free-go { flex:0 0 auto; width:auto; min-height:40px; padding:0 16px; }
 
-/* the reader's scrollbar: always visible, 10 px, light thumb on a faint track (owner 2026-11-20); phones otherwise overlay-hide it */
-/* no scrollbar-width / scrollbar-color here: in Chrome they win over ::-webkit-scrollbar and bring back the overlay bar that phones hide */
-.cell.rd-on .reader::-webkit-scrollbar{ width:12px; -webkit-appearance:none; }
-.cell.rd-on .reader::-webkit-scrollbar-track{ background:rgba(255,255,255,.07); border-radius:5px; }
-.cell.rd-on .reader::-webkit-scrollbar-thumb{ background:rgba(230,232,238,.55); border-radius:5px; min-height:28px; }
+/* the reader's own bar is replaced by .cbar (always visible at the card's edge) */
+.cell.rd-on .reader{ scrollbar-width:none; }
+.cell.rd-on .reader::-webkit-scrollbar{ display:none; }
