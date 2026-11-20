@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A Mac session's card is no longer blank** — a `mac:` session has no tmux pane, so its terminal card showed nothing at all; the card (and `GET /api/pane/mac:<name>`) now shows where the session runs (machine, project, folder, Remote Control link) and the text of its last stop, and follows each new stop · area: dashboard
+
 - **The docked session list gives the name more of the row** — the agent column is 62 px (was 92) and the time column 38 px (was 46), and the empty priority slot no longer takes a gap, so the name keeps about 40 px more before it is cut · area: dashboard
 
 - **The left session list gives its width to the name** — the priority badge and the reporter bolt are gone from each row of the left list (the priority is still set on the card and the header), so a long session name is cut later · area: dashboard

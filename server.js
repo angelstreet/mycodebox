@@ -2691,7 +2691,7 @@ async function handleHttp(req, res) {
     const session = decodeURIComponent(p.slice('/api/pane/'.length));
     const lines = Number(url.searchParams.get('lines') || PANE_LINES);
     if (!paneLinesOk(lines)) return json(res, 400, { ok: false, error: 'lines 1000-10000 required' });
-    try { return json(res, 200, { ok: true, pane: await capturePane(session, lines), lines }); }
+    try { return json(res, 200, { ok: true, pane: remote.owns(session) ? remote.paneText(session) : await capturePane(session, lines), lines }); }
     catch (err) { return json(res, err.status || 500, { ok: false, error: err.message }); }
   }
   if (req.method === 'POST' && p === '/api/sessions') {
@@ -3245,7 +3245,8 @@ server.on('upgrade', (req, socket, head) => {
       // Send the cached snapshot on open so the pane is never blank.
       const send = (c) => ws.readyState === 1 && ws.send(JSON.stringify({ type: 'snapshot', session, pane: c.pane, cols: c.cols, rows: c.rows }));
       const cache = lastSnapshots.get(session);
-      if (cache && cache.depth >= PANE_LINES) send(cache);
+      if (remote.owns(session)) send({ pane: remote.paneText(session) });   // a Mac session has no pane: its last stop (was a blank card)
+      else if (cache && cache.depth >= PANE_LINES) send(cache);
       else if (cache) {
         // The cached capture is the short background one: paint it at once, then the full history.
         send(cache);
@@ -3270,6 +3271,7 @@ server.on('upgrade', (req, socket, head) => {
 // Poll loop
 // ---------------------------------------------------------------------------
 
+const macPanes = new Map();
 async function tick() {
   try {
     const { status, changedSessions } = await poll();
@@ -3277,6 +3279,10 @@ async function tick() {
     if (quotaResumeEnabled()) await quotaResumer.tick(Object.keys(status)).catch((e) => console.error('[quota-resume]', e.message));
     await claudeLimitTick(status).catch((e) => console.error('[claude-accounts]', e.message));
     await sendQueueTick(status);
+    for (const name of remote.names()) {   // a Mac session's card follows its stops
+      const pane = remote.paneText(name);
+      if (pane && macPanes.get(name) !== pane) { macPanes.set(name, pane); broadcast(name, { type: 'snapshot', session: name, pane }); }
+    }
     for (const name of changedSessions) {
       const c = lastSnapshots.get(name);
       if (c) broadcast(name, { type: 'snapshot', session: name, pane: c.pane, cols: c.cols, rows: c.rows });
