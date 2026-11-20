@@ -1240,6 +1240,9 @@ button.prio{ cursor:pointer; }
 .prio.P1{ background:rgba(232,154,74,0.16); color:var(--accent); border-color:rgba(232,154,74,0.5); }
 .rdychip{ flex-shrink:0; height:20px; padding:0 6px; margin-left:4px; border-radius:6px; font-size:10.5px; font-weight:600; line-height:20px; background:rgba(80,180,120,0.16); color:var(--ink-2); border:1px solid rgba(80,180,120,0.5); text-decoration:none; white-space:nowrap; }
 .cell .h .pr, .row-item .l1 .pr, .session-list .sub .pr{ display:inline-flex; flex-shrink:0; }
+/* owner 2026-11-20: the left list gives the width to the name: no priority badge, no reporter bolt (priority stays on the card and header) */
+.session-list .sub .pr .prio, .session-list .sub .rp{ display:none; }
+.session-list .sub .pr{ width:auto; }
 .session-list .sub .pr .prio{ height:15px; min-width:20px; padding:0 4px; font-size:9.5px; }
 .session-list .sub .sst, .session-list .sub .ag{ min-width:0; overflow:hidden; text-overflow:ellipsis; }
 .session-list .sub .pp{ font-size:9px; padding:1px 5px; }
@@ -1984,7 +1987,7 @@ body.side-docked .session-list .sub{ flex:0 1 auto; max-width:62%; }
 body.side-docked .session-list .sub.rb{ flex:1 0 100%; max-width:none; }   /* repo · branch, when shown, keeps a second line */
 /* docked list: priority, agent and time sit in fixed columns so every row lines up (owner 2026-11-07); the pin slot is always reserved */
 body.side-docked .session-list .sub:not(.rb){ max-width:none; flex:0 0 auto; gap:6px; }
-body.side-docked .session-list .sub .pr{ width:26px; justify-content:center; }
+body.side-docked .session-list .sub .pr{ width:auto; justify-content:center; }
 body.side-docked .session-list .sub .ag{ width:92px; display:inline-flex; align-items:center; gap:4px; overflow:visible; }
 body.side-docked .session-list .sub .sst{ width:46px; text-align:right; overflow:visible; }
 body.side-docked .session-list .pinmark{ display:inline-flex; visibility:hidden; width:13px; flex-shrink:0; }

@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The left session list gives its width to the name** — the priority badge and the reporter bolt are gone from each row of the left list (the priority is still set on the card and the header), so a long session name is cut later · area: dashboard
+
 - **A session started by cbsession now runs on the active Claude account** — the account rotation only reached the dashboard's create and resume paths, so every session started by `cbsession` (the manager's worker sessions) ran on the default account and burned its quota while the other seats sat idle: the team seats' rate files had not been written for two weeks although one of them was the active account. `cbsession` reads the active account from `claude-accounts.json` and exports the same `CLAUDE_CONFIG_DIR` and `GHOSTY_CLAUDE_ACCOUNT` as the dashboard (bug-6434d8a9) · area: claude-accounts
 
 - **The history of a session loads in the dashboard again** — the pane endpoint refused fewer lines than the server's own pane depth (2000 on this host), so the dashboard's first request (1000 lines) answered 400 and the history of a session never loaded; the floor is now the 1000 lines the dashboard asks for (bug-4f9afc93) · area: server
