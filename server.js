@@ -3294,7 +3294,7 @@ server.on('upgrade', (req, socket, head) => {
       else if (cache) {
         // The cached capture is the short background one: paint it at once, then the full history.
         send(cache);
-        capturePane(session).then((pane) => send({ pane, cols: cache.cols, rows: cache.rows }), () => {});
+        capturePane(session).then((pane) => send({ pane, cols: cache.cols, rows: cache.rows, alt: cache.alt }), () => {});
       }
       else {
         capturePane(session).then((pane) => send({ pane }), () => {});
