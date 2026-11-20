@@ -94,6 +94,13 @@ test('a needs-owner stop with options is classified like a local one, escalated,
   assert.equal(row.state, 'done'); assert.equal(row.remote.machine, 'mac-test'); assert.equal(row.stall.case, 'owner_decision'); assert.equal(row.stall.options.length, 2);
 });
 
+test('a Mac session has a pane text: where it runs and its last stop, so the dashboard card is never blank', async () => {
+  const r = await post({ session_name: 'pane-text', text: 'All done here.\nSTATUS: done' });
+  const t = remote.paneText(r.body.session);
+  assert.match(t, /Mac session on mac-test/); assert.match(t, /All done here\./); assert.match(t, /\r\n/);
+  assert.equal(remote.paneText('mac:nobody'), null);
+});
+
 test('a menu with a recommended option is answered after the countdown and the answer rides the long-poll', async () => {
   const t0 = Date.now();
   const r = await post({ session_name: 'rec-menu', text: MENU(1) });
