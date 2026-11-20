@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The reader shows the progress lines the terminal shows** — Claude Code prints its short progress updates in the terminal (marked "· summary"); they are stored as "updates" thinking in the session file and the reader skipped them, so the two views of a fullscreen session differed. The reader now shows them in italics; other thinking stays hidden, as in the terminal · area: dashboard
+
 - **A card no longer switches between reader and terminal by itself** — scrolling a fullscreen session's terminal switched the card to the reader without saving it, so the next reload (every deploy) flipped it back to the terminal: views changed under the owner. Now only the `>_` button changes the view; a fullscreen terminal scrolls the live screen, the reader scrolls the conversation locally, and an open reader showing the whole conversation reloads it every 5 s so it keeps up with a working agent (it lagged a turn behind the screen) · area: dashboard
 
 - **The jump arrows no longer cover the scrollbar thumb on a phone** — on narrow screens the ⤒ ⤓ buttons sit 22 px from the card's edge, left of the 12 px scrollbar · area: dashboard
