@@ -241,7 +241,8 @@ a test). A live picture that does not move is still reported as frozen and never
 The run also left its scratch file (the chosen source) in the state dir, one per replacement and per night; it is now deleted
 after the apply step (test asserts the state dir holds no `apply-*` file).
 
-The session is MiniMax started by `cbsession` from the `~/ghosty-sessions` checkout (it makes its own worktree). It runs
+The session is MiniMax started by `cbsession` from the `~/virtualpytest` checkout (it makes its own worktree; owner 2026-11-20, so the dashboard groups it under virtualpytest, not mycodebox). It runs
+`~/ghosty-sessions/scripts/agent/rtsp_replace.py` (absolute path),
 `rtsp_replace.py`, reads the report, writes one line to the manager as the first line of its STATUS when a stream was replaced,
 rolled back or a camera is down, and files `found-bug` for a camera down or a rollback.
 
