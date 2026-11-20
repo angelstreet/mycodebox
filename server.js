@@ -149,6 +149,7 @@ import { goneCwd, projectCandidates } from './cwd-gone.js';
 import { pickableProject, launchArgs, codexModels, CLAUDE_MODELS, MINIMAX_MODELS, DEFAULT_MODELS } from './new-session.js';
 import { createSessionHistory } from './session-history.js';
 import { paneLinesOk } from './pane-lines.js';
+import { scrollPlan, altScrollApplies } from './alt-scroll.js';
 import { createHistoryView } from './history-view.js';
 import { createQuota, defaults as quotaDefaults } from './quota.js';
 import { createClaudeAccounts, rateFile as claudeRateFile, accountOfPid, scanClaudeLimit, DEFAULT_ID as CLAUDE_DEFAULT_ACCOUNT } from './claude-accounts.js';
@@ -255,15 +256,15 @@ async function listSessions() {
 
 // session -> { pid, cmd, cols, rows, dead }  (active pane of the active window)
 async function listPanes() {
-  const fmt = '#{session_name}|#{pane_pid}|#{pane_current_command}|#{pane_width}|#{pane_height}|#{pane_dead}|#{window_active}|#{pane_active}|#{pane_current_path}';
+  const fmt = '#{session_name}|#{pane_pid}|#{pane_current_command}|#{pane_width}|#{pane_height}|#{pane_dead}|#{window_active}|#{pane_active}|#{alternate_on}|#{history_size}|#{pane_current_path}';
   const out = new Map();
   try {
     const { stdout } = await exec(TMUX, ['list-panes', '-a', '-F', fmt]);
     for (const line of stdout.split('\n').filter(Boolean)) {
-      const [name, pid, cmd, cols, rows, dead, wa, pa, ...cwdParts] = line.split('|');
+      const [name, pid, cmd, cols, rows, dead, wa, pa, alt, hist, ...cwdParts] = line.split('|');
       const active = wa === '1' && pa === '1';
       if (out.has(name) && !active) continue;
-      out.set(name, { pid: Number(pid), cmd, cols: Number(cols), rows: Number(rows), dead: dead === '1', cwd: cwdParts.join('|') });
+      out.set(name, { pid: Number(pid), cmd, cols: Number(cols), rows: Number(rows), dead: dead === '1', alt: altScrollApplies({ alt: alt === '1', history: Number(hist) }), cwd: cwdParts.join('|') });
     }
   } catch {}
   return out;
@@ -1551,9 +1552,9 @@ async function pollOnce() {
     let changed = false;
     const act = offline ? null : activityText(pane);
     if (!offline) {
-      changed = !prev || prev.pane !== pane || prev.cols !== p.cols || prev.rows !== p.rows;
+      changed = !prev || prev.pane !== pane || prev.cols !== p.cols || prev.rows !== p.rows || prev.alt !== !!p.alt;
       if (changed) {
-        lastSnapshots.set(s.name, { pane, act, cols: p.cols, rows: p.rows, depth });
+        lastSnapshots.set(s.name, { pane, act, cols: p.cols, rows: p.rows, alt: !!p.alt, depth });
         changedSessions.push(s.name);
       }
     }
@@ -2688,6 +2689,20 @@ async function handleHttp(req, res) {
       return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message, reason: err.reason });
     }
   }
+  // Scroll a pane in the alternate screen (Claude Code fullscreen): the app scrolls its own transcript on PageUp / PageDown.
+  if (req.method === 'POST' && p.startsWith('/api/scroll/')) {
+    const session = decodeURIComponent(p.slice('/api/scroll/'.length));
+    try {
+      const body = await readJsonBody(req);
+      const plan = scrollPlan(body?.dir);
+      if (!plan) return json(res, 400, { ok: false, error: 'dir must be up, down, top or bottom' });
+      if (!(await sessionExists(session))) throw httpError(404, 'no such session');
+      if (!lastSnapshots.get(session)?.alt) return json(res, 409, { ok: false, error: 'pane has scrollback: scroll the terminal' });
+      await assertAgentPane(session, actorOf(body));
+      for (let i = 0; i < plan.count; i++) await exec(TMUX, ['send-keys', '-t', tgt(session), plan.key]);
+      return json(res, 200, { ok: true, dir: body.dir });
+    } catch (err) { return json(res, err.status || 500, { ok: false, error: err.message }); }
+  }
   if (req.method === 'GET' && p.startsWith('/api/pane/')) {
     const session = decodeURIComponent(p.slice('/api/pane/'.length));
     const lines = Number(url.searchParams.get('lines') || PANE_LINES);
@@ -3244,7 +3259,7 @@ server.on('upgrade', (req, socket, head) => {
       if (!set) { set = new Set(); wsBySession.set(session, set); }
       set.add(ws);
       // Send the cached snapshot on open so the pane is never blank.
-      const send = (c) => ws.readyState === 1 && ws.send(JSON.stringify({ type: 'snapshot', session, pane: c.pane, cols: c.cols, rows: c.rows }));
+      const send = (c) => ws.readyState === 1 && ws.send(JSON.stringify({ type: 'snapshot', session, pane: c.pane, cols: c.cols, rows: c.rows, alt: !!c.alt }));
       const cache = lastSnapshots.get(session);
       if (remote.owns(session)) send({ pane: remote.paneText(session) });   // a Mac session has no pane: its last stop (was a blank card)
       else if (cache && cache.depth >= PANE_LINES) send(cache);
@@ -3286,7 +3301,7 @@ async function tick() {
     }
     for (const name of changedSessions) {
       const c = lastSnapshots.get(name);
-      if (c) broadcast(name, { type: 'snapshot', session: name, pane: c.pane, cols: c.cols, rows: c.rows });
+      if (c) broadcast(name, { type: 'snapshot', session: name, pane: c.pane, cols: c.cols, rows: c.rows, alt: !!c.alt });
     }
     // Status: always (it is small); working timers etc. need fresh values.
     broadcastStatus({ type: 'status', status });

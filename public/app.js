@@ -618,6 +618,31 @@ function relayoutTerm(session) {
   if (layoutTerm(session) && entry.lastPane != null) paintTerm(session, true);
 }
 
+// A pane in tmux's alternate screen (Claude Code fullscreen) has no scrollback to show: the wheel, a touch drag and the jump buttons
+// are forwarded to the app as PageUp / PageDown (POST /api/scroll, alt-scroll.js). bug: lol-first-waves could not be scrolled.
+let altBusy = 0;
+function altScroll(session, dir) {
+  const now = Date.now();
+  if (dir === 'up' || dir === 'down') { if (now - altBusy < 150) return; altBusy = now; }
+  fetch(`/api/scroll/${encodeURIComponent(session)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ dir }) }).catch(() => {});
+}
+function bindAltScroll(session, host) {
+  let wheel = 0, ty = null, tacc = 0;
+  host.addEventListener('wheel', (e) => {
+    if (!state.terms.get(session)?.alt) return;
+    e.preventDefault(); e.stopPropagation();
+    wheel += e.deltaY;
+    if (Math.abs(wheel) >= 40) { altScroll(session, wheel < 0 ? 'up' : 'down'); wheel = 0; }
+  }, { capture: true, passive: false });
+  host.addEventListener('touchstart', (e) => { ty = e.touches[0]?.clientY ?? null; tacc = 0; }, { capture: true, passive: true });
+  host.addEventListener('touchmove', (e) => {
+    if (!state.terms.get(session)?.alt || ty == null) return;
+    const y = e.touches[0].clientY; tacc += y - ty; ty = y;
+    e.preventDefault();
+    if (Math.abs(tacc) >= 40) { altScroll(session, tacc > 0 ? 'up' : 'down'); tacc = 0; }   // finger down = older, like a list
+  }, { capture: true, passive: false });
+}
+
 function mountTerm(session, host) {
   if (!host) return;
   const entry = getTerm(session);
@@ -643,6 +668,7 @@ function mountTerm(session, host) {
   }
   if (entry.host !== host) {
     entry.host = host;
+    bindAltScroll(session, host);
     if (entry.ro) entry.ro.disconnect();
     if (typeof ResizeObserver !== 'undefined') {
       let raf = 0;
@@ -736,6 +762,7 @@ function connectSession(session) {
       const msg = JSON.parse(ev.data);
       if (msg.type === 'snapshot') {
         const entry = state.terms.get(msg.session);
+        if (entry) entry.alt = !!msg.alt;   // alternate screen, no scrollback: the wheel goes to the app (altScroll)
         if (entry?.historyLines > 1000) {
           fetch(`/api/pane/${encodeURIComponent(msg.session)}?lines=${entry.historyLines}`)
             .then((r) => r.ok ? r.json() : null).then((d) => { if (d) writeToTerm(msg.session, d.pane, { cols: msg.cols, rows: msg.rows }); }).catch(() => {});
@@ -2085,7 +2112,9 @@ function jumpTo(cell, name, where) {
     el.scrollTo({ top: where === 'top' ? 0 : el.scrollHeight, behavior: 'smooth' });
     return;
   }
-  const term = state.terms.get(name)?.term;
+  const e = state.terms.get(name);
+  if (e?.alt) { altScroll(name, where); return; }
+  const term = e?.term;
   if (!term) return;
   if (where === 'top') term.scrollToTop(); else term.scrollToBottom();
 }
