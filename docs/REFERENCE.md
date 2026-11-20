@@ -1118,7 +1118,7 @@ decision source). A reported turn with background work in flight is logged as `c
 escalated or answered. The pane is still read for the owner's unsent draft and for waiting menus / permission dialogs.
 
 The status payload carries a small `reporter` object per live Claude session (`seenAt`, `turnAt`, `backgroundWork`,
-`waiting`, `agents {count, by}`, `agentList`); the cards show a ⚡ (with the subagent count) whose tooltip lists them.
+`waiting`, `agents {count, by}`, `agentList`); the session cards show a ⚡ (not the left list rows, owner 2026-11-20) (with the subagent count) whose tooltip lists them.
 `GET /api/reporter/:session` returns everything held for one session (latest turn, prompt, waiting, agents).
 
 Develop / test the plugin: `claude plugin validate claude-plugin/ghosty-reporter` and
