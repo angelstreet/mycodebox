@@ -531,6 +531,35 @@ this night (two passes, see below), 1 `replace` and 1 `verify`.
   night of 2026-11-19 ran before the check existed, so the title of the renamed device was read by hand instead: the app shows
   "FR Movie 1 — Cine 666 by Pluto TV" for `vpt-nipogi/device7` (the new title), which is what the check reads today.
 
+### Night of 2026-11-20 (live, run by the nightly session)
+
+103 streams checked, **94 ok, 9 down**, **1 replaced**, 0 rolled back, 0 cameras down, 0 unverified. 15 hosts walked, 15 read,
+**no inventory error** (every server and every host answered the host-config GET). The journal holds 104 `check` events for
+this night (the source the night installed is checked again at the end of the night), 1 `replace` and 2 `verify`. **One pass.**
+
+- The 9 down: 8 devices with an empty source (`vpt-nipogi` DEVICE4, 5, 6, 17, 22, 23, 24 and `vpt-pi4` DEVICE2; reported by
+  name, never changed) and 1 dead HLS channel (`vpt-nipogi/DEVICE3`), which the night replaced. The fleet carries **no IP camera
+  device** tonight (the kinds are `file` 67, `hls` 28, `no_source` 8), so no camera is down.
+- The 1 replaced: `vpt-nipogi/DEVICE3` ("FR News 3 — CNEWS PRIME"), a dead HLS channel, was replaced by another channel of the
+  same group and renamed ("FR News 3 — Africa 24 English (1080p)"): full host-config payload, a 0600 backup, a read-back diff and
+  a `vpt-stream` restart, all under the host lease. The night verified what it installed 5 min later (`verify` event `plays`: the
+  new source still plays) and read the title the app shows (`verify` event `title_updated`: the app shows the new title).
+  - The tile is proven in the browser, not from its snapshot: on hover `readyState` 4, the clock advances 149.3 s → 151.7 s,
+    320x180, no failed HLS request, and the screenshot shows the channel's own picture (Africa 24 on air).
+  - The tile read `stale` **during** the run: the host rewrites its thumbnail about once a second and the `vpt-stream` restart had
+    just happened. A re-check a few minutes later reads `ok`, age 1 s, luma 250, live layer 231, one audio track: the stale
+    reading was the restart gap, not a stopped host.
+- What the app shows (tile snapshots): 95 ok, 6 unknown, 1 stale, 1 missing.
+  - **No `multi_audio` tile**: no host runs the old `run_ffmpeg.sh` any more, so no `vpt-stream` restart was needed tonight.
+  - The 1 "dark snapshot but the live video plays" note, `vpt-nipogi/DEVICE10` ("FR Movie 7 — Pluto TV Dating"), is a real picture:
+    the browser proves it (`readyState` 4, the clock advances 149.3 s → 151.7 s, 320x180, no failed HLS request, the screenshot
+    shows the film's own frame). A dark thumbnail of a moving picture, not a dead stream (bug-6b227d92). The re-check after the
+    run reads `ok` (luma 213, live layer 199).
+  - The 1 `missing` tile is `vpt-nipogi/DEVICE5`, one of the devices with an empty source; the 6 `unknown` tiles are the other
+    empty-source devices.
+- The pool was not touched: re-probed, `smoke` plays (the only vetted entry, from `vpt-pi4`) and the three public candidates still
+  time out on port 554 from codebox, so nothing new is vetted (bug-c7c2bb0e, still `wontfix`).
+
 ## Private config (not in the repo)
 
 `~/.config/rtsp-nightly/env`, sourced by the session: `RTSP_CHECK_SERVERS="<label>=<server url>,..."` (one per backend server), `RTSP_LEASE_ENV` (the `vpt-lease` environment of the hosts, default
