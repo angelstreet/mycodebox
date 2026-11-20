@@ -151,6 +151,7 @@ import { pickableProject, launchArgs, codexModels, CLAUDE_MODELS, MINIMAX_MODELS
 import { createSessionHistory } from './session-history.js';
 import { paneLinesOk } from './pane-lines.js';
 import { scrollPlan, wheelPlan, altScrollApplies } from './alt-scroll.js';
+import { findSessionFile, readConversation } from './conversation.js';
 import { createHistoryView } from './history-view.js';
 import { createQuota, defaults as quotaDefaults } from './quota.js';
 import { createClaudeAccounts, rateFile as claudeRateFile, accountOfPid, scanClaudeLimit, DEFAULT_ID as CLAUDE_DEFAULT_ACCOUNT } from './claude-accounts.js';
@@ -2569,9 +2570,13 @@ async function handleHttp(req, res) {
   if (req.method === 'GET' && p.startsWith('/api/transcript/')) {
     const session = decodeURIComponent(p.slice('/api/transcript/'.length));
     try {
+      // A Claude session: its own session file holds the whole conversation (the pane of a fullscreen session holds one screen).
+      const sid = latest?.status?.[session]?.claudeSessionId;
+      const file = sid ? await findSessionFile(sid).catch(() => null) : null;
+      if (file) { const text = await readConversation(file); if (text) return json(res, 200, { session, text, hash: shortHash(text), source: 'session-file' }); }
       const lines = plainLines(await capturePane(session));
       const text = transcriptOf(lines, bodyEnd(lines));
-      return json(res, 200, { session, text, hash: shortHash(text) });
+      return json(res, 200, { session, text, hash: shortHash(text), source: 'pane' });
     } catch {
       return json(res, 404, { ok: false, error: 'no such session' });
     }

@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A fullscreen session scrolls locally: its conversation is loaded into the card** — scrolling a Claude Code fullscreen session (alternate screen, no tmux scrollback) used a server request per step and felt sticky; now the first scroll opens the card's reader, which holds the whole conversation read from Claude's own session file (the newest ~3 MB; `GET /api/transcript/<session>` now answers from it, `conversation.js`) and scrolls in the browser with no request. The live screen is one tap away (`>_`) · area: dashboard
+
 - **The reader's scrollbar is always on in Chrome and on phones** — `scrollbar-width` / `scrollbar-color` on the reader beat the `::-webkit-scrollbar` rules and brought back the overlay bar that hides when idle; only the 12 px `::-webkit-scrollbar` bar is left, so it stays visible · area: dashboard
 
 - **The whole dashboard uses the Claude Code app's dark look** — the page and the terminal card are near-black (`#191919`, the sidebar and panels `#1f1f1f`) with `#e6e6e6` terminal text, not only the reader view (`Aa`); the browser theme colour follows · area: dashboard
