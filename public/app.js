@@ -653,6 +653,15 @@ async function altPump(session) {
   if (e.altQ) altPump(session);
 }
 const wheelPx = (ev) => ev.deltaY * (ev.deltaMode === 1 ? 16 : ev.deltaMode === 2 ? 400 : 1);
+// Scrolling a fullscreen session's terminal opens its reader, which holds the whole conversation and scrolls locally (no request per step).
+// The live screen is one tap away (the >_ button). Not persisted: the next card keeps the reader / terminal choice the user made.
+function altToReader(session) {
+  if (state.reader) return false;
+  state.reader = true;
+  for (const c of els.cardPane.children) syncCell(c);
+  return true;
+}
+
 function bindAltScroll(session, host) {
   let wheel = 0, ty = null, tacc = 0;
   let px = 16;
@@ -662,6 +671,7 @@ function bindAltScroll(session, host) {
     if (entry) entry.scrollAt = Date.now();
     if (!entry?.alt) return;
     e.preventDefault(); e.stopPropagation();
+    if (altToReader(session)) return;
     px = altRowPx(session);
     wheel += wheelPx(e);
     const k = notches(wheel);
@@ -674,6 +684,7 @@ function bindAltScroll(session, host) {
     if (!entry?.alt || ty == null) return;
     const y = e.touches[0].clientY; tacc += y - ty; ty = y;
     e.preventDefault();
+    if (altToReader(session)) return;
     px = altRowPx(session);
     const k = notches(tacc);   // finger down = older, like a list
     if (k) { altScroll(session, k > 0 ? 'up' : 'down', Math.abs(k)); tacc -= k * px; }
@@ -2198,6 +2209,7 @@ function jumpTo(cell, name, where) {
     return;
   }
   const e = state.terms.get(name);
+  if (e?.alt && altToReader(name)) { const r = cell.querySelector('.reader'); if (r) r.scrollTop = where === 'top' ? 0 : r.scrollHeight; return; }
   if (e?.alt) { altScroll(name, where); return; }
   const term = e?.term;
   if (!term) return;
@@ -2448,8 +2460,9 @@ function syncReader(cell, n) {
       .then((d) => {
         // keep the last good reply when the server has none right now (tool line is last)
         if (d.reply) c.text = String(d.reply);
+        const prevHash = c.hash;
         c.failed = false; c.hash = hash;
-        if (c.full != null) return loadTranscript(n, c);
+        if (c.full != null && (hash !== prevHash || hash !== '')) return loadTranscript(n, c);   // not every 5 s on a session with no reply hash: the file can be MBs
       })
       .catch(() => { c.failed = true; })
       .finally(() => {
@@ -2470,6 +2483,11 @@ function paintReader(cell, n) {
     const tail = stripAnsi(state.paneText.get(n) || '').split('\n')
       .map((l) => l.replace(/\s+$/, '')).filter((l) => l.trim() && !RULE_RE.test(l)).slice(-24).join('\n');
     if (tail) text = `${text}\n\n\`\`\`\n${tail.replace(/```/g, "'''")}\n\`\`\``;
+  }
+  // A fullscreen (alternate-screen) session has no scrollback: load its whole conversation once, so the reader scrolls locally, with no request per step.
+  if (c && !c.autoFull && state.terms.get(n)?.alt) {
+    c.autoFull = true;
+    loadTranscript(n, c).then(() => { el.dataset.h = ''; el.dataset.pending = ''; paintReader(cell, n); el.scrollTop = el.scrollHeight; });
   }
   const full = c && c.full != null;
   if (full && c.full) text = c.full;
