@@ -91,7 +91,7 @@ test('F4: the name is validated before lookup and prototype names are never reco
 });
 
 // ---- F3: manager-fresh script + unit ------------------------------------------------------------------------------
-function freshRun(t, { env = {}, withClaude = true, pane = '' } = {}) {
+function freshRun(t, { env = {}, withClaude = true, pane = '', args = [] } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'p1fix-fresh-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
   const bin = join(dir, 'bin'); const home = join(dir, 'home'); mkdirSync(bin); mkdirSync(home);
   const fake = `#!${process.execPath}
@@ -100,6 +100,7 @@ const dir = process.env.FAKE_DIR; const cmd = path.basename(process.argv[1]); co
 let stdin = ''; if (args.includes('@-')) { try { stdin = fs.readFileSync(0, 'utf8'); } catch {} }
 fs.appendFileSync(path.join(dir, 'calls'), JSON.stringify([cmd, ...args, ...(stdin ? [stdin] : [])]) + '\\n');
 if (cmd === 'curl' && !args.includes('POST')) process.stdout.write(JSON.stringify({ status: { manager: { state: 'done', stall: {} } } }));
+if (cmd === 'tmux' && args[0] === 'has-session' && process.env.FAKE_NOSESSION) process.exit(1);
 if (cmd === 'tmux' && args[0] === 'display') console.log('4242');
 if (cmd === 'tmux' && args[0] === 'capture-pane') process.stdout.write(process.env.FAKE_PANE || '');
 if (cmd === 'ps') { console.log('claude'); process.exit(0); }
@@ -115,7 +116,7 @@ if (cmd === 'pgrep') {
 }
 `;
   for (const c of ['tmux', 'curl', 'pgrep', 'ps', 'sleep', 'git', ...(withClaude ? ['claude'] : [])]) writeFileSync(join(bin, c), fake, { mode: 0o755 });
-  const r = spawnSync('/bin/bash', [resolve('scripts/manager-fresh.sh')], {
+  const r = spawnSync('/bin/bash', [resolve('scripts/manager-fresh.sh'), ...args], {
     env: { PATH: `${bin}:${dirname(process.execPath)}:/usr/bin:/bin`, HOME: home, LANG: 'C.UTF-8', FAKE_DIR: dir, FAKE_PANE: pane, GHOSTY_URL: 'http://localhost:1', ...env },
     encoding: 'utf8', timeout: 60000,   // ~30 fake-tmux node spawns; 11 s idle, over 20 s at load 30
   });
@@ -135,6 +136,18 @@ test('F3: a missing launch executable aborts before tmux is touched', (t) => {
     assert.deepEqual(tmuxCalls(r), [], 'no tmux call at all');
     assert.equal(r.calls.filter(([c]) => c === 'curl').length, 0);
   }
+});
+test('F3: --now recreates a missing manager session, launches and kicks; without --now it stops', (t) => {
+  const r = freshRun(t, { pane: 'remote-control is active\n', env: { FAKE_NOSESSION: '1', MANAGER_DIR: '/nonexistent-xyz' }, args: ['--now'] });
+  assert.equal(r.status, 0, r.stderr);
+  const created = tmuxCalls(r).find(([, ...a]) => a[0] === 'new-session');
+  assert.ok(created, 'new-session called');
+  assert.ok(created.includes('manager') && created.some((a) => a.endsWith('/ghosty-sessions')), JSON.stringify(created));
+  assert.equal(kicks(r).length, 1);
+  const r2 = freshRun(t, { env: { FAKE_NOSESSION: '1' } });
+  assert.equal(r2.status, 1);
+  assert.match(r2.stdout, /no manager session/);
+  assert.ok(!tmuxCalls(r2).some(([, ...a]) => a[0] === 'new-session'));
 });
 test('F3: remote-control wait expiry exits non-zero and never types the kickoff', (t) => {
   const r = freshRun(t, { pane: '$ bash: claude: command not found\n' });

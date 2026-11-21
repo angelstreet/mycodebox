@@ -141,6 +141,7 @@ PUBLIC_URL=https://<machine>.<tailnet>.ts.net     # notification tap opens /?s=<
 | `DONE_IDLE_HOURS` | `6` | a finished agent session turns `done` -> `idle` after this long |
 | `AGENT_CMD_CLAUDE` / `_CODEX` / `_MINIMAX` / `_BASH` | `claude --dangerously-skip-permissions` / `codex --dangerously-bypass-approvals-and-sandbox` / `PATH=$HOME/.local/node-v24.21.0-linux-x64/bin:$PATH mcode` / (none) | create/resume launch commands (owner's default 2026-10-11: prompts skipped, folder trust pre-accepted via `trust.js`); Claude also configures manager-fresh; an override wins verbatim, even empty. Only a non-loopback `HOST` warns |
 | `MANAGER_MODEL` | `sonnet` | Model of the Claude manager (`managerCommand` in `launch-config.js`, used by `manager-fresh.sh` and `manager-watch.sh`); owner decision 2026-10-21: Sonnet, not Opus. A model alias or id; anything else falls back to `sonnet`. |
+| `MANAGER_DIR` | `~/ghosty-sessions-manager` (else `~/ghosty-sessions`) | Directory `manager-fresh.sh --now` creates a missing `manager` tmux session in. |
 | `TLS_KEY` / `TLS_CERT` | `certs/key.pem` / `certs/cert.pem` under checkout | native TLS starts only when both exist; same HOST as HTTP |
 | `TLS_PORT` | `7443` (`443` if PORT=443) | native HTTPS port; HTTP remains enabled |
 | `TMUX_BIN` | `tmux` | tmux executable |

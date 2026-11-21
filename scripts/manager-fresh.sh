@@ -30,7 +30,14 @@ for w in $CMD; do case "$w" in *=*|env|exec|nohup|command|-*) ;; *) exe=$w; brea
 if [ -z "$exe" ] || ! command -v "$exe" >/dev/null 2>&1; then
   echo "manager command not found: '${exe:-<empty>}' (check AGENT_CMD_CLAUDE and that its .env is loaded); not restarted" >&2; exit 1
 fi
-tmux has-session -t "=$S" 2>/dev/null || { echo "no $S session"; exit 1; }
+# --now (manager-watch, manager-resume skill): a missing session is a dead manager too. Recreate the tmux session in the
+# manager's own worktree (MANAGER_DIR, default ~/ghosty-sessions-manager, else ~/ghosty-sessions); it then counts as dead below.
+if ! tmux has-session -t "=$S" 2>/dev/null; then
+  [ "$NOW" = 1 ] || { echo "no $S session"; exit 1; }
+  mdir="${MANAGER_DIR:-$HOME/ghosty-sessions-manager}"; [ -d "$mdir" ] || mdir="$HOME/ghosty-sessions"
+  tmux new-session -d -s "$S" -c "$mdir" || { echo "could not create the $S session in $mdir" >&2; exit 1; }
+  echo "no $S session: created it in $mdir"
+fi
 pane=$(tmux display -p -t "=$S:" '#{pane_pid}')
 # A pane with no claude process under it is a bare shell: the manager is dead (its /exit succeeded and the relaunch
 # failed readiness, or the agent was killed). --now then skips BOTH the idle wait and the /exit (there is nothing to
