@@ -10,7 +10,8 @@ Object.assign(process.env, { GHOSTY_STATE_DIR: dir, STALL_SETTLE_MS: '1000', JEV
 const m = await import('../manager.js');
 const sent = [], pushes = [], items = [], enq = [];
 let repo = 'mycodebox';
-const integration = { repoForCwd: async () => repo, enqueue: (r) => { enq.push(r); return { id: 'int-fake01', position: 1, repo: r.repo }; } };
+let listed = [];
+const integration = { repoForCwd: async () => repo, list: () => listed, enqueue: (r) => { enq.push(r); return { id: 'int-fake01', position: 1, repo: r.repo }; } };
 await m.initManager({ onOwnerNeeded: (s) => pushes.push(s), onManagerItem: (it) => items.push(it), integration, sendKeys: async (name, text) => { sent.push({ name, text }); }, sendKey: async () => {} });
 await m.setManagerConfig({ aiTriage: 'off', routerShadow: false, wakeShadow: false, autoSend: true });
 
@@ -65,4 +66,14 @@ test('merge_wait with a hard word (force-push) still goes to the owner', async (
   const e = await stop('mw3', 'Done.\nSTATUS: needs-owner: merge PR #24 and force-push main?', (r) => r.type === 'escalated');
   assert.notEqual(e.target, 'manager');
   assert.equal(enq.length, 1);
+});
+
+test('a branch the lane just answered "already in the target" is not queued again (re-queue loop, 2026-11-21)', async () => {
+  repo = 'mycodebox';
+  listed = [{ id: 'int-old01', repo: 'mycodebox', branch: 'v2/loop', alreadyMerged: true, updatedAt: new Date().toISOString() }];
+  const n = enq.length;
+  try {
+    const e = await stop('mw-loop', 'Waiting.\nSTATUS: waiting — your merge decision on PR #31 (branch v2/loop)', (r) => r.type === 'merge_handoff_skipped' || r.type === 'merge_handoff');
+    assert.equal(e.type, 'merge_handoff_skipped'); assert.equal(enq.length, n);
+  } finally { listed = []; }
 });

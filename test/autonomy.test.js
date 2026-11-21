@@ -38,7 +38,7 @@ const RULE = '─'.repeat(40);
 const pane = (body) => [...body.split('\n'), '✻ Baked for 1m · done 3:59 PM', RULE, '❯ ', RULE, '  ⏵⏵ bypass permissions on'];
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const until = async (fn, ms = 6000) => { for (let t = 0; t < ms && !fn(); t += 20) await wait(20); };
-const lines = (f) => (existsSync(f) ? readFileSync(f, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
+const lines = (f) => (existsSync(f) ? readFileSync(f, 'utf8').trim().split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean) : []);   // a line still being written is not a record yet
 const stalls = () => lines(join(dir, 'stalls.jsonl'));
 const journal = () => lines(join(dir, 'manager-decisions.jsonl'));
 const esc = (name) => stalls().find((r) => r.type === 'escalated' && r.session === name);   // a live menu is already shown to the owner by ghosty's waiting alert: the escalation is logged
