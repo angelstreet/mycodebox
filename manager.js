@@ -1185,6 +1185,13 @@ async function mergeHandoff({ s, w, id, h, final, stall }) {
   if (w.hash !== h) return { handled: true };
   const at = new Date(s.now);
   if (repo && branch && !/^(?:main|master)$/.test(branch)) {
+    // A branch the lane just answered "nothing new: already in the target" is not queued again: a session whose closing line names a
+    // branch that is not its own (it is waiting on that request) was re-queued every ~75 s, each one ending the same way (2026-11-21).
+    const recent = integration?.list ? integration.list({ repo, limit: 50 }).find((x) => x.branch === branch && x.alreadyMerged && Date.now() - Date.parse(x.updatedAt || x.createdAt || 0) < 30 * 60_000) : null;
+    if (recent) {
+      logLater({ type: 'merge_handoff_skipped', id, session: name, repo, branch, reason: `already in the target (${recent.id})` });
+      return { handled: false, why: `merge not handed off: ${branch} is already in the target (${recent.id})` };
+    }
     let q = null;
     try { q = integration.enqueue({ repo, branch, session: name, by: 'manager' }); } catch (e) { q = { error: e.message }; }
     if (q?.id) {

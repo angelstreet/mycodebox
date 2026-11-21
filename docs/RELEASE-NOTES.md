@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The manager no longer re-queues a branch the lane just answered "already in main"** — a session whose closing line named a branch that was not its own (it waited on that request) got the same integration queued under its name every ~75 s, each ending "nothing new"; the merge hand-off now skips a branch with an already-merged request in the last 30 min and logs `merge_handoff_skipped` · area: manager
+
 - **`manager-fresh.sh --now` brings back a manager whose tmux session is gone** — it stopped with "no manager session" when the `manager` session itself was missing (not only its claude process), so a restart needed a hand `cbsession` launch; `--now` now creates the session in the manager worktree (`MANAGER_DIR`, default `~/ghosty-sessions-manager`, else `~/ghosty-sessions`), then launches and sends the kickoff. Without `--now` it still stops · area: manager
 
 - **Open dashboards pick up new looks at once, and the reader matches the terminal** — the service worker's cache name was not bumped by the recent dashboard changes, so an open tab or the installed app kept the old stylesheet (no scrollbar, the old sans-serif reader) until a hand reload; it is `ghosty-shell-v173` now, so open tabs reload. The reader's text column now starts and ends where the terminal's does, your messages look as in the terminal (`❯` and a gray background behind the text), and messages you send while the agent works (stored as queued commands) show as yours. The conversation is read backwards from the session file, skipping tool output unparsed, so a long session shows its whole recent conversation (a 23 MB file: 107 k characters in 89 ms; the 3 MB tail had held 2 k) · area: dashboard
