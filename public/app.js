@@ -23,6 +23,7 @@ import { copyPromptButtonHtml, wireCopyPrompt } from '/copy-prompt.js';
 import { uploadOne } from '/upload.js';
 import { renderMd } from '/md.js';
 import { decideReaderPaint } from '/reader-paint.js';
+import { localScrollEnters, localScrollExits, flingVelocity, flingStep, ENTER_PX } from '/local-scroll.js';
 import { chipModel, machinesOf, holdingsOf, blocksDeploy, shortResource, ttlText } from '/platforms.js';
 import { displayStateOf, STATE_RANK, STATE_LABEL, isRoutineAlert } from '/state.js';
 import { fmtTok, fmtUsd, sessionRows, topEntries, dayBars, summaryFresh, managerBlockHtml } from '/usage.js';
@@ -398,6 +399,22 @@ state.font = clampFont(Number(lsGet(LS_FONT, 0)) || (matchMedia('(max-width: 720
 state.fit = lsGet(LS_FIT, '1') !== '0';
 state.cardCtl = lsGet(LS_CTRL, '1') !== '0';
 document.body.classList.toggle('no-cardctl', !state.cardCtl);
+// "Smooth scroll" (docs/SCROLL-DESIGN.md): scrolling a fullscreen session's terminal up shows its conversation locally; the bottom returns to the live screen.
+const LS_SMOOTH = 'ghosty.smoothScroll';
+state.smoothScroll = lsGet(LS_SMOOTH, '1') !== '0';
+state.scrollRd = new Set();   // sessions whose terminal card shows the conversation while scrolled up; per card, never saved
+function setSmoothScroll(on) {
+  state.smoothScroll = !!on;
+  lsSet(LS_SMOOTH, on ? '1' : '0');
+  if (!on) for (const n of [...state.scrollRd]) localScrollExit(n);
+  syncSmoothUi();
+}
+// two switches for one setting: the text popover (desktop) and the More menu (a phone has no text popover)
+function syncSmoothUi() {
+  $('#smoothToggle')?.classList.toggle('on', state.smoothScroll);
+  $('#smoothBtn')?.classList.toggle('on', state.smoothScroll);
+  const l = $('#smoothLbl'); if (l) l.textContent = `Smooth scroll: ${state.smoothScroll ? 'on' : 'off'}`;
+}
 function setCardCtl(on) {
   state.cardCtl = on;
   lsSet(LS_CTRL, on ? '1' : '0');
@@ -657,9 +674,62 @@ async function altPump(session) {
   if (e.altQ) altPump(session);
 }
 const wheelPx = (ev) => ev.deltaY * (ev.deltaMode === 1 ? 16 : ev.deltaMode === 2 ? 400 : 1);
+
+// Smooth scroll (local-scroll.js, docs/SCROLL-DESIGN.md): a scroll toward older text in a fullscreen terminal shows the conversation the
+// page already holds, `px` above its end, and scrolls it locally: no request per step, every pixel, real momentum, an exact scrollbar.
+// -> the reader element, or null when the card stays on the forwarded scroll (setting off, no conversation file, not loaded yet).
+const cardCell = (session) => els.cardPane?.querySelector(`.cell[data-session="${cssEscape(session)}"]`);
+function localScrollEnter(session, px) {
+  const e = state.terms.get(session), c = state.replies.get(session);
+  if (state.scrollRd.has(session)) return cardCell(session)?.querySelector('.reader') || null;
+  if (!localScrollEnters({ on: state.smoothScroll, reader: readerOn(session), alt: !!e?.alt, source: c?.fullSource, text: c?.full, px: Math.max(px, ENTER_PX) })) {
+    if (state.smoothScroll && e?.alt && c && c.full == null && !c.fullBusy) { c.fullBusy = true; loadTranscript(session, c).finally(() => { c.fullBusy = false; }); }   // ready for the next scroll
+    return null;
+  }
+  const cell = cardCell(session); if (!cell) return null;
+  // the app itself was scrolled up (before the setting, or from another device): put it back at its live end, which is where the card returns to
+  if (e.altUp || /Jump to bottom|new messages? \(ctrl\+End\)/i.test(e.lastPane || '')) altScroll(session, 'bottom');
+  state.scrollRd.add(session);
+  syncCell(cell);
+  const el = cell.querySelector('.reader');
+  wireLocalScroll(session, el);
+  el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight - px);
+  // The document was loaded when the card opened or at the last reply: fetch what the agent wrote since and swap it in under the reader's
+  // position (text is only added at the end, so what is being read does not move).
+  if (e.lastPane !== c.fullPane && !c.fullBusy) {
+    c.fullBusy = true;
+    const before = c.full;
+    loadTranscript(session, c).finally(() => { c.fullBusy = false; c.fullPane = e.lastPane; if (c.full !== before && state.scrollRd.has(session) && cell.isConnected) paintReader(cell, session, { keepTop: true }); });
+  }
+  updateBar(cell);
+  return el;
+}
+function localScrollExit(session) {
+  if (!state.scrollRd.delete(session)) return;
+  const cell = cardCell(session);
+  if (cell) { syncCell(cell); relayoutTerm(session); updateBar(cell); }
+}
+// At the bottom, finger up, scroll at rest: the live screen comes back.
+function wireLocalScroll(session, el) {
+  if (el._localWired) return;
+  el._localWired = true;
+  let timer = 0;
+  const check = () => {
+    clearTimeout(timer);
+    if (!state.scrollRd.has(session)) return;
+    const idle = Date.now() - (el._scrollAt || 0);
+    if (localScrollExits({ fromBottomPx: el.scrollHeight - el.clientHeight - el.scrollTop, touching: !!el._touching, idleMs: idle })) { localScrollExit(session); return; }
+    if (el.scrollHeight - el.clientHeight - el.scrollTop <= 1) timer = setTimeout(check, 60);
+  };
+  el._localCheck = check;
+  el.addEventListener('scroll', () => { el._scrollAt = Date.now(); check(); }, { passive: true });
+  el.addEventListener('touchstart', () => { el._touching = true; el._fling = 0; }, { passive: true });
+  for (const ev of ['touchend', 'touchcancel']) el.addEventListener(ev, () => { el._touching = false; el._scrollAt = Date.now(); check(); }, { passive: true });
+}
 function bindAltScroll(session, host) {
   let wheel = 0, ty = null, tacc = 0;
   let px = 16;
+  let local = null, samples = [];   // local: the reader this touch scrolls (the gesture began on the terminal, which is hidden since)
   const notches = (acc) => Math.trunc(acc / px);
   host.addEventListener('wheel', (e) => {
     const entry = state.terms.get(session);
@@ -668,20 +738,45 @@ function bindAltScroll(session, host) {
     e.preventDefault(); e.stopPropagation();
     px = altRowPx(session);
     wheel += wheelPx(e);
+    if (wheel <= -ENTER_PX && localScrollEnter(session, -wheel)) { wheel = 0; return; }   // the next wheel events land on the reader itself
     const k = notches(wheel);
     if (k) { altScroll(session, k < 0 ? 'up' : 'down', Math.abs(k)); wheel -= k * px; }
   }, { capture: true, passive: false });
-  host.addEventListener('touchstart', (e) => { ty = e.touches[0]?.clientY ?? null; tacc = 0; }, { capture: true, passive: true });
+  host.addEventListener('touchstart', (e) => { ty = e.touches[0]?.clientY ?? null; tacc = 0; local = null; samples = []; }, { capture: true, passive: true });
   host.addEventListener('touchmove', (e) => {
     const entry = state.terms.get(session);
     if (entry) entry.scrollAt = Date.now();
     if (!entry?.alt || ty == null) return;
-    const y = e.touches[0].clientY; tacc += y - ty; ty = y;
+    const y = e.touches[0].clientY, dy = y - ty; tacc += dy; ty = y;
     e.preventDefault();
+    if (local) {   // the finger moves the document pixel for pixel
+      local.scrollTop -= dy; local._scrollAt = Date.now();
+      samples.push({ t: performance.now(), y }); if (samples.length > 12) samples.shift();
+      return;
+    }
+    if (tacc >= ENTER_PX && (local = localScrollEnter(session, tacc))) { local._touching = true; local._fling = 0; samples = [{ t: performance.now(), y }]; tacc = 0; return; }
     px = altRowPx(session);
     const k = notches(tacc);   // finger down = older, like a list
     if (k) { altScroll(session, k > 0 ? 'up' : 'down', Math.abs(k)); tacc -= k * px; }
   }, { capture: true, passive: false });
+  const lift = () => {
+    const el = local; local = null; ty = null;
+    if (!el) return;
+    el._touching = false; el._scrollAt = Date.now();
+    // the fling the browser would have given a native scroll: this touch began on the terminal, so it is ours to continue
+    let v = flingVelocity(samples, performance.now()), last = performance.now();
+    const id = el._fling = Math.random();
+    const step = (now) => {
+      if (el._fling !== id || !state.scrollRd.has(session)) return;
+      const f = flingStep(v, now - last); last = now; v = f.v;
+      const top = el.scrollTop; el.scrollTop = top - f.dy;
+      if (f.done || el.scrollTop === top) { el._localCheck?.(); return; }
+      requestAnimationFrame(step);
+    };
+    if (v) requestAnimationFrame(step); else el._localCheck?.();
+  };
+  host.addEventListener('touchend', lift, { capture: true, passive: true });
+  host.addEventListener('touchcancel', lift, { capture: true, passive: true });
 }
 
 // Always-visible scrollbar at the RIGHT EDGE OF THE CARD (the .cell, not the text column), one per card, drawn by us: native bars are overlay
@@ -689,7 +784,9 @@ function bindAltScroll(session, host) {
 //  - the reader: real scrollTop / scrollHeight;
 //  - a terminal with scrollback: xterm's real viewportY / baseY;
 //  - a fullscreen (alternate-screen) terminal: there is no scrollback and the app's position cannot be read, so the thumb is an ESTIMATE:
-//    the notches sent up over the conversation's length (barMetrics), snapped to the bottom whenever Claude Code stops showing "Jump to bottom". The card never changes view by itself: the reader / terminal choice is the user's (the >_ button).
+//    the notches sent up over the conversation's length (barMetrics), snapped to the bottom whenever Claude Code stops showing "Jump to bottom".
+//    The saved reader / terminal choice is the user's (the >_ button) and is never changed here. With "Smooth scroll" on, a scroll up shows
+//    the conversation in the card until the bottom is reached again (localScrollEnter: per card, never saved), so the bar is the real one.
 // Thumb: >= 28 px, bright on a visible track; drag it or tap the track to jump (reader / scrollback terminal).
 const SBAR_PX = 12;
 function ensureBar(cell) {
@@ -709,10 +806,13 @@ function ensureBar(cell) {
   };
   bar.addEventListener('pointerdown', (ev) => {
     ev.preventDefault(); ev.stopPropagation();
-    const m = metrics();
+    let m = metrics();
+    if (m && m.kind === 'alt' && localScrollEnter(cell.dataset.session, 0)) m = metrics();   // smooth scroll: the estimate becomes the document's real bar
     if (m && !m.draggable) return;
     bar.setPointerCapture(ev.pointerId); jump(ev);
-    const mv = (e) => jump(e), up = () => { bar.removeEventListener('pointermove', mv); bar.removeEventListener('pointerup', up); bar.removeEventListener('pointercancel', up); };
+    const rdEl = m && m.kind === 'reader' ? m.el : null;
+    if (rdEl) rdEl._touching = true;   // a drag that passes the bottom does not leave the document under the pointer
+    const mv = (e) => jump(e), up = () => { if (rdEl) { rdEl._touching = false; rdEl._scrollAt = Date.now(); rdEl._localCheck?.(); } bar.removeEventListener('pointermove', mv); bar.removeEventListener('pointerup', up); bar.removeEventListener('pointercancel', up); };
     bar.addEventListener('pointermove', mv); bar.addEventListener('pointerup', up); bar.addEventListener('pointercancel', up);
   });
   return bar;
@@ -890,11 +990,12 @@ function connectSession(session) {
       if (msg.type === 'snapshot') {
         const entry = state.terms.get(msg.session);
         if (entry) entry.alt = !!msg.alt;
+        if (!msg.alt && state.scrollRd.has(msg.session)) localScrollExit(msg.session);   // the app left fullscreen: its terminal has scrollback again
         if (entry?.alt && !entry.preloaded) {   // a fullscreen session: have its whole conversation ready before the first scroll (the reader shows it, scrolls locally)
           entry.preloaded = true;
           const c = state.replies.get(msg.session) || { hash: null, at: 0, text: '' };
           state.replies.set(msg.session, c);
-          if (!c.autoFull) { c.autoFull = true; loadTranscript(msg.session, c); }
+          if (!c.autoFull) { c.autoFull = true; loadTranscript(msg.session, c).then(() => { const cur = cardCell(msg.session); if (cur && state.smoothScroll) paintReader(cur, msg.session); }); }   // painted while hidden: the first scroll shows it at once
         }   // alternate screen, no scrollback: the wheel goes to the app (altScroll)
         if (entry?.historyLines > 1000) {
           fetch(`/api/pane/${encodeURIComponent(msg.session)}?lines=${entry.historyLines}`)
@@ -2240,12 +2341,14 @@ function wireDrag(cell, name) {
 // ⤒ / ⤓: jump to the oldest / newest output in whatever the card shows
 // (reader text or the terminal's scrollback).
 function jumpTo(cell, name, where) {
+  if (state.scrollRd.has(name) && where === 'bottom') { localScrollExit(name); return; }   // smooth scroll: the newest output is the live screen
   if (cell.classList.contains('rd-on')) {
     const el = cell.querySelector('.reader');
     el.scrollTo({ top: where === 'top' ? 0 : el.scrollHeight, behavior: 'smooth' });
     return;
   }
   const e = state.terms.get(name);
+  if (e?.alt && where === 'top') { const el = localScrollEnter(name, 0); if (el) { el.scrollTo({ top: 0, behavior: 'smooth' }); return; } }
   if (e?.alt) { altScroll(name, where); return; }
   const term = e?.term;
   if (!term) return;
@@ -2469,10 +2572,13 @@ function rowChipsHtml(n) {
 // ---------- reader (rendered last reply) ----------
 const LS_READER = 'ghosty.reader';
 state.reader = false;
-function readerOn(n) { return state.reader || String(n).startsWith('mac:'); }   // a Mac session has no terminal: its card is always the reader
+function readerOn(n) { return state.reader || state.scrollRd.has(n) || String(n).startsWith('mac:'); }   // a Mac session has no terminal: its card is always the reader
 state.replies = new Map();     // session -> { hash, at, text, failed, busy }
 function toggleReader() {
-  state.reader = !state.reader;
+  // while a card shows its conversation for a smooth scroll, the button pins that view (reader on); otherwise it flips as always
+  const pinned = state.active && state.scrollRd.has(state.active);
+  state.scrollRd.clear();
+  state.reader = pinned ? true : !state.reader;
   lsSet(LS_READER, state.reader ? '1' : '0');
   for (const c of els.cardPane.children) syncCell(c);
   const a = state.active;
@@ -2481,7 +2587,7 @@ function toggleReader() {
 // "earlier conversation": the whole captured history (prompts, replies, tool names) instead of just the last reply
 function loadTranscript(n, c) {
   return fetch(`/api/transcript/${encodeURIComponent(n)}`).then((r) => r.ok ? r.json() : Promise.reject(r.status))
-    .then((d) => { c.full = d.text || ''; c.fullAt = Date.now(); }).catch(() => {});
+    .then((d) => { c.full = d.text || ''; c.fullSource = d.source || ''; c.fullAt = Date.now(); c.fullPane = state.terms.get(n)?.lastPane; }).catch(() => {});
 }
 function syncReader(cell, n) {
   const st = state.status[n] || {};
@@ -2516,7 +2622,7 @@ function syncReader(cell, n) {
   }
   paintReader(cell, n);
 }
-function paintReader(cell, n) {
+function paintReader(cell, n, opts = {}) {
   const c = state.replies.get(n);
   const el = cell.querySelector('.reader');
   let text = c ? c.text : '';
@@ -2552,6 +2658,11 @@ function paintReader(cell, n) {
   // same-fresh-html isn't treated as a no-op.
   const effective = el.dataset.pending || html;
   if (el.dataset.h === effective && !el.dataset.pending) return;
+  if (opts.keepTop && el.dataset.h !== undefined) {   // smooth scroll: newer text swapped in under the reader's position (it is added at the end)
+    const top = el.scrollTop;
+    el.dataset.pending = ''; el.dataset.h = html; el.innerHTML = html; el.scrollTop = top;
+    return;
+  }
   if (!el._wired) {
     el._wired = true;
     el.addEventListener('click', async (e) => {
@@ -2923,6 +3034,7 @@ function focusSession(name) {
   // selected card, or of the last unlocked one when the selected card is locked. A card already on
   // screen can always be selected or opened.
   const prev = state.active;
+  if (prev && prev !== name) state.scrollRd.delete(prev);   // smooth scroll is for the card in hand: coming back to a card shows its live screen
   const cellOf = (n) => els.gridPane.querySelector(`[data-session="${cssEscape(n)}"]`);
   const locked = (n) => state.lockedSessions.includes(n);
   let slot = null;
@@ -5448,6 +5560,9 @@ function wireFontUi() {
   $('#fitToggle').onclick = () => setFit(!state.fit);
   $('#ctlToggle').onclick = () => setCardCtl(!state.cardCtl);
   $('#ctlToggle').classList.toggle('on', state.cardCtl);
+  $('#smoothToggle').onclick = () => setSmoothScroll(!state.smoothScroll);
+  $('#smoothBtn').onclick = () => { setSmoothScroll(!state.smoothScroll); toast(`Smooth scroll ${state.smoothScroll ? 'on' : 'off'}`, 1400); };
+  syncSmoothUi();
   $('#fontBtn').onclick = (e) => { e.stopPropagation(); pop.classList.toggle('hidden'); };
   $('#fontClose').onclick = (e) => { e.stopPropagation(); pop.classList.add('hidden'); };
   pop.onclick = (e) => e.stopPropagation();
