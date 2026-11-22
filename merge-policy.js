@@ -823,3 +823,25 @@ export function composeReply({ info = [], merge = null, push = null, deploy = nu
   if (hardMatch(text, { mergePresent: used.merge, pushPresent: used.push, deployPresent: used.deploy, migrationsOk: present.migrationsOk && used.deploy })) return null;
   return { text, info: keptInfo, merge: used.merge, push: used.push, deploy: used.deploy };
 }
+
+// ---- fingerprint algorithm floor (owner 2026-11-22) ----
+// A change to the VirtualPyTest fingerprint / matcher algorithm needs a manager approval AND a no-regression retest report.
+// The path list lives in the target repo (scripts/review/fingerprint_algorithm_paths.txt: one path or glob per line, # comments),
+// read at merge time from the target ref; FINGERPRINT_PATHS_PLACEHOLDER applies until that file exists there.
+export const FINGERPRINT_PATHS_FILE = 'scripts/review/fingerprint_algorithm_paths.txt';
+export const FINGERPRINT_MODOP = 'docs/agent/navigation/FINGERPRINT_RETEST.md';
+export const FINGERPRINT_REPORT_DIR = 'docs/agent/navigation/retest-reports/';
+export const FINGERPRINT_PATHS_PLACEHOLDER = ['backend_host/src/services/navigation/fingerprint/', 'backend_host/src/services/localize/', 'shared/lib/utils/fingerprint*'];
+export const parseFingerprintPaths = (text) => String(text || '').split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+const globRe = (g) => new RegExp('^' + g.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*\*/g, '\u0000').replace(/\*/g, '[^/]*').replace(/\u0000/g, '.*').replace(/\?/g, '[^/]') + '$');
+export const matchesFingerprintPath = (f, list) => list.some((g) => (g.endsWith('/') ? f.startsWith(g) : /[*?]/.test(g) ? globRe(g).test(f) : f === g || f.startsWith(g + '/')));
+// -> { touched: [files], reasons: [string] }. Docs (isDocFile) never count as algorithm changes.
+export function fingerprintGate({ files, list, approvedBy, note }) {
+  const touched = (files || []).filter((f) => !isDocFile(f) && matchesFingerprintPath(f, list));
+  if (!touched.length) return { touched, reasons: [] };
+  const ref = `see ${FINGERPRINT_MODOP}`;
+  if (!approvedBy) return { touched, reasons: [`fingerprint algorithm paths changed (${touched.join(', ')}): needs manager or owner approval (integrate request <branch> --approved-by manager) and a no-regression retest report on all platforms with all fingerprints; ${ref}`] };
+  const report = (files || []).some((f) => f.startsWith(FINGERPRINT_REPORT_DIR) && isDocFile(f)) || /(?:^|[\s"'(])\S*retest-reports\/\S+\.\w+/.test(String(note || ''));
+  if (!report) return { touched, reasons: [`fingerprint algorithm change is approved but has no retest report: add a file under ${FINGERPRINT_REPORT_DIR} to the diff or name its path in --note; ${ref}`] };
+  return { touched, reasons: [] };
+}

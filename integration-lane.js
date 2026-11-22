@@ -15,7 +15,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { spawn, execFile } from 'node:child_process';
-import { gitFacts, mergeFloor, isConvention, isDocFile, migrationReasons } from './merge-policy.js';
+import { fingerprintGate, parseFingerprintPaths, FINGERPRINT_PATHS_FILE, FINGERPRINT_PATHS_PLACEHOLDER, gitFacts, mergeFloor, isConvention, isDocFile, migrationReasons } from './merge-policy.js';
 import { mergeReleaseNote } from './release-note-merge.js';
 import { cleanupWorktree } from './worktree-cleanup.js';
 import { attribute, readLedgerTail, rowCwdMatchesWorktree } from './usage-window.js';
@@ -655,6 +655,17 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
       if (e?.verdict === 'merge') journalMigration(r, c, e);
       return { ok: e?.verdict === 'merge', tail: reasons.join('\n'), info: { reasons, infra: e?.infra?.only ? e.infra.files : null } };
     });
+    // Fingerprint algorithm floor (owner 2026-11-22): the virtualpytest repo only; the list is read from the target ref now.
+    if (c.fingerprintGate === true || (c.fingerprintGate !== false && /^virtualpytest$/i.test(String(r.repo || '')))) {
+      const nm = await G(r, c, ['diff', '--name-only', `${c.remote}/${c.target}...${r.branchSha}`]);
+      const lf = await G(r, c, ['show', `${c.remote}/${c.target}:${FINGERPRINT_PATHS_FILE}`]);
+      const list = lf.ok !== false && (lf.code ?? 0) === 0 && lf.out?.trim() ? parseFingerprintPaths(lf.out) : FINGERPRINT_PATHS_PLACEHOLDER;
+      const fg = fingerprintGate({ files: String(nm.out || '').split('\n').filter(Boolean), list, approvedBy: r.approvedBy, note: r.note });
+      if (fg.reasons.length) {
+        if (!r.approvedBy) { try { managerItem({ kind: 'merge', id: r.id, repo: r.repo, branch: r.branch, session: r.session, paths: fg.touched, text: `${fg.reasons[0]}\nApprove (covers commit ${String(r.branchSha).slice(0, 12)}) once the retest report exists: integrate request ${r.branch} --repo ${r.repo} --approved-by manager --note <report path>` }); } catch (err) { log('manager item failed', err?.message); } }
+        throw new Ret(fg.reasons[0], '', { outcome: r.approvedBy ? 'needs_report' : 'needs_approval', fingerprintPaths: fg.touched, reasons: fg.reasons });
+      }
+    }
     if (!ev.ok && ev.info.infra) {
       const paths = ev.info.infra;
       const st = await G(r, c, ['diff', '--stat', `${c.remote}/${c.target}...${r.branchSha}`]);
