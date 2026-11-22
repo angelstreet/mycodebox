@@ -302,6 +302,10 @@ body{ display:flex; flex-direction:column; }
 .cell.deploy{ border-color:var(--deploy); box-shadow:0 0 0 1px var(--deploy), 0 0 14px rgba(160,112,255,0.22); }
 .cell.manager{ border-color:var(--manager); box-shadow:0 0 0 1px var(--manager), 0 0 14px rgba(79,214,200,0.20); }
 .cell.done::before{ content:''; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--done); z-index:2; pointer-events:none; }   /* a marker drawn inside, not a thicker border: the card's content never shifts when the state changes */
+/* A grid of several cards (owner 2026-11-22): a lean header. No reporter ⚡, no account label (it is in the agent badge's tooltip), no priority
+   chip, no worktree fork: the branch says enough. The single card and the one-session view keep them. */
+.grid-pane:not(.size-1) .cell .h .rp, .grid-pane:not(.size-1) .cell .h .agent-acct, .grid-pane:not(.size-1) .cell .h .prio,
+.grid-pane:not(.size-1) .cell .h .wt{ display:none; }
 .grid-pane .cell.focus{ box-shadow: 0 0 0 2px var(--accent), 0 0 18px rgba(232,154,74,0.35); }
 .cell .h .tgt{
   display:none; flex-shrink:0; font-size:9.5px; font-weight:700; letter-spacing:.03em;
