@@ -133,7 +133,7 @@ import { scanTaskDocs, withHomeDirs, computeUnfinished, docLeftoversFor, createU
 import { pushOf, replyFor } from './owner-push.js';
 import { createWorkerAutoClose, shouldClose as shouldCloseWorker, politeClose, LEFTOVERS_WINDOW_MS } from './worker-auto-close.js';
 import { statusLine, inputBox } from './stall.js';
-import { verifyDelivered, confirmDelivered, waitSettled, settleBudgetMs } from './send-verify.js';
+import { verifyDelivered, confirmDelivered, waitSettled, settleBudgetMs, pasteTextOf } from './send-verify.js';
 import { machinesOf, holdingsOf, deployWaitOf, agentSession, agentSessionCandidates, holderSession } from './public/platforms.js';
 import { createHash, randomBytes } from 'node:crypto';
 import { basename, dirname, extname, join, normalize, sep } from 'node:path';
@@ -164,6 +164,7 @@ import { createUsage, usageFile } from './usage-view.js';
 import { createTurnMeter, statusMeterLine } from './turn-meter.js';
 import { evaluatePolicy } from './public/policy.js';
 import { isPriority } from './public/prio.js';
+import { createPromptSenders } from './prompt-senders.js';
 import { createTts, parseRange } from './tts.js';
 import { publicLinks, loadAssetlinks } from './assetlinks.js';
 import { revertPlan } from './decided.js';
@@ -436,7 +437,7 @@ async function sendKeys(session, keys, enter = true) {
   if (lines.length > 5000) throw httpError(400, 'too many lines (max 5000)');
   if (text.length) {
     const buf = `ghosty-send-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    await exec(TMUX, ['set-buffer', '-b', buf, '--', text]);
+    await exec(TMUX, ['set-buffer', '-b', buf, '--', pasteTextOf(text)]);   // a trailing @path gets a space: else the Enter only picks the file suggestion
     await exec(TMUX, ['paste-buffer', '-p', '-d', '-b', buf, '-t', tgt(session)]);
   }
   let submitted;
@@ -2216,7 +2217,11 @@ async function setSessionMeta(session, body) {
 }
 
 // Who typed: every send is logged with its actor (the owner's UI sends no `by`, the manager agent sends 'manager-agent').
+// Who typed each prompt (owner 2026-11-22): the AI side's sends, so the reader and the terminal show the owner's own messages apart.
+const promptSenders = createPromptSenders();
+promptSenders.seed(LOG_FILE).catch(() => {});
 function logSend(session, by, payload) {
+  if (payload.key === undefined) promptSenders.note(session, by, String(payload.keys || ''));
   noteAnswerer(session, by);   // round 9: who answered, for owner-roundtrips.jsonl
   logEvent({ type: 'send', session, by, ...(payload.key !== undefined ? { key: String(payload.key).slice(0, 40) } : { text: String(payload.keys || '').slice(0, 200) }) });
   // an owner tap on a NEEDS YOU option closes its ledger line (Q245/Q262 stayed open after the owner answered)
@@ -2585,6 +2590,9 @@ async function handleHttp(req, res) {
     } catch {
       return json(res, 404, { ok: false, error: 'no such session' });
     }
+  }
+  if (req.method === 'GET' && p.startsWith('/api/senders/')) {   // the AI side's recent prompts in a session: [{ sig, by }] (prompt-sig.js)
+    return json(res, 200, { session: decodeURIComponent(p.slice('/api/senders/'.length)), ai: promptSenders.of(decodeURIComponent(p.slice('/api/senders/'.length))) });
   }
   if (req.method === 'GET' && p.startsWith('/api/reply/')) {
     const session = decodeURIComponent(p.slice('/api/reply/'.length));

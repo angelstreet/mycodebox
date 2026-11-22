@@ -12,7 +12,8 @@ import { platformsBlocks } from '/platforms-view.js';
 import { stripSentEcho } from '/sent-echo.js';
 import { closeBgAtNewlines } from '/term-sgr.js';
 import { planPaint } from '/term-paint.js';
-import { stripResizeHint, stripDiffPanel } from '/pane-hints.js';
+import { stripResizeHint, stripDiffPanel, tintOwnerPrompts } from '/pane-hints.js';
+import { aiSenderOf, senderLabel } from '/prompt-sig.js';
 import { fitAction, fitSatisfied } from '/fit-policy.js';
 import { fitFont, canShrinkFont, isSettling } from '/fit-font.js';
 import { registerUrlLinks } from '/term-links.js';
@@ -297,7 +298,8 @@ function agentBadgeHtml(name, { model = true } = {}) {
   const m = (state.status[name] || {}).model;
   // the model is the badge's tooltip; the nav list shows no model text (no room), cards and rows show it when they have space
   // the nav list has no room for the account either (its label ran into the age column, owner 2026-11-12): it goes in the tooltip there
-  const acct = model ? acctBadgeHtml(name) : '', acctTip = model ? '' : acctLabelOf(name);
+  // the account is always in the tooltip too: a grid card of several hides the label to save room (owner 2026-11-22)
+  const acct = model ? acctBadgeHtml(name) : '', acctTip = acctLabelOf(name);
   const tip = [m, acctTip && `account: ${acctTip}`].filter(Boolean).join('\n');
   return `<span class="agent ${a}"${tip ? ` title="${escapeHtml(tip)}"` : ''}>${AGENT_LABEL[a] || a}</span>${acct}${m && model ? `<span class="agent-model"> · ${escapeHtml(m)}</span>` : ''}${reporterMarkHtml(name)}`;
 }
@@ -909,7 +911,8 @@ function paintTerm(session, force) {
   const kept = entry.keepFromBottom || 0;
   const atBottom = !kept && buf.viewportY >= buf.baseY;
   const fromBottom = kept || buf.baseY - buf.viewportY;
-  const text = closeBgAtNewlines(stripResizeHint(stripDiffPanel(entry.lastPane)).replace(/\n+$/, ''));
+  const ai = sendersOf(session);
+  const text = closeBgAtNewlines(tintOwnerPrompts(stripResizeHint(stripDiffPanel(entry.lastPane)), (t) => !!aiSenderOf(t, ai)).replace(/\n+$/, ''));
   // Only rows of the visible screen changed (the usual tick of a live session): overwrite them in place, no clear, no blink, scroll untouched.
   // A resize, a changed history line or a changed line count is a full repaint; so is every 60th paint, as a cheap guard against drift.
   // The drift guard (a full repaint every 60th paint) waits while the reader is scrolled up: it is exactly the jump they would see.
@@ -2569,6 +2572,19 @@ function rowChipsHtml(n) {
   return chips.join('');
 }
 
+// Who typed each prompt (owner 2026-11-22): the AI side's recent prompts per session (GET /api/senders), refreshed every 15 s at most.
+// The reader and the terminal show the owner's own prompts in blue and the AI side's in gray (prompt-sig.js).
+state.senders = new Map();   // session -> { ai, at, busy }
+function sendersOf(n) {
+  let c = state.senders.get(n);
+  if (!c) { c = { ai: [], at: 0, busy: false }; state.senders.set(n, c); }
+  if (!c.busy && Date.now() - c.at > 15000) {
+    c.busy = true;
+    fetch(`/api/senders/${encodeURIComponent(n)}`).then((r) => r.ok ? r.json() : null).then((d) => { if (d && Array.isArray(d.ai)) c.ai = d.ai; })
+      .catch(() => {}).finally(() => { c.busy = false; c.at = Date.now(); });
+  }
+  return c.ai;
+}
 // ---------- reader (rendered last reply) ----------
 const LS_READER = 'ghosty.reader';
 state.reader = false;
@@ -2634,13 +2650,14 @@ function paintReader(cell, n, opts = {}) {
     if (tail) text = `${text}\n\n\`\`\`\n${tail.replace(/```/g, "'''")}\n\`\`\``;
   }
   // A fullscreen (alternate-screen) session has no scrollback: load its whole conversation once, so the reader scrolls locally, with no request per step.
-  if (c && !c.autoFull && state.terms.get(n)?.alt) {
+  // A non-fullscreen Claude session too (owner 2026-11-22): its last reply alone, cut from the wrapped pane, read differently from a fullscreen one.
+  if (c && !c.autoFull && (state.terms.get(n)?.alt || agentOf(n) === 'claude')) {
     c.autoFull = true;
     loadTranscript(n, c).then(() => { el.dataset.h = ''; el.dataset.pending = ''; paintReader(cell, n); el.scrollTop = el.scrollHeight; });
   }
   const full = c && c.full != null;
   if (full && c.full) text = c.full;
-  const body = text && text.trim() ? renderReply(text) : '<div class="rd-empty">no reply yet \u2014 tap &gt;_ for terminal</div>';
+  const body = text && text.trim() ? renderReply(text, sendersOf(n)) : '<div class="rd-empty">no reply yet \u2014 tap &gt;_ for terminal</div>';
   // QF-16 — copy the reply to the clipboard and read it aloud. Both are
   // present on the popup / task doc / multi-question popover via
   // copy-prompt.js + audio-chip.js; the reader was the only place they
@@ -2756,12 +2773,14 @@ function boxTable(block) {
   return `<div class="mdt"><table><thead><tr>${head.map((c) => `<th>${inlineMd(c)}</th>`).join('')}</tr></thead><tbody>${
     body.map((r) => `<tr>${r.map((c) => `<td>${inlineMd(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
 }
-function renderReply(text) {
+function renderReply(text, ai = []) {
   if (!text || !text.trim()) return '<div class="rd-empty">No reply yet.</div>';
   const lines = String(text).replace(/\t/g, '    ').split('\n');
   const out = [];
   let para = [], code = null, fence = false;
-  const flushPara = () => { if (para.length) { out.push(para.prompt ? `<div class="rq">${para.join('<br>')}</div>` : `<p>${para.join('<br>')}</p>`); para = []; } };
+  // a prompt the AI side typed keeps the gray block with its sender's label; the owner's own prompts are blue (.rq.me)
+  const promptHtml = () => { const by = aiSenderOf((para.raw || []).join(' '), ai); return by ? `<div class="rq ai"><span class="rq-by">AI · ${escapeHtml(senderLabel(by))}</span>${para.join('<br>')}</div>` : `<div class="rq me">${para.join('<br>')}</div>`; };
+  const flushPara = () => { if (para.length) { out.push(para.prompt ? promptHtml() : `<p>${para.join('<br>')}</p>`); para = []; } };
   const flushCode = () => { if (code) { out.push(`<pre>${escapeHtml(code.join('\n'))}</pre>`); code = null; } };
   for (let li = 0; li < lines.length; li++) {
     const raw = lines[li];
@@ -2782,7 +2801,7 @@ function renderReply(text) {
     if (code) { if (!line.trim()) { code.push(''); continue; } flushCode(); }
     if (!line.trim()) { flushPara(); continue; }
     // "> " lines are the owner's prompts (the conversation view): one highlighted block, like the prompt in the terminal
-    if (/^> ?/.test(line)) { if (!para.prompt) { flushPara(); para.prompt = true; } para.push(inlineMd(line.replace(/^> ?/, ''))); continue; }
+    if (/^> ?/.test(line)) { if (!para.prompt) { flushPara(); para.prompt = true; para.raw = []; } para.raw.push(line.replace(/^> ?/, '')); para.push(inlineMd(line.replace(/^> ?/, ''))); continue; }
     if (para.prompt) flushPara();
     const h = /^(#{1,4})\s+(.*)$/.exec(line);
     if (h) { flushPara(); out.push(`<div class="rh">${inlineMd(h[2])}</div>`); continue; }
