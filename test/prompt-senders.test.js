@@ -75,3 +75,11 @@ test('reader: a jump button goes to the owner\'s last request (reader only)', as
   assert.match(app, /querySelectorAll\('\.rq\.me'\)/);
   assert.match(css, /\.cell:not\(\.rd-on\) \.jump \.jme\{ display:none; \}/);
 });
+
+test('a prompt stored as <pasted_content> is matched on its text; "Status check:" is a check', () => {
+  const sent = 'Integration int-1a2: merged feat/x into main at abc, deployed live';
+  const ai = [{ sig: promptSig(sent), by: 'integration' }];
+  assert.equal(aiSenderOf(`<pasted_content id="6c63">\n${sent}\n</pasted_content id="6c63">`, ai), 'integration');
+  assert.equal(aiSenderOf('<pasted_content id="6c63"> Status check: your done line needs a Verification: block', []), 'harness');
+  assert.equal(aiSenderOf('<pasted_content id="1">please fix the reader colours</pasted_content id="1">', ai), null, 'an owner paste stays the owner\'s');
+});
