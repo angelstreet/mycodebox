@@ -2904,6 +2904,11 @@ body.reading #diskBanner{ display:none !important; }
 .cell.rd-on .reader .rd-tools[open] > summary::before{ content:'\25BE  '; }
 .cell.rd-on .reader .rd-tools > pre{ margin:.4em 0 0; white-space:pre-wrap; overflow-wrap:anywhere; font-size:.88em; color:var(--ink-2); }
 .cell.rd-on .reader .rq.me{ background:#1c3054; }
+.cell.rd-on .reader .rq.me.rq-flash{ animation:rq-flash 1.6s ease-out; }
+@keyframes rq-flash{ 0%,30%{ box-shadow:0 0 0 2px var(--accent); } 100%{ box-shadow:0 0 0 2px transparent; } }
+/* my-last-request jump: reader only */
+.cell:not(.rd-on) .jump .jme{ display:none; }
+.cell.rd-on .jump .jme{ color:#8fb4ff; }
 .cell.rd-on .reader .rq-by{ display:block; text-indent:0; font-size:.78em; color:#9aa3ad; letter-spacing:.02em; }
 /* the owner's message looks as in the terminal: ❯ and a gray background behind the text (owner 2026-11-20); the AI's answer is plain text */
 /* the reader's text column is the terminal's: same left edge and width as .b (max-width --measure, padding 6px left / 16px right) */
