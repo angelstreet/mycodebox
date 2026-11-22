@@ -178,7 +178,7 @@ import { createIntegrationLane, createTmuxRestart } from './integration-lane.js'
 import { createIntegrationRoutes, PREFIX as INTEGRATION_API } from './integration-routes.js';
 import { createPeerSession } from './peer-session.js';
 import { createHostAllow } from './host-allow.js';
-import { createClaudeIndex, claudeOfPane, minimaxOfPane, codexOfPane, busyChildren, lastActivityOf, leasesOfSession, capView, createParking, readManualNotes, autoParkArchived, transcriptFile, SESSION_CAP } from './parking.js';
+import { createClaudeIndex, claudeOfPane, minimaxOfPane, codexOfPane, busyChildren, lastActivityOf, leasesOfSession, capView, createParking, readManualNotes, autoParkArchived, transcriptFile, SESSION_CAP, ownChildTree, isDescendant } from './parking.js';
 import { actorOf, agentFromArgs, createAlertApi, DEFAULT_ACTOR, interactiveAgentOf, paneBackgroundOf, scriptBusyOf, shouldRefuse } from './api-extras.js';
 import { gitCleanOf } from './git-facts.js';
 import { callerOf, deleteVerdict } from './session-delete-guard.js';
@@ -2057,17 +2057,37 @@ async function parkFacts(name) {
 
 // limitStop: the pane shows a Claude usage-limit stop (claude-accounts.js). The board may read that stop as "waiting" or
 // a pending question; it is neither, so those two checks are waived. Leases, jobs and an attached terminal still refuse.
-async function parkSession(name, { limitStop = false } = {}) {
+// force (owner-initiated park / account move, owner 2026-11-22): stop the session's own running work and park anyway. Escape ends
+// the turn, then only descendants of THIS pane's Claude pid (parking.js ownChildTree, found by walking the pid tree) get SIGTERM,
+// and SIGKILL after killGraceMs when still alive and still below that pid. Leases are listed in the result, never released.
+async function killOwnChildren(name, claudePid, { killGraceMs = 4000 } = {}) {
+  const killed = [];
+  try { await sendKey(name, 'Escape'); await new Promise((r) => setTimeout(r, 1500)); } catch { /* nothing to interrupt */ }
+  const first = ownChildTree(claudePid, await processTable());
+  for (const c of first) { try { process.kill(c.pid, 'SIGTERM'); killed.push({ pid: c.pid, cmd: c.args.replace(/\s+/g, ' ').slice(0, 80) }); } catch { /* gone already */ } }
+  if (killed.length) {
+    await new Promise((r) => setTimeout(r, killGraceMs));
+    const table = await processTable();
+    for (const c of killed) if (isDescendant(claudePid, c.pid, table)) { try { process.kill(c.pid, 'SIGKILL'); c.sigkill = true; } catch { /* gone */ } }
+  }
+  return killed;
+}
+async function parkSession(name, { limitStop = false, force = false, killGraceMs } = {}) {
   if (typeof name !== 'string' || !NAME_RE.test(name)) throw httpError(400, 'invalid session name');
   const facts = await parkFacts(name);
   if (limitStop) { facts.state = 'idle'; facts.reporterWaiting = false; }
+  const leasesHeld = (facts.leases || []).map((l) => l.id);
+  const forceClaude = force && !!facts.claude;
   const rec = await parking.park(name, facts, {
+    force: forceClaude,
+    interrupt: forceClaude ? () => killOwnChildren(name, facts.claude.pid, { killGraceMs }) : null,
     claudeAlive: pidAlive,
     readPane: async (n) => (await exec(TMUX, ['capture-pane', '-p', '-t', `=${n}:`], { timeout: 5000 })).stdout,
     busyNow: async () => { const f = await parkFacts(name); return f.busy; },
   });
   latest = null;
-  return { ok: true, parked: rec };
+  const { killed = [], ...parked } = rec;
+  return { ok: true, parked, ...(force ? { killed, leases: leasesHeld } : {}) };
 }
 
 // Archived in the Claude app (Remote Control ended, code 4090) -> park it when it is done and holds no lease. manager.json autoParkArchived (default on).
@@ -2139,18 +2159,18 @@ async function claudeAccountsRefresh() {
   return r;
 }
 // Park the Claude session and resume the same conversation on `account`, then say "continue" (the last prompt hit the limit).
-async function swapClaudeAccount(name, account, by, { limitStop = false } = {}) {
+async function swapClaudeAccount(name, account, by, { limitStop = false, force = false } = {}) {
   if (!claudeAccounts.byId(account)) throw httpError(400, 'unknown claude account');
   const row = latest?.status?.[name];
   if (row && row.agent !== 'claude') throw httpError(400, 'not a Claude session');
   if (limitStop) { try { await sendKey(name, 'Escape'); await new Promise((r) => setTimeout(r, 1500)); } catch { /* the limit menu may be gone already */ } }
-  await parkSession(name, { limitStop });
+  const parkOut = await parkSession(name, { limitStop, force });
   const out = await resumeSession(name, { claudeAccount: account });
-  logEvent({ type: 'claude-account-swap', session: name, by, account });
+  logEvent({ type: 'claude-account-swap', session: name, by, account, ...(force ? { killed: parkOut.killed, leases: parkOut.leases } : {}) });
   if (limitStop && !sessionMeta.isPaused(name)) {
     setTimeout(() => { sendKeys(name, 'continue', true).then(() => logSend(name, 'claude-accounts', { keys: 'continue' })).catch((e) => console.error('[claude-accounts] continue', e.message)); }, 15000).unref?.();
   }
-  return { ok: true, session: name, claudeAccount: account, resumed: out.resumed };
+  return { ok: true, session: name, claudeAccount: account, resumed: out.resumed, ...(force ? { killed: parkOut.killed, leases: parkOut.leases } : {}) };
 }
 // A Claude session stopped on its usage limit: mark that account used up and, with another account free, restart the session
 // on it (manager.json-independent switch: claude-accounts.json autoSwapSessions, default on). One handling per stop and account.
@@ -2825,7 +2845,7 @@ async function handleHttp(req, res) {
       try {
         await diskGuard.assertStart('Resuming a session');
         const body = await readJsonBody(req);
-        return json(res, 200, await swapClaudeAccount(decodeURIComponent(m[1]), String(body?.account || ''), actorOf(body) || 'owner'));
+        return json(res, 200, await swapClaudeAccount(decodeURIComponent(m[1]), String(body?.account || ''), actorOf(body) || 'owner', { force: body?.safe !== true }));
       } catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message, reasons: err.reasons }); }
     }
   }
@@ -2839,7 +2859,9 @@ async function handleHttp(req, res) {
       try {
         // A resume starts a new agent and writes more to the disk: it is refused while the disk is low. Parking frees space.
         if (m[2] === 'resume') await diskGuard.assertStart('Resuming a session');
-        return json(res, 200, m[2] === 'park' ? await parkSession(name) : await resumeSession(name));
+        let force = false;
+        if (m[2] === 'park') { const b = await readJsonBody(req).catch(() => ({})); force = b?.force === true; }   // the dashboard button sends force (owner-initiated)
+        return json(res, 200, m[2] === 'park' ? await parkSession(name, { force }) : await resumeSession(name));
       }
       catch (err) { return json(res, err.status || 500, { ok: false, error: err.message, reasons: err.reasons, ...(err.reason ? { reason: err.reason } : {}) }); }
     }

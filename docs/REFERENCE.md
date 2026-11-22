@@ -1302,7 +1302,15 @@ State: `$GHOSTY_STATE_DIR/claude-accounts.json`. API: `GET/POST /api/claude-acco
 `{active?, auto?, autoSwapSessions?, order?, clearMark?}`, `DELETE /api/claude-accounts/:id`,
 `POST /api/claude-accounts/:id/login` (tmux session `login-<id>` running claude on that account),
 `POST /api/sessions/:name/claude-account {account}`. CLI: `scripts/claude-account` (list, add, login, use, auto, swap,
-order, clear, move, remove). Tests: `test/claude-accounts.test.js`.
+order, clear, move, remove). **Owner-initiated park / move kills the session's own work (owner 2026-11-22).** The dashboard Park button (`POST /api/sessions/:name/park`
+with `{force:true}`), the account switch (`POST /api/sessions/:name/claude-account`, forced unless the body has `safe:true`) and
+`claude-account move <session> <id>` (`--safe` keeps the old refusal) no longer refuse for "status busy / board state working / background job /
+running child / attached terminal / lease". They send Escape, SIGTERM the busy children of that pane's Claude pid and everything below them
+(`ownChildTree` in `parking.js`: a pid-tree walk, never a name pattern; MCP servers stay), SIGKILL the survivors after 4 s if they are still
+below that pid, answer "Exit and stop tasks" to Claude's background-work menu, then park as usual. Still refused: no agent in the pane, no
+resumable session id. The result carries `killed:[{pid,cmd,sigkill?}]` and `leases:[ids]` (the session's leases are listed, never released);
+the toast and the CLI print them. The automatic usage-limit swap (`claudeLimitTick`), the archived-session auto-park and `POST .../park`
+without `force` keep every check. Tests: `test/parking.test.js` (force park, `ownChildTree`, a real process tree). Tests: `test/claude-accounts.test.js`.
 
 Env: `CODEX_BIN` (default `~/.local/bin/codex`), `MINIMAX_AUTH_FILE` (mcode login file, default the `en`/prod one),
 `CLAUDE_RATE_LIMITS_FILE` override the paths.

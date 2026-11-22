@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { writeFileSync, readFileSync, existsSync, mkdirSync, utimesSync } from 'node:fs';
 
 import { join } from 'node:path';
-import { createClaudeIndex, claudeOfPane, minimaxOfPane, minimaxPidsUnder, codexOfPane, codexPidsUnder, codexMetaOf, findCodexSessionId, codexResumeCommand, busyChildren, lastActivityOf, resumeCommand, leasesOfSession, capView, createParking, fmtIdle, readManualNotes, isWatcher, rcArchivedInTail, transcriptFile, autoParkArchived } from '../parking.js';
+import { createClaudeIndex, claudeOfPane, minimaxOfPane, minimaxPidsUnder, codexOfPane, codexPidsUnder, codexMetaOf, findCodexSessionId, codexResumeCommand, busyChildren, lastActivityOf, resumeCommand, leasesOfSession, capView, createParking, fmtIdle, readManualNotes, isWatcher, rcArchivedInTail, transcriptFile, autoParkArchived, ownChildTree, isDescendant } from '../parking.js';
+import { spawn, execFileSync } from 'node:child_process';
 import { tmp } from './helpers-tmp.js';
 
 const table = (rows) => { // rows: [pid, ppid, args]
@@ -516,4 +517,49 @@ test('codexResumeCommand keeps the launch flags and refuses a tampered id', () =
   assert.equal(codexResumeCommand({ base: 'codex', sessionId: 's' }), 'codex resume s');
   assert.throws(() => codexResumeCommand({ base: 'codex', sessionId: 'x; rm -rf /' }), /invalid resume session id/);
   assert.throws(() => codexResumeCommand({ base: 'codex', sessionId: null }), /invalid resume session id/);
+});
+
+test('force park (owner): the refusals that are busy/job/lease/board state are waived, the interrupt runs before /exit, killed list comes back', async () => {
+  const h = harness();
+  const busy = { ...h.facts, claude: { ...h.facts.claude, info: { ...h.facts.claude.info, status: 'busy' } }, state: 'working', backgroundWork: 1, busy: [{ pid: 5, args: 'sleep 99' }], leases: [{ id: 'L1' }], attached: true };
+  await assert.rejects(h.p.park('S', busy, { claudeAlive: h.isAlive }), (e) => e.status === 409);   // the safe path still refuses
+  let ran = 0;
+  const rec = await h.p.park('S', busy, { claudeAlive: h.isAlive, force: true, interrupt: async () => { ran++; h.log.push('interrupt'); return [{ pid: 5, cmd: 'sleep 99' }]; } });
+  assert.equal(ran, 1);
+  assert.deepEqual(h.log, ['interrupt', 'text /exit', 'enter', 'kill S']);
+  assert.deepEqual(rec.killed, [{ pid: 5, cmd: 'sleep 99' }]);
+  // a session with no resumable id is still refused, even forced
+  const h2 = harness();
+  await assert.rejects(h2.p.park('S', { ...h2.facts, claude: { ...h2.facts.claude, info: { ...h2.facts.claude.info, sessionId: null } } }, { claudeAlive: h2.isAlive, force: true }), /resumable/);
+});
+
+test('ownChildTree: busy children and their subtrees only; MCP, helpers and other sessions stay', () => {
+  const t = table([[1, 0, 'claude'], [2, 1, 'node /x/mcp-server.js'], [3, 1, '/bin/bash -c source snap; sleep 600'], [4, 3, 'sleep 600'], [50, 0, 'claude other'], [51, 50, 'sleep 600']]);
+  assert.deepEqual(ownChildTree(1, t).map((c) => c.pid), [3, 4]);
+  assert.equal(isDescendant(1, 4, t), true);
+  assert.equal(isDescendant(1, 51, t), false);
+  assert.equal(isDescendant(1, 1, t), false);
+});
+
+test('ownChildTree on a real process tree: a fake claude bash with a sleep child; an unrelated sleep is not listed', async () => {
+  const fake = spawn('bash', ['-c', 'sleep 61 & wait'], { stdio: 'ignore' });   // stands for the Claude pane process
+  const other = spawn('sleep', ['62'], { stdio: 'ignore' });                      // another session's job
+  try {
+    await new Promise((r) => setTimeout(r, 400));
+    const children = new Map(), args = new Map();
+    for (const line of execFileSync('ps', ['-eo', 'pid=,ppid=,args=']).toString().split('\n')) {
+      const m = line.match(/^\s*(\d+)\s+(\d+)\s+(.*)$/); if (!m) continue;
+      args.set(Number(m[1]), m[3]); const pp = Number(m[2]); if (!children.has(pp)) children.set(pp, []); children.get(pp).push(Number(m[1]));
+    }
+    const t = { children, args };
+    const own = ownChildTree(fake.pid, t);
+    assert.equal(own.length, 1);
+    assert.match(own[0].args, /sleep 61/);
+    assert.ok(!own.some((c) => c.pid === other.pid));
+    assert.equal(isDescendant(fake.pid, own[0].pid, t), true);
+    assert.equal(isDescendant(fake.pid, other.pid, t), false);
+    process.kill(own[0].pid, 'SIGTERM');
+    await new Promise((r) => fake.once('exit', r));
+    process.kill(other.pid, 0);   // the unrelated sleep is still alive
+  } finally { try { process.kill(other.pid, 'SIGKILL'); } catch {} try { fake.kill('SIGKILL'); } catch {} }
 });
