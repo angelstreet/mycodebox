@@ -118,7 +118,7 @@ export function goalReplyOf(text, goal = '', parts = []) {
   const evidence = evidenceOf(t);
   const noPart = evidence.length ? partsWithoutEvidence(text, parts) : [];
   // with parts, the reply is judged on evidence per part: a reply that gives one per part restates the goal by doing so
-  const restated = (parts.length && evidence.length && !noPart.length) || /\bgoal(?: as given)?\s*[:=]\s*(?!achieved\b)\S{3,}/i.test(t) || (gw.size ? hit >= need : false);
+  const restated = (parts.length && evidence.length && !noPart.length) || /\bgoal(?: as given)?\s*[:=]\s*(?!achieved\b)\S+(?:\s+\S+){2,}/i.test(t) || (gw.size ? hit >= need : false);
   const notReached = NOT_REACHED.exec(t.replace(/\bgoal not achieved\b(?=[^.]*\bif not\b)/i, ''));
   const missing = [];
   if (!restated) missing.push(gw.size ? `a restatement of the goal (it names ${hit} of the goal's words, ${need} needed)` : 'a restatement of the goal ("Goal: ...")');

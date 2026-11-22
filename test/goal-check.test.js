@@ -212,3 +212,10 @@ test('Done when items are the parts; a reply with one evidenced line per item is
   assert.equal(r.ok, true, r.missing.join('; '));
   assert.equal(_reply('1. refusal: status-honesty.js:60\n2. goal-check.js:121', 'x'.repeat(5), parts).ok, false, 'part 3 has no evidence');
 });
+
+test('goal reply: a "Goal:" line whose first word is short still restates the goal', () => {
+  const r = goalReplyOf('Goal: in read mode, one click jumps to your last request. 1. pass, public/app.js:2244, int-1a20385ab231e9ec6', '');
+  assert.equal(r.restated, true);
+  assert.equal(r.ok, true);
+  assert.equal(goalReplyOf('STATUS: done · goal: achieved · evidence: public/app.js:1', '').restated, false, '"goal: achieved" is not a restatement');
+});

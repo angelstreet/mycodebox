@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **Goal check reads a "Goal:" line that starts with a short word** — the restatement check needed the first word after `Goal:` to have 3+ characters, so "Goal: in read mode, …" was rejected as "lacks a restatement of the goal" twice. It now needs three words after `Goal:` ("goal: achieved" still does not count) · area: harness
+
 - **One click back to your last request in the reader** — reading a long session meant scrolling up to find what you last asked. The reader's jump buttons now have a person button between ⤒ and ⤓: it puts your latest request at the top of the reader and flashes it; each further click goes to the request before it. Reader only; a reader showing the last reply only loads the whole conversation first. Shell cache `ghosty-shell-v179` · area: dashboard
 
 - **Tool calls fold away in the reader** — each tool call was its own code line, so a working session's reader was mostly `Bash ...` / `Read ...` lines. Consecutive calls are now one group, collapsed by default ("▸ 5 commands · Bash ×3, Read, Write"); a click opens it and it stays open while the reader repaints. Checked on a live session: 47 loose lines became 8 groups. Shell cache `ghosty-shell-v178` · area: dashboard
