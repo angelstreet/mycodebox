@@ -304,7 +304,8 @@ body{ display:flex; flex-direction:column; }
 .cell.done::before{ content:''; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--done); z-index:2; pointer-events:none; }   /* a marker drawn inside, not a thicker border: the card's content never shifts when the state changes */
 /* A grid of several cards (owner 2026-11-22): a lean header. No reporter ⚡, no account label (it is in the agent badge's tooltip), no priority
    chip, no worktree fork: the branch says enough. The single card and the one-session view keep them. */
-.grid-pane:not(.size-1) .cell .h .rp, .grid-pane:not(.size-1) .cell .h .agent-acct, .grid-pane:not(.size-1) .cell .h .prio,
+.cell .h .agent-acct{ display:none; }   /* every card header: the account is in the agent badge's tooltip (owner 2026-11-22) */
+.grid-pane:not(.size-1) .cell .h .rp, .grid-pane:not(.size-1) .cell .h .prio,
 .grid-pane:not(.size-1) .cell .h .wt{ display:none; }
 .grid-pane .cell.focus{ box-shadow: 0 0 0 2px var(--accent), 0 0 18px rgba(232,154,74,0.35); }
 .cell .h .tgt{
@@ -2891,6 +2892,9 @@ body.reading #diskBanner{ display:none !important; }
 .cell.rd-on .reader code{ font-size:inherit; }
 .cell.rd-on .reader .rq{ margin:1.4em 0 1.2em; padding:2px 6px 2px 2ch; text-indent:-2ch; background:#3a3a3a; color:#fff; white-space:pre-wrap; overflow-wrap:anywhere; }
 .cell.rd-on .reader .rq::before{ content:'❯ '; color:#949494; }
+/* the owner's own prompts in blue, the AI side's (manager, checks, lane) gray with their sender (owner 2026-11-22) */
+.cell.rd-on .reader .rq.me{ background:#1c3054; }
+.cell.rd-on .reader .rq-by{ display:block; text-indent:0; font-size:.78em; color:#9aa3ad; letter-spacing:.02em; }
 /* the owner's message looks as in the terminal: ❯ and a gray background behind the text (owner 2026-11-20); the AI's answer is plain text */
 /* the reader's text column is the terminal's: same left edge and width as .b (max-width --measure, padding 6px left / 16px right) */
 @media (min-width: 1100px){
