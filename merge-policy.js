@@ -838,7 +838,9 @@ const globRe = (g) => new RegExp('^' + g.replace(/[.+^${}()|[\]\\]/g, '\\$&').re
 export const matchesFingerprintPath = (f, list) => list.some((g) => (g.endsWith('/') ? f.startsWith(g) : /[*?]/.test(g) ? globRe(g).test(f) : f === g || f.startsWith(g + '/')));
 // -> { touched: [files], reasons: [string] }. Docs (isDocFile) never count as algorithm changes.
 export const reportCandidates = (files, note) => [...new Set([...(files || []).filter((f) => f.startsWith(FINGERPRINT_REPORT_DIR) && isDocFile(f)), ...[...String(note || '').matchAll(/(?:^|[\s"'(])((?:\S*\/)?docs\/agent\/navigation\/retest-reports\/[^\s"')]+\.md)/g)].map((m) => m[1])])];
-// `reportVerdicts` (optional): { <path>: first line of the report }. When given, only a report whose first line says PASS counts (a FAIL report never unlocks the gate).
+// Verdict of a retest report (owner 2026-11-22): the first line within the first 15 lines that contains **PASS** or **FAIL** (the tool writes a title or YAML frontmatter first); '' when none.
+export const reportVerdict = (text) => String(text || '').split('\n').slice(0, 15).find((l) => /\*\*(PASS|FAIL)\*\*/.test(l)) || '';
+// `reportVerdicts` (optional): { <path>: verdict line (reportVerdict) }. When given, only a report whose verdict line has **PASS** counts (a FAIL first, or no verdict, never unlocks the gate).
 export function fingerprintGate({ files, list, approvedBy, note, reportVerdicts }) {
   const touched = (files || []).filter((f) => !isDocFile(f) && matchesFingerprintPath(f, list));
   if (!touched.length) return { touched, reasons: [] };
@@ -846,6 +848,6 @@ export function fingerprintGate({ files, list, approvedBy, note, reportVerdicts 
   if (!approvedBy) return { touched, reasons: [`fingerprint algorithm paths changed (${touched.join(', ')}): needs manager or owner approval (integrate request <branch> --approved-by manager) and a no-regression retest report on all platforms with all fingerprints; ${ref}`] };
   const report = (files || []).some((f) => f.startsWith(FINGERPRINT_REPORT_DIR) && isDocFile(f)) || /(?:^|[\s"'(])\S*retest-reports\/\S+\.\w+/.test(String(note || ''));
   const passing = reportVerdicts ? Object.values(reportVerdicts).some((l) => /\*\*PASS\*\*/.test(String(l || ''))) : report;
-  if (!report || !passing) return { touched, reasons: [`fingerprint algorithm change is approved but has no passing retest report (first line **PASS**): add a file under ${FINGERPRINT_REPORT_DIR} to the diff or name its path in --note; ${ref}`] };
+  if (!report || !passing) return { touched, reasons: [`fingerprint algorithm change is approved but has no passing retest report (verdict line **PASS** within the first 15 lines): add a file under ${FINGERPRINT_REPORT_DIR} to the diff or name its path in --note; ${ref}`] };
   return { touched, reasons: [] };
 }
