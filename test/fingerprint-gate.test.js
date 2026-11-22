@@ -48,12 +48,20 @@ test('approved but no report: returned; report file in the diff: merged; report 
   const { lane, go } = mk(w);
   const a = await go({ branch: 'fp1', session: 'manager', approvedBy: 'manager' });
   assert.equal(a.state, 'returned'); assert.equal(a.outcome, 'needs_report'); assert.match(a.reason, /retest report/);
-  w.branch('fp2', { [ALGO]: 'y\n', 'docs/agent/navigation/retest-reports/2026-11-22.md': 'all green\n' });
+  w.branch('fp2', { [ALGO]: 'y\n', 'docs/agent/navigation/retest-reports/2026-11-22.md': '**PASS**\n\nall green\n' });
   const b = await go({ branch: 'fp2', session: 'manager', approvedBy: 'manager' });
   assert.equal(b.state, 'merged', JSON.stringify(b));
   w.branch('fp3', { 'backend_host/src/services/localize/other.py': 'z\n' });
   const c = await go({ branch: 'fp3', session: 'manager', approvedBy: 'manager', note: 'retest report docs/agent/navigation/retest-reports/2026-11-22.md' });
   assert.equal(c.state, 'merged', JSON.stringify(c));
+  lane.stop();
+});
+
+test('a FAIL retest report does not unlock the gate', async () => {
+  const w = makeWorld(); w.branch('ff', { [ALGO]: 'x\n', 'docs/agent/navigation/retest-reports/2026-11-22-f.md': '**FAIL**\n\nregressions\n' });
+  const { lane, go } = mk(w);
+  const r = await go({ branch: 'ff', session: 'manager', approvedBy: 'manager' });
+  assert.equal(r.state, 'returned'); assert.equal(r.outcome, 'needs_report'); assert.match(r.reason, /PASS/);
   lane.stop();
 });
 
