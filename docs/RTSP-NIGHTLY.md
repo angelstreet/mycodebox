@@ -1,6 +1,6 @@
 # Nightly RTSP check and replacement (owner, 2026-11-11)
 
-**Scope (2026-11-11, after the app showed 92 `rtsp_video` devices):** every device of model `rtsp_video` is checked, not only literal `rtsp://` sources. The model is the generic stream model: today about 66 looping local files, 25 HLS internet-TV channels, 8 with no source, 0 rtsp://. Kinds: `loopback`, `public`, `ip_camera` (rtsp), `hls`, `file`, `no_source`. **Decision (owner, 2026-11-11: "we want to identify those streams every night and fix them"):** a dead HLS channel is repaired from the free channel lists (below), only after it fails again on a re-probe 20 s later (a TV channel can blink). Files, empty sources and IP cameras are reported by name, never changed.
+**Scope (2026-11-11, after the app showed 92 `rtsp_video` devices):** every device of model `rtsp_video` is checked, not only literal `rtsp://` sources. The model is the generic stream model: today about 66 looping local files, 25 HLS internet-TV channels, 8 with no source, 0 rtsp://. Kinds: `loopback`, `public`, `ip_camera` (rtsp), `hls`, `file`, `no_source`, `youtube`. **Decision (owner, 2026-11-11: "we want to identify those streams every night and fix them"):** a dead HLS channel is repaired from the free channel lists (below), only after it fails again on a re-probe 20 s later (a TV channel can blink). Files, empty sources and IP cameras are reported by name, never changed.
 
 Owner: "send a worker every night, MiniMax, to check the RTSP video and replace the stream that is not working."
 
@@ -17,7 +17,8 @@ Per stream: `ffprobe` (10 s timeout, TCP) connects and finds a video stream (cod
 as `framemd5`: the md5s must differ and the pts must advance, otherwise the stream is `frozen`. A **file** source that opens
 on a black leader (seconds of identical frames, e.g. Plan 9 on `lenovo-local-hd`) is probed again 60 s in, so a film that plays
 is not called frozen (found and fixed 2026-11-11). Statuses: `ok`, `no_connect`,
-`no_video`, `frozen`, `timeout`, `unverified` (a loopback source on a host with no ssh alias: only the host can reach it).
+`no_video`, `frozen`, `timeout`, `unverified` (a loopback source on a host with no ssh alias: only the host can reach it),
+`not_managed` (a YouTube device: its source is in `DEVICE_YOUTUBE_URL`, so the nightly has no source to probe).
 `rtsp_check.py URL...` checks URLs, `--inventory` checks every `DEVICE<n>_VIDEO=rtsp(s)://` of the hosts of the configured servers
 (read through `GET /server/settings/host-config`). `--json` for JSON. Exit 0 all ok, 1 not ok, 2 nothing checked. Every printed
 or journaled string goes through `redact()` (`user:pass@` becomes `***@`).
@@ -38,6 +39,7 @@ The journal keeps the per-stream check events, not the inventory errors, so a ni
 | `public` (host is in the pool file) | replaced from the pool |
 | `hls` (http/https source) | **restore** the same channel from a new URL, else **replace** it with another channel of the same group (see "Dead HLS channels"), after a confirming re-probe |
 | `ip_camera` (anything else: owner hardware) | **reported only, never replaced** |
+| `youtube` (the source is in `DEVICE_YOUTUBE_URL`, not `DEVICE_VIDEO`) | **reported only**: the nightly does not manage it, and it is **not a down stream** (2026-11-22) |
 
 - Only pool entries with a `vetted` date are replacement candidates, and a candidate is probed again right before use. A
   `loopback` entry is valid only on the hosts listed in the env var its `hostsEnv` names (`RTSP_LOOPBACK_HOSTS`, private config: the hosts running `vpt-rtsp`).
@@ -81,7 +83,12 @@ The journal keeps the per-stream check events, not the inventory errors, so a ni
 - Journal `<state>/rtsp-nightly/journal.jsonl` (redacted), daily `report-<date>.json`; `<state>` is `$GHOSTY_STATE_DIR` (default
   `~/.local/state/ghosty`). The report carries `hosts` (`walked`: hosts the servers listed, `read`: hosts whose config
   answered) next to `streams` and `errors`, so a night with no rtsp device says how much was looked at instead of
-  looking like an empty inventory. A **dry** run writes `report-<date>-dry.json` when the day's live report already exists:
+  looking like an empty inventory. The report carries a `summary` block too (`streams`, `down`, `no_source`,
+  `not_managed`, `unverified`, `by_kind`): **a device without a source is not a down stream** (there is no stream to
+  repair) and a device the nightly does not manage (a YouTube device) is not one either, so "N down" means N streams
+  that were checked and are not playing. The exit code follows it: 0 when no stream is down, 1 when one is or when the
+  inventory had an error (2026-11-22: the night read its 8 empty slots as "8 down" every night, which reads like 8
+  broken streams and asks why the job did not fix them). A **dry** run writes `report-<date>-dry.json` when the day's live report already exists:
   a read-only run never destroys the night's evidence, and `rtsp_replace.py` now parses its flags (`--help` prints the usage
   and exits, an unknown flag is an error and nothing runs).
 - Adding a pool source: probe it from a host that will use it, then set `vetted` to the date. The probe must run on that host: a
@@ -572,6 +579,41 @@ this night (the source the night installed is checked again at the end of the ni
     the filed bug instead of fixing it, so it is left to the bug's owner.
 - The pool was not touched: re-probed, `smoke` plays (the only vetted entry, from `vpt-pi4`) and the three public candidates still
   time out on port 554 from codebox, so nothing new is vetted (bug-c7c2bb0e, still `wontfix`).
+
+### Night of 2026-11-22 (live, run by the nightly session)
+
+103 streams checked, **95 ok, 8 down**, **0 replaced**, 0 rolled back, 0 cameras down, 0 unverified. 16 hosts walked, 16 read,
+**no inventory error** (every server and every host answered the host-config GET). The journal holds 103 `check` events for
+the live pass and nothing else: no `replace`, no `rolled_back`, no `lease_not_granted`, no `apply_failed`, no `verify`.
+
+- The 8 "down" of that report were **8 devices with no source at all** (`DEVICE_VIDEO` empty): `vpt-nipogi` DEVICE4, 5, 6, 17,
+  22, 23, 24 (six of them hold nothing but `DEVICE_MODEL`) and `vpt-pi4` DEVICE2. They are reported by name and never
+  changed: there is no stream to repair, and which channel an empty slot should show is the owner's call (2026-11-11).
+  **No stream was really down**, so nothing had to be replaced and the pool was never used.
+- **One of the 8 was not even an empty slot**: `vpt-pi4/DEVICE2` ("YouTube live") is modelled as `rtsp_video` but keeps its
+  source in `DEVICE_YOUTUBE_URL`, so the night read an empty `DEVICE_VIDEO` and counted a **working device as a down stream**
+  (its tile is fresh and bright: luma 181, live layer 172, age 1 s; it has no device-control card, so there is no browser
+  proof, like `DEVICE31` on 2026-11-15). It is now the kind `youtube` with the status `not_managed` (fixed the same day).
+- What the app shows (tile snapshots): 95 ok, 7 unknown, 1 missing, **0 black, 0 multi_audio** — no host runs the old
+  `run_ffmpeg.sh`, so no `vpt-stream` restart was needed tonight.
+  - The 1 `unknown` that is not an empty slot, `vpt-nipogi/DEVICE25` ("FR Kids 1 — Pluto TV Kids Classics FR"), is proven in the
+    browser: on hover the tile plays (`readyState` 4, the clock 90.7 s → 93.1 s → 96.1 s, 320x180, not paused, no failed HLS
+    request) and the screenshot shows the channel's own picture. The night's `unknown` (a dark snapshot, luma 2, and a live
+    layer it could not read) was a dark moment of the channel, not a dead tile.
+  - The 6 others are the empty slots (no capture path) and the 1 `missing` is `vpt-nipogi/DEVICE5` (an empty source: there is
+    no snapshot of a stream that was never set up).
+  - The 1 note, `vpt-nipogi/DEVICE7` ("FR Movie 1 — Cine 666 by Pluto TV"): a dark snapshot but the live video plays (snapshot
+    luma 13, live luma 205) — a dark moment of the channel, not changed.
+- The pool was not touched: re-probed, `smoke` plays (the only vetted entry, from `vpt-pi4`) and the three public candidates
+  still time out on port 554 from codebox, so nothing new is vetted (bug-c7c2bb0e, still `wontfix`).
+- **The summary now separates the three cases** (fixed the same day, 2026-11-22): a device without a source and a device the
+  nightly does not manage are not down streams, so the line reads "103 streams, 0 down, 7 without a source, 1 not managed"
+  instead of "8 down" (which read like 8 broken streams, and asked why the job did not fix them). A dry validation run against
+  the fleet with the patched tool confirms it (`report-2026-11-22-dry.json`, written beside the day's live report, which it
+  does not touch).
+  - That dry run read `vpt-nipogi/DEVICE10` ("FR Movie 7 — Pluto TV Dating") as a timeout that **played on the confirming
+    re-probe** (nothing touched, its tile is ok) and read the pool's `smoke` as `frozen` under the parallel load of 103 probes;
+    re-probed alone from `vpt-pi4` it plays (h264 640x360). Both are transients of a loaded host, not dead sources.
 
 ## Private config (not in the repo)
 

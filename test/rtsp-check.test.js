@@ -207,6 +207,34 @@ test('the report says how many hosts were walked, so an empty night is readable'
   assert.equal(rep.streams.length, 0);
 });
 
+test('the summary separates the streams that are down from the devices without a source, and a YouTube device is not down', async () => {
+  // A YouTube device is modelled as rtsp_video but its source lives in DEVICE_YOUTUBE_URL: the night read it as a
+  // down stream every night while its tile played (2026-11-22). A device without a source has no stream to fix:
+  // it is reported, never replaced (owner, 2026-11-11).
+  const w = await world({ pool: POOL, devices: {
+    DEVICE1: { DEVICE_MODEL: 'rtsp_video', DEVICE_NAME: '' },                                      // an empty slot
+    DEVICE2: { DEVICE_MODEL: 'rtsp_video', DEVICE_NAME: 'YouTube live', DEVICE_YOUTUBE_URL: 'https://youtube.test/watch?v=x' },
+    DEVICE3: { ...dev('ok', 'https://example.test/ok.m3u8'), DEVICE_MODEL: 'rtsp_video' } } });
+  const r = await py(REPLACE, [], w.E);
+  w.close();
+  assert.match(r.stdout, /3 streams, 0 down, 1 without a source, 1 not managed, 0 unverified/, r.stdout + r.stderr);
+  assert.match(r.stdout, /a YouTube device \(its source is in DEVICE_YOUTUBE_URL\)/);
+  assert.equal(r.code, 0, 'nothing is down and nothing errored: the night exits 0');
+  assert.equal(w.posts.length, 0, 'nothing was written to the host');
+  const day = new Date().toISOString().slice(0, 10);
+  const rep = JSON.parse(readFileSync(path.join(w.state, 'rtsp-nightly', `report-${day}.json`), 'utf8'));
+  assert.equal(rep.summary.streams, 3);
+  assert.equal(rep.summary.down, 0);
+  assert.equal(rep.summary.no_source, 1);
+  assert.equal(rep.summary.not_managed, 1);
+  const yt = rep.streams.find((s) => s.device === 'DEVICE2');
+  assert.equal(yt.status, 'not_managed');
+  assert.equal(yt.kind, 'youtube');
+  const empty = rep.streams.find((s) => s.device === 'DEVICE1');
+  assert.equal(empty.status, 'no_source');
+  assert.match(empty.action, /the owner's call/);
+});
+
 test('run live: a BUSY lease never runs the command, nothing is touched', async () => {
   const w = await world({ pool: POOL, leaseBusy: true, devices: { DEVICE1: dev('a', 'rtsp://test.example/dead-pub') } });
   const r = await py(REPLACE, ['--mode', 'live'], w.E);

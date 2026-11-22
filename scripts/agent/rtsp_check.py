@@ -25,7 +25,8 @@ from concurrent.futures import ThreadPoolExecutor
 FFPROBE = os.environ.get('RTSP_CHECK_FFPROBE', 'ffprobe')
 FFMPEG = os.environ.get('RTSP_CHECK_FFMPEG', 'ffmpeg')
 CRED = re.compile(r'(?i)(rtsps?|https?|rtmp|udp)://[^/\s@]*@')
-OK_STATES = ('ok', 'unverified')  # unverified = could not be probed from here, not a failure
+OK_STATES = ('ok', 'unverified', 'not_managed')  # unverified = could not be probed from here, not a failure;
+# not_managed = a device whose source the nightly does not manage (a YouTube device): not a failure either
 LOOPBACK = {'127.0.0.1', 'localhost', '::1'}
 FILE_LEADER_SEEK = int(os.environ.get('RTSP_FILE_LEADER_SEEK', '60'))  # seconds to skip past a film's black leader
 
@@ -267,8 +268,14 @@ def inventory(servers, pool):
             for dev, f in sorted(devs.items()):
                 v = f.get('DEVICE_VIDEO', '')
                 if is_rtsp(v) or f.get('DEVICE_MODEL') == 'rtsp_video':
+                    kind = classify(v, pool)
+                    if kind == 'no_source' and clean_value(f.get('DEVICE_YOUTUBE_URL', '')):
+                        # A YouTube device is modelled as rtsp_video but its source lives in DEVICE_YOUTUBE_URL: it is
+                        # neither an empty slot nor a broken stream (2026-11-22: the night read it as "down" every night
+                        # while its tile played). The nightly does not manage it: reported, never replaced.
+                        kind = 'youtube'
                     entries.append({'env': env, 'server': server, 'host': host, 'device': dev, 'name': f.get('DEVICE_NAME', ''),
-                                    'url': clean_value(v), 'kind': classify(v, pool),
+                                    'url': clean_value(v), 'kind': kind,
                                     'capture': os.path.basename(clean_value(f.get('DEVICE_VIDEO_CAPTURE_PATH', '')).rstrip('/'))})
     return entries, errors, {'walked': walked, 'read': read}
 
@@ -529,8 +536,14 @@ def check_captures(entries):
 
 
 def check_entries(entries, ssh_map, timeout):
+    def one(e):
+        if e['kind'] == 'youtube':
+            # Its source is in DEVICE_YOUTUBE_URL: there is nothing to probe here, and nothing to replace.
+            return {'status': 'not_managed', 'detail': 'its source is in DEVICE_YOUTUBE_URL', 'codec': None,
+                    'width': None, 'height': None, 'frames': 0, 'distinct': 0}
+        return check_stream(e['url'], timeout, ssh_map.get(e['host']))
     with ThreadPoolExecutor(max_workers=4) as ex:
-        return list(ex.map(lambda e: check_stream(e['url'], timeout, ssh_map.get(e['host'])), entries))
+        return list(ex.map(one, entries))
 
 
 def table(rows):
