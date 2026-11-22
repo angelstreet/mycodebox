@@ -2241,6 +2241,7 @@ function buildCell(s) {
     <div class="docview"></div>
     <div class="jump">
       <button data-j="top" aria-label="Jump to oldest output" title="Top (oldest)">${icon('arrow-up-to-line', 15)}</button>
+      <button data-j="me" class="jme" aria-label="Jump to my last request" title="My last request (again: the one before)">${icon('user', 15)}</button>
       <button data-j="bottom" aria-label="Jump to newest output" title="Bottom (newest)">${icon('arrow-down-to-line', 15)}</button>
     </div>`;
   cell.querySelector('.rd').onclick = (e) => { e.stopPropagation(); cell.classList.remove('doc-on'); toggleReader(); };
@@ -2344,6 +2345,7 @@ function wireDrag(cell, name) {
 // ⤒ / ⤓: jump to the oldest / newest output in whatever the card shows
 // (reader text or the terminal's scrollback).
 function jumpTo(cell, name, where) {
+  if (where === 'me') { jumpToMine(cell, name); return; }
   if (state.scrollRd.has(name) && where === 'bottom') { localScrollExit(name); return; }   // smooth scroll: the newest output is the live screen
   if (cell.classList.contains('rd-on')) {
     const el = cell.querySelector('.reader');
@@ -2356,6 +2358,26 @@ function jumpTo(cell, name, where) {
   const term = e?.term;
   if (!term) return;
   if (where === 'top') term.scrollToTop(); else term.scrollToBottom();
+}
+// Reader only (owner 2026-11-22): one click puts the owner's latest request at the top of the reader to read on from there; each
+// further click steps to the request before it. A reader showing the last reply only loads the whole conversation first.
+async function jumpToMine(cell, name) {
+  const el = cell.querySelector('.reader');
+  if (!el || !cell.classList.contains('rd-on')) return;
+  let mine = [...el.querySelectorAll('.rq.me')];
+  const c = state.replies.get(name);
+  if (!mine.length && c && c.full == null) {
+    await loadTranscript(name, c);
+    el.dataset.h = ''; el.dataset.pending = ''; paintReader(cell, name);
+    mine = [...el.querySelectorAll('.rq.me')];
+  }
+  if (!mine.length) { toast('no request of yours in this conversation'); return; }
+  const base = el.getBoundingClientRect().top - el.scrollTop;
+  const topOf = (q) => q.getBoundingClientRect().top - base - 8;
+  const target = mine.reverse().find((q) => topOf(q) < el.scrollTop - 4) || mine[0];
+  el._busyUntil = Date.now() + 1500;   // no repaint under the jump
+  el.scrollTo({ top: Math.max(0, topOf(target)), behavior: 'smooth' });
+  target.classList.remove('rq-flash'); void target.offsetWidth; target.classList.add('rq-flash');
 }
 async function loadOlder(name) {
   const entry = state.terms.get(name);

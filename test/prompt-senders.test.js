@@ -65,3 +65,13 @@ test('the dashboard\'s checks count as the AI side: by their opening phrase, and
   assert.doesNotMatch(src, /send(?:ToSession)?: \(name, text\) => sendKeys\(/, 'a check send that bypasses harnessSend is shown as the owner\'s');
   assert.match(src, /async function harnessSend[\s\S]{0,200}by: 'harness'[\s\S]{0,120}promptSenders\.note\(name, 'harness'/);
 });
+
+test('reader: a jump button goes to the owner\'s last request (reader only)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
+  assert.match(app, /data-j="me"/);
+  assert.match(app, /if \(where === 'me'\) \{ jumpToMine\(cell, name\); return; \}/);
+  assert.match(app, /querySelectorAll\('\.rq\.me'\)/);
+  assert.match(css, /\.cell:not\(\.rd-on\) \.jump \.jme\{ display:none; \}/);
+});

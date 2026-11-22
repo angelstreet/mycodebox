@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **One click back to your last request in the reader** — reading a long session meant scrolling up to find what you last asked. The reader's jump buttons now have a person button between ⤒ and ⤓: it puts your latest request at the top of the reader and flashes it; each further click goes to the request before it. Reader only; a reader showing the last reply only loads the whole conversation first. Shell cache `ghosty-shell-v179` · area: dashboard
+
 - **Tool calls fold away in the reader** — each tool call was its own code line, so a working session's reader was mostly `Bash ...` / `Read ...` lines. Consecutive calls are now one group, collapsed by default ("▸ 5 commands · Bash ×3, Read, Write"); a click opens it and it stays open while the reader repaints. Checked on a live session: 47 loose lines became 8 groups. Shell cache `ghosty-shell-v178` · area: dashboard
 
 - **Tables show as tables in the reader, and a grid card never cuts the session name** — the reader now reads the session file, where tables are Markdown (`| a | b |`), and only drew the box-drawing tables of the pane: each row showed as raw text. Pipe tables now render like the others (25 of 25 in a checked session). In a grid of several cards the name is no longer capped at 60% of the header, and the project / branch chip is hidden whenever the name or the chip itself would be cut (`fitProj`, measured on each sync and resize). Shell cache `ghosty-shell-v177` · area: dashboard
