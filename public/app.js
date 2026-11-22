@@ -14,6 +14,7 @@ import { closeBgAtNewlines } from '/term-sgr.js';
 import { planPaint } from '/term-paint.js';
 import { stripResizeHint, stripDiffPanel, tintOwnerPrompts } from '/pane-hints.js';
 import { aiSenderOf, senderLabel } from '/prompt-sig.js';
+import { MEDIA_LINE, mediaPathsIn, mediaRowHtml } from '/media-links.js';
 import { fitAction, fitSatisfied } from '/fit-policy.js';
 import { fitFont, canShrinkFont, isSettling } from '/fit-font.js';
 import { registerUrlLinks } from '/term-links.js';
@@ -2846,7 +2847,9 @@ function renderReply(text, ai = [], openTools = null) {
   let para = [], code = null, fence = false;
   // a prompt the AI side typed keeps the gray block with its sender's label; the owner's own prompts are blue (.rq.me)
   const promptHtml = () => { const by = aiSenderOf((para.raw || []).join(' '), ai); return by ? `<div class="rq ai"><span class="rq-by">AI · ${escapeHtml(senderLabel(by))}</span>${para.join('<br>')}</div>` : `<div class="rq me">${para.join('<br>')}</div>`; };
-  const flushPara = () => { if (para.length) { out.push(para.prompt ? promptHtml() : `<p>${para.join('<br>')}</p>`); para = []; } };
+  const seen = new Set();   // a picture is shown once per reply, however often its path is named
+  const flushPara = () => { if (para.length) { out.push(para.prompt ? promptHtml() : `<p>${para.join('<br>')}</p>`); if (para.media) out.push(mediaRowHtml(para.media, seen)); para = []; } };
+  const noteMedia = (l) => { const m = mediaPathsIn(l); if (m.length) (para.media ||= []).push(...m); };
   const flushCode = () => { if (code) { out.push(`<pre>${escapeHtml(code.join('\n'))}</pre>`); code = null; } };
   for (let li = 0; li < lines.length; li++) {
     const raw = lines[li];
@@ -2859,6 +2862,12 @@ function renderReply(text, ai = [], openTools = null) {
       if (html && k < lines.length) { flushPara(); flushCode(); out.push(html); li = k; continue; }
     }
     if (!fence) { const pt = pipeTable(lines, li); if (pt) { flushPara(); flushCode(); out.push(pt.html); li = pt.end; continue; } }
+    if (!fence && MEDIA_LINE.test(line.trim())) {   // files the agent sent: one row of pictures / open links
+      const paths = [];
+      let k = li;
+      for (; k < lines.length; k++) { const m = MEDIA_LINE.exec(lines[k].trim()); if (!m) break; paths.push(m[1]); }
+      flushPara(); flushCode(); out.push(mediaRowHtml(paths, seen)); li = k - 1; continue;
+    }
     if (!fence && TOOL_LINE.test(line.trim())) {
       const group = [];
       let k = li;
@@ -2879,12 +2888,13 @@ function renderReply(text, ai = [], openTools = null) {
     if (code) { if (!line.trim()) { code.push(''); continue; } flushCode(); }
     if (!line.trim()) { flushPara(); continue; }
     // "> " lines are the owner's prompts (the conversation view): one highlighted block, like the prompt in the terminal
-    if (/^> ?/.test(line)) { if (!para.prompt) { flushPara(); para.prompt = true; para.raw = []; } para.raw.push(line.replace(/^> ?/, '')); para.push(inlineMd(line.replace(/^> ?/, ''))); continue; }
+    if (/^> ?/.test(line)) { if (!para.prompt) { flushPara(); para.prompt = true; para.raw = []; } para.raw.push(line.replace(/^> ?/, '')); para.push(inlineMd(line.replace(/^> ?/, ''))); noteMedia(line); continue; }
     if (para.prompt) flushPara();
     const h = /^(#{1,4})\s+(.*)$/.exec(line);
     if (h) { flushPara(); out.push(`<div class="rh">${inlineMd(h[2])}</div>`); continue; }
     // tmux hard-wraps at the pane width (can be ~20 cols): glue wrapped lines back together,
     // but keep list items and table/box rows on their own line
+    noteMedia(line);
     const item = /^\s*(?:[-*\u2022]|\d+[.)]) /.test(line);
     const boxy = /^\s*[\u2500-\u257f|]/.test(line) || (line.match(/[\u2500-\u257f]/g) || []).length > 2;
     if (para.length && !item && !boxy && !para.boxy) para[para.length - 1] += ' ' + inlineMd(line.trim());
