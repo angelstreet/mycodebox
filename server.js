@@ -154,6 +154,7 @@ import { createSessionHistory } from './session-history.js';
 import { paneLinesOk } from './pane-lines.js';
 import { scrollPlan, wheelPlan, altScrollApplies } from './alt-scroll.js';
 import { findSessionFile, readConversation } from './conversation.js';
+import { resolveServedFile } from './files-route.js';
 import { createHistoryView } from './history-view.js';
 import { createQuota, defaults as quotaDefaults } from './quota.js';
 import { createClaudeAccounts, rateFile as claudeRateFile, accountOfPid, scanClaudeLimit, DEFAULT_ID as CLAUDE_DEFAULT_ACCOUNT } from './claude-accounts.js';
@@ -2599,6 +2600,14 @@ async function handleHttp(req, res) {
     } catch {
       return json(res, 404, { ok: false, error: 'no such session' });
     }
+  }
+  if (req.method === 'GET' && p.startsWith('/files/')) {   // an agent's picture / mockup for the reader (files-route.js)
+    const r = resolveServedFile(p.slice('/files'.length), { home: homedir() });
+    if (!r.file) { res.writeHead(r.status, { 'content-type': 'text/plain; charset=utf-8' }); return res.end(r.error); }
+    const h = { 'content-type': r.type, 'content-length': r.size, 'cache-control': 'private, max-age=300', 'x-content-type-options': 'nosniff' };
+    if (r.sandbox) h['content-security-policy'] = 'sandbox allow-scripts allow-popups allow-forms';
+    res.writeHead(200, h);
+    return createReadStream(r.file).on('error', () => { try { res.end(); } catch {} }).pipe(res);
   }
   if (req.method === 'GET' && p.startsWith('/api/senders/')) {   // the AI side's recent prompts in a session: [{ sig, by }] (prompt-sig.js)
     return json(res, 200, { session: decodeURIComponent(p.slice('/api/senders/'.length)), ai: promptSenders.of(decodeURIComponent(p.slice('/api/senders/'.length))) });

@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **Pictures and HTML mockups open from the reader, on any device** — a file an agent sent (SendUserFile) or a picture / page path it wrote showed as a bare name, and the file sat on codebox. The reader now shows pictures inline (click: full size in a new tab) and gives pages, PDFs and videos an "open ↗" link; the dashboard serves them at `/files/<path>` (media types only, home folder and scratchpads only, no dot folder except uploads, HTML sandboxed). Shell cache `ghosty-shell-v181` · area: dashboard
+
 - **Pasted check messages show as the AI's, not yours** — the session file stores a long prompt as `<pasted_content id="…">…`, so the start of the text never matched the logged send and the done check's "Status check:" messages showed in the owner's blue. The sender match now reads the text inside the wrapper, and "Status check:" joins the known check phrases · area: dashboard
 
 - **Goal check reads a "Goal:" line that starts with a short word** — the restatement check needed the first word after `Goal:` to have 3+ characters, so "Goal: in read mode, …" was rejected as "lacks a restatement of the goal" twice. It now needs three words after `Goal:` ("goal: achieved" still does not count) · area: harness

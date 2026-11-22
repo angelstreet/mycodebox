@@ -2915,3 +2915,13 @@ body.reading #diskBanner{ display:none !important; }
 @media (min-width: 1100px){
   .view-card .card-pane .cell.rd-on .reader{ padding-left:max(14px, calc((100% - var(--measure)) / 2 + 6px)); padding-right:max(18px, calc((100% - var(--measure)) / 2 + 16px)); }
 }
+
+/* pictures and mockups an agent sent or named (media-links.js): inline thumbnails, click = full size in a new tab */
+.reader .rd-media-row{ display:flex; flex-wrap:wrap; gap:10px; margin:6px 0 14px; }
+.reader .rd-media{ display:flex; flex-direction:column; gap:4px; max-width:min(100%, 420px); text-decoration:none; color:var(--ink-3); font-size:11px; }
+.reader .rd-media img{ display:block; max-width:100%; max-height:300px; object-fit:contain; border:1px solid var(--line-2); border-radius:6px; background:#111; }
+.reader .rd-media:hover img{ border-color:var(--accent); }
+.reader .rd-media span{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.reader .rd-file{ display:inline-flex; align-items:center; gap:4px; padding:6px 10px; border:1px solid var(--line-2); border-radius:8px; background:var(--bg-2); color:var(--ink); text-decoration:none; font-size:12px; }
+.reader .rd-file em{ font-style:normal; color:var(--accent); }
+.reader .rd-file:hover{ border-color:var(--accent); }

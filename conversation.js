@@ -45,6 +45,11 @@ export function renderRecord(o) {
     } else if (b.type === 'tool_use' && o.type === 'assistant') {
       const arg = b.input && (b.input.command || b.input.file_path || b.input.pattern || b.input.description || b.input.prompt || b.input.url || '');
       out.push(`\`${b.name}${arg ? ' ' + String(arg).replace(/\s+/g, ' ').slice(0, 100) : ''}\``);
+      // a file sent to the owner (a picture, a mockup): one ![](path) line each, shown inline by the reader (media-links.js)
+      if (b.name === 'SendUserFile' && Array.isArray(b.input?.files)) {
+        const f = b.input.files.filter((x) => typeof x === 'string' && x.startsWith('/'));
+        if (f.length) out.push(f.map((x) => `![](${x.replace(/[()\s]/g, encodeURIComponent)})`).join('\n'));
+      }
     }
   }
   return out;
