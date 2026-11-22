@@ -55,3 +55,13 @@ test('createPromptSenders: the owner\'s sends are not recorded; the log tail see
   assert.deepEqual(s.of('s1').map((x) => x.by), ['manager-agent', 'integration'], 'capped to max, newest kept');
   assert.deepEqual(s.of('nope'), []);
 });
+
+test('the dashboard\'s checks count as the AI side: by their opening phrase, and every check send is recorded as harness', async () => {
+  assert.equal(aiSenderOf('Goal check: No goal was recorded for this session', []), 'harness');
+  assert.equal(aiSenderOf('Done check: your STATUS is not an end state', []), 'harness');
+  assert.equal(aiSenderOf('goal: make the check pass please', []), null);
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('../server.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(src, /send(?:ToSession)?: \(name, text\) => sendKeys\(/, 'a check send that bypasses harnessSend is shown as the owner\'s');
+  assert.match(src, /async function harnessSend[\s\S]{0,200}by: 'harness'[\s\S]{0,120}promptSenders\.note\(name, 'harness'/);
+});
