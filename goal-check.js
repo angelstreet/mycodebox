@@ -183,6 +183,7 @@ export function createGoalGate({ stateDir, goalOf: goalFor = async () => '', par
   async function save() { try { await mkdir(stateDir, { recursive: true }); await writeFile(stFile, JSON.stringify(st)); } catch (e) { log.error?.('[goal-check] save', e.message); } }
   async function note(e) { try { await appendFile(journal, JSON.stringify({ at: new Date(now()).toISOString(), ...e }) + '\n'); } catch {} }
   const day = () => new Date(now()).toISOString().slice(0, 10);
+  const textSigOf = (text) => createHash('sha1').update(String(text || '').replace(/\s+/g, ' ').trim()).digest('hex').slice(0, 12);
   const sigOf = (text) => createHash('sha1').update(lastStatus(text)?.line || '').digest('hex').slice(0, 12);
 
   async function evaluate(s) {
@@ -194,7 +195,10 @@ export function createGoalGate({ stateDir, goalOf: goalFor = async () => '', par
     const sig = sigOf(s.text);
     // a new done turn: a different line, or the same line written after we asked (doneAt later than the ask)
     const fresh = (at) => sig !== e.sig || (s.doneAt && at && s.doneAt > at);
-    if (e.accepted === sig && !(s.doneAt && e.acceptedAt && s.doneAt > e.acceptedAt + 1000)) return null;
+    // the same closing text as the accepted reply is the same turn, whatever its doneAt says: the server re-stamps doneAt of a
+    // finished turn (a mid-turn done guess, then a later flip), which re-asked an accepted reply every ~10 min (bug-724947cb)
+    const txt = textSigOf(s.text);
+    if (e.accepted === sig && (e.acceptedText === txt || !(s.doneAt && e.acceptedAt && s.doneAt > e.acceptedAt + 1000))) return null;
     if (e.sig === sig && !fresh(e.at)) return null;   // already answered this done turn (asked, bounced or accepted)
     let goal = ''; try { goal = String(await goalFor(s.name) || ''); } catch { goal = ''; }
     let parts = []; try { parts = ((await partsOf(s.name)) || []).map(String).slice(0, 8); } catch { parts = []; }
@@ -217,7 +221,7 @@ export function createGoalGate({ stateDir, goalOf: goalFor = async () => '', par
     } else d = { kind: 'ask', message: goalQuestion(goal, parts) };
     d.goal = goal; d.sig = sig;
     if (d.kind === 'accepted') {
-      Object.assign(e, { sig, at: now(), accepted: sig, acceptedAt: s.doneAt || now(), asked: false });
+      Object.assign(e, { sig, at: now(), accepted: sig, acceptedAt: s.doneAt || now(), acceptedText: txt, asked: false });
       await note({ session: s.name, accepted: true, evidence: d.evidence, goal: goal.slice(0, 160) }); await save();
       return d;
     }
