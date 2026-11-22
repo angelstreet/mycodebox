@@ -1811,7 +1811,7 @@ whose reply approves the plan around the question (round 9 `approvedAction`).
   **A session that moved on closes its ask (bug-71b3ff6a, 2026-11-22)**: the owner answers in the session pane, so the ledger is told by the session's
   next stop: a logged stop whose STATUS is `done` / `running` / `waiting` (not `needs-*`, `blocked`, `failed`, not a wait that names the ask id or the owner)
   and is later than the ask (30 s) appends `{state:"resolved", via:"session-moved-on", reason, at}` (`resolveMovedOn` in `owner-asks.js`, called from `manager.js`
-  through `onAskMovedOn`); the open view, `manager-ask-scan.sh`, the stale list and the ask fold read the ledger, so the item is gone from all of them.
+  through `onAskMovedOn`). **Second trigger, the item acted on**: the session's own integration request reaching `merged` / `deployed` (a real merge, not `alreadyMerged`) calls `onMerged` in `integration-notify.js`, which resolves the session's older open asks with the branch in the reason; the open view, `manager-ask-scan.sh`, the stale list and the ask fold read the ledger, so the item is gone from all of them.
 - **Mockup-first** (`mockups.js`; `mockupFirst`, `mockupWindowMin` default 10): `POST /api/mockups` (loopback + reporter token) records a feed item
   `kind: mockup` with a link and a deadline; a stop asking to show the mockup before building is answered "post it to the feed and build"; the owner's
   "Object" (notification button or `POST /api/mockups/<id>/object`) sends the session "The owner objects to the mockup: wait for their notes."

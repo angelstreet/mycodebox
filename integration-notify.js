@@ -126,7 +126,7 @@ export const SESSION_OWNED_STATES = ['returned', 'merged_ci_superseded', 'cancel
 // defer: (session, request, text) => bool; keeps the wake for the next stop of a session that is not stopped / not listed now (pending-wakes.js).
 //   When it takes the wake, afterSend runs at once (the own-job watch is not needed: the pending wake owns the delivery).
 // quiet: the server decides which states are quiet (manager.json integrationDigest, default on).
-export function createIntegrationNotify({ status = () => undefined, isRemote = () => false, canSend = () => false, send = async () => {}, feed = () => {}, digest = () => {}, quiet = () => false, managerEvent = async () => {}, afterSend = () => {}, defer = null, log = () => {} } = {}) {
+export function createIntegrationNotify({ status = () => undefined, isRemote = () => false, canSend = () => false, send = async () => {}, feed = () => {}, digest = () => {}, quiet = () => false, managerEvent = async () => {}, onMerged = () => {}, afterSend = () => {}, defer = null, log = () => {} } = {}) {
   const done = new Set();   // `${id}:${state}`: a transition is told once per process
   return async function notify(request, event = {}) {
     try {
@@ -136,6 +136,8 @@ export function createIntegrationNotify({ status = () => undefined, isRemote = (
       done.add(key);
       if (done.size > 2000) done.delete(done.values().next().value);
       const session = request.session ? String(request.session) : '';
+      // the session's branch is on the target: an owner ask it still has open was acted on (owner-asks.js resolveMovedOn, bug-71b3ff6a)
+      if (session && (request.state === 'merged' || request.state === 'deployed') && !request.alreadyMerged) { try { onMerged(session, request); } catch { /* best effort */ } }
       const n = integrationNotice(request);
       const url = session ? `/?s=${encodeURIComponent(session)}` : '/?integration=1';
       const item = { title: n.title, body: n.body, url: '/?integration=1', tag: `integration-${request.id}`, priority: n.priority, kind: 'integration', state: request.state, requestId: request.id, session,
