@@ -832,7 +832,8 @@ export const FINGERPRINT_PATHS_FILE = 'scripts/review/fingerprint_algorithm_path
 export const FINGERPRINT_MODOP = 'docs/agent/navigation/FINGERPRINT_RETEST.md';
 export const FINGERPRINT_REPORT_DIR = 'docs/agent/navigation/retest-reports/';
 export const FINGERPRINT_PATHS_PLACEHOLDER = ['backend_host/src/services/navigation/fingerprint/', 'backend_host/src/services/localize/', 'shared/lib/utils/fingerprint*'];
-export const parseFingerprintPaths = (text) => String(text || '').split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+export const parseFingerprintPaths = (text) => [...new Set(String(text || '').split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#')).map((l) => l.split('::')[0].trim()).filter(Boolean))];   // path::symbol gates the whole file (stricter)
+
 const globRe = (g) => new RegExp('^' + g.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*\*/g, '\u0000').replace(/\*/g, '[^/]*').replace(/\u0000/g, '.*').replace(/\?/g, '[^/]') + '$');
 export const matchesFingerprintPath = (f, list) => list.some((g) => (g.endsWith('/') ? f.startsWith(g) : /[*?]/.test(g) ? globRe(g).test(f) : f === g || f.startsWith(g + '/')));
 // -> { touched: [files], reasons: [string] }. Docs (isDocFile) never count as algorithm changes.

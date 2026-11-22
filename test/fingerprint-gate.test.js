@@ -21,6 +21,7 @@ test('unit: path list parsing, globs, docs excluded', () => {
   assert.deepEqual(list, ['algo/', 'lib/fp*.py', 'exact.py']);
   assert.ok(matchesFingerprintPath('algo/x/y.py', list) && matchesFingerprintPath('lib/fp_a.py', list) && matchesFingerprintPath('exact.py', list));
   assert.ok(!matchesFingerprintPath('lib/other.py', list));
+  assert.deepEqual(parseFingerprintPaths('a.py::f\na.py::g\nb.py::FP_*\n'), ['a.py', 'b.py']);
   assert.deepEqual(fingerprintGate({ files: ['algo/README.md'], list }).reasons, []);
 });
 
