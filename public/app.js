@@ -2669,7 +2669,8 @@ function paintReader(cell, n, opts = {}) {
   }
   const full = c && c.full != null;
   if (full && c.full) text = c.full;
-  const body = text && text.trim() ? renderReply(text, sendersOf(n)) : '<div class="rd-empty">no reply yet \u2014 tap &gt;_ for terminal</div>';
+  if (!state.toolOpen.has(n)) state.toolOpen.set(n, new Set());
+  const body = text && text.trim() ? renderReply(text, sendersOf(n), state.toolOpen.get(n)) : '<div class="rd-empty">no reply yet \u2014 tap &gt;_ for terminal</div>';
   // QF-16 — copy the reply to the clipboard and read it aloud. Both are
   // present on the popup / task doc / multi-question popover via
   // copy-prompt.js + audio-chip.js; the reader was the only place they
@@ -2694,6 +2695,12 @@ function paintReader(cell, n, opts = {}) {
   }
   if (!el._wired) {
     el._wired = true;
+    // a tool group opened or closed: remember it, so the next repaint keeps it (toggle does not bubble: capture)
+    el.addEventListener('toggle', (e) => {
+      const d = e.target; if (!d.matches?.('details.rd-tools')) return;
+      const set = state.toolOpen.get(n) || new Set(); state.toolOpen.set(n, set);
+      const k = d.dataset.k; if (d.open) set.add(k); else set.delete(k);
+    }, true);
     el.addEventListener('click', async (e) => {
       const b = e.target.closest('.rd-more');
       if (!b) return;
@@ -2798,7 +2805,19 @@ function pipeTable(lines, i) {
   return { end: k - 1, html: `<div class="mdt"><table><thead><tr>${head.map((c) => `<th>${inlineMd(c)}</th>`).join('')}</tr></thead><tbody>${
     body.map((r) => `<tr>${r.map((c) => `<td>${inlineMd(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>` };
 }
-function renderReply(text, ai = []) {
+// Tool calls in the conversation (conversation.js writes one `Tool arg` line each): consecutive ones are one collapsed group (owner 2026-11-22),
+// "▸ 5 commands · Bash ×3, Read, Write"; a click opens it. The open groups are kept per session (state.toolOpen), keyed by their first line,
+// so a repaint while the agent works does not close them.
+const TOOL_LINE = /^`([A-Z][A-Za-z]+|mcp__[\w-]+)(?: [^`]*)?`$/;
+state.toolOpen = new Map();   // session -> Set(first line of an open group)
+function toolGroupHtml(group, open) {
+  const counts = new Map();
+  for (const g of group) { const n = TOOL_LINE.exec(g)[1]; counts.set(n, (counts.get(n) || 0) + 1); }
+  const what = [...counts].map(([n, c]) => (c > 1 ? `${n} \u00d7${c}` : n)).join(', ');
+  const key = escapeHtml(group[0].slice(0, 200));
+  return `<details class="rd-tools" data-k="${key}"${open ? ' open' : ''}><summary>${group.length} command${group.length === 1 ? '' : 's'} \u00b7 ${escapeHtml(what)}</summary><pre>${escapeHtml(group.map((g) => g.slice(1, -1)).join('\n'))}</pre></details>`;
+}
+function renderReply(text, ai = [], openTools = null) {
   if (!text || !text.trim()) return '<div class="rd-empty">No reply yet.</div>';
   const lines = String(text).replace(/\t/g, '    ').split('\n');
   const out = [];
@@ -2818,6 +2837,17 @@ function renderReply(text, ai = []) {
       if (html && k < lines.length) { flushPara(); flushCode(); out.push(html); li = k; continue; }
     }
     if (!fence) { const pt = pipeTable(lines, li); if (pt) { flushPara(); flushCode(); out.push(pt.html); li = pt.end; continue; } }
+    if (!fence && TOOL_LINE.test(line.trim())) {
+      const group = [];
+      let k = li;
+      for (; k < lines.length; k++) {
+        const t = lines[k].trim();
+        if (TOOL_LINE.test(t)) { group.push(t); continue; }
+        if (!t) { let m = k + 1; while (m < lines.length && !lines[m].trim()) m++; if (m < lines.length && TOOL_LINE.test(lines[m].trim())) { k = m - 1; continue; } }
+        break;
+      }
+      flushPara(); flushCode(); out.push(toolGroupHtml(group, !!openTools?.has(group[0].slice(0, 200)))); li = k - 1; continue;
+    }
     if (/^\s*```/.test(line)) {
       if (fence) { fence = false; flushCode(); } else { flushPara(); flushCode(); fence = true; code = []; }
       continue;
