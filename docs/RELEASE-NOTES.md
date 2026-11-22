@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **Pasted check messages show as the AI's, not yours** — the session file stores a long prompt as `<pasted_content id="…">…`, so the start of the text never matched the logged send and the done check's "Status check:" messages showed in the owner's blue. The sender match now reads the text inside the wrapper, and "Status check:" joins the known check phrases · area: dashboard
+
 - **Goal check reads a "Goal:" line that starts with a short word** — the restatement check needed the first word after `Goal:` to have 3+ characters, so "Goal: in read mode, …" was rejected as "lacks a restatement of the goal" twice. It now needs three words after `Goal:` ("goal: achieved" still does not count) · area: harness
 
 - **One click back to your last request in the reader** — reading a long session meant scrolling up to find what you last asked. The reader's jump buttons now have a person button between ⤒ and ⤓: it puts your latest request at the top of the reader and flashes it; each further click goes to the request before it. Reader only; a reader showing the last reply only loads the whole conversation first. Shell cache `ghosty-shell-v179` · area: dashboard
