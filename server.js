@@ -1129,7 +1129,7 @@ const ciWatch = createCiWatch({
     if (await sessionExists(name)) await exec(TMUX, ['kill-session', '-t', `=${name}`]);   // only reached with no live agent in it
     await exec(join(dirname(fileURLToPath(import.meta.url)), 'scripts', 'cbsession'), ['-n', name, '-d', cwd, '-p', provider, '-A', ...(model ? ['-m', model] : []), '-f', promptFile], { timeout: 180000 });
   },
-  sendToSession: (name, text) => sendKeys(name, text),
+  sendToSession: (name, text) => harnessSend(name, text),
   record: (e) => managerEvents.record(e),
   alert,
   mode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).ciWatch; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
@@ -1232,7 +1232,7 @@ const doneCheck = createDoneCheck({
   goalOf: async (name) => { try { return goalOfPrompt(readFileSync(join(homedir(), 'handovers', `${String(name).replace(/[^\w.-]/g, '')}.prompt.md`), 'utf8')); } catch { return ''; } },
   goalGate,   // (H) goal check
   integrationsOf: (name) => integrationLane.mergedFor(name),   // (O) release note / bug record evidence
-  send: (name, text) => sendKeys(name, text),
+  send: (name, text) => harnessSend(name, text),
   pressure: hostPressure,
   record: (e) => managerEvents.record(e),
   mode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).doneCheck; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
@@ -1389,7 +1389,7 @@ const rulesWatch = createRulesWatch({
   stateDir: STATE_DIR,
   git: async (cwd, args) => (await exec('git', ['-C', cwd, ...args], { timeout: 60000 })).stdout,
   listTargets: () => rulesWatchTargets(),
-  send: (name, text) => sendKeys(name, text),
+  send: (name, text) => harnessSend(name, text),
   pressure: hostPressure,
   record: (e) => managerEvents.record(e),
   mode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).rulesWatch; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
@@ -1400,7 +1400,7 @@ const overlapGuard = createOverlapGuard({
   stateDir: STATE_DIR,
   git: async (cwd, args) => (await exec('git', ['-C', cwd, ...args], { timeout: 30000 })).stdout,
   listTargets: () => rulesWatchTargets(),
-  send: (name, text) => sendKeys(name, text),
+  send: (name, text) => harnessSend(name, text),
   pressure: hostPressure,
   record: (e) => managerEvents.record(e),
   mode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).overlapGuard; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
@@ -1414,7 +1414,7 @@ const sharedCheckoutGuard = createSharedCheckoutGuard({
   git: async (cwd, args) => (await exec('git', ['-C', cwd, ...args], { timeout: 30000 })).stdout,
   listCheckouts: async () => { let l; try { l = JSON.parse(readFileSync(managerConfigFile, 'utf8')).sharedCheckouts; } catch {} return (Array.isArray(l) ? l.map(String) : ['~/ghosty-sessions', '~/virtualpytest']).map((p) => expandHome(p, HOME)); },
   listTargets: () => rulesWatchTargets(),
-  send: (name, text) => sendKeys(name, text),
+  send: (name, text) => harnessSend(name, text),
   pressure: hostPressure,
   record: (e) => managerEvents.record(e),
   mode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).sharedCheckoutGuard; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
@@ -2220,6 +2220,15 @@ async function setSessionMeta(session, body) {
 // Who typed each prompt (owner 2026-11-22): the AI side's sends, so the reader and the terminal show the owner's own messages apart.
 const promptSenders = createPromptSenders();
 promptSenders.seed(LOG_FILE).catch(() => {});
+// A check of the dashboard itself (done / goal check, rules watch, overlap and checkout guards, bug drain) types into a session: send it and
+// record it as the AI side's (by 'harness'), so the reader and the terminal do not show it as the owner's. Not through logSend: these are
+// not answers to a stop, and the owner round-trip counters must not count them.
+async function harnessSend(name, text) {
+  const r = await sendKeys(name, text);
+  logEvent({ type: 'send', session: name, by: 'harness', text: String(text || '').slice(0, 200) });
+  promptSenders.note(name, 'harness', String(text || ''));
+  return r;
+}
 function logSend(session, by, payload) {
   if (payload.key === undefined) promptSenders.note(session, by, String(payload.keys || ''));
   noteAnswerer(session, by);   // round 9: who answered, for owner-roundtrips.jsonl
