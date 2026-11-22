@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A message ending in a screenshot path is sent, not left in the prompt** — an uploaded screenshot is sent as `@<path>` at the end of the text, which opens Claude Code's file suggestion list; the dashboard's Enter only picked the suggestion, so the text stayed in the prompt. The send check did not catch it: it read the list's `❯ /path` row as the prompt, saw no trace of the message, and counted it as sent. Now a trailing `@path` gets a space (the list does not open, one Enter sends; probed on Claude Code 2.1.330), and the prompt parser skips the suggestion row, so the Enter retry works if a list opens anyway · area: dashboard
+
 - **A channel that failed once and played on the confirming re-probe reads `flaky`, not a down stream** — a TV channel can blink: the night counted it as "down" while its own re-probe proved it plays, so the "N down" number included streams that were fine. Such a row is now `flaky` (it plays) and the summary leaves it out of "down" · area: rtsp-nightly
 - **The nightly says what is down instead of counting every device without a source** — a device whose `DEVICE_VIDEO` is empty has no stream to repair (it is reported, never changed), and a YouTube device (its source lives in `DEVICE_YOUTUBE_URL`, not `DEVICE_VIDEO`) was read as a down stream every night while its tile played: the night of 2026-11-22 reported "8 down" when nothing was broken, which reads like 8 broken streams. The summary now reads "N streams, X down, Y without a source, Z not managed", the report carries the same split in a `summary` block, and the exit code follows it (0 when no stream is down) · area: rtsp-nightly
 

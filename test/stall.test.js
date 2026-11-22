@@ -606,3 +606,13 @@ test('prose announces a push to main -> forbidden', () => {
   assert.ok(s.topics?.push, 'the push topic is set so ops-ask routes it as a manager item');
   assert.equal(wouldSend(s).send, null);
 });
+
+// Claude Code's @-file suggestion list under the box (captured 2026-11-22, Claude Code 2.1.330): its cursor row `  ❯ /path` is not the prompt.
+test('inputBox: the @-file suggestion row under the box is not read as the draft', () => {
+  const rule = '─'.repeat(80);
+  const pane = ['● previous answer', '', rule, '❯ reply ok only please look at this', '  @/tmp/x/shot.png', rule, '  ❯ /tmp/x/shot.png'];
+  assert.equal(inputBox(pane).draft, 'reply ok only please look at this');
+  // without the list the box is read as before
+  assert.equal(inputBox([...pane.slice(0, 6), '  Sonnet 5.5 wk 0%', '  ⏵⏵ bypass permissions on']).draft, 'reply ok only please look at this');
+  assert.equal(inputBox(['x', rule, '❯ hello', rule]).draft, 'hello');
+});

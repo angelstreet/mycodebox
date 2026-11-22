@@ -76,7 +76,16 @@ function inputLineIndex(lines) {
     if (!PROMPT_GLYPH.test(stripAnsi(lines[i]))) continue;
     let j = i - 1;
     while (j > 0 && FRAGMENT.test(stripAnsi(lines[j]))) j--;
-    if (j >= 0 && RULE_LINE.test(stripAnsi(lines[j]))) return i;
+    if (j >= 0 && RULE_LINE.test(stripAnsi(lines[j]))) {
+      // Claude Code's @-file suggestion list sits BELOW the box, its cursor row `  ❯ /path` right under the bottom rule: when the rows above
+      // that rule are a prompt row with its own top rule (the draft, maybe wrapped), the box is that one, not the menu row.
+      for (let k = j - 1; k > 0 && k >= j - 12; k--) {
+        const t = stripAnsi(lines[k]);
+        if (RULE_LINE.test(t)) break;
+        if (PROMPT_GLYPH.test(t) && RULE_LINE.test(stripAnsi(lines[k - 1]))) return k;
+      }
+      return i;
+    }
   }
   return -1;
 }
