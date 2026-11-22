@@ -6,6 +6,7 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A channel that failed once and played on the confirming re-probe reads `flaky`, not a down stream** — a TV channel can blink: the night counted it as "down" while its own re-probe proved it plays, so the "N down" number included streams that were fine. Such a row is now `flaky` (it plays) and the summary leaves it out of "down" · area: rtsp-nightly
 - **The nightly says what is down instead of counting every device without a source** — a device whose `DEVICE_VIDEO` is empty has no stream to repair (it is reported, never changed), and a YouTube device (its source lives in `DEVICE_YOUTUBE_URL`, not `DEVICE_VIDEO`) was read as a down stream every night while its tile played: the night of 2026-11-22 reported "8 down" when nothing was broken, which reads like 8 broken streams. The summary now reads "N streams, X down, Y without a source, Z not managed", the report carries the same split in a `summary` block, and the exit code follows it (0 when no stream is down) · area: rtsp-nightly
 
 - **The goal check no longer re-asks a reply it already accepted** — the server can re-stamp when a finished turn ended (`doneAt`), and the gate took the later stamp for a new done turn, so an accepted reply was asked the goal question again about 10 min later, without limit (asks are not bounces). The gate now also remembers the accepted closing text (whitespace-normalized): the same text is the same turn · area: done-check
