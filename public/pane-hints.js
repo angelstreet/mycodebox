@@ -56,3 +56,24 @@ export function stripDiffPanel(text) {
   for (let i = a; i <= b; i++) lines[i] = cutAt(lines[i], col);
   return lines.join('\n');
 }
+
+// The owner's own prompts in blue (owner 2026-11-22): Claude Code paints every past prompt the same, `ESC[48;5;237m❯ text` on a gray
+// background the wrapped rows inherit. A prompt the AI side typed (matched by the start of its text, prompt-sig.js) keeps the gray; any
+// other prompt is the owner's: its opening background code becomes blue, and so do its wrapped rows.
+export const OWNER_BG = '\x1b[48;2;28;48;84m';
+const PROMPT_BG = '\x1b[48;5;237m';
+const HEAD_RE = /^((?:\x1b\[[0-9;]*m)*?)\x1b\[48;5;237m(?:\x1b\[[0-9;]*m)*❯ /;
+const plainOf = (l) => l.replace(/\x1b\[[0-9;:]*[A-Za-z]/g, '');
+export function tintOwnerPrompts(text, isAi) {
+  if (!text || !text.includes(PROMPT_BG)) return text;
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    const m = HEAD_RE.exec(l);   // the colour codes before the ❯ hold the gray background (a foreground code may come first)
+    if (!m || !/^❯ \S/.test(plainOf(l))) continue;
+    let t = plainOf(l);
+    for (let j = i + 1; j < lines.length && j <= i + 30 && /^ {2}\S/.test(plainOf(lines[j])); j++) t += ' ' + plainOf(lines[j]).trim();
+    if (!isAi(t)) lines[i] = m[1] + OWNER_BG + l.slice(m[1].length + PROMPT_BG.length);
+  }
+  return lines.join('\n');
+}

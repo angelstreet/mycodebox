@@ -164,6 +164,7 @@ import { createUsage, usageFile } from './usage-view.js';
 import { createTurnMeter, statusMeterLine } from './turn-meter.js';
 import { evaluatePolicy } from './public/policy.js';
 import { isPriority } from './public/prio.js';
+import { createPromptSenders } from './prompt-senders.js';
 import { createTts, parseRange } from './tts.js';
 import { publicLinks, loadAssetlinks } from './assetlinks.js';
 import { revertPlan } from './decided.js';
@@ -2216,7 +2217,11 @@ async function setSessionMeta(session, body) {
 }
 
 // Who typed: every send is logged with its actor (the owner's UI sends no `by`, the manager agent sends 'manager-agent').
+// Who typed each prompt (owner 2026-11-22): the AI side's sends, so the reader and the terminal show the owner's own messages apart.
+const promptSenders = createPromptSenders();
+promptSenders.seed(LOG_FILE).catch(() => {});
 function logSend(session, by, payload) {
+  if (payload.key === undefined) promptSenders.note(session, by, String(payload.keys || ''));
   noteAnswerer(session, by);   // round 9: who answered, for owner-roundtrips.jsonl
   logEvent({ type: 'send', session, by, ...(payload.key !== undefined ? { key: String(payload.key).slice(0, 40) } : { text: String(payload.keys || '').slice(0, 200) }) });
   // an owner tap on a NEEDS YOU option closes its ledger line (Q245/Q262 stayed open after the owner answered)
@@ -2585,6 +2590,9 @@ async function handleHttp(req, res) {
     } catch {
       return json(res, 404, { ok: false, error: 'no such session' });
     }
+  }
+  if (req.method === 'GET' && p.startsWith('/api/senders/')) {   // the AI side's recent prompts in a session: [{ sig, by }] (prompt-sig.js)
+    return json(res, 200, { session: decodeURIComponent(p.slice('/api/senders/'.length)), ai: promptSenders.of(decodeURIComponent(p.slice('/api/senders/'.length))) });
   }
   if (req.method === 'GET' && p.startsWith('/api/reply/')) {
     const session = decodeURIComponent(p.slice('/api/reply/'.length));
