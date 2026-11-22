@@ -1518,7 +1518,7 @@ export function observe(s) {
       jev: jevOut, wouldSend: ws.send, why: ws.why, confidence, excerpt: stall.excerpt,
       ...(final.handoff ? { handoff: final.handoff } : {}),
     });
-    if (!isManagerSession(s.name) && /^(?:done|ok|complete|completed|finished|running|waiting)$/i.test(final.status || (final.case === 'done' ? 'done' : ''))) { try { askMovedHook(s.name, final.status || 'done', String(final.question || '').slice(0, 300)); } catch (e) { console.error('[manager] ask moved on', e.message); } }
+    if (!isManagerSession(s.name) && /^(?:done|ok|complete|completed|finished|running|waiting)$/i.test(final.status || '')) { try { askMovedHook(s.name, final.status, String(final.question || '').slice(0, 300)); } catch (e) { console.error('[manager] ask moved on', e.message); } }
     if (/^(?:waiting|running|blocked)$/i.test(final.status || '')) { try { statusHook(s.name, String(final.status).toLowerCase(), String(final.question || '').slice(0, 300)); } catch (e) { console.error('[manager] onStatus', e.message); } }
     // a session that waits on a job of its own is woken when the job ends (own-jobs.js); a deploy it queued is followed the same way
     // a blocked STATUS that names a job in words only: it is the session's own when the agent has a live child process at the stop

@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **Owner-ask auto-resolve reads the STATUS word only (bug-71b3ff6a)** — a stop with no STATUS line (plain text, classified `done`) no longer resolves the session's owner asks; only an explicit done / running / waiting STATUS does, pinned by a stall test · area: manager
+
 - **An owner ask also resolves when its session's branch is merged (bug-71b3ff6a, second trigger)** — a merged / deployed integration request of the session closes its older open owner asks (`reason: ... its branch <b> was merged`), so an item the session already acted on is never listed again · area: manager
 
 - **A stale owner item resolves itself (bug-71b3ff6a)** — the owner answers in the session pane and nothing told the ledger, so asks stayed "waiting for you" for hours after the session built, merged and closed. A later stop whose STATUS is done / running / waiting (not on the owner) now appends `state: resolved` (reason, at, `via: session-moved-on`) to `manager-owner-asks.jsonl`; the open view, `manager-status-scan.sh` and the stale list drop it · area: manager

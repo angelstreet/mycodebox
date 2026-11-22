@@ -616,3 +616,10 @@ test('inputBox: the @-file suggestion row under the box is not read as the draft
   assert.equal(inputBox([...pane.slice(0, 6), '  Sonnet 5.5 wk 0%', '  ⏵⏵ bypass permissions on']).draft, 'reply ok only please look at this');
   assert.equal(inputBox(['x', rule, '❯ hello', rule]).draft, 'hello');
 });
+
+test('the stop carries the STATUS word the owner-asks resolver reads (bug-71b3ff6a): done / running / waiting yes, a stop with no STATUS none', () => {
+  assert.equal(classify(claude('Built.\n\nSTATUS: done — x')).status, 'done');
+  assert.equal(classify(claude('Working.\n\nSTATUS: running: worker w1')).status, 'running');
+  assert.equal(classify(claude('Waiting.\n\nSTATUS: waiting: integration int-1')).status, 'waiting');
+  assert.equal(classify(claude('Finished the work, tests pass.')).status, undefined, 'no STATUS: nothing resolves an ask');
+});
