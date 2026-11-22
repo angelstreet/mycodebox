@@ -25,6 +25,7 @@ see [docs/skills/codebox-sessions.md](skills/codebox-sessions.md). Past sessions
 
 1. Select a session on the board. Check its name and working directory before sending.
 2. Use reader mode for the last answer, or terminal mode for the pane output. Status is inferred from the screen unless a reporter supplies events; it can be wrong.
+   Scrolling a fullscreen (Claude Code) terminal up shows the conversation and scrolls it locally; the bottom returns to the live screen ("Smooth scroll" in the More menu or the text popover turns this off; [why](SCROLL-DESIGN.md)).
 3. Type a reply or choose a quick key. Sending types into the real tmux session. Check the selected target, especially in grid or multi-target mode.
 4. Use filters for project, agent and state. P0/P1/P2 set priority; shared ordering and pins persist on the server, while some display preferences are per device.
 
