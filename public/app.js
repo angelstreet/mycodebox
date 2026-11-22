@@ -2484,6 +2484,7 @@ function syncCell(cell) {
   syncAutoPill(cell.querySelector('.apill'), n);
   const pj = cell.querySelector('.proj'), ph = projHtml(n);
   if (pj.dataset.h !== ph) { pj.dataset.h = ph; pj.innerHTML = ph; }
+  fitProj(cell);
   const mt = cell.querySelector('.mt'), mh = headMetaHtml(n);
   if (mt.dataset.h !== mh) { mt.dataset.h = mh; mt.innerHTML = mh; }
   const rd = cell.querySelector('.rd');
@@ -2549,6 +2550,17 @@ function headMetaHtml(n) {
   // owner 2026-10-31: no live activity text ("Running 26s · ...") in the header; the card body shows it
   return parts.join('<span class="sep"> \u00b7 </span>');
 }
+// A grid of several cards (owner 2026-11-22): the session name is the most important part of the header. The project / branch chip shows only
+// when both fit in full: if the name or the chip would be cut (…), the chip is hidden. Measured on every sync (each tick and on resize).
+function fitProj(cell) {
+  const multi = cell.parentElement === els.gridPane && !els.gridPane.classList.contains('size-1');
+  const name = cell.querySelector('.h .name'), pj = cell.querySelector('.h .proj');
+  cell.classList.remove('proj-off');
+  if (!multi || !name || !pj || !pj.innerHTML) return;
+  const cut = (e) => e.scrollWidth > e.clientWidth + 1;
+  if (cut(name) || cut(pj) || [...pj.children].some(cut)) cell.classList.add('proj-off');
+}
+window.addEventListener('resize', () => { for (const c of els.gridPane.children) fitProj(c); });
 // Centre label of a card header: project · branch · worktree.
 function projHtml(n) {
   const st = state.status[n] || {};
@@ -2773,6 +2785,19 @@ function boxTable(block) {
   return `<div class="mdt"><table><thead><tr>${head.map((c) => `<th>${inlineMd(c)}</th>`).join('')}</tr></thead><tbody>${
     body.map((r) => `<tr>${r.map((c) => `<td>${inlineMd(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
 }
+// A Markdown pipe table (the session file's text, owner 2026-11-22: the reader showed it as raw `| a | b |` lines): header row, a `|---|` rule,
+// body rows. Same markup as boxTable. -> { html, end } (end = index of the last table line) or null.
+const PIPE_ROW = /^\s*\|.*\|\s*$/, PIPE_RULE = /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?\s*$/;
+function pipeTable(lines, i) {
+  if (!PIPE_ROW.test(lines[i] || '') || !PIPE_RULE.test(lines[i + 1] || '')) return null;
+  const cells = (l) => l.trim().replace(/^\||\|$/g, '').split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, '|'));
+  const head = cells(lines[i]);
+  let k = i + 2;
+  const body = [];
+  while (k < lines.length && PIPE_ROW.test(lines[k])) body.push(cells(lines[k++]));
+  return { end: k - 1, html: `<div class="mdt"><table><thead><tr>${head.map((c) => `<th>${inlineMd(c)}</th>`).join('')}</tr></thead><tbody>${
+    body.map((r) => `<tr>${r.map((c) => `<td>${inlineMd(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>` };
+}
 function renderReply(text, ai = []) {
   if (!text || !text.trim()) return '<div class="rd-empty">No reply yet.</div>';
   const lines = String(text).replace(/\t/g, '    ').split('\n');
@@ -2792,6 +2817,7 @@ function renderReply(text, ai = []) {
       // an unfinished table (still being typed) falls through as plain lines
       if (html && k < lines.length) { flushPara(); flushCode(); out.push(html); li = k; continue; }
     }
+    if (!fence) { const pt = pipeTable(lines, li); if (pt) { flushPara(); flushCode(); out.push(pt.html); li = pt.end; continue; } }
     if (/^\s*```/.test(line)) {
       if (fence) { fence = false; flushCode(); } else { flushPara(); flushCode(); fence = true; code = []; }
       continue;
