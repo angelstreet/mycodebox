@@ -77,3 +77,12 @@ test('confirmDelivered: swallowed once -> one retry Enter, then submitted', asyn
 test('confirmDelivered: never clears -> exactly one retry, honest submitted:false', async () => assert.deepEqual(await confirm([TEXT]), { pressed: 1, submitted: false, enters: 1 }));
 test('confirmDelivered: unreadable prompt -> submitted:null, no Enter', async () => assert.deepEqual(await confirm([null]), { pressed: 0, submitted: null, enters: 0 }));
 test('confirmDelivered: a human draft that is not ours is left alone', async () => assert.deepEqual(await confirm(['owner typing something else']), { pressed: 0, submitted: true, enters: 0 }));
+
+test('pasteTextOf: a trailing @path gets a space so the Enter is not taken by the file suggestion list', async () => {
+  const { pasteTextOf } = await import('../send-verify.js');
+  assert.equal(pasteTextOf('look @/home/u/.ghosty/uploads/1-a.png'), 'look @/home/u/.ghosty/uploads/1-a.png ');
+  assert.equal(pasteTextOf('@/tmp/a.png'), '@/tmp/a.png ');
+  assert.equal(pasteTextOf('look @/tmp/a.png then fix it'), 'look @/tmp/a.png then fix it');
+  assert.equal(pasteTextOf('mail me at a@b.c'), 'mail me at a@b.c');
+  assert.equal(pasteTextOf('plain text'), 'plain text');
+});

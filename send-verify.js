@@ -60,3 +60,10 @@ export async function confirmDelivered({ text, draftNow, pressEnter, sleep, onRe
   }
   return { pressed, submitted: false };
 }
+
+// A message ending in `@<path>` (every uploaded screenshot) opens Claude Code's @-file suggestion list, and the Enter then only accepts the
+// suggestion: the text stays in the prompt. A trailing space closes the list, so one Enter submits (probe on Claude Code 2.1.330, 2026-11-22).
+export function pasteTextOf(text) {
+  const t = String(text || '');
+  return /(?:^|\s)@\S+$/.test(t) ? `${t} ` : t;
+}

@@ -133,7 +133,7 @@ import { scanTaskDocs, withHomeDirs, computeUnfinished, docLeftoversFor, createU
 import { pushOf, replyFor } from './owner-push.js';
 import { createWorkerAutoClose, shouldClose as shouldCloseWorker, politeClose, LEFTOVERS_WINDOW_MS } from './worker-auto-close.js';
 import { statusLine, inputBox } from './stall.js';
-import { verifyDelivered, confirmDelivered, waitSettled, settleBudgetMs } from './send-verify.js';
+import { verifyDelivered, confirmDelivered, waitSettled, settleBudgetMs, pasteTextOf } from './send-verify.js';
 import { machinesOf, holdingsOf, deployWaitOf, agentSession, agentSessionCandidates, holderSession } from './public/platforms.js';
 import { createHash, randomBytes } from 'node:crypto';
 import { basename, dirname, extname, join, normalize, sep } from 'node:path';
@@ -436,7 +436,7 @@ async function sendKeys(session, keys, enter = true) {
   if (lines.length > 5000) throw httpError(400, 'too many lines (max 5000)');
   if (text.length) {
     const buf = `ghosty-send-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    await exec(TMUX, ['set-buffer', '-b', buf, '--', text]);
+    await exec(TMUX, ['set-buffer', '-b', buf, '--', pasteTextOf(text)]);   // a trailing @path gets a space: else the Enter only picks the file suggestion
     await exec(TMUX, ['paste-buffer', '-p', '-d', '-b', buf, '-t', tgt(session)]);
   }
   let submitted;
