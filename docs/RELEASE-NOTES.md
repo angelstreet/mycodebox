@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **Park / move on the owner's word kills the session's own running work (owner 2026-11-22)** — the dashboard Park button, the account switch and `claude-account move` used to answer "Can't park …: busy, background job, running child process". They now end the turn, stop only the descendants of that session's Claude pane (SIGTERM, SIGKILL after 4 s) and park / resume anyway; the toast and CLI name the killed pids and the leases still held (not released). `--safe` and the automatic limit swap keep the refusal · area: sessions
+
 - **Fingerprint algorithm merge gate (owner 2026-11-22)** — in the virtualpytest lane a change to the paths listed in `scripts/review/fingerprint_algorithm_paths.txt` is returned unless a manager approved it (`--approved-by manager`) and a no-regression retest report is in the diff (`docs/agent/navigation/retest-reports/`) or named in `--note`; docs in those folders pass · area: integration lane
 
 - **Owner-ask auto-resolve reads the STATUS word only (bug-71b3ff6a)** — a stop with no STATUS line (plain text, classified `done`) no longer resolves the session's owner asks; only an explicit done / running / waiting STATUS does, pinned by a stall test · area: manager

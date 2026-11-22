@@ -333,7 +333,7 @@ function openAccountSheet(name) {
       try {
         const r = await fetch(`/api/sessions/${encodeURIComponent(name)}/claude-account`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ account: b.dataset.acct }) });
         const j = await r.json().catch(() => ({}));
-        if (r.ok) { toast(`${name} now on ${b.dataset.acct}`, 2400); close(); }
+        if (r.ok) { const n = killedNote(j); if (n) topToast(`${name} now on ${b.dataset.acct}${n}`, 9000); else toast(`${name} now on ${b.dataset.acct}`, 2400); close(); }
         else topToast(parkRefusal(name, j, r.status).replace("Can't park", "Can't move"), 9000);
       } catch (err) { topToast(`Can't move ${name}: ${err.message}`, 9000); }
     };
@@ -1395,12 +1395,20 @@ function parkRefusal(name, j, status) {
   const rs = Array.isArray(j?.reasons) && j.reasons.length ? j.reasons : [String(j?.error || `HTTP ${status}`).replace(/^not parked: /, '')];
   return `Can't park ${name}: ${rs.join('; ')}`;
 }
+// What a forced park killed and which leases the session still holds (owner 2026-11-22), for the toast.
+function killedNote(j) {
+  const k = Array.isArray(j?.killed) ? j.killed : [], l = Array.isArray(j?.leases) ? j.leases : [];
+  const parts = [];
+  if (k.length) parts.push(`killed ${k.map((c) => `${c.pid} ${String(c.cmd || '').slice(0, 30)}`).join(', ')}`);
+  if (l.length) parts.push(`still holds lease ${l.join(', ')}`);
+  return parts.length ? `; ${parts.join('; ')}` : '';
+}
 async function parkSession(name) {
   toast(`parking ${name}…`, 4000);
   try {
-    const r = await fetch(`/api/sessions/${encodeURIComponent(name)}/park`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+    const r = await fetch(`/api/sessions/${encodeURIComponent(name)}/park`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ force: true }) });
     const j = await r.json().catch(() => ({}));
-    if (r.ok) toast(`${name} parked`, 1800);
+    if (r.ok) { const n = killedNote(j); if (n) topToast(`${name} parked${n}`, 9000); else toast(`${name} parked`, 1800); }
     else topToast(parkRefusal(name, j, r.status), 9000);
   } catch (err) { topToast(`Can't park ${name}: ${err.message}`, 9000); }
   fetchParking();

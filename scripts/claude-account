@@ -9,7 +9,8 @@
 //   claude-account swap on|off                        restart a session stopped on a limit on the next account (default on)
 //   claude-account order <id> <id> ...                preference order
 //   claude-account clear <id>                         forget a "limit reached" mark on an account
-//   claude-account move <session> <id>                resume a Claude session's conversation on another account now
+//   claude-account move <session> <id> [--safe]       resume a Claude session's conversation on another account now; kills the session's own
+//                                                     running children first (owner 2026-11-22), --safe keeps the refusal when it is busy
 //   claude-account remove <id>                        forget an account (its config dir and login stay on disk)
 const [cmd, ...rest] = process.argv.slice(2);
 const base = `http://127.0.0.1:${process.env.PORT || 7777}`;
@@ -48,7 +49,9 @@ else if (cmd === 'order') print(await api('POST', '/api/claude-accounts/settings
 else if (cmd === 'clear') print(await api('POST', '/api/claude-accounts/settings', { clearMark: rest[0] }));
 else if (cmd === 'move') {
   if (!rest[1]) die('usage: claude-account move <session> <id>');
-  const r = await api('POST', `/api/sessions/${encodeURIComponent(rest[0])}/claude-account`, { account: rest[1] });
+  const r = await api('POST', `/api/sessions/${encodeURIComponent(rest[0])}/claude-account`, { account: rest[1], ...(rest.includes('--safe') ? { safe: true } : {}) });
   console.log(`${r.session} resumed on ${r.claudeAccount}`);
+  for (const k of r.killed || []) console.log(`killed ${k.pid}${k.sigkill ? ' (SIGKILL)' : ''}: ${k.cmd}`);
+  if ((r.leases || []).length) console.log(`still holds lease: ${r.leases.join(', ')} (not released)`);
 } else if (cmd === 'remove') { await api('DELETE', `/api/claude-accounts/${encodeURIComponent(rest[0] || '')}`); console.log('removed'); }
 else die(`unknown command ${cmd} (list|add|login|use|auto|swap|order|clear|move|remove)`);

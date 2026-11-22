@@ -202,6 +202,22 @@ export function busyChildren(pid, table) {
   return (table.children.get(pid) || []).map((c) => ({ pid: c, args: table.args.get(c) || '' }))
     .filter((c) => !/mcp/i.test(c.args) && !MCODE_HELPER_RE.test(c.args.replace(/\\012|\n/g, ' ')));
 }
+// Owner-forced park (owner 2026-11-22): the processes to stop are the running work under the agent pid: its busy children and
+// everything below them, found by walking the pid tree (never a name pattern). MCP servers and the agent's helpers stay (they
+// die with the agent). Returns [{pid, args}], parents before children.
+export function ownChildTree(pid, table) {
+  const out = [], seen = new Set([pid]);
+  const walk = (p) => { for (const c of table.children.get(p) || []) { if (seen.has(c)) continue; seen.add(c); out.push({ pid: c, args: table.args.get(c) || '' }); walk(c); } };
+  for (const c of busyChildren(pid, table)) { if (seen.has(c.pid)) continue; seen.add(c.pid); out.push(c); walk(c.pid); }
+  return out;
+}
+// True when `pid` is still a descendant of `root` in `table` (re-checked right before SIGKILL: a pid may have been reused).
+export function isDescendant(root, pid, table) {
+  const par = new Map();
+  for (const [pp, cs] of table.children) for (const c of cs) par.set(c, pp);
+  for (let p = pid, n = 0; p && n < 64; p = par.get(p), n++) { if (p === root) return p !== pid; }
+  return false;
+}
 
 // Newest activity of a Claude session in ms: Claude's own idle/busy stamp, or the reporter's last turn / prompt, whichever is later.
 export function lastActivityOf({ info, reporterAt }) {
@@ -345,9 +361,13 @@ export function createParking({ file, tmux, exitWaitMs = 30000, pollMs = 500, sl
     },
     // Records the session, exits the agent with /exit, kills the tmux session only once the agent process is gone ( Claude: refuses if it
     // doesn't exit within the wait; MiniMax: falls back to Ctrl-C twice when /exit didn't take effect, then kills the tmux session anyway).
-    async park(name, facts, { claudeAlive, readPane, busyNow }) {
+    // force (owner-initiated): only "no agent / no session id" refuse; busy, running children, jobs, leases, an attached terminal
+    // do not. `interrupt()` runs before /exit (Escape + kill of the agent's own children) and returns what it killed.
+    async park(name, facts, { claudeAlive, readPane, busyNow, force = false, interrupt = null }) {
       await load();
-      const reasons = this.checks(facts);
+      let killed = [];
+      let reasons = this.checks(facts);
+      if (force) reasons = reasons.filter((x) => /^no (Claude, Codex|resumable)/.test(x));
       if (reasons.length) throw err(409, `not parked: ${reasons.join('; ')}`, reasons);
       // Dead session: the agent is already gone, so there is nothing to /exit and nothing to wait for. Record the
       // same shape as a Claude park (so resume is unchanged: new tmux + `claude --resume <id>`) with dead:true, then
@@ -360,6 +380,7 @@ export function createParking({ file, tmux, exitWaitMs = 30000, pollMs = 500, sl
         return rec;
       }
       let rec;
+      if (force && interrupt) { try { killed = (await interrupt()) || []; } catch { killed = []; } }
       if (facts.claude) {
         const { info, args } = facts.claude;
         rec = { session: name, cwd: info.cwd, sessionId: info.sessionId, claudeName: info.name || name, args: args.slice(0, 400), priority: facts.priority || null, rssMb: facts.rssMb ?? null, lastActivity: info.statusUpdatedAt || null, parkedAt: now() };
@@ -378,7 +399,8 @@ export function createParking({ file, tmux, exitWaitMs = 30000, pollMs = 500, sl
             menu = true;
             const now_ = busyNow ? await busyNow() : (facts.busy || []);
             const real = now_.filter((c) => !isWatcher(c.args));
-            if (!real.length) await tmux.sendText(name, '1');   // only watcher loops: stopping them loses nothing
+            if (force) await tmux.sendText(name, '1');           // owner forced: exit and stop the tasks
+            else if (!real.length) await tmux.sendText(name, '1');   // only watcher loops: stopping them loses nothing
             else {
               await tmux.sendText(name, '3');                    // Stay: the session keeps running untouched
               delete data.parked[name];
@@ -394,6 +416,7 @@ export function createParking({ file, tmux, exitWaitMs = 30000, pollMs = 500, sl
           throw err(500, 'Claude did not exit within the wait; session left running, nothing killed');
         }
         await tmux.kill(name);
+        if (killed.length) rec = { ...rec, killed };
       } else {
         // MiniMax and Codex: park = record {agent, cwd, args, priority, rssMb, parkedAt} (+ sessionId for Codex, which
         // resumes with `codex resume <id>`); the exit keystroke, the wait, the Ctrl-C fallback and the kill are the same.
