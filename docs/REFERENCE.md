@@ -547,7 +547,9 @@ Every tick (also healthy ones) it first removes stale test leftovers: directorie
 **Nightly RTSP check (owner, 2026-11-11).** `systemd/rtsp-nightly.timer` (05:45 UTC) starts a MiniMax session through `scripts/rtsp-nightly/run.sh`
 that runs `scripts/agent/rtsp_replace.py`: every rtsp `DEVICE<n>_VIDEO` is probed (`rtsp_check.py`); a dead public test stream or loopback
 `smoke` source is replaced from the vetted `config/rtsp-pool.json` (host lease, full host-config payload, backup, rollback, at most 3 a night),
-an IP camera is only reported. Default mode `dry`; `<state>/rtsp-nightly/mode` = `live` is the manager's switch. The script parses
+an IP camera is only reported. A device **without a source** and a **YouTube device** (its source is in `DEVICE_YOUTUBE_URL`, not
+`DEVICE_VIDEO`) are not down streams: the summary reads the three apart (`down`, `no_source`, `not_managed`), the report carries the
+same split in a `summary` block, and the exit code follows it (2026-11-22). Default mode `dry`; `<state>/rtsp-nightly/mode` = `live` is the manager's switch. The script parses
 its flags (`--help` prints the usage and exits, an unknown flag is an error and nothing runs) and a **dry** run writes
 `report-<date>-dry.json` beside the day's live report instead of replacing it, so a read-only run never destroys the night's evidence.
 After it installed a replacement it also reads back the title the app shows for the device it renamed

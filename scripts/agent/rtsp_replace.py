@@ -378,7 +378,11 @@ def run(mode, timeout=10):
             y = rc.source_luma(e['url'], 20, ssh_map.get(e['host']))
             row['source_luma'] = None if y is None else round(y, 1)
             black_src = y is not None and y < rc.BLACK_LUMA
-        if file_black:
+        if e['kind'] == 'youtube':
+            # A YouTube device (its source is in DEVICE_YOUTUBE_URL) is not an RTSP stream: the nightly has nothing
+            # to probe and nothing to replace, and it is not a down stream (2026-11-22).
+            row['action'] = 'report: a YouTube device (its source is in DEVICE_YOUTUBE_URL): the nightly does not manage it'
+        elif file_black:
             # A file is only reported, never changed, and never blamed on the capture side (owner, 2026-11-13).
             # The clip's own picture is measured now (bug-59664715), so the line says what was seen instead of
             # assuming a cause: the clip's own dark frame, or a tile that shows something else.
@@ -539,6 +543,21 @@ def report_path(day, mode):
     return path
 
 
+def summary(rows):
+    """The night's numbers. A device WITHOUT a source is not a down stream: there is no stream to fix (2026-11-22).
+    A device the nightly does not manage (a YouTube device) is not one either."""
+    by = {}
+    for r in rows:
+        by.setdefault(r['kind'], {}).setdefault(r['status'], 0)
+        by[r['kind']][r['status']] += 1
+    return {'streams': len(rows),
+            'down': sum(1 for r in rows if r['status'] not in rc.OK_STATES and r['status'] != 'no_source'),
+            'no_source': sum(r['status'] == 'no_source' for r in rows),
+            'not_managed': sum(r['status'] == 'not_managed' for r in rows),
+            'unverified': sum(r['status'] == 'unverified' for r in rows),
+            'by_kind': by}
+
+
 def main(argv):
     # A real parser: an unknown flag used to be ignored and the night ran anyway (bug: `--help` ran a
     # dry pass and overwrote the day's live report). Now `--help` prints the usage and exits, and an
@@ -553,18 +572,15 @@ def main(argv):
         return apply_one(a.apply[0], a.apply[1], a.apply[2], a.apply[3], a.out)  # pid = the chosen-source JSON file
     mode = a.mode
     rep = run(mode)
+    rep['summary'] = summary(rep['streams'])
     os.makedirs(STATE, exist_ok=True)
     day = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d')
     with open(report_path(day, mode), 'w') as f:
         f.write(rc.redact(json.dumps(rep, indent=2)))
     print(f"mode={mode}\n" + rc.table([{**r, 'status': f"{r['status']} -> {r['action']}"} for r in rep['streams']]) + ''.join(f'\nERROR {e}' for e in rep['errors']))
-    bad = [r for r in rep['streams'] if r['status'] not in rc.OK_STATES]
-    unv = sum(r['status'] == 'unverified' for r in rep['streams'])
-    by = {}
-    for r in rep['streams']:
-        by.setdefault(r['kind'], {}).setdefault(r['status'], 0)
-        by[r['kind']][r['status']] += 1
-    print(f"{len(rep['streams'])} streams, {len(bad)} down, {unv} unverified; by kind: {json.dumps(by)}")
+    s = rep['summary']
+    print(f"{s['streams']} streams, {s['down']} down, {s['no_source']} without a source, {s['not_managed']} not managed,"
+          f" {s['unverified']} unverified; by kind: {json.dumps(s['by_kind'])}")
     capc = {}
     for r in rep['streams']:
         capc[r.get('capture', 'unknown')] = capc.get(r.get('capture', 'unknown'), 0) + 1
@@ -576,7 +592,7 @@ def main(argv):
         print('no stream devices found' + (' (inventory errors above)' if rep['errors'] else '') + f' ({walked})')
     else:
         print(walked)
-    return 1 if (bad or rep['errors']) else 0
+    return 1 if (rep['summary']['down'] or rep['errors']) else 0
 
 
 if __name__ == '__main__':

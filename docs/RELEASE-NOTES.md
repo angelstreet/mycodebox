@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The nightly says what is down instead of counting every device without a source** — a device whose `DEVICE_VIDEO` is empty has no stream to repair (it is reported, never changed), and a YouTube device (its source lives in `DEVICE_YOUTUBE_URL`, not `DEVICE_VIDEO`) was read as a down stream every night while its tile played: the night of 2026-11-22 reported "8 down" when nothing was broken, which reads like 8 broken streams. The summary now reads "N streams, X down, Y without a source, Z not managed", the report carries the same split in a `summary` block, and the exit code follows it (0 when no stream is down) · area: rtsp-nightly
+
 - **The goal check no longer re-asks a reply it already accepted** — the server can re-stamp when a finished turn ended (`doneAt`), and the gate took the later stamp for a new done turn, so an accepted reply was asked the goal question again about 10 min later, without limit (asks are not bounces). The gate now also remembers the accepted closing text (whitespace-normalized): the same text is the same turn · area: done-check
 
 - **The manager no longer re-queues a branch the lane just answered "already in main"** — a session whose closing line named a branch that was not its own (it waited on that request) got the same integration queued under its name every ~75 s, each ending "nothing new"; the merge hand-off now skips a branch with an already-merged request in the last 30 min and logs `merge_handoff_skipped` · area: manager
