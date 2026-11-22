@@ -2896,6 +2896,13 @@ body.reading #diskBanner{ display:none !important; }
 .cell.rd-on .reader .rq{ margin:1.4em 0 1.2em; padding:2px 6px 2px 2ch; text-indent:-2ch; background:#3a3a3a; color:#fff; white-space:pre-wrap; overflow-wrap:anywhere; }
 .cell.rd-on .reader .rq::before{ content:'❯ '; color:#949494; }
 /* the owner's own prompts in blue, the AI side's (manager, checks, lane) gray with their sender (owner 2026-11-22) */
+/* consecutive tool calls: one collapsed group (owner 2026-11-22) */
+.cell.rd-on .reader .rd-tools{ margin:.6em 0; border-left:2px solid var(--line-2); padding-left:8px; }
+.cell.rd-on .reader .rd-tools > summary{ cursor:pointer; color:var(--ink-3); font-size:.88em; list-style:none; user-select:none; }
+.cell.rd-on .reader .rd-tools > summary::-webkit-details-marker{ display:none; }
+.cell.rd-on .reader .rd-tools > summary::before{ content:'\25B8  '; }
+.cell.rd-on .reader .rd-tools[open] > summary::before{ content:'\25BE  '; }
+.cell.rd-on .reader .rd-tools > pre{ margin:.4em 0 0; white-space:pre-wrap; overflow-wrap:anywhere; font-size:.88em; color:var(--ink-2); }
 .cell.rd-on .reader .rq.me{ background:#1c3054; }
 .cell.rd-on .reader .rq-by{ display:block; text-indent:0; font-size:.78em; color:#9aa3ad; letter-spacing:.02em; }
 /* the owner's message looks as in the terminal: ❯ and a gray background behind the text (owner 2026-11-20); the AI's answer is plain text */
