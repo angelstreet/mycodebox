@@ -83,6 +83,9 @@ STATUS: done — catch-up fixed · goal: achieved · evidence: int-1a1cbfa071dec
   assert.equal(ok.kind, 'accepted');
   assert.ok(ok.evidence.includes('file') && ok.evidence.includes('run id'));
   assert.equal(await g.evaluate({ name: 'lease-fix', text: good, doneAt: t }), null, 'accepted: quiet');
+  // bug-724947cb: the server re-stamps doneAt of the same finished turn; the same text is not asked again
+  assert.equal(await g.evaluate({ name: 'lease-fix', text: good, doneAt: t + 10 * 60e3 }), null, 'same text, later doneAt: quiet');
+  assert.equal(await g.evaluate({ name: 'lease-fix', text: good.replace(/\n/g, '\n  '), doneAt: t + 20 * 60e3 }), null, 'rewrapped pane text: quiet');
   const snap = await g.snapshot();
   assert.equal(snap.sessions['lease-fix'].bouncedToday, 1, 'the question itself is not a bounce; the rejected reply is');
 });
