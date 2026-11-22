@@ -18,7 +18,8 @@ as `framemd5`: the md5s must differ and the pts must advance, otherwise the stre
 on a black leader (seconds of identical frames, e.g. Plan 9 on `lenovo-local-hd`) is probed again 60 s in, so a film that plays
 is not called frozen (found and fixed 2026-11-11). Statuses: `ok`, `no_connect`,
 `no_video`, `frozen`, `timeout`, `unverified` (a loopback source on a host with no ssh alias: only the host can reach it),
-`not_managed` (a YouTube device: its source is in `DEVICE_YOUTUBE_URL`, so the nightly has no source to probe).
+`not_managed` (a YouTube device: its source is in `DEVICE_YOUTUBE_URL`, so the nightly has no source to probe),
+`flaky` (it failed once and played on the confirming re-probe: it plays, so it is not a down stream).
 `rtsp_check.py URL...` checks URLs, `--inventory` checks every `DEVICE<n>_VIDEO=rtsp(s)://` of the hosts of the configured servers
 (read through `GET /server/settings/host-config`). `--json` for JSON. Exit 0 all ok, 1 not ok, 2 nothing checked. Every printed
 or journaled string goes through `redact()` (`user:pass@` becomes `***@`).
@@ -613,7 +614,8 @@ the live pass and nothing else: no `replace`, no `rolled_back`, no `lease_not_gr
   does not touch).
   - That dry run read `vpt-nipogi/DEVICE10` ("FR Movie 7 — Pluto TV Dating") as a timeout that **played on the confirming
     re-probe** (nothing touched, its tile is ok) and read the pool's `smoke` as `frozen` under the parallel load of 103 probes;
-    re-probed alone from `vpt-pi4` it plays (h264 640x360). Both are transients of a loaded host, not dead sources.
+    re-probed alone from `vpt-pi4` it plays (h264 640x360). Both are transients of a loaded host, not dead sources. Such a
+    channel now reads the status `flaky` (it plays), so it is not counted as down (2026-11-22).
 
 ## Private config (not in the repo)
 

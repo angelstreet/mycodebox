@@ -444,6 +444,8 @@ def run(mode, timeout=10):
         elif budget <= 0:
             row['action'] = 'report: replacement budget used up tonight'
         elif not black_src and (confirmed := confirm_down(e, ssh_map, timeout)) in rc.OK_STATES:
+            # It failed once and played on the confirming re-probe: it plays, so it is not a down stream (2026-11-22).
+            row['status'] = 'flaky'
             row['action'] = f"report: {r['status']} once, played on the re-probe (slow or flaky), nothing touched"
         elif not black_src and confirmed == 'frozen':
             row['action'] = 'report: frozen picture confirmed (could be a still or radio channel), not changed automatically'

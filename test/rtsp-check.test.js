@@ -505,9 +505,15 @@ test('a stream that fails once but plays on the slower re-probe, or shows a froz
   w.E.RTSP_CHANNEL_LISTS = path.join(dir, 'l.m3u');
   const r = await py(REPLACE, ['--mode', 'live'], w.E);
   w.close();
-  assert.match(r.stdout, /DEVICE1\s+hls\s+no_connect -> report: no_connect once, played on the re-probe/, r.stdout);
+  assert.match(r.stdout, /DEVICE1\s+hls\s+flaky -> report: no_connect once, played on the re-probe/, r.stdout);
   assert.match(r.stdout, /DEVICE2\s+hls\s+frozen -> report: frozen picture confirmed/);
+  // The flaky one plays, so it is not a down stream; the frozen one is (2026-11-22).
+  assert.match(r.stdout, /2 streams, 1 down, 0 without a source, 0 not managed, 0 unverified/, r.stdout);
   assert.equal(w.posts.length, 0);
+  const day = new Date().toISOString().slice(0, 10);
+  const rep = JSON.parse(readFileSync(path.join(w.state, 'rtsp-nightly', `report-${day}.json`), 'utf8'));
+  assert.equal(rep.streams.find((s) => s.device === 'DEVICE1').status, 'flaky');
+  assert.equal(rep.summary.down, 1);
 });
 
 test('a 502 blip from the server is retried: the night still reads its hosts', async () => {

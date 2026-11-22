@@ -25,8 +25,9 @@ from concurrent.futures import ThreadPoolExecutor
 FFPROBE = os.environ.get('RTSP_CHECK_FFPROBE', 'ffprobe')
 FFMPEG = os.environ.get('RTSP_CHECK_FFMPEG', 'ffmpeg')
 CRED = re.compile(r'(?i)(rtsps?|https?|rtmp|udp)://[^/\s@]*@')
-OK_STATES = ('ok', 'unverified', 'not_managed')  # unverified = could not be probed from here, not a failure;
-# not_managed = a device whose source the nightly does not manage (a YouTube device): not a failure either
+OK_STATES = ('ok', 'unverified', 'not_managed', 'flaky')  # unverified = could not be probed from here, not a failure;
+# not_managed = a device whose source the nightly does not manage (a YouTube device): not a failure either;
+# flaky = it failed once and played on the confirming re-probe (the nightly gives it that status): not a failure either
 LOOPBACK = {'127.0.0.1', 'localhost', '::1'}
 FILE_LEADER_SEEK = int(os.environ.get('RTSP_FILE_LEADER_SEEK', '60'))  # seconds to skip past a film's black leader
 
