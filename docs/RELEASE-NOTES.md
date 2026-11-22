@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **Fingerprint gate reads the real retest report verdict (owner 2026-11-22)** — the lane required **PASS** on the first non-empty line, but `fingerprint_retest.py` reports start with a title (or frontmatter) and carry the verdict on line 3, so a passing retest was returned. The verdict is now the first line within the first 15 lines containing **PASS** or **FAIL**; FAIL first or none still blocks · area: integration lane
+
 - **Park / move on the owner's word kills the session's own running work (owner 2026-11-22)** — the dashboard Park button, the account switch and `claude-account move` used to answer "Can't park …: busy, background job, running child process". They now end the turn, stop only the descendants of that session's Claude pane (SIGTERM, SIGKILL after 4 s) and park / resume anyway; the toast and CLI name the killed pids and the leases still held (not released). `--safe` and the automatic limit swap keep the refusal · area: sessions
 
 - **Fingerprint algorithm merge gate (owner 2026-11-22)** — in the virtualpytest lane a change to the paths listed in `scripts/review/fingerprint_algorithm_paths.txt` is returned unless a manager approved it (`--approved-by manager`) and a no-regression retest report is in the diff (`docs/agent/navigation/retest-reports/`) or named in `--note`; docs in those folders pass · area: integration lane

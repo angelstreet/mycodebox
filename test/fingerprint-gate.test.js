@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createIntegrationLane } from '../integration-lane.js';
-import { fingerprintGate, parseFingerprintPaths, matchesFingerprintPath } from '../merge-policy.js';
+import { reportVerdict, fingerprintGate, parseFingerprintPaths, matchesFingerprintPath } from '../merge-policy.js';
 import { makeWorld } from './helpers-lane.js';
 import { tmp } from './helpers-tmp.js';
 
@@ -85,4 +85,31 @@ test('the list is read from the target repo at merge time', async () => {
 
 test('docs state the rule', () => {
   for (const f of ['AGENTS.md', 'docs/REFERENCE.md']) assert.match(fs.readFileSync(new URL(`../${f}`, import.meta.url), 'utf8'), /fingerprint_algorithm_paths\.txt/);
+});
+
+const RR = 'docs/agent/navigation/retest-reports/';
+test('verdict = first line in the first 15 lines with **PASS** or **FAIL**', () => {
+  assert.match(reportVerdict('# Fingerprint retest x\n\n**PASS** · corpus 10\n'), /PASS/);
+  assert.match(reportVerdict('---\nbranch: x\n---\n\n# Proof\n\n**PASS** ok\n'), /PASS/);
+  assert.match(reportVerdict('# t\n**FAIL** a\n**PASS** b\n'), /FAIL/);
+  assert.equal(reportVerdict('# t\nno verdict\n'), '');
+  assert.equal(reportVerdict('x\n'.repeat(15) + '**PASS**\n'), '');
+});
+
+test('real report shapes through the lane: title+blank+PASS and frontmatter pass; FAIL-first, late and missing verdicts do not', async () => {
+  const w = makeWorld();
+  const shapes = {
+    t: ['# Fingerprint retest feat-x\n\n**PASS** · corpus 120 · no regression\n', 'merged'],
+    y: ['---\ntitle: proof\n---\n\n# Proof\n\n**PASS** all\n', 'merged'],
+    f: ['# Fingerprint retest\n\n**FAIL** · 3 regressions\n', 'returned'],
+    ff: ['# Fingerprint retest\n**FAIL** x\n**PASS** y\n', 'returned'],
+    n: ['# Fingerprint retest\n\nsome text\n', 'returned'],
+  };
+  for (const [k, [txt]] of Object.entries(shapes)) w.branch('s' + k, { [ALGO.replace('matcher', 'm' + k)]: k + '\n', [`${RR}2026-11-22-${k}.md`]: txt });
+  const { lane, go } = mk(w);
+  for (const [k, [, want]] of Object.entries(shapes)) {
+    const r = await go({ branch: 's' + k, session: 'manager', approvedBy: 'manager' });
+    assert.equal(r.state, want, k + ' ' + JSON.stringify(r));
+  }
+  lane.stop();
 });
