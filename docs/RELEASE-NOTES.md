@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A stale owner item resolves itself (bug-71b3ff6a)** — the owner answers in the session pane and nothing told the ledger, so asks stayed "waiting for you" for hours after the session built, merged and closed. A later stop whose STATUS is done / running / waiting (not on the owner) now appends `state: resolved` (reason, at, `via: session-moved-on`) to `manager-owner-asks.jsonl`; the open view, `manager-status-scan.sh` and the stale list drop it · area: manager
+
 - **Pictures and HTML mockups open from the reader, on any device** — a file an agent sent (SendUserFile) or a picture / page path it wrote showed as a bare name, and the file sat on codebox. The reader now shows pictures inline (click: full size in a new tab) and gives pages, PDFs and videos an "open ↗" link; the dashboard serves them at `/files/<path>` (media types only, home folder and scratchpads only, no dot folder except uploads, HTML sandboxed). Shell cache `ghosty-shell-v181` · area: dashboard
 
 - **Pasted check messages show as the AI's, not yours** — the session file stores a long prompt as `<pasted_content id="…">…`, so the start of the text never matched the logged send and the done check's "Status check:" messages showed in the owner's blue. The sender match now reads the text inside the wrapper, and "Status check:" joins the known check phrases · area: dashboard

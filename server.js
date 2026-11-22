@@ -192,7 +192,7 @@ import { appendRegret, readRegrets, effectiveRegrets, regretKey } from './regret
 import { createWakesView, startWakesLogger } from './manager-wakes.js';
 import { wakeFacts, quotaPercents } from './wake-shadow.js';
 import { createTranscriber, extFor, MAX_AUDIO } from './transcribe.js';
-import { readOpenAsks, readOpenAsksReport, recordOwnerAnswer } from './owner-asks.js';
+import { readOpenAsks, readOpenAsksReport, recordOwnerAnswer, resolveMovedOn } from './owner-asks.js';
 import { createAskFold } from './ask-fold.js';
 import { createAskGuard } from './ask-guard.js';
 import { createOwnJobs, jobPids, parkedDeps } from './own-jobs.js';
@@ -3501,6 +3501,8 @@ server.listen(PORT, HOST, async () => {
     readyStore,   // ready windows: the manager answers a hardware-step ask while one covers the session
     leaseView: () => leaseSource.view(true),   // the manager answers a lease question from this (lease-ask.js), never escalates it
     onStatus: onStopStatus,
+    onAskMovedOn: (session, status, text) => resolveMovedOn(join(STATE_DIR, 'manager-owner-asks.jsonl'), session, { status, text })
+      .then((ids) => { if (ids.length) { logEvent({ type: 'owner-ask-moved-on', session, ids }); askFold.refresh(); } }).catch((e) => console.error(`[owner-asks] moved-on: ${e.message}`)),
     hasOpenAsk: (session) => !!askFold.openAskOf(session),   // a stop blocked on an owner answer already in the ledger is a system wait
     // a lease, deploy or needs-manager stop is a manager item: one feed event for the manager agent, no owner push (ops-ask.js)
     onManagerItem: (it) => {
