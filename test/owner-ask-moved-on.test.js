@@ -30,3 +30,19 @@ test('needs-owner / blocked / failed, a waiting on the owner, a fresh ask and a 
   assert.deepEqual(await resolveMovedOn(f, 'S3', { status: 'done', now }), []);
   assert.deepEqual(await ids(f), ['Q2', 'Q1']);
 });
+
+test('a merged integration of the session branch resolves its open ask with the branch in the reason', async () => {
+  const f = seed([ask(1), ask(2)]);
+  assert.deepEqual(await resolveMovedOn(f, 'S1', { status: 'merged', text: 'fix/x-branch', now }), ['Q1']);
+  assert.deepEqual(await ids(f), ['Q2']);
+  assert.match((await readLedger(f)).records.at(-1).reason, /branch fix\/x-branch was merged/);
+});
+
+test('integration notify calls onMerged for a real merge of the session branch, not for returned / already-merged', async () => {
+  const { createIntegrationNotify } = await import('../integration-notify.js');
+  const got = [];
+  const notify = createIntegrationNotify({ onMerged: (s, r) => got.push([s, r.id]) });
+  const r = { id: 'int-1', session: 'S1', branch: 'fix/x', target: 'main', state: 'merged', sha: 'a'.repeat(40) };
+  await notify(r); await notify({ ...r, id: 'int-2', state: 'returned' }); await notify({ ...r, id: 'int-3', alreadyMerged: true });
+  assert.deepEqual(got, [['S1', 'int-1']]);
+});

@@ -498,7 +498,7 @@ export function staleAsks(records, { now = Date.now(), hours = STALE_ASK_HOURS }
 // is done / running / waiting (not needs-owner, needs-manager, blocked, failed) proves the session is no longer waiting on the
 // owner: its open asks, written before that turn, are resolved with the reason. A `waiting` that names the ask id (or says it
 // waits for the owner) is the ask itself, so it keeps the ask open.
-const MOVED_ON = /^(?:done|ok|complete|completed|finished|running|waiting)$/i;
+const MOVED_ON = /^(?:done|ok|complete|completed|finished|running|waiting|merged)$/i;   // `merged`: the session's integration request reached the target (integration-notify onMerged)
 export async function resolveMovedOn(file, session, { status = '', text = '', now = new Date(), minAgeMs = 30_000 } = {}) {
   if (!session || !MOVED_ON.test(String(status).trim())) return [];
   const t = now instanceof Date ? now.getTime() : Number(now);
@@ -511,7 +511,7 @@ export async function resolveMovedOn(file, session, { status = '', text = '', no
       if (!Number.isFinite(at) || t - at < minAgeMs) continue;   // the turn that raised the ask is not a later turn
       if (/^waiting$/i.test(String(status).trim()) && (String(text).includes(a.id) || /\b(?:owner|answer|jev)\b/i.test(String(text)))) continue;
       await appendFile(file, JSON.stringify({ at: new Date(t).toISOString(), id: a.id, state: 'resolved', via: 'session-moved-on', session,
-        reason: `session ${session} moved past it: a later turn's STATUS is ${String(status).toLowerCase()}` }) + '\n');
+        reason: /^merged$/i.test(status) ? `session ${session} acted on it: its branch ${String(text).slice(0, 80) || '?'} was merged` : `session ${session} moved past it: a later turn's STATUS is ${String(status).toLowerCase()}` }) + '\n');
       out.push(a.id);
     }
     return out;

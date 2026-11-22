@@ -3241,6 +3241,8 @@ const integrationNotify = createIntegrationNotify({
   digest: (item) => queueDigest(`integration:${item.requestId}:${item.state}`, { title: item.title, body: item.body, url: item.url, meta: { session: item.session || 'lane', case: item.state, question: `${item.branch} -> ${item.target}` } }),
   quiet: (state) => integrationDigestOn() && isQuietState(state),
   managerEvent: (e) => managerEvents.record(e),
+  onMerged: (session, r) => resolveMovedOn(join(STATE_DIR, 'manager-owner-asks.jsonl'), session, { status: 'merged', text: String(r.branch || ''), now: new Date() })
+    .then((ids) => { if (ids.length) { logEvent({ type: 'owner-ask-moved-on', session, ids, merged: r.id }); askFold.refresh(); } }).catch((e) => console.error(`[owner-asks] merged: ${e.message}`)),
   afterSend: (session, r) => { if (integrationOwnJobs?.jobOf(session)?.id === r.id) integrationOwnJobs.forget(session); },
   defer: (session, r, text) => !!pendingWakes.add({ session, key: `integration:${r.id}:${r.state}:${session}`, text, by: 'integration' }).queued,   // not stopped / not listed now: kept for the next stop
   log: (r) => logEvent(r),
