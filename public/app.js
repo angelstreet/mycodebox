@@ -296,7 +296,8 @@ function agentBadgeHtml(name, { model = true } = {}) {
   const m = (state.status[name] || {}).model;
   // the model is the badge's tooltip; the nav list shows no model text (no room), cards and rows show it when they have space
   // the nav list has no room for the account either (its label ran into the age column, owner 2026-11-12): it goes in the tooltip there
-  const acct = model ? acctBadgeHtml(name) : '', acctTip = model ? '' : acctLabelOf(name);
+  // the account is always in the tooltip too: a grid card of several hides the label to save room (owner 2026-11-22)
+  const acct = model ? acctBadgeHtml(name) : '', acctTip = acctLabelOf(name);
   const tip = [m, acctTip && `account: ${acctTip}`].filter(Boolean).join('\n');
   return `<span class="agent ${a}"${tip ? ` title="${escapeHtml(tip)}"` : ''}>${AGENT_LABEL[a] || a}</span>${acct}${m && model ? `<span class="agent-model"> · ${escapeHtml(m)}</span>` : ''}${reporterMarkHtml(name)}`;
 }
