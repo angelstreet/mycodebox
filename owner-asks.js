@@ -491,3 +491,29 @@ export function staleAsks(records, { now = Date.now(), hours = STALE_ASK_HOURS }
     .filter((a) => Number.isFinite(a.ageH) && a.ageH >= hours)
     .sort((x, y) => y.ageH - x.ageH);
 }
+
+// ---- a session that moved past its ask closes it (bug-71b3ff6a, 2026-11-22) ----
+// The owner answers in the session pane and nothing told the ledger: four asks stayed "waiting for you" for 3+ hours after the
+// sessions had built, merged and closed. The stop record already carries the turn's STATUS word, so a later turn whose STATUS
+// is done / running / waiting (not needs-owner, needs-manager, blocked, failed) proves the session is no longer waiting on the
+// owner: its open asks, written before that turn, are resolved with the reason. A `waiting` that names the ask id (or says it
+// waits for the owner) is the ask itself, so it keeps the ask open.
+const MOVED_ON = /^(?:done|ok|complete|completed|finished|running|waiting)$/i;
+export async function resolveMovedOn(file, session, { status = '', text = '', now = new Date(), minAgeMs = 30_000 } = {}) {
+  if (!session || !MOVED_ON.test(String(status).trim())) return [];
+  const t = now instanceof Date ? now.getTime() : Number(now);
+  return withFileLock(file, async () => {
+    const { records } = await readLedger(file);
+    const out = [];
+    for (const a of openAsksFromRecords(records)) {
+      if (a.session !== session) continue;
+      const at = Date.parse(a.at);
+      if (!Number.isFinite(at) || t - at < minAgeMs) continue;   // the turn that raised the ask is not a later turn
+      if (/^waiting$/i.test(String(status).trim()) && (String(text).includes(a.id) || /\b(?:owner|answer|jev)\b/i.test(String(text)))) continue;
+      await appendFile(file, JSON.stringify({ at: new Date(t).toISOString(), id: a.id, state: 'resolved', via: 'session-moved-on', session,
+        reason: `session ${session} moved past it: a later turn's STATUS is ${String(status).toLowerCase()}` }) + '\n');
+      out.push(a.id);
+    }
+    return out;
+  });
+}

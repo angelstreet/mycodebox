@@ -122,6 +122,7 @@ let stopFacts = null;                                              // injected: 
 let ownJobs = null;                                                 // injected: own-jobs.js watcher { watch, forget, progressOf } (round 9, item 11). Unset = jobs are not watched
 let hasOpenAskHook = () => false;                                   // injected: (session) -> the owner-asks ledger has an open ask for it
 let managerItemHook = () => {};                                      // injected: ({ session, id, kind: 'lease'|'deploy', case, question, reason }) -> manager event (no owner push)
+let askMovedHook = () => {};                                          // injected: (session, status, text) -> closes the session's open owner asks when its STATUS moved on
 let statusHook = () => {};                                          // injected: (session, status, text) for a logged stop whose STATUS is waiting / blocked
 let notifyHold = () => {};                                          // injected: (session, 'hold'|'resume', reason) -> owner alert
 
@@ -131,7 +132,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 export const stopKey = (text) => String(text || '').replace(/\s+/g, '').slice(-400);
 const hash = (s) => createHash('sha1').update(s).digest('hex').slice(0, 10);
 
-export async function initManager({ onJudgeDown, managerSessions, credits, onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context, onHandoff = () => {}, onMergeDecision: mergeHook, onMergeCancelled: cancelHook, mergeJev: mergeJevFn, decideContext: decideCtx, onDigest: digestHook, onNotice, leaseView, onStatus, onManagerItem, hasOpenAsk, ownJobs: ownJobsDep, integration: integrationDep, readyStore, stopFacts: stopFactsDep } = {}) {
+export async function initManager({ onJudgeDown, managerSessions, credits, onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context, onHandoff = () => {}, onMergeDecision: mergeHook, onMergeCancelled: cancelHook, mergeJev: mergeJevFn, decideContext: decideCtx, onDigest: digestHook, onNotice, leaseView, onStatus, onManagerItem, hasOpenAsk, onAskMovedOn, ownJobs: ownJobsDep, integration: integrationDep, readyStore, stopFacts: stopFactsDep } = {}) {
   await mkdir(STATE_DIR, { recursive: true });
   try {
     const saved = JSON.parse(await readFile(CONFIG_FILE, 'utf8'));
@@ -182,6 +183,7 @@ export async function initManager({ onJudgeDown, managerSessions, credits, onOwn
   if (onStatus) statusHook = onStatus;
   if (onManagerItem) managerItemHook = onManagerItem;
   if (hasOpenAsk) hasOpenAskHook = hasOpenAsk;
+  if (onAskMovedOn) askMovedHook = onAskMovedOn;
   if (ownJobsDep) ownJobs = ownJobsDep;
   if (integrationDep) integration = integrationDep;
   if (stopFactsDep) stopFacts = stopFactsDep;
@@ -1516,6 +1518,7 @@ export function observe(s) {
       jev: jevOut, wouldSend: ws.send, why: ws.why, confidence, excerpt: stall.excerpt,
       ...(final.handoff ? { handoff: final.handoff } : {}),
     });
+    if (!isManagerSession(s.name) && /^(?:done|ok|complete|completed|finished|running|waiting)$/i.test(final.status || (final.case === 'done' ? 'done' : ''))) { try { askMovedHook(s.name, final.status || 'done', String(final.question || '').slice(0, 300)); } catch (e) { console.error('[manager] ask moved on', e.message); } }
     if (/^(?:waiting|running|blocked)$/i.test(final.status || '')) { try { statusHook(s.name, String(final.status).toLowerCase(), String(final.question || '').slice(0, 300)); } catch (e) { console.error('[manager] onStatus', e.message); } }
     // a session that waits on a job of its own is woken when the job ends (own-jobs.js); a deploy it queued is followed the same way
     // a blocked STATUS that names a job in words only: it is the session's own when the agent has a live child process at the stop
