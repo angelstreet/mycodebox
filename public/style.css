@@ -304,6 +304,9 @@ body{ display:flex; flex-direction:column; }
 .cell.done::before{ content:''; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--done); z-index:2; pointer-events:none; }   /* a marker drawn inside, not a thicker border: the card's content never shifts when the state changes */
 /* A grid of several cards (owner 2026-11-22): a lean header. No reporter ⚡, no account label (it is in the agent badge's tooltip), no priority
    chip, no worktree fork: the branch says enough. The single card and the one-session view keep them. */
+/* a grid of several cards: the name is not capped; the project chip is hidden when it or the name would be cut (fitProj, owner 2026-11-22) */
+.grid-pane:not(.size-1) .cell .h .nm{ max-width:none; flex:0 1 auto; }
+.grid-pane:not(.size-1) .cell.proj-off .h .proj{ display:none; }
 .cell .h .agent-acct{ display:none; }   /* every card header: the account is in the agent badge's tooltip (owner 2026-11-22) */
 .grid-pane:not(.size-1) .cell .h .rp, .grid-pane:not(.size-1) .cell .h .prio,
 .grid-pane:not(.size-1) .cell .h .wt{ display:none; }
