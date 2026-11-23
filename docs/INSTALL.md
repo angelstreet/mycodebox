@@ -24,6 +24,7 @@ Use the installed machine's paths and service user; do not copy a previous deplo
 3. Check `tailscale status` and `tailscale ip -4` locally. Do not paste their private output into repository files or public issues.
 4. Restrict inbound access to the owner or explicitly trusted operators through the tailnet policy. Existing allow-all rules can make a new restrictive grant ineffective: review the complete policy, not just the new rule. See [Tailscale grants](https://tailscale.com/docs/features/access-control/grants) and [examples](https://tailscale.com/docs/reference/examples/grants).
 5. Choose one network mode below. Do not open router/firewall ports to the internet or enable Tailscale Funnel.
+6. Check the path is direct: `tailscale ping <server>` from the client must answer `via <ip>:<port>`, not `via DERP(...)`. A relayed path adds 0.5-2.5 s to every dashboard request. If the server sits behind a stateless provider firewall (for example a Hetzner Robot firewall, which lets TCP replies back in through an `ack` rule but has no UDP equivalent), `tailscale netcheck` on the server shows `UDP: false`; allow incoming UDP to Tailscale's port (41641, or the node's `--port`). This only exposes WireGuard, not the dashboard.
 
 The recommended mode allows trusted clients to reach HTTPS on TCP 443 through Serve; Node listens only on `127.0.0.1:7777`. Direct mode instead needs policy access to TCP 7777 and, if configured, 7443 on the node. Other tailnet users must not receive access merely because they share the network.
 
