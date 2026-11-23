@@ -24,7 +24,7 @@ import { audioChipHtml, wireAudioChips } from '/audio-chip.js';
 import { copyPromptButtonHtml, wireCopyPrompt } from '/copy-prompt.js';
 import { uploadOne, uploadType, UPLOAD_ACCEPT, UPLOAD_HINT } from '/upload.js';
 import { renderMd } from '/md.js';
-import { decideReaderPaint } from '/reader-paint.js';
+import { decideReaderPaint, autoFullDue, autoFullDone } from '/reader-paint.js';
 import { localScrollEnters, localScrollExits, flingVelocity, flingStep, ENTER_PX } from '/local-scroll.js';
 import { chipModel, machinesOf, holdingsOf, blocksDeploy, shortResource, ttlText } from '/platforms.js';
 import { displayStateOf, STATE_RANK, STATE_LABEL, isRoutineAlert } from '/state.js';
@@ -1004,7 +1004,7 @@ function connectSession(session) {
           entry.preloaded = true;
           const c = state.replies.get(msg.session) || { hash: null, at: 0, text: '' };
           state.replies.set(msg.session, c);
-          if (!c.autoFull) { c.autoFull = true; c.wantFull = true; loadTranscript(msg.session, c).then(() => { const cur = cardCell(msg.session); if (cur && state.smoothScroll) paintReader(cur, msg.session); }); }   // painted while hidden: the first scroll shows it at once
+          if (autoFullDue(c)) { c.autoFull = true; c.wantFull = true; loadTranscript(msg.session, c).then((ok) => { autoFullDone(c, ok); const cur = cardCell(msg.session); if (cur && state.smoothScroll) paintReader(cur, msg.session); }); }   // painted while hidden: the first scroll shows it at once
         }   // alternate screen, no scrollback: the wheel goes to the app (altScroll)
         if (entry?.historyLines > 1000) {
           fetch(`/api/pane/${encodeURIComponent(msg.session)}?lines=${entry.historyLines}`)
@@ -2668,7 +2668,7 @@ function loadTranscript(n, c, opts) {
   const tail = opts?.full ? false : c.full == null ? !(c.wantFull || state.terms.get(n)?.alt) : !!c.fullPartial;
   const seq = c.tseq = (c.tseq || 0) + 1;   // answers apply in the order asked: a tail refresh still on its way must not replace the older text that was loaded after it
   return getJson(`/api/transcript/${encodeURIComponent(n)}${tail ? `?max=${TAIL_CHARS}` : ''}`, 30000)
-    .then((d) => { if (seq < (c.tseqDone || 0)) return; c.tseqDone = seq; c.full = d.text || ''; c.fullSource = d.source || ''; c.fullPartial = !!d.partial; c.fullAt = Date.now(); c.fullPane = state.terms.get(n)?.lastPane; }).catch(() => {});
+    .then((d) => { if (seq < (c.tseqDone || 0)) return true; c.tseqDone = seq; c.full = d.text || ''; c.fullSource = d.source || ''; c.fullPartial = !!d.partial; c.fullAt = Date.now(); c.fullPane = state.terms.get(n)?.lastPane; return true; }).catch(() => false);   // true once loaded: the automatic load re-arms on false (autoFullDone)
 }
 // the rest of the conversation, prepended; the reader keeps showing what it showed (scroll position held at the old top)
 async function loadOlderConversation(n) {
@@ -2729,9 +2729,9 @@ function paintReader(cell, n, opts = {}) {
   }
   // A fullscreen (alternate-screen) session has no scrollback: load its whole conversation once, so the reader scrolls locally, with no request per step.
   // A non-fullscreen Claude session too (owner 2026-11-22): its last reply alone, cut from the wrapped pane, read differently from a fullscreen one.
-  if (c && !c.autoFull && (state.terms.get(n)?.alt || agentOf(n) === 'claude')) {
+  if (autoFullDue(c) && (state.terms.get(n)?.alt || agentOf(n) === 'claude')) {
     c.autoFull = true;
-    loadTranscript(n, c).then(() => { el.dataset.h = ''; el.dataset.pending = ''; paintReader(cell, n); el.scrollTop = el.scrollHeight; });
+    loadTranscript(n, c).then((ok) => { autoFullDone(c, ok); if (!ok) return; el.dataset.h = ''; el.dataset.pending = ''; paintReader(cell, n); el.scrollTop = el.scrollHeight; });
   }
   const full = c && c.full != null;
   if (full && c.full) text = c.full;

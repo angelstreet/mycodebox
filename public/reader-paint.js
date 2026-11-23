@@ -38,3 +38,16 @@ export function decideReaderPaint({
   // their thumb and ruin their position.
   return { action: 'defer' };
 }
+
+// The automatic whole-conversation load (Claude and fullscreen sessions) runs once per session. If that one load failed (a stalled request
+// over a relayed link, owner 2026-11-23) the reader stayed on the last reply for the life of the tab. A failed load re-arms it after a pause;
+// a successful one, or the owner's "last reply only", keeps it off.
+export const AUTO_FULL_RETRY_MS = 5000;
+export function autoFullDue(c, now = Date.now()) {
+  return !!c && !c.autoFull && now >= (c.autoFullRetryAt || 0);
+}
+export function autoFullDone(c, ok, now = Date.now()) {
+  if (ok) return;
+  c.autoFull = false;
+  c.autoFullRetryAt = now + AUTO_FULL_RETRY_MS;
+}
