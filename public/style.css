@@ -2114,7 +2114,7 @@ body.res-hidden .health.inbar, body.res-hidden .quota.inbar{ display:none !impor
 .newsess .nsproj .ucpanel{ position:static; margin-top:6px; box-shadow:none; }
 .newsess .nsproj .uclist{ max-height:min(32dvh, 300px); }
 .newsess .nsprompt{ position:relative; }
-.newsess .nsprompt textarea{ width:100%; min-height:88px; resize:vertical; padding-right:40px; font:inherit; }
+.newsess .nsprompt textarea{ width:100%; min-height:calc(5 * 1.4em + 22px); resize:vertical; padding-right:40px; font:inherit; font-size:13px; line-height:1.4; }
 .newsess .nsprompt.over textarea{ border-color:var(--accent); }
 .newsess .nsclip{ position:absolute; right:6px; bottom:8px; }
 .newsess .nsclip.busy{ opacity:.5; pointer-events:none; }

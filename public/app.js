@@ -5039,7 +5039,7 @@ function openNewSession() {
       <div class="seg nsmodel" id="nsModel"></div>
       <div class="ucombo nsproj"><button type="button" class="ucb" id="nsProj" aria-label="Choose a project"><span class="ucl">choose a project…</span></button>
         <div class="ucpanel hidden" id="nsPanel"><input class="ucs" id="nsSearch" type="search" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="search projects or type a path…"><div class="uclist" id="nsDirs"><div class="sheet-empty">loading…</div></div></div></div>
-      <div class="nsprompt" id="nsDrop"><textarea class="sheet-in" id="nsPrompt" rows="4" placeholder="first message (optional) — drop or paste images / .md here"></textarea>
+      <div class="nsprompt" id="nsDrop"><textarea class="sheet-in" id="nsPrompt" rows="5" placeholder="first message (optional) — drop or paste images / .md here"></textarea>
         <button type="button" class="icon-btn nsclip" id="nsAttach" aria-label="Attach a file" title="Attach a file">${icon('paperclip', 16)}</button>
         <input type="file" id="nsFile" accept="${UPLOAD_ACCEPT}" multiple hidden></div>
       <div class="nsname"><label class="flab" for="nsName">name</label><input class="sheet-in" id="nsName" maxlength="32" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="session name"></div>
@@ -5050,8 +5050,11 @@ function openNewSession() {
     const panel = body.querySelector('#nsPanel'), search = body.querySelector('#nsSearch'), projBtn = body.querySelector('#nsProj');
     const promptIn = body.querySelector('#nsPrompt'), modelSeg = body.querySelector('#nsModel'), clip = body.querySelector('#nsAttach');
     const taken = (n) => state.sessions.some((s) => s.name === n);
+    // no prompt: the project's name as before; a prompt and no name typed: the field stays empty and the prompt names the session
     const suggest = () => {
       if (nameTouched) return;
+      nameIn.placeholder = promptIn.value.trim() ? 'named from your prompt' : 'session name';
+      if (promptIn.value.trim()) { nameIn.value = ''; return; }
       const b = safeName(baseName(cwdIn.value)) || agent;
       let n = b, i = 2;
       while (taken(n)) n = `${b}-${i++}`;
@@ -5089,7 +5092,8 @@ function openNewSession() {
     panel.onclick = (e) => { e.stopPropagation(); const b = e.target.closest('.uci'); if (b) pick(b.dataset.p); };
     search.oninput = drawDirs;
     body.addEventListener('click', (e) => { if (!e.target.closest('.nsproj')) panel.classList.add('hidden'); });
-    nameIn.oninput = () => { nameTouched = true; };
+    nameIn.oninput = () => { nameTouched = !!nameIn.value.trim(); if (!nameTouched) suggest(); };   // emptied again: back to automatic
+    promptIn.addEventListener('input', () => suggest());
     body.querySelector('#nsPrio').onclick = (e) => {
       const b = e.target.closest('button');
       if (!b) return;
@@ -5133,12 +5137,19 @@ function openNewSession() {
       const a = e.target.closest('button')?.dataset.a;
       if (a === 'cancel') return close();
       if (a !== 'go') return;
-      const name = safeName(nameIn.value), cwd = cwdIn.value.trim(), model = modelOf(agent), prompt = promptIn.value.trim();
-      if (!name) { toast('name required'); return; }
+      let name = safeName(nameIn.value);
+      const cwd = cwdIn.value.trim(), model = modelOf(agent), prompt = promptIn.value.trim();
+      if (!name && !prompt) { toast('name required'); return; }
       if (!cwd) { toast('pick a project'); return; }
       const go = foot.querySelector('#nsGo');
-      go.disabled = true; go.textContent = 'creating…';
+      go.disabled = true; go.textContent = name ? 'creating…' : 'naming…';
       try {
+        if (!name) {   // the prompt names the session (about 6 s); a failure falls back to the project's name
+          const j = await fetch('/api/new-session/name', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt }) }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+          const b = safeName(j?.name) || safeName(baseName(cwd)) || agent;
+          name = b; for (let i = 2; taken(name); i++) name = safeName(`${b.slice(0, 28)}-${i}`);
+          nameIn.value = name; go.textContent = 'creating…';
+        }
         const r = await fetch('/api/sessions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, agent, cwd, priority, ...(model ? { model } : {}), ...(prompt ? { prompt } : {}) }) });
         if (r.status === 404 || r.status === 405) { toast("server doesn't support this yet"); return; }
         if (r.status === 409) { toast(`"${name}" already exists`); return; }
