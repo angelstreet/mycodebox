@@ -37,6 +37,7 @@ import { reloadGuard } from '/sw-update.js';
 import { listHtml, detailHtml, newFormHtml, scorecardHtml } from '/tasks-view.js';
 import * as hv from '/history-view.js';
 import { linkFilePaths, linkUrls } from '/file-links.js';
+import { TOOL_LINE } from '/tool-lines.js';
 import { openFilePanel, closeFilePanel, filePanelOpen } from '/file-panel.js';
 
 const $  = (q) => document.querySelector(q);
@@ -2843,7 +2844,6 @@ function pipeTable(lines, i) {
 // Tool calls in the conversation (conversation.js writes one `Tool arg` line each): consecutive ones are one collapsed group (owner 2026-11-22),
 // "▸ 5 commands · Bash ×3, Read, Write"; a click opens it. The open groups are kept per session (state.toolOpen), keyed by their first line,
 // so a repaint while the agent works does not close them.
-const TOOL_LINE = /^`([A-Z][A-Za-z]+|mcp__[\w-]+)(?: [^`]*)?`$/;
 state.toolOpen = new Map();   // session -> Set(first line of an open group)
 function toolGroupHtml(group, open) {
   const counts = new Map();
