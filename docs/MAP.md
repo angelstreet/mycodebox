@@ -27,7 +27,7 @@ Origin checks protect browser requests but are not user authentication. Any allo
 | Concern | Entry points | Tests |
 |---|---|---|
 | HTTP routes, WebSockets, tmux, static files | `server.js`; route inventory at its top, handlers below | `test/send-guard.test.js`, `test/state.test.js` |
-| Browser views, reader, input, icons | `public/app.js`, `public/index.html`, `public/style.css`, `public/icons.js`, `public/disk-banner.js` (the disk banner's text) | `test/buttons.test.js`, `test/ask-popup.test.js`, `test/disk-banner.test.js` |
+| Browser views, reader, input, icons | `public/app.js`, `public/index.html`, `public/style.css`, `public/icons.js`, `public/disk-banner.js` (the disk banner's text), `public/tool-lines.js` (reader command groups) | `test/buttons.test.js`, `test/ask-popup.test.js`, `test/disk-banner.test.js`, `test/tool-lines.test.js` |
 | Reader pictures and mockups (`/files/<path>`, relative `/files-in/<session>/<path>`), terminal file links | `public/media-links.js`, `public/term-links.js` (`registerFileLinks`), `files-route.js` (`findInFolder`), `conversation.js` (SendUserFile -> `![](path)`) | `test/reader-media.test.js` |
 | File panel (a path an agent names opens beside the session; `/api/file`, `/view.html`) and web links in the reader (`linkUrls`) | `public/file-links.js`, `public/file-panel.js`, `public/view.html`, `file-view.js`, `public/term-links.js` (`textLinksOf`) | `test/file-view.test.js` |
 | PWA cache and push | `public/sw.js`, `public/sw-update.js`, `push.js` | `test/push.test.js`, `test/push-tiers.test.js`, `test/integration-feed-noise.test.js` |

@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **Commands group and fold in the reader when the session file is not found (owner 2026-11-23)** — with no session file the reader falls back to the pane, which writes tool lines as `Bash(cd …` (often cut before the closing paren); only the `Bash cd …` form of the session file was grouped, so each command stood alone. Both forms are now one collapsed group per run of consecutive commands (`public/tool-lines.js`) · area: dashboard
+
 - **Context summaries and long AI messages fold in the reader (owner 2026-11-23)** — Claude Code's "This session is being continued from a previous conversation…" summary was shown blue, as if the owner had typed it. It is now an AI prompt (gray, "AI · context summary"), and any AI prompt over 4 lines or 400 characters (summary, manager message, check) starts folded to its first line; a click opens it and the reader keeps it open across repaints (`public/prompt-sig.js` `foldsPrompt`) · area: dashboard
 
 - **Web links in the reader open on a tap (owner 2026-11-23)** — the phone app shows the reader, and a plain `https://…` URL in an answer was plain text there (only the terminal linked it). URLs in the reader are now links that open in a new tab; sentence punctuation stays outside the link and a path inside a URL is not also a file link (`public/file-links.js` `linkUrls`) · area: dashboard
