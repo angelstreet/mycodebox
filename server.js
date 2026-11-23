@@ -149,6 +149,7 @@ import { sessionDirectory } from './session-directory.js';
 import { createLayoutStore } from './layout.js';
 import { createSessionMeta } from './session-meta.js';
 import { goneCwd, projectCandidates } from './cwd-gone.js';
+import { maybeGzip, acceptsGzip } from './gzip-send.js';
 import { logUpload, readUploadLog, cleanReport, clientOf } from './upload-log.js';
 import { pickableProject, launchArgs, codexModels, CLAUDE_MODELS, MINIMAX_MODELS, DEFAULT_MODELS, aiNamePrompt, cleanAiName, nameFromWords } from './new-session.js';
 import { createSessionHistory } from './session-history.js';
@@ -1812,9 +1813,15 @@ async function serveStatic(req, res, urlPath) {
   const cache = noCacheExts.has(extname(full)) || rel === '/sw.js' || rel === '/manifest.webmanifest'
     ? 'no-cache'
     : 'public, max-age=3600';
-  res.writeHead(200, { 'content-type': type, 'cache-control': cache });
-  res.end(body);
+  // text files are gzipped once per version of the file (a Map keyed by path, mtime and size): app.js is 357 KB, ~90 KB gzipped
+  const key = `${full}|${st.mtimeMs}|${st.size}`;
+  let g = gzCache.get(key);
+  if (!g) { g = await maybeGzip(req.headers, type, body, 9); if (g.headers['content-encoding']) { if (gzCache.size > 200) gzCache.clear(); gzCache.set(key, g); } }
+  else if (!acceptsGzip(req.headers)) g = { body, headers: {} };
+  res.writeHead(200, { 'content-type': type, 'cache-control': cache, 'content-length': g.body.length, ...g.headers });
+  res.end(g.body);
 }
+const gzCache = new Map();
 
 const MAX_BODY = 64 * 1024;
 // raw request body (audio upload), capped
@@ -2373,8 +2380,13 @@ async function collectDirs() {
 }
 
 function json(res, code, obj) {
-  res.writeHead(code, { 'content-type': 'application/json' });
-  res.end(JSON.stringify(obj));
+  const text = JSON.stringify(obj);
+  if (text.length < 1024 || !res.req) { res.writeHead(code, { 'content-type': 'application/json' }); res.end(text); return; }
+  // a big answer (a conversation is 200 KB) is gzipped when the browser accepts it: 4 to 5 times shorter over a slow link
+  maybeGzip(res.req.headers, 'application/json', text).then((g) => {
+    if (res.writableEnded || res.destroyed) return;
+    res.writeHead(code, { 'content-type': 'application/json', 'content-length': g.body.length, ...g.headers }); res.end(g.body);
+  }).catch(() => { if (!res.writableEnded) { res.writeHead(code, { 'content-type': 'application/json' }); res.end(text); } });
 }
 
 // Reject browser requests whose Origin host differs from the Host header (CSRF / cross-site WS).
