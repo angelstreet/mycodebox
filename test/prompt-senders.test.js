@@ -93,3 +93,11 @@ test('a context-compaction summary is an AI prompt, and a long AI prompt folds; 
   assert.equal(foldsPrompt(['a', 'b', 'c', 'd', 'e']), true);
   assert.equal(foldsPrompt(['x'.repeat(401)]), true);
 });
+
+test('a "Manager: ..." message and an "Integration int-..." result are AI prompts even when the send was not logged', () => {
+  assert.equal(aiSenderOf('Manager: approved for feat/x. The navigation file changed', []), 'manager');
+  assert.equal(aiSenderOf('Integration int-1a2093b2859cb7c00 (feat/fingerprint-edit-node-grids) was returned', []), 'integration');
+  assert.equal(senderLabel('integration'), 'integration lane');
+  assert.equal(aiSenderOf('manager is down, can you check', []), null);   // the owner's own words are not matched
+  assert.equal(aiSenderOf('Integration tests are red', []), null);
+});

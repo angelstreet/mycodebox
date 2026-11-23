@@ -13,12 +13,17 @@ export const senderLabel = (by) => LABELS[by] || String(by || 'AI');
 // The dashboard's own checks open with a fixed phrase: recognised even when the send was never logged (before 2026-11-22).
 const CHECK_RE = /^(?:goal check|done check|status check):/;
 // Claude Code's own summary after a context compaction is typed as a user prompt: it is not the owner's (owner 2026-11-23)
+// The manager's own messages ("Manager: approved ...") and the lane's results ("Integration int-1a2...: merged ...") are never the owner's, also when the
+// send was not logged (owner 2026-11-23: they showed owner-blue)
+const MANAGER_RE = /^manager:/, LANE_RE = /^integration int-[0-9a-f]{6,}/;
 const COMPACT_RE = /^this session is being continued from a previous\b/;   // the signature keeps 48 chars
 export function aiSenderOf(text, ai = []) {
   const s = promptSig(text);
   if (s.length < 8) return null;
   if (CHECK_RE.test(s)) return 'harness';
   if (COMPACT_RE.test(s)) return 'compaction';
+  if (MANAGER_RE.test(s)) return 'manager';
+  if (LANE_RE.test(s)) return 'integration';
   for (const x of ai) if (x.sig && (s.startsWith(x.sig) || x.sig.startsWith(s))) return x.by;
   return null;
 }
