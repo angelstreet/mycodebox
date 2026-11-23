@@ -191,3 +191,14 @@ test('displayState: an explicit STATUS: done outranks a stale reporter count; am
   assert.equal(displayState({ state: 'done', reporter: { backgroundWork: 1 }, stall: saidDone, scriptBusy: true }), 'working');
   assert.equal(displayState({ state: 'done', reporter: { backgroundWork: 1 }, stall: { case: 'background_wait', source: 'rule', no_status: false } }), 'working', 'STATUS: running stays green');
 });
+
+test('displayState: a closing STATUS: needs-owner / blocked / failed outranks a reporter background count and the background_wait stall; real process signals still count', () => {
+  const turn = (status) => ({ at: 1, status, source: 'reporter' });
+  const bg = { backgroundWork: 1, crons: 0 }, stall = { case: 'background_wait', source: 'rule', no_status: false };
+  for (const st of ['needs-owner', 'needs-manager', 'blocked', 'failed']) {
+    assert.notEqual(displayState({ state: 'done', reporter: bg, stall, lastTurn: turn(st) }), 'working', st);
+  }
+  assert.equal(displayState({ state: 'done', reporter: bg, stall, lastTurn: turn('needs-owner') }), 'done');
+  assert.equal(displayState({ state: 'done', reporter: bg, stall, lastTurn: turn('running') }), 'working');   // running / waiting keep the old rule
+  assert.equal(displayState({ state: 'done', reporter: bg, stall, lastTurn: turn('needs-owner'), paneBackground: true }), 'working');
+});
