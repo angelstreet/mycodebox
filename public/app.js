@@ -1413,7 +1413,12 @@ async function parkSession(name) {
   try {
     const r = await fetch(`/api/sessions/${encodeURIComponent(name)}/park`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ force: true }) });
     const j = await r.json().catch(() => ({}));
+    // The session is gone from tmux once parked, but the status frame that removes it can lag over a slow link: drop it here at once, or it stays
+    // listed and a second Park says "no such session" (owner 2026-11-23). "no such session" means the same: it is not running.
+    const gone = r.ok || r.status === 404 || /no such session/.test(String(j?.error || ''));
+    if (gone && state.status[name]) { delete state.status[name]; onStatus(); }
     if (r.ok) { const n = killedNote(j); if (n) topToast(`${name} parked${n}`, 9000); else toast(`${name} parked`, 1800); }
+    else if (gone) toast(`${name} is not running (already parked)`, 3000);
     else topToast(parkRefusal(name, j, r.status), 9000);
   } catch (err) { topToast(`Can't park ${name}: ${err.message}`, 9000); }
   fetchParking();

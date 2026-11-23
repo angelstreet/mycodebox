@@ -16,3 +16,7 @@ test('reply and transcript go through getJson with an abort deadline', () => {
 test('an outstanding or failed load is not reported as "no reply yet"', () => {
   assert.match(src, /c\.busy \|\| c\.failed[\s\S]{0,200}loading/);
 });
+
+test('a parked (or already gone) session leaves the list at once, not on the next status frame', () => {
+  assert.match(src, /async function parkSession[\s\S]{0,900}delete state\.status\[name\]; onStatus\(\)/);
+});
