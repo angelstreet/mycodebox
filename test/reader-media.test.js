@@ -4,7 +4,8 @@ import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { kindOf, fileUrl, mediaPathsIn, mediaHtml, mediaRowHtml, MEDIA_LINE } from '../public/media-links.js';
-import { resolveServedFile } from '../files-route.js';
+import { findInFolder, resolveServedFile } from '../files-route.js';
+import { fileLinksOf } from '../public/term-links.js';
 import { renderRecord } from '../conversation.js';
 
 test('media-links: kinds, urls, paths named in text, html', () => {
@@ -47,4 +48,36 @@ test('files route: media under home or the scratchpad only, never a dot folder, 
     assert.equal(r(`${home}/out/none.png`).status, 404);
     assert.equal(r('relative.png').status, 400);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('relative media paths: terminal links and reader tiles go through /files-in/<session>/', () => {
+  // the phone shows the terminal: "[file] out/ep01.mp4" (owner 2026-11-23)
+  const l = fileLinksOf('  › [file] out/ep01_draft1_send.mp4 (18.5MB)', 'docs-x');
+  assert.deepEqual(l.map((x) => [x.path, x.start, x.end, x.url]), [['out/ep01_draft1_send.mp4', 11, 35, '/files-in/docs-x/out/ep01_draft1_send.mp4']]);
+  assert.deepEqual(fileLinksOf('see https://h.io/a/b.png, ~/m/x.html and bare.png', 's').map((x) => x.url), ['/files/~/m/x.html'], 'URLs and bare names are not file links');
+  assert.deepEqual(fileLinksOf('│ out/a.png │ /home/u/b.pdf│', 's').map((x) => x.url), ['/files-in/s/out/a.png', '/files/home/u/b.pdf']);
+  assert.deepEqual(mediaPathsIn('the file is scripts/video/out/ep01.mp4. Done'), [], 'the reader keeps absolute-only without a session');
+  assert.deepEqual(mediaPathsIn('the file is scripts/video/out/ep01.mp4. Done', { relative: true }), ['scripts/video/out/ep01.mp4']);
+  assert.deepEqual(mediaPathsIn('raw/*.webm and footage/{a,b}.mp4 and ~/x/*.png', { relative: true }), [], 'globs are not files');
+  assert.equal(fileUrl('out/a.png'), '', 'a relative path needs its session');
+  assert.match(mediaRowHtml(['out/a b.png'], new Set(), 's'), /<img src="\/files-in\/s\/out\/a%20b\.png"[^>]*onerror=/);
+  assert.equal(mediaRowHtml(['out/a.png'], new Set()), '', 'no session: no tile');
+});
+
+test('findInFolder: <cwd>/<rel> first, else a bounded search for a file ending in /<rel>; never up or into dot folders', () => {
+  const d = mkdtempSync(join(tmpdir(), 'files-route-'));
+  try {
+    mkdirSync(join(d, 'scripts', 'video', 'out'), { recursive: true });
+    writeFileSync(join(d, 'scripts', 'video', 'out', 'ep.mp4'), 'v');
+    mkdirSync(join(d, 'out')); writeFileSync(join(d, 'out', 'top.png'), 'p');
+    mkdirSync(join(d, '.hidden', 'out'), { recursive: true }); writeFileSync(join(d, '.hidden', 'out', 'h.png'), 'p');
+    assert.equal(findInFolder(d, 'out/top.png'), join(d, 'out', 'top.png'));
+    assert.equal(findInFolder(d, './out/ep.mp4'), join(d, 'scripts', 'video', 'out', 'ep.mp4'));
+    assert.equal(findInFolder(d, 'scripts/video/out/ep.mp4'), join(d, 'scripts', 'video', 'out', 'ep.mp4'));
+    assert.equal(findInFolder(d, 'out/h.png'), null, 'dot folders are not searched');
+    assert.equal(findInFolder(d, '../x/top.png'), null);
+    assert.equal(findInFolder(d, '/etc/a.png'), null);
+    assert.equal(findInFolder(d, 'out/notes.txt'), null, 'media and pages only');
+    assert.equal(findInFolder(d, 'out/ep.mp4', { maxDepth: 1 }), null, 'bounded depth');
+  } finally { rmSync(d, { recursive: true, force: true }); }
 });
