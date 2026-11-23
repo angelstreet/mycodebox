@@ -5050,6 +5050,7 @@ function openNewSession() {
     const panel = body.querySelector('#nsPanel'), search = body.querySelector('#nsSearch'), projBtn = body.querySelector('#nsProj');
     const promptIn = body.querySelector('#nsPrompt'), modelSeg = body.querySelector('#nsModel'), clip = body.querySelector('#nsAttach');
     const taken = (n) => state.sessions.some((s) => s.name === n);
+    let uploading = 0;   // pictures still on their way: create waits, or the prompt would go without them
     // no prompt: the project's name as before; a prompt and no name typed: the field stays empty and the prompt names the session
     const suggest = () => {
       if (nameTouched) return;
@@ -5112,7 +5113,7 @@ function openNewSession() {
     const attach = async (files) => {
       const fs = Array.from(files || []).filter(uploadType);
       if (!fs.length) { toast(UPLOAD_HINT); return; }
-      clip.classList.add('busy');
+      clip.classList.add('busy'); uploading++;
       try {
         const paths = [];
         for (const f of fs) paths.push(`@${(await uploadOne(f)).path}`);
@@ -5120,7 +5121,7 @@ function openNewSession() {
         promptIn.value = (cur && !/\s$/.test(cur) ? `${cur} ` : cur) + paths.join(' ') + ' ';
         promptIn.focus();
       } catch (err) { toast(`upload failed: ${err.message || 'network error'}`, 4000); }
-      finally { clip.classList.remove('busy'); }
+      finally { clip.classList.toggle('busy', --uploading > 0); }
     };
     clip.onclick = () => body.querySelector('#nsFile').click();
     body.querySelector('#nsFile').onchange = (e) => { attach(e.target.files); e.target.value = ''; };
@@ -5137,6 +5138,7 @@ function openNewSession() {
       const a = e.target.closest('button')?.dataset.a;
       if (a === 'cancel') return close();
       if (a !== 'go') return;
+      if (uploading) { toast('a file is still uploading — wait a moment'); return; }
       let name = safeName(nameIn.value);
       const cwd = cwdIn.value.trim(), model = modelOf(agent), prompt = promptIn.value.trim();
       if (!name && !prompt) { toast('name required'); return; }
@@ -5150,7 +5152,22 @@ function openNewSession() {
           name = b; for (let i = 2; taken(name); i++) name = safeName(`${b.slice(0, 28)}-${i}`);
           nameIn.value = name; go.textContent = 'creating…';
         }
-        const r = await fetch('/api/sessions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, agent, cwd, priority, ...(model ? { model } : {}), ...(prompt ? { prompt } : {}) }) });
+        // The answer can get lost on a slow or relayed link (the session is made, the button stays "creating…" until a reload, owner
+        // 2026-11-23): no answer in 20 s -> ask whether the session exists and carry on when it does.
+        let r;
+        try {
+          const ac = new AbortController(), timer = setTimeout(() => ac.abort(), 20000);
+          try { r = await fetch('/api/sessions', { method: 'POST', headers: { 'content-type': 'application/json' }, signal: ac.signal, body: JSON.stringify({ name, agent, cwd, priority, ...(model ? { model } : {}), ...(prompt ? { prompt } : {}) }) }); }
+          finally { clearTimeout(timer); }
+        } catch {
+          go.textContent = 'checking…';
+          for (let i = 0; i < 5 && !r; i++) {
+            await new Promise((ok) => setTimeout(ok, 1500));
+            const list = await fetch('/api/sessions').then((x) => (x.ok ? x.json() : null)).catch(() => null);
+            if ((list?.sessions || list || []).some?.((x) => x.name === name)) r = { ok: true, status: 200, json: async () => ({ ok: true, name }) };
+          }
+          if (!r) { toast('no answer from the server — check the session list before trying again', 6000); return; }
+        }
         if (r.status === 404 || r.status === 405) { toast("server doesn't support this yet"); return; }
         if (r.status === 409) { toast(`"${name}" already exists`); return; }
         const j = await r.json().catch(() => ({}));

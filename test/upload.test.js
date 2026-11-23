@@ -155,3 +155,17 @@ test('text uploads from a Mac: .md / .txt with no type or text/plain are taken a
   await uploadOne(file, { timeoutMs: 0, fetchImpl: async (u, o) => { sent = o.headers; return { ok: true, json: async () => ({ ok: true, path: '/p' }) }; } });
   assert.deepEqual(sent, { 'content-type': 'text/markdown', 'x-upload-name': 'ai%20bot.md' });
 });
+
+import { uploadTimeoutMs, shrinkImage } from '../public/upload.js';
+test('upload time allowed grows with the file (slow relayed links), capped; shrinkImage leaves small files and non-pictures alone', async () => {
+  assert.equal(uploadTimeoutMs(0), 30000);
+  assert.equal(uploadTimeoutMs(60 * 1024), 30000);
+  assert.ok(uploadTimeoutMs(540 * 1024) > 80000 - 20000 && uploadTimeoutMs(540 * 1024) < 100000);
+  assert.equal(uploadTimeoutMs(500 * 1024 * 1024), 180000);
+  const small = { type: 'image/png', size: 1000, name: 'a.png' };
+  assert.equal(await shrinkImage(small), small);
+  const txt = { type: 'text/markdown', size: 9e6, name: 'a.md' };
+  assert.equal(await shrinkImage(txt), txt);
+  const big = { type: 'image/png', size: 9e6, name: 'a.png' };
+  assert.equal(await shrinkImage(big), big, 'no DOM here: sent as it is');
+});

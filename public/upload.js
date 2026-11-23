@@ -35,6 +35,32 @@ export class HttpError extends Error {
 }
 
 const DEFAULTS = { attempts: 3, backoffMs: 400, timeoutMs: 30000 };
+export const uploadTimeoutMs = (bytes) => Math.min(180000, Math.max(DEFAULTS.timeoutMs, 20000 + Math.round((Number(bytes) || 0) / 8)));   // ~8 KB/s floor
+
+// A big picture (a Retina screenshot is 400 KB to 2 MB) is made smaller before it goes: at most 1600 px on the long side, PNG when that
+// is small enough, else JPEG. Agents read a 1600 px screenshot as well as a 2880 px one, and over a slow link the upload is 3 to 6 times
+// shorter. Anything that does not get clearly smaller, or cannot be decoded here, is sent as it is.
+const SHRINK_OVER = 250 * 1024, SHRINK_PX = 1600;
+export async function shrinkImage(file) {
+  if (!/^image\/(png|jpeg)$/.test(file?.type || '') || file.size < SHRINK_OVER || typeof createImageBitmap !== 'function' || typeof document === 'undefined') return file;
+  let bmp;
+  try {
+    bmp = await createImageBitmap(file);
+    const k = Math.min(1, SHRINK_PX / Math.max(bmp.width, bmp.height)), w = Math.max(1, Math.round(bmp.width * k)), h = Math.max(1, Math.round(bmp.height * k));
+    const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+    const g = cv.getContext('2d'); g.drawImage(bmp, 0, 0, w, h);
+    const blob = (type, q) => new Promise((ok) => cv.toBlob(ok, type, q));
+    let best = file.type === 'image/png' ? await blob('image/png') : null;
+    if (!best || best.size > SHRINK_OVER) {   // a photo: JPEG, on white (a PNG's transparent pixels are black in a JPEG)
+      g.globalCompositeOperation = 'destination-over'; g.fillStyle = '#fff'; g.fillRect(0, 0, w, h);
+      const j = await blob('image/jpeg', 0.85); if (j && (!best || j.size < best.size)) best = j;
+    }
+    if (!best || best.size > file.size * 0.8) return file;
+    const ext = best.type === 'image/jpeg' ? 'jpg' : 'png';
+    return new File([best], String(file.name || 'image').replace(/\.[A-Za-z0-9]+$/, '') + '.' + ext, { type: best.type, lastModified: file.lastModified });
+  } catch { return file; }
+  finally { try { bmp?.close?.(); } catch { /* none */ } }
+}
 
 // A failed upload is reported to the server (/api/upload-report -> uploads.jsonl, shown in /upload-debug.html): a request that never
 // arrived (offline, a VPN blip, a timeout) leaves no server line. A report that cannot be sent waits in localStorage for the next page load.
@@ -58,6 +84,7 @@ if (typeof window !== 'undefined') setTimeout(() => flushUploadReports().catch((
 
 export async function uploadOne(file, opts = {}) {
   const t0 = Date.now();
+  if (!opts.fetchImpl && opts.shrink !== false) file = await shrinkImage(file);
   try { return await uploadAttempts(file, opts); }
   catch (err) {
     if (!opts.fetchImpl && opts.report !== false && err?.message !== 'upload aborted') reportUploadFailure(file, err, { attempts: err.attempts, ms: Date.now() - t0 });
@@ -65,7 +92,8 @@ export async function uploadOne(file, opts = {}) {
   }
 }
 async function uploadAttempts(file, opts = {}) {
-  const { attempts = DEFAULTS.attempts, backoffMs = DEFAULTS.backoffMs, timeoutMs = DEFAULTS.timeoutMs } = opts;
+  // a slow link (a Mac reaching the codebox through a Tailscale relay moved 20 KB/s, owner 2026-11-23): the time allowed grows with the file
+  const { attempts = DEFAULTS.attempts, backoffMs = DEFAULTS.backoffMs, timeoutMs = uploadTimeoutMs(file?.size) } = opts;
   const fetchImpl = opts.fetchImpl || (typeof fetch !== 'undefined' ? fetch : null);
   if (!fetchImpl) throw new Error('no fetch implementation available');
   const signal = opts.signal;
