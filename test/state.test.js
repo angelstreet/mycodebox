@@ -179,3 +179,15 @@ test('displayState: a done turn whose STATUS is "waiting" on its own job reads a
   assert.equal(displayState(w({ question: 'the owner go-ahead' })), 'done');
   assert.equal(displayState(w({ deployHint: { id: 'd-42' } })), 'done');
 });
+
+test('displayState: an explicit STATUS: done outranks a stale reporter count; ambiguous or other closing lines do not', () => {
+  const saidDone = { case: 'done', source: 'rule', no_status: false };
+  assert.equal(displayState({ state: 'done', reporter: { backgroundWork: 1, crons: 0 }, stall: saidDone }), 'done');
+  assert.equal(displayState({ state: 'done', reporter: { backgroundWork: 0, crons: 2 }, stall: saidDone }), 'done');
+  // no STATUS line (a guessed done) or a pane signal: still working
+  assert.equal(displayState({ state: 'done', reporter: { backgroundWork: 1 }, stall: { case: 'done', source: 'ambiguous', no_status: true } }), 'working');
+  assert.equal(displayState({ state: 'done', reporter: { backgroundWork: 1 }, stall: { case: 'done' } }), 'working');
+  assert.equal(displayState({ state: 'done', reporter: { backgroundWork: 1 }, stall: saidDone, paneBackground: true }), 'working');
+  assert.equal(displayState({ state: 'done', reporter: { backgroundWork: 1 }, stall: saidDone, scriptBusy: true }), 'working');
+  assert.equal(displayState({ state: 'done', reporter: { backgroundWork: 1 }, stall: { case: 'background_wait', source: 'rule', no_status: false } }), 'working', 'STATUS: running stays green');
+});
