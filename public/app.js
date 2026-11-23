@@ -13,7 +13,7 @@ import { stripSentEcho } from '/sent-echo.js';
 import { closeBgAtNewlines } from '/term-sgr.js';
 import { planPaint } from '/term-paint.js';
 import { stripResizeHint, stripDiffPanel, tintOwnerPrompts } from '/pane-hints.js';
-import { aiSenderOf, senderLabel } from '/prompt-sig.js';
+import { aiSenderOf, senderLabel, foldsPrompt } from '/prompt-sig.js';
 import { MEDIA_LINE, mediaPathsIn, mediaRowHtml } from '/media-links.js';
 import { fitAction, fitSatisfied } from '/fit-policy.js';
 import { fitFont, canShrinkFont, isSettling } from '/fit-font.js';
@@ -2732,7 +2732,7 @@ function paintReader(cell, n, opts = {}) {
     el._wired = true;
     // a tool group opened or closed: remember it, so the next repaint keeps it (toggle does not bubble: capture)
     el.addEventListener('toggle', (e) => {
-      const d = e.target; if (!d.matches?.('details.rd-tools')) return;
+      const d = e.target; if (!d.matches?.('details.rd-tools, details.rd-fold')) return;
       const set = state.toolOpen.get(n) || new Set(); state.toolOpen.set(n, set);
       const k = d.dataset.k; if (d.open) set.add(k); else set.delete(k);
     }, true);
@@ -2869,7 +2869,15 @@ function renderReply(text, ai = [], openTools = null, session = '') {
   const out = [];
   let para = [], code = null, fence = false;
   // a prompt the AI side typed keeps the gray block with its sender's label; the owner's own prompts are blue (.rq.me)
-  const promptHtml = () => { const by = aiSenderOf((para.raw || []).join(' '), ai); return by ? `<div class="rq ai"><span class="rq-by">AI · ${escapeHtml(senderLabel(by))}</span>${para.join('<br>')}</div>` : `<div class="rq me">${para.join('<br>')}</div>`; };
+  const promptHtml = () => {
+    const raw = para.raw || [], by = aiSenderOf(raw.join(' '), ai);
+    if (!by) return `<div class="rq me">${para.join('<br>')}</div>`;
+    const label = `AI · ${escapeHtml(senderLabel(by))}`;
+    if (!foldsPrompt(raw)) return `<div class="rq ai"><span class="rq-by">${label}</span>${para.join('<br>')}</div>`;
+    // a long AI prompt (context summary, manager brief): folded to its first line; opening it is remembered like a tool group
+    const key = escapeHtml(raw.join(' ').slice(0, 200)), first = raw.find((x) => x.trim() && !/^\s*<\/?pasted_content\b[^>]*>\s*$/.test(x)) || '';
+    return `<details class="rq ai rd-fold" data-k="${key}"${openTools?.has(raw.join(' ').slice(0, 200)) ? ' open' : ''}><summary><span class="rq-by">${label}</span><span class="rq-first">${inlineMd(first.length > 140 ? first.slice(0, 140) + '…' : first)}</span></summary>${para.join('<br>')}</details>`;
+  };
   const rel = !!session && !String(session).startsWith('mac:');   // relative paths resolve in a codebox session's folder (a Mac's files are not here)
   const seen = new Set();   // a picture is shown once per reply, however often its path is named
   const flushPara = () => { if (para.length) { out.push(para.prompt ? promptHtml() : `<p>${para.join('<br>')}</p>`); if (para.media) out.push(mediaRowHtml(para.media, seen, rel ? session : '')); para = []; } };

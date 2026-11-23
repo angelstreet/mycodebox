@@ -2910,6 +2910,15 @@ body.reading #diskBanner{ display:none !important; }
 .cell:not(.rd-on) .jump .jme{ display:none; }
 .cell.rd-on .jump .jme{ color:#8fb4ff; }
 .cell.rd-on .reader .rq-by{ display:block; text-indent:0; font-size:.78em; color:#9aa3ad; letter-spacing:.02em; }
+/* a long AI prompt is folded to its first line; open, the summary line is hidden and the full text shows (owner 2026-11-23) */
+.cell.rd-on .reader details.rd-fold{ display:block; text-indent:0; }
+.cell.rd-on .reader details.rd-fold::before{ content:none; }
+.cell.rd-on .reader details.rd-fold > summary{ list-style:none; cursor:pointer; user-select:none; }
+.cell.rd-on .reader details.rd-fold > summary::-webkit-details-marker{ display:none; }
+.cell.rd-on .reader details.rd-fold > summary .rq-by::after{ content:'  \25B8'; }
+.cell.rd-on .reader details.rd-fold[open] > summary .rq-by::after{ content:'  \25BE'; }
+.cell.rd-on .reader details.rd-fold > summary .rq-first{ display:block; color:#c9ced4; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.cell.rd-on .reader details.rd-fold[open] > summary .rq-first{ display:none; }
 /* the owner's message looks as in the terminal: ❯ and a gray background behind the text (owner 2026-11-20); the AI's answer is plain text */
 /* the reader's text column is the terminal's: same left edge and width as .b (max-width --measure, padding 6px left / 16px right) */
 @media (min-width: 1100px){

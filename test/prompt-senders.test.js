@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { promptSig, aiSenderOf, senderLabel } from '../public/prompt-sig.js';
+import { promptSig, aiSenderOf, senderLabel, foldsPrompt } from '../public/prompt-sig.js';
 import { tintOwnerPrompts, OWNER_BG } from '../public/pane-hints.js';
 import { createPromptSenders } from '../prompt-senders.js';
 
@@ -82,4 +82,14 @@ test('a prompt stored as <pasted_content> is matched on its text; "Status check:
   assert.equal(aiSenderOf(`<pasted_content id="6c63">\n${sent}\n</pasted_content id="6c63">`, ai), 'integration');
   assert.equal(aiSenderOf('<pasted_content id="6c63"> Status check: your done line needs a Verification: block', []), 'harness');
   assert.equal(aiSenderOf('<pasted_content id="1">please fix the reader colours</pasted_content id="1">', ai), null, 'an owner paste stays the owner\'s');
+});
+
+test('a context-compaction summary is an AI prompt, and a long AI prompt folds; a short one does not', () => {
+  const sum = 'This session is being continued from a previous conversation that ran out of context. The summary below covers';
+  assert.equal(aiSenderOf(sum, []), 'compaction');
+  assert.equal(senderLabel('compaction'), 'context summary');
+  assert.equal(aiSenderOf('this session is fine, continue', []), null);
+  assert.equal(foldsPrompt(['Integration int-1: merged x into main at abc.']), false);
+  assert.equal(foldsPrompt(['a', 'b', 'c', 'd', 'e']), true);
+  assert.equal(foldsPrompt(['x'.repeat(401)]), true);
 });
