@@ -92,3 +92,14 @@ test('readViewFile: a link beside the open document wins over the session folder
     assert.equal(readViewFile('GAPS.md', { home, base: join(home, 'r', 'docs'), uid: 99999 }).text, 'beside', 'no session: the folder alone');
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
+
+test('linkUrls: plain http(s) URLs in the reader open in a new tab; sentence punctuation and existing links stay out', async () => {
+  const { linkUrls, linkFilePaths } = await import('../public/file-links.js');
+  const h = linkUrls('<p>on the site: https://box.example.ts.net:10000/ and (see http://a.example/x_(1)/y.md?q=1&amp;r=2).</p>');
+  assert.match(h, /<a class="rd-url" href="https:\/\/box\.example\.ts\.net:10000\/" target="_blank" rel="noopener">https:\/\/box\.example\.ts\.net:10000\/<\/a> and/);
+  assert.match(h, /href="http:\/\/a\.example\/x_\(1\)\/y\.md\?q=1&amp;r=2" [^>]*>[^<]+<\/a>\)\.<\/p>/);
+  // a path inside a URL is not also a file link
+  assert.doesNotMatch(linkFilePaths(h, 's'), /rd-path/);
+  assert.equal(linkUrls('<a href="https://x.example">https://x.example</a>'), '<a href="https://x.example">https://x.example</a>');
+  assert.match(linkUrls('say &quot;https://q.example/a&quot; ok'), /href="https:\/\/q\.example\/a" [^>]*>https:\/\/q\.example\/a<\/a>&quot; ok/);
+});

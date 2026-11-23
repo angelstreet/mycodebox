@@ -71,3 +71,24 @@ export function linkFilePaths(html, session = '', base = '') {
   }
   return parts.join('');
 }
+
+// Plain http(s) URLs in the reader (owner 2026-11-23: on the phone the reader is the view, and its links were plain text; the
+// terminal links them in term-links.js). html is escaped: the URL stops at a tag, a space or an escaped quote / bracket, and
+// closing punctuation of the sentence ("see https://x/.", "(https://x/)") stays outside the link.
+const URL_RE = /https?:\/\/(?:(?!&(?:quot|#39|lt|gt);)[^\s<>"'`│|])+/g;
+export function linkUrls(html) {
+  const parts = String(html || '').split(/(<[^>]*>)/);
+  let inA = 0;
+  for (let i = 0; i < parts.length; i++) {
+    const s = parts[i];
+    if (i % 2) { const m = /^<(\/?)(a|button|select|textarea)\b/i.exec(s); if (m) inA = Math.max(0, inA + (m[1] ? -1 : 1)); continue; }
+    if (inA || !s || !s.includes('http')) continue;
+    parts[i] = s.replace(URL_RE, (u) => {
+      let url = u.replace(/[.,;:!?*]+$/, '');
+      while (url.endsWith(')') && (url.match(/\(/g) || []).length < (url.match(/\)/g) || []).length) url = url.slice(0, -1);
+      while (/&amp;$/.test(url)) url = url.slice(0, -5);
+      return `<a class="rd-url" href="${attr(url)}" target="_blank" rel="noopener">${url}</a>${u.slice(url.length)}`;
+    });
+  }
+  return parts.join('');
+}

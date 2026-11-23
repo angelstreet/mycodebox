@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **Web links in the reader open on a tap (owner 2026-11-23)** — the phone app shows the reader, and a plain `https://…` URL in an answer was plain text there (only the terminal linked it). URLs in the reader are now links that open in a new tab; sentence punctuation stays outside the link and a path inside a URL is not also a file link (`public/file-links.js` `linkUrls`) · area: dashboard
+
 - **Attaching .md and .txt files from a Mac works (owner 2026-11-23)** — a Mac browser often gives a .md / .txt no type, so the upload went out as `application/octet-stream` and was refused, and .txt was refused outright. The attach button, drop, paste and the new-session dialog now take images and text files (.md, .txt, .csv, .json, .yaml, .log) by extension, and the saved copy keeps its name (`<time>-<id>-ai_bot_story_ep01_final_script.md`), so the agent sees what it is (`upload-kind.js`, `public/upload.js` `uploadType`) · area: dashboard
 
 - **Files an agent names open in a side panel (owner 2026-11-23)** — like Cursor / Claude Code: a path in the reader (`docs/X.md`, `server.js:120`, `INVENTORY.md`) or the terminal opens a panel on the right (full screen on a phone) with the file: markdown rendered, code with line numbers and the named lines marked. Buttons: copy the content, copy the path, full screen, open in a new tab (`/view.html`), close (Esc / back). Links inside the file open beside it. `GET /api/file` (`file-view.js`) serves text files only, at most 1 MB, under home or the scratchpads, never a dot folder (except Claude skills, agents, memory and CLAUDE.md), a binary or a secret-looking name · area: dashboard
