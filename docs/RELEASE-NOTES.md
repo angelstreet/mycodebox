@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The dashboard server no longer stalls on the scorecard (owner 2026-11-23)** — every scorecard load re-read and parsed the whole 190 MB usage ledger and 40 MB stall log on the server's main thread (profile: about 60 % of its time, event-loop stalls of 1.2 s), which delayed every other answer (reply, transcript, status). It now streams the files and parses only the window (days + 8), and concurrent loads share one (`readJsonl` `since`, `cachedScorecard` in `scorecard.js`); same numbers, longest event-loop stall 1188 ms → 16 ms · area: dashboard
+
 - **A parked session leaves the list at once (owner 2026-11-23)** — after Park the session stayed listed until a status frame removed it (slow over a relayed link), and a second Park showed "Can't park …: no such session". The dashboard now drops the session as soon as the park succeeds or the server says it is not running, with the toast "is not running (already parked)" (`parkSession` in `public/app.js`) · area: dashboard
 
 - **A stalled request no longer leaves the reader on "no reply yet" (owner 2026-11-23)** — over a relayed link a `/api/reply` or `/api/transcript` request could hang with no error; the reader kept `busy` set, showed "no reply yet" and never asked again. Both requests now have a deadline (8 s and 30 s, `getJson` in `public/app.js`), a failure retries on the next tick, and the empty reader says "loading…" or "could not load — retrying…" instead of "no reply yet" while the answer is outstanding · area: dashboard

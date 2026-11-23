@@ -41,6 +41,8 @@ import { promises as fs } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
+import { createReadStream } from 'node:fs';
+import { createInterface } from 'node:readline';
 import { effectiveLabels, outcomeFromReplyKind } from './decisions.js';
 import { OWNER_THRESHOLD } from './router-shadow.js';
 import { computeShare, summarizeShare } from './scripts/decision-share.js';
@@ -586,13 +588,24 @@ export function scorecardDays({ ledgerRows = [], stallRecs = [], eventRecs = [],
 
 function hash16(s) { return createHash('sha1').update(s).digest('hex').slice(0, 16); }
 
+const LOOKBACK_MS = 8 * 86400000;   // rows older than the window by this much are not read (plan-week start, day boundaries)
 // One JSONL file -> array of objects (skip blank lines, swallow JSON errors, fail open on ENOENT).
-async function readJsonl(path, opts = {}) {
-  let text = '';
-  try { text = await fs.readFile(path, 'utf8'); } catch (e) { if (e.code === 'ENOENT') return []; throw e; }
+// opts.since (ms): lines whose top-level "ts" (ms) or "at" (ISO) is older are dropped without parsing. The server re-read the whole 190 MB usage ledger
+// and 40 MB stall log on every scorecard load (about 3 s of blocked event loop a minute), while a 7-day window needs the last few days
+// (owner 2026-11-23: the dashboard got slow). The file is streamed, so no giant string is held either.
+const TS_RE = /"ts":(\d{12,})/, AT_RE = /"at":"(\d{4}-\d\d-\d\dT[^"]*)"/;
+export async function readJsonl(path, opts = {}) {
   const out = [];
-  for (const l of text.split('\n')) {
+  const sinceIso = opts.since ? new Date(opts.since).toISOString() : '';
+  let stream;
+  try { await fs.access(path); stream = createReadStream(path, { encoding: 'utf8' }); } catch (e) { if (e.code === 'ENOENT') return []; throw e; }
+  for await (const l of createInterface({ input: stream, crlfDelay: Infinity })) {
     if (!l) continue;
+    if (opts.since) {
+      const t = TS_RE.exec(l);
+      if (t) { if (+t[1] < opts.since) continue; }
+      else { const a = AT_RE.exec(l); if (a && a[1] < sinceIso) continue; }
+    }
     try { out.push(JSON.parse(l)); } catch { if (opts.silent) continue; else throw new Error(`bad json in ${path}: ${l.slice(0, 80)}`); }
   }
   return out;
@@ -645,9 +658,10 @@ export function foldRuns(lines) {
 // Build the scorecard for one UTC day boundary [from, to). All I/O.
 export async function loadScorecard({ from, to, env = process.env, fsLib = fs, deployList = null } = {}) {
   const dir = stateDir(env);
+  const since = Date.parse(from) - LOOKBACK_MS;
   const [ledgerRows, stallRecs, runsLines, eventsNow, eventsOld, claudeRateLimits, actionRecs, regretRecs, roundtripRecs] = await Promise.all([
-    readJsonl(join(dir, 'usage-ledger.jsonl'), { silent: true }).catch(() => []),
-    readJsonl(join(dir, 'stalls.jsonl'), { silent: true }).catch(() => []),
+    readJsonl(join(dir, 'usage-ledger.jsonl'), { silent: true, since }).catch(() => []),
+    readJsonl(join(dir, 'stalls.jsonl'), { silent: true, since }).catch(() => []),
     readJsonl(join(dir, 'manager-runs.jsonl'), { silent: true }).catch(() => []),
     readJsonl(join(dir, 'manager-events.jsonl'), { silent: true }).catch(() => []),
     readJsonl(join(dir, 'manager-events.jsonl.1'), { silent: true }).catch(() => []),
@@ -665,9 +679,10 @@ export async function loadScorecard({ from, to, env = process.env, fsLib = fs, d
 // days=1..30. Returns { today, days: [oldest..today] } for the UI.
 export async function loadScorecardDays({ days = 7, env = process.env, fsLib = fs, deployList = null } = {}) {
   const dir = stateDir(env);
+  const since = Date.now() - (days + 8) * DAY_MS;
   const [ledgerRows, stallRecs, runsLines, eventsNow, eventsOld, claudeRateLimits, actionRecs, regretRecs, roundtripRecs] = await Promise.all([
-    readJsonl(join(dir, 'usage-ledger.jsonl'), { silent: true }).catch(() => []),
-    readJsonl(join(dir, 'stalls.jsonl'), { silent: true }).catch(() => []),
+    readJsonl(join(dir, 'usage-ledger.jsonl'), { silent: true, since }).catch(() => []),
+    readJsonl(join(dir, 'stalls.jsonl'), { silent: true, since }).catch(() => []),
     readJsonl(join(dir, 'manager-runs.jsonl'), { silent: true }).catch(() => []),
     readJsonl(join(dir, 'manager-events.jsonl'), { silent: true }).catch(() => []),
     readJsonl(join(dir, 'manager-events.jsonl.1'), { silent: true }).catch(() => []),
@@ -692,13 +707,17 @@ async function readConfig(env, fsLib) {
 
 // Cache wrapper: < 60 s we serve from the in-memory map.
 const cache = new Map();      // key -> { at, value }
+const inflight = new Map();   // key -> promise of a load in progress
 export async function cachedScorecard({ days = 7, ttlMs = 60000, env = process.env, deployList = null } = {}) {
   const key = `${days}`;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < ttlMs) return hit.value;
-  const value = await loadScorecardDays({ days, env, deployList: typeof deployList === 'function' ? deployList() : deployList });
-  cache.set(key, { at: Date.now(), value });
-  return value;
+  if (inflight.has(key)) return inflight.get(key);   // one load at a time: concurrent callers share it
+  const p = loadScorecardDays({ days, env, deployList: typeof deployList === 'function' ? deployList() : deployList })
+    .then((value) => { cache.set(key, { at: Date.now(), value }); return value; })
+    .finally(() => inflight.delete(key));
+  inflight.set(key, p);
+  return p;
 }
 
 // A small helper used by the Langfuse posting: build the events for one scorecard.
