@@ -15,6 +15,21 @@
 //     are not started after an external abort
 //   - the optional fetchImpl lets tests inject a fake fetch
 
+// The content type to send for a picked / dropped file, or '' when /api/upload does not take it (upload-kind.js on the server).
+// A Mac browser often gives a .md or .txt no type at all (owner 2026-11-23: "I cannot share .md and .txt"): name it by extension.
+const IMAGE_TYPES = /^image\/(png|jpeg|gif|webp)$/;
+const TEXT_BY_EXT = { md: 'text/markdown', markdown: 'text/markdown', txt: 'text/plain', log: 'text/plain', csv: 'text/csv', tsv: 'text/plain',
+  json: 'text/plain', jsonl: 'text/plain', yaml: 'text/plain', yml: 'text/plain' };
+export const UPLOAD_ACCEPT = 'image/png,image/jpeg,image/gif,image/webp,.md,.markdown,.txt,.log,.csv,.tsv,.json,.jsonl,.yaml,.yml,text/markdown,text/plain';
+export const UPLOAD_HINT = 'images (png, jpeg, gif, webp) or text files (.md, .txt, .csv, .json, .yaml, .log) only';
+export function uploadType(file) {
+  const t = String(file?.type || '').toLowerCase();
+  if (IMAGE_TYPES.test(t)) return t;
+  const ext = (/\.([A-Za-z0-9]+)$/.exec(String(file?.name || '')) || [])[1]?.toLowerCase();
+  if (ext && TEXT_BY_EXT[ext]) return TEXT_BY_EXT[ext];
+  return /^text\/(markdown|x-markdown|plain)$/.test(t) ? t : '';
+}
+
 export class HttpError extends Error {
   constructor(message, status) { super(message); this.name = 'HttpError'; this.status = status; }
 }
@@ -36,7 +51,9 @@ export async function uploadOne(file, opts = {}) {
     let timedOut = false;
     const timer = timeoutMs > 0 ? setTimeout(() => { timedOut = true; ac.abort(); }, timeoutMs) : null;
     try {
-      const r = await fetchImpl('/api/upload', { method: 'POST', headers: { 'content-type': file.type || 'application/octet-stream' }, body: file, signal: ac.signal });
+      const headers = { 'content-type': uploadType(file) || file.type || 'application/octet-stream' };
+      if (file.name) headers['x-upload-name'] = encodeURIComponent(file.name);   // the saved copy keeps the name (upload-kind.js)
+      const r = await fetchImpl('/api/upload', { method: 'POST', headers, body: file, signal: ac.signal });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new HttpError(j.error || `HTTP ${r.status}`, r.status);
       return j;

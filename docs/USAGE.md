@@ -39,7 +39,7 @@ On the grid, swipe inside the focused card to scroll its output. Swipe on an unf
 Use a trusted HTTPS URL for installation, microphone and Web Push. Install from your browser's app menu when supported.
 On iOS/iPadOS, use Add to Home Screen and open the installed app before enabling notifications where required by the OS.
 Tap the bell to subscribe and use the notification test. The phone must be able to reach the tailnet endpoint when fetching notification details.
-Voice requires the optional local transcription dependency; attaching images stores them in `~/.ghosty/uploads/`.
+Voice requires the optional local transcription dependency; attaching images or text files (.md, .txt, .csv, .json, .yaml, .log) stores them in `~/.ghosty/uploads/` under their own name after a unique prefix.
 Browser and OS support varies; accepting a certificate warning is not a reliable secure-context setup.
 
 ## Optional panels

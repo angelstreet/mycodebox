@@ -22,7 +22,7 @@ import { jevTabHtml, jevRowHtml, creditRowHtml, filtersHtml, decisionsHtml, cred
 import { anthropicChips } from '/anthropic-chips.js';
 import { audioChipHtml, wireAudioChips } from '/audio-chip.js';
 import { copyPromptButtonHtml, wireCopyPrompt } from '/copy-prompt.js';
-import { uploadOne } from '/upload.js';
+import { uploadOne, uploadType, UPLOAD_ACCEPT, UPLOAD_HINT } from '/upload.js';
 import { renderMd } from '/md.js';
 import { decideReaderPaint } from '/reader-paint.js';
 import { localScrollEnters, localScrollExits, flingVelocity, flingStep, ENTER_PX } from '/local-scroll.js';
@@ -5032,7 +5032,7 @@ function openNewSession() {
         <div class="ucpanel hidden" id="nsPanel"><input class="ucs" id="nsSearch" type="search" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="search projects or type a path…"><div class="uclist" id="nsDirs"><div class="sheet-empty">loading…</div></div></div></div>
       <div class="nsprompt" id="nsDrop"><textarea class="sheet-in" id="nsPrompt" rows="4" placeholder="first message (optional) — drop or paste images / .md here"></textarea>
         <button type="button" class="icon-btn nsclip" id="nsAttach" aria-label="Attach a file" title="Attach a file">${icon('paperclip', 16)}</button>
-        <input type="file" id="nsFile" accept="image/png,image/jpeg,image/gif,image/webp,.md,text/markdown" multiple hidden></div>
+        <input type="file" id="nsFile" accept="${UPLOAD_ACCEPT}" multiple hidden></div>
       <div class="nsname"><label class="flab" for="nsName">name</label><input class="sheet-in" id="nsName" maxlength="32" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="session name"></div>
       <input type="hidden" id="nsCwd">`;
     foot.classList.remove('hidden');
@@ -5097,8 +5097,8 @@ function openNewSession() {
     modelSeg.onclick = (e) => { const b = e.target.closest('button'); if (b) { models[agent] = b.dataset.m; drawModels(); } };
     // attachments: picked, pasted or dropped files are uploaded to the codebox and added to the prompt as @path
     const attach = async (files) => {
-      const fs = Array.from(files || []).filter((f) => /^image\/(png|jpeg|gif|webp)$/.test(f.type) || /^text\/(markdown|x-markdown|plain)$/.test(f.type) || f.name?.toLowerCase().endsWith('.md'));
-      if (!fs.length) { toast('png, jpeg, gif, webp images or .md files only'); return; }
+      const fs = Array.from(files || []).filter(uploadType);
+      if (!fs.length) { toast(UPLOAD_HINT); return; }
       clip.classList.add('busy');
       try {
         const paths = [];
@@ -5593,8 +5593,8 @@ async function attachImages(files) {
   // upload while the first is still in flight. The two concurrent POSTs /api/upload can fail
   // the second with a 'Failed to fetch' on some mobile browsers. Drop the second pick silently.
   if (els.attachBtn.classList.contains('busy')) return;
-  const imgs = Array.from(files || []).filter((f) => /^image\/(png|jpeg|gif|webp)$/.test(f.type) || /^text\/(markdown|x-markdown)$/.test(f.type) || f.name?.toLowerCase().endsWith('.md'));
-  if (!imgs.length) { topToast('png, jpeg, gif, webp images or .md files only', 4000, 'error'); return; }
+  const imgs = Array.from(files || []).filter(uploadType);
+  if (!imgs.length) { topToast(UPLOAD_HINT, 4000, 'error'); return; }
   els.attachBtn.classList.add('busy');
   try {
     const paths = [];
