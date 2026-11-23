@@ -20,11 +20,16 @@ export const STATE_LABEL = { working: 'working', waiting: 'needs you', manager: 
 const OWNER_WORDS = /\b(?:you|your|owner|approval|approve|decision|decide|go-ahead|answer|permission|input|review|confirm|sign[- ]?off|credentials?|token)\b|\?/i;
 const isOwnWait = (stall) => stall.status === 'waiting' && stall.case === 'waiting_deploy' && !stall.deployHint?.id && !OWNER_WORDS.test(stall.question || '');
 
+// An explicit "STATUS: done" closing line (stall.source 'rule', case 'done'): by our own status rules nothing of the session's is still
+// running, so a reporter count of background tasks / crons does not outrank it (owner 2026-11-23: a session that said done for 33 min stayed
+// green because the reporter still counted one task, while its claude process had no child at all). Real process signals still count.
+const saidDone = (stall) => !!stall && stall.case === 'done' && stall.source === 'rule' && stall.no_status === false;
+
 export function isLoopWaiting(status) {
   if (!status) return false;
   const r = status.reporter;
   return !!(
-    (r && (r.backgroundWork > 0 || r.crons > 0)) ||
+    (r && (r.backgroundWork > 0 || r.crons > 0) && !saidDone(status.stall)) ||
     (status.stall && (status.stall.case === 'background_wait' || status.stall.case === 'own_job_wait' || isOwnWait(status.stall))) ||
     status.paneBackground ||
     status.scriptBusy
