@@ -36,7 +36,7 @@ import { askSummary, askLine } from '/manager-ask.js';
 import { reloadGuard } from '/sw-update.js';
 import { listHtml, detailHtml, newFormHtml, scorecardHtml } from '/tasks-view.js';
 import * as hv from '/history-view.js';
-import { linkFilePaths } from '/file-links.js';
+import { linkFilePaths, linkUrls } from '/file-links.js';
 import { openFilePanel, closeFilePanel, filePanelOpen } from '/file-panel.js';
 
 const $  = (q) => document.querySelector(q);
@@ -2853,7 +2853,8 @@ function toolGroupHtml(group, open) {
   return `<details class="rd-tools" data-k="${key}"${open ? ' open' : ''}><summary>${group.length} command${group.length === 1 ? '' : 's'} \u00b7 ${escapeHtml(what)}</summary><pre>${escapeHtml(group.map((g) => g.slice(1, -1)).join('\n'))}</pre></details>`;
 }
 // file paths in the reply open the file panel (file-links.js / file-panel.js); a Mac session's files are not on codebox
-const withFileLinks = (html, n) => (String(n).startsWith('mac:') ? html : linkFilePaths(html, n));
+// web links first, so a path inside a URL stays part of it; a Mac session's files are not on codebox, its URLs still open
+const withFileLinks = (html, n) => { const h = linkUrls(html); return String(n).startsWith('mac:') ? h : linkFilePaths(h, n); };
 document.addEventListener('click', (e) => {
   const a = e.target.closest?.('a.rd-path');
   if (!a || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey) return;   // ctrl / middle click: the link's new tab
