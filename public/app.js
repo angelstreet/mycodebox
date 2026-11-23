@@ -2653,10 +2653,16 @@ function toggleReader() {
 // comes when the reader is scrolled near its top or "older conversation" is pressed (loadOlderConversation). A fullscreen session scrolls locally on
 // the whole conversation and a "more" press asks for all of it, so those load everything. Refreshes keep the mode they started in.
 const TAIL_CHARS = 40000;
+// A request over a relayed link can stall for good (lost packets, no error): without a deadline `busy` stays set, the reader says "no reply yet"
+// and never asks again (owner 2026-11-23). The answer is dropped after `ms` and counts as a failure, so the next tick retries.
+function getJson(url, ms) {
+  const ac = new AbortController(), timer = setTimeout(() => ac.abort(), ms);
+  return fetch(url, { signal: ac.signal }).then((r) => r.ok ? r.json() : Promise.reject(r.status)).finally(() => clearTimeout(timer));
+}
 function loadTranscript(n, c, opts) {
   const tail = opts?.full ? false : c.full == null ? !(c.wantFull || state.terms.get(n)?.alt) : !!c.fullPartial;
   const seq = c.tseq = (c.tseq || 0) + 1;   // answers apply in the order asked: a tail refresh still on its way must not replace the older text that was loaded after it
-  return fetch(`/api/transcript/${encodeURIComponent(n)}${tail ? `?max=${TAIL_CHARS}` : ''}`).then((r) => r.ok ? r.json() : Promise.reject(r.status))
+  return getJson(`/api/transcript/${encodeURIComponent(n)}${tail ? `?max=${TAIL_CHARS}` : ''}`, 30000)
     .then((d) => { if (seq < (c.tseqDone || 0)) return; c.tseqDone = seq; c.full = d.text || ''; c.fullSource = d.source || ''; c.fullPartial = !!d.partial; c.fullAt = Date.now(); c.fullPane = state.terms.get(n)?.lastPane; }).catch(() => {});
 }
 // the rest of the conversation, prepended; the reader keeps showing what it showed (scroll position held at the old top)
@@ -2688,7 +2694,7 @@ function syncReader(cell, n) {
   if (stale && !(c && c.busy)) {
     c = c || { hash: null, at: 0, text: '' };
     c.busy = true; state.replies.set(n, c);
-    fetch(`/api/reply/${encodeURIComponent(n)}`).then((r) => r.ok ? r.json() : Promise.reject(r.status))
+    getJson(`/api/reply/${encodeURIComponent(n)}`, 8000)
       .then((d) => {
         // keep the last good reply when the server has none right now (tool line is last)
         if (d.reply) c.text = String(d.reply);
@@ -2725,7 +2731,7 @@ function paintReader(cell, n, opts = {}) {
   const full = c && c.full != null;
   if (full && c.full) text = c.full;
   if (!state.toolOpen.has(n)) state.toolOpen.set(n, new Set());
-  const body = text && text.trim() ? withFileLinks(renderReply(text, sendersOf(n), state.toolOpen.get(n), n), n) : '<div class="rd-empty">no reply yet \u2014 tap &gt;_ for terminal</div>';
+  const body = text && text.trim() ? withFileLinks(renderReply(text, sendersOf(n), state.toolOpen.get(n), n), n) : '<div class="rd-empty">' + (!c || c.busy || c.failed ? (c && c.failed ? 'could not load \u2014 retrying\u2026' : 'loading\u2026') : 'no reply yet \u2014 tap &gt;_ for terminal') + '</div>';
   // QF-16 — copy the reply to the clipboard and read it aloud. Both are
   // present on the popup / task doc / multi-question popover via
   // copy-prompt.js + audio-chip.js; the reader was the only place they
