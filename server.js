@@ -149,6 +149,7 @@ import { sessionDirectory } from './session-directory.js';
 import { createLayoutStore } from './layout.js';
 import { createSessionMeta } from './session-meta.js';
 import { goneCwd, projectCandidates } from './cwd-gone.js';
+import { logUpload, readUploadLog, cleanReport, clientOf } from './upload-log.js';
 import { pickableProject, launchArgs, codexModels, CLAUDE_MODELS, MINIMAX_MODELS, DEFAULT_MODELS, aiNamePrompt, cleanAiName, nameFromWords } from './new-session.js';
 import { createSessionHistory } from './session-history.js';
 import { paneLinesOk } from './pane-lines.js';
@@ -2445,19 +2446,33 @@ async function handleHttp(req, res) {
     catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
   }
   if (req.method === 'POST' && p === '/api/upload') {   // dock attach / paste / drop: an image or a text file -> saved on the codebox -> { path } (upload-kind.js)
+    const t0 = Date.now(), upLog = join(STATE_DIR, 'uploads.jsonl');
+    let name = ''; try { name = decodeURIComponent(String(req.headers['x-upload-name'] || '')); } catch { /* keep no name */ }
+    const ct = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+    const rec = { side: 'server', client: clientOf(req.headers['user-agent']), name: name.slice(0, 120), type: ct.slice(0, 60), declared: Number(req.headers['content-length']) || undefined };
+    const done = (status, extra) => { logUpload(upLog, { ...rec, ok: status === 200, status, ms: Date.now() - t0, ...extra }); };
     try {
-      let name = ''; try { name = decodeURIComponent(String(req.headers['x-upload-name'] || '')); } catch { /* keep no name */ }
-      const t = uploadTarget(req.headers['content-type'], name);
-      if (!t) return json(res, 415, { ok: false, error: 'images (png, jpeg, gif, webp) or text files (.md, .txt, .csv, .json, .yaml, .log) only' });
+      const t = uploadTarget(ct, name);
+      if (!t) { done(415, { error: `refused: ${ct || 'no content type'}` }); return json(res, 415, { ok: false, error: `can't take ${ct || 'a file with no type'}: images (png, jpeg, gif, webp) or text files (.md, .txt, .csv, .json, .yaml, .log) only` }); }
       const img = await readRawBody(req, MAX_IMAGE);
-      if (!img.length) return json(res, 400, { ok: false, error: 'empty file' });
+      if (!img.length) { done(400, { error: 'empty file' }); return json(res, 400, { ok: false, error: 'empty file' }); }
       const dir = join(homedir(), '.ghosty', 'uploads');
       await mkdir(dir, { recursive: true });
       const file = join(dir, `${Date.now()}-${randomBytes(3).toString('hex')}${t.stem ? `-${t.stem}` : ''}.${t.ext}`);
       await writeFile(file, img, { mode: 0o600 });
+      done(200, { bytes: img.length, saved: file.split('/').pop() });
       return json(res, 200, { ok: true, path: file });
-    } catch (err) { return json(res, err.status || 500, { ok: false, error: err.message }); }
+    } catch (err) {
+      done(err.status || 500, { error: String(err.message || err).slice(0, 200) });   // "aborted" / ECONNRESET: the browser dropped the connection mid-upload
+      return json(res, err.status || 500, { ok: false, error: err.message });
+    }
   }
+  // the browser's own report of an upload that failed for good (a request that never arrived leaves no server line)
+  if (req.method === 'POST' && p === '/api/upload-report') {
+    try { logUpload(join(STATE_DIR, 'uploads.jsonl'), cleanReport(await readJsonBody(req), req.headers['user-agent'])); return json(res, 200, { ok: true }); }
+    catch (err) { return json(res, err instanceof SyntaxError ? 400 : 500, { ok: false, error: err.message }); }
+  }
+  if (req.method === 'GET' && p === '/api/upload-log') return json(res, 200, { ok: true, items: readUploadLog(join(STATE_DIR, 'uploads.jsonl'), url.searchParams.get('n')) });
   if (req.method === 'POST' && p === '/api/transcribe') {   // dock mic: audio body -> { text }
     try {
       const audio = await readRawBody(req, MAX_AUDIO);
