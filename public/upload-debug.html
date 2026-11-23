@@ -54,7 +54,7 @@
   async function run(file, label) {
     const t0 = performance.now(); const lines = [`${label}: ${file.name || '(no name)'} · browser says type "${file.type || ''}" · ${kb(file.size)} · sent as "${uploadType(file) || file.type || 'application/octet-stream'}"`];
     $('#out').textContent = lines.join('\n') + '\n… uploading'; $('#out').className = '';
-    try { const j = await uploadOne(file, { attempts: 1, report: false }); const ms = performance.now() - t0; lines.push(`OK  ${Math.round(ms)} ms · ${(file.size / 1e6 / (ms / 1000)).toFixed(1)} MB/s · saved ${j.path.split('/').pop()}`); }
+    try { const j = await uploadOne(file, { attempts: 1, report: false, shrink: false }); const ms = performance.now() - t0; lines.push(`OK  ${Math.round(ms)} ms · ${(file.size / 1e6 / (ms / 1000)).toFixed(1)} MB/s · saved ${j.path.split('/').pop()}`); }
     catch (e) { lines.push(`FAILED  ${Math.round(performance.now() - t0)} ms · ${e instanceof HttpError ? `HTTP ${e.status}: ` : ''}${e.message}`); if (!(e instanceof HttpError)) lines.push('The request did not get an answer: a network, VPN or timeout problem between this browser and the server.'); }
     $('#out').textContent = lines.join('\n');
     load();

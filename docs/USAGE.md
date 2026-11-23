@@ -44,7 +44,7 @@ Browser and OS support varies; accepting a certificate warning is not a reliable
 
 ## Upload problems
 
-An image or file that will not attach: open `/upload-debug.html` on the device that fails (the Mac browser or the phone app). It shows the browser's network facts, uploads a test image or the real file with its timing, and lists what the server and the browsers logged (refused type such as HEIC, too big, the connection dropped, offline). "copy for the agent" puts that log on the clipboard.
+An image or file that will not attach: open `/upload-debug.html` on the device that fails (the Mac browser or the phone app). It shows the browser's network facts, uploads a test image or the real file with its timing, and lists what the server and the browsers logged (refused type such as HEIC, too big, the connection dropped, offline). "copy for the agent" puts that log on the clipboard. Slow uploads from a Mac are usually the network path: `tailscale status` on the codebox shows `relay` instead of a direct address for that Mac; pictures over 250 KB are shrunk before sending for that reason.
 
 ## Optional panels
 
