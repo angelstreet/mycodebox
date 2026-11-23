@@ -42,6 +42,10 @@ Tap the bell to subscribe and use the notification test. The phone must be able 
 Voice requires the optional local transcription dependency; attaching images or text files (.md, .txt, .csv, .json, .yaml, .log) stores them in `~/.ghosty/uploads/` under their own name after a unique prefix.
 Browser and OS support varies; accepting a certificate warning is not a reliable secure-context setup.
 
+## Upload problems
+
+An image or file that will not attach: open `/upload-debug.html` on the device that fails (the Mac browser or the phone app). It shows the browser's network facts, uploads a test image or the real file with its timing, and lists what the server and the browsers logged (refused type such as HEIC, too big, the connection dropped, offline). "copy for the agent" puts that log on the clipboard.
+
 ## Optional panels
 
 The More menu also has **Preview new pages**, which opens a separate tab with sample-data designs for AI manager,

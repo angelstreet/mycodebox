@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0f1014">
+  <title>Upload debug · mycodebox</title>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    body{ overflow:auto; }
+    main{ max-width:980px; margin:0 auto; padding:16px; color:var(--ink); font-size:14px; }
+    h1{ font-size:18px; margin:0 0 12px; } h2{ font-size:13px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3); margin:22px 0 8px; }
+    .row{ display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+    button.b, label.b{ background:var(--bg-in); color:var(--ink); border:1px solid var(--line-2); border-radius:8px; padding:8px 12px; cursor:pointer; font:inherit; }
+    button.b:hover, label.b:hover{ border-color:var(--accent); }
+    table{ border-collapse:collapse; width:100%; font-size:12.5px; } th,td{ text-align:left; padding:5px 8px; border-bottom:1px solid var(--line-2); vertical-align:top; overflow-wrap:anywhere; }
+    th{ color:var(--ink-3); font-weight:600; }
+    .ok{ color:#4ade80; } .bad{ color:#f87171; } .dim{ color:var(--ink-3); }
+    pre{ background:var(--bg-in); border:1px solid var(--line-2); border-radius:8px; padding:10px; white-space:pre-wrap; overflow-wrap:anywhere; font-size:12.5px; margin:8px 0; }
+    .scroll{ overflow-x:auto; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Upload debug</h1>
+  <div class="dim">Try uploads from this browser, see what the server and the browsers logged. Open it on the Mac that fails.</div>
+  <h2>This browser</h2><pre id="env">…</pre>
+  <h2>Try an upload</h2>
+  <div class="row">
+    <button class="b" data-size="100000">test image 100 KB</button>
+    <button class="b" data-size="3000000">3 MB</button>
+    <button class="b" data-size="12000000">12 MB</button>
+    <label class="b">a real file… <input id="pick" type="file" multiple hidden></label>
+  </div>
+  <pre id="out" class="dim">nothing tried yet</pre>
+  <h2>Recent uploads <button class="b" id="reload">reload</button> <button class="b" id="copy">copy for the agent</button></h2>
+  <div class="scroll"><table id="log"><thead><tr><th>time</th><th>who</th><th>result</th><th>file</th><th>type sent</th><th>size</th><th>ms</th><th>what</th></tr></thead><tbody></tbody></table></div>
+</main>
+<script type="module">
+  import { uploadOne, uploadType, HttpError } from '/upload.js';
+  const $ = (s) => document.querySelector(s);
+  const esc = (t) => String(t ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+  const kb = (n) => (n == null ? '' : n >= 1e6 ? (n / 1e6).toFixed(1) + ' MB' : Math.round(n / 1e3) + ' KB');
+  const c = navigator.connection;
+  $('#env').textContent = [`browser   ${navigator.userAgent}`, `online    ${navigator.onLine}`, `network   ${c ? `${c.effectiveType} · rtt ${c.rtt} ms · ${c.downlink} Mb/s${c.saveData ? ' · data saver on' : ''}` : 'not reported by this browser'}`,
+    `page      ${location.origin}  (secure context: ${isSecureContext})`, `service worker  ${navigator.serviceWorker?.controller ? 'active' : 'none'}`].join('\n');
+  const noisePng = (bytes) => new Promise((ok) => {   // random pixels do not compress: the PNG is about `bytes` long
+    const side = Math.max(16, Math.round(Math.sqrt(bytes / 4))), cv = document.createElement('canvas'); cv.width = cv.height = side;
+    const g = cv.getContext('2d'), im = g.createImageData(side, side);
+    for (let i = 0; i < im.data.length; i += 65536) crypto.getRandomValues(im.data.subarray(i, Math.min(i + 65536, im.data.length)));
+    for (let i = 3; i < im.data.length; i += 4) im.data[i] = 255;
+    g.putImageData(im, 0, 0); cv.toBlob(ok, 'image/png');
+  });
+  async function run(file, label) {
+    const t0 = performance.now(); const lines = [`${label}: ${file.name || '(no name)'} · browser says type "${file.type || ''}" · ${kb(file.size)} · sent as "${uploadType(file) || file.type || 'application/octet-stream'}"`];
+    $('#out').textContent = lines.join('\n') + '\n… uploading'; $('#out').className = '';
+    try { const j = await uploadOne(file, { attempts: 1, report: false }); const ms = performance.now() - t0; lines.push(`OK  ${Math.round(ms)} ms · ${(file.size / 1e6 / (ms / 1000)).toFixed(1)} MB/s · saved ${j.path.split('/').pop()}`); }
+    catch (e) { lines.push(`FAILED  ${Math.round(performance.now() - t0)} ms · ${e instanceof HttpError ? `HTTP ${e.status}: ` : ''}${e.message}`); if (!(e instanceof HttpError)) lines.push('The request did not get an answer: a network, VPN or timeout problem between this browser and the server.'); }
+    $('#out').textContent = lines.join('\n');
+    load();
+  }
+  for (const b of document.querySelectorAll('button[data-size]')) b.onclick = async () => run(new File([await noisePng(Number(b.dataset.size))], `debug-${b.dataset.size}.png`, { type: 'image/png' }), 'test image');
+  $('#pick').onchange = async (e) => { for (const f of e.target.files) await run(f, 'your file'); e.target.value = ''; };
+  let items = [];
+  async function load() {
+    try { items = (await (await fetch('/api/upload-log?n=80')).json()).items || []; } catch { items = []; }
+    $('#log tbody').innerHTML = items.slice().reverse().map((r) => `<tr><td class="dim">${esc((r.t || '').slice(5, 19).replace('T', ' '))}</td><td>${esc(r.client)}<div class="dim">${r.side === 'client' ? 'browser report' : 'server'}</div></td>`
+      + `<td class="${r.ok ? 'ok' : 'bad'}">${r.ok ? 'ok' : 'failed'} ${esc(r.status ?? '')}</td><td>${esc(r.name || r.saved || '')}</td><td>${esc(r.type || '')}${r.sent && r.sent !== r.type ? `<div class="dim">sent ${esc(r.sent)}</div>` : ''}</td>`
+      + `<td>${kb(r.bytes ?? r.declared)}</td><td>${esc(r.ms ?? '')}${r.attempts ? `<div class="dim">${r.attempts} tries</div>` : ''}</td><td>${esc(r.error || '')}${r.online === false ? '<div class="bad">offline</div>' : ''}${r.net ? `<div class="dim">${esc(r.net)}</div>` : ''}</td></tr>`).join('') || '<tr><td colspan="8" class="dim">no uploads logged yet</td></tr>';
+  }
+  $('#reload').onclick = load;
+  $('#copy').onclick = async () => { const t = items.slice(-30).map((r) => JSON.stringify(r)).join('\n'); try { await navigator.clipboard.writeText(`upload log of this dashboard (newest last)\n${$('#env').textContent}\n${t}`); $('#copy').textContent = 'copied'; } catch { $('#copy').textContent = 'copy failed'; } setTimeout(() => { $('#copy').textContent = 'copy for the agent'; }, 1500); };
+  load();
+</script>
+</body>
+</html>

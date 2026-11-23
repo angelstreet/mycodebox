@@ -36,7 +36,35 @@ export class HttpError extends Error {
 
 const DEFAULTS = { attempts: 3, backoffMs: 400, timeoutMs: 30000 };
 
+// A failed upload is reported to the server (/api/upload-report -> uploads.jsonl, shown in /upload-debug.html): a request that never
+// arrived (offline, a VPN blip, a timeout) leaves no server line. A report that cannot be sent waits in localStorage for the next page load.
+const QUEUE_KEY = 'ghosty.uploadReports';
+const lsq = (fn) => { try { return fn(globalThis.localStorage); } catch { return undefined; } };
+const post = (rec) => fetch('/api/upload-report', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(rec) }).then((r) => { if (!r.ok) throw new Error(String(r.status)); });
+export async function flushUploadReports() {
+  const q = lsq((l) => JSON.parse(l.getItem(QUEUE_KEY) || '[]')) || [];
+  if (!q.length) return;
+  lsq((l) => l.removeItem(QUEUE_KEY));
+  for (const rec of q) { try { await post(rec); } catch { saveReport(rec); } }
+}
+function saveReport(rec) { lsq((l) => { const q = JSON.parse(l.getItem(QUEUE_KEY) || '[]'); q.push(rec); l.setItem(QUEUE_KEY, JSON.stringify(q.slice(-20))); }); }
+export function reportUploadFailure(file, err, info = {}) {
+  const c = globalThis.navigator?.connection;
+  const rec = { name: file?.name || '', type: file?.type || '', sent: uploadType(file), bytes: file?.size, error: String(err?.message || err), status: err?.status,
+    attempts: info.attempts, ms: info.ms, online: globalThis.navigator?.onLine, net: c ? `${c.effectiveType || ''} ${c.rtt ?? ''}ms ${c.downlink ?? ''}Mb/s`.trim() : '', page: globalThis.location?.pathname };
+  post(rec).catch(() => saveReport(rec));
+}
+if (typeof window !== 'undefined') setTimeout(() => flushUploadReports().catch(() => {}), 3000);
+
 export async function uploadOne(file, opts = {}) {
+  const t0 = Date.now();
+  try { return await uploadAttempts(file, opts); }
+  catch (err) {
+    if (!opts.fetchImpl && opts.report !== false && err?.message !== 'upload aborted') reportUploadFailure(file, err, { attempts: err.attempts, ms: Date.now() - t0 });
+    throw err;
+  }
+}
+async function uploadAttempts(file, opts = {}) {
   const { attempts = DEFAULTS.attempts, backoffMs = DEFAULTS.backoffMs, timeoutMs = DEFAULTS.timeoutMs } = opts;
   const fetchImpl = opts.fetchImpl || (typeof fetch !== 'undefined' ? fetch : null);
   if (!fetchImpl) throw new Error('no fetch implementation available');
@@ -60,9 +88,10 @@ export async function uploadOne(file, opts = {}) {
     } catch (err) {
       lastErr = err;
       // Real server errors: no retry, won't fix itself.
+      err.attempts = attempt + 1;
       if (err instanceof HttpError) throw err;
       // Internal timeout fired: surface as a clear, retryable-on-next-click message.
-      if (timedOut) throw new Error('upload timed out');
+      if (timedOut) throw Object.assign(new Error('upload timed out'), { attempts: attempt + 1 });
       // External signal cancelled: don't keep retrying.
       if (signal?.aborted) throw new Error('upload aborted');
       // 'Failed to fetch' (TypeError on offline / DNS / CORS) and other
