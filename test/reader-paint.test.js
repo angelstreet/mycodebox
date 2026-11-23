@@ -61,3 +61,18 @@ test('busy window expired -> run the normal decision', () => {
   // not at the bottom, so defer
   assert.deepEqual(d, { action: 'defer' });
 });
+
+test('auto full load: due once, re-armed after a failed load, off after success', async () => {
+  const { autoFullDue, autoFullDone, AUTO_FULL_RETRY_MS } = await import('../public/reader-paint.js');
+  const c = {};
+  assert.equal(autoFullDue(c, 0), true);
+  c.autoFull = true;
+  assert.equal(autoFullDue(c, 0), false);
+  autoFullDone(c, false, 1000);            // the request stalled or failed
+  assert.equal(autoFullDue(c, 1000), false, 'not straight away');
+  assert.equal(autoFullDue(c, 1000 + AUTO_FULL_RETRY_MS), true, 'again after the pause');
+  c.autoFull = true;
+  autoFullDone(c, true, 9000);
+  assert.equal(autoFullDue(c, 99999), false, 'a loaded conversation is not asked for again');
+  assert.equal(autoFullDue(null), false);
+});
