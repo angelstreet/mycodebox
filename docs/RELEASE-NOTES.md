@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **Files an agent names open in a side panel (owner 2026-11-23)** — like Cursor / Claude Code: a path in the reader (`docs/X.md`, `server.js:120`, `INVENTORY.md`) or the terminal opens a panel on the right (full screen on a phone) with the file: markdown rendered, code with line numbers and the named lines marked. Buttons: copy the content, copy the path, full screen, open in a new tab (`/view.html`), close (Esc / back). Links inside the file open beside it. `GET /api/file` (`file-view.js`) serves text files only, at most 1 MB, under home or the scratchpads, never a dot folder (except Claude skills, agents, memory and CLAUDE.md), a binary or a secret-looking name · area: dashboard
+
 - **Picture, video and page paths are clickable in the terminal too (owner 2026-11-23)** — on the phone the card shows the terminal, where only URLs were links, so `[file] out/ep01.mp4` could not be opened. A picture / video / page / PDF path in the terminal now opens in a new tab, and the reader also shows relative paths (`out/a.png`) inline. A relative path is looked up in the session's folder by `/files-in/<session>/<path>` (`findInFolder`: `<cwd>/<path>`, else a bounded search; dot folders skipped), which redirects to the checked `/files/` route · area: dashboard
 
 - **Fingerprint gate reads the real retest report verdict (owner 2026-11-22)** — the lane required **PASS** on the first non-empty line, but `fingerprint_retest.py` reports start with a title (or frontmatter) and carry the verdict on line 3, so a passing retest was returned. The verdict is now the first line within the first 15 lines containing **PASS** or **FAIL**; FAIL first or none still blocks · area: integration lane

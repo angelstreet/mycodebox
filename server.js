@@ -155,6 +155,7 @@ import { paneLinesOk } from './pane-lines.js';
 import { scrollPlan, wheelPlan, altScrollApplies } from './alt-scroll.js';
 import { findSessionFile, readConversation } from './conversation.js';
 import { findInFolder, resolveServedFile } from './files-route.js';
+import { readViewFile } from './file-view.js';
 import { createHistoryView } from './history-view.js';
 import { createQuota, defaults as quotaDefaults } from './quota.js';
 import { createClaudeAccounts, rateFile as claudeRateFile, accountOfPid, scanClaudeLimit, DEFAULT_ID as CLAUDE_DEFAULT_ACCOUNT } from './claude-accounts.js';
@@ -2640,6 +2641,16 @@ async function handleHttp(req, res) {
     if (!file) { res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }); return res.end('no such file in the session folder'); }
     res.writeHead(302, { location: '/files' + file.split('/').map(encodeURIComponent).join('/'), 'cache-control': 'no-store' });
     return res.end();
+  }
+  if (req.method === 'GET' && p === '/api/file') {   // a text file an agent named, for the file panel (file-view.js)
+    const session = url.searchParams.get('s') || '', path = url.searchParams.get('p') || '';
+    let cwd = '';
+    if (session && !session.startsWith('mac:')) {
+      try { cwd = (await exec(TMUX, ['display-message', '-p', '-t', tgt(session), '#{pane_current_path}'])).stdout.trim(); } catch { /* no session */ }
+    }
+    const r = readViewFile(path, { home: homedir(), cwd, base: url.searchParams.get('b') || '' });
+    if (!r.path) return json(res, r.status, { ok: false, error: r.error });
+    return json(res, 200, { ok: true, ...r });
   }
   if (req.method === 'GET' && p.startsWith('/api/senders/')) {   // the AI side's recent prompts in a session: [{ sig, by }] (prompt-sig.js)
     return json(res, 200, { session: decodeURIComponent(p.slice('/api/senders/'.length)), ai: promptSenders.of(decodeURIComponent(p.slice('/api/senders/'.length))) });

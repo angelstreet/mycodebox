@@ -36,6 +36,8 @@ import { askSummary, askLine } from '/manager-ask.js';
 import { reloadGuard } from '/sw-update.js';
 import { listHtml, detailHtml, newFormHtml, scorecardHtml } from '/tasks-view.js';
 import * as hv from '/history-view.js';
+import { linkFilePaths } from '/file-links.js';
+import { openFilePanel, closeFilePanel, filePanelOpen } from '/file-panel.js';
 
 const $  = (q) => document.querySelector(q);
 const $$ = (q) => Array.from(document.querySelectorAll(q));
@@ -451,7 +453,8 @@ function getTerm(session) {
     },
   });
   registerUrlLinks(term, (url) => { window.open(url, '_blank', 'noopener'); });   // URLs in the output open in a new tab, wrapped ones included
-  registerFileLinks(term, () => session, (url) => { window.open(url, '_blank', 'noopener'); });   // and picture / video / page paths (media-links.js)
+  registerFileLinks(term, () => session, (url) => { window.open(url, '_blank', 'noopener'); },   // and picture / video / page paths (media-links.js)
+    (f) => openFilePanel({ session, ...f }));   // text files open the file panel (file-panel.js)
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
   entry = { term, fit, host: null, ro: null, lastPane: null, cols: 0, rows: 0, paneCols: 0, paneRows: 0, historyLines: 1000, laidOut: '', reqKey: '', reqTimer: 0, noFit: false };
@@ -2702,7 +2705,7 @@ function paintReader(cell, n, opts = {}) {
   const full = c && c.full != null;
   if (full && c.full) text = c.full;
   if (!state.toolOpen.has(n)) state.toolOpen.set(n, new Set());
-  const body = text && text.trim() ? renderReply(text, sendersOf(n), state.toolOpen.get(n), n) : '<div class="rd-empty">no reply yet \u2014 tap &gt;_ for terminal</div>';
+  const body = text && text.trim() ? withFileLinks(renderReply(text, sendersOf(n), state.toolOpen.get(n), n), n) : '<div class="rd-empty">no reply yet \u2014 tap &gt;_ for terminal</div>';
   // QF-16 — copy the reply to the clipboard and read it aloud. Both are
   // present on the popup / task doc / multi-question popover via
   // copy-prompt.js + audio-chip.js; the reader was the only place they
@@ -2849,6 +2852,16 @@ function toolGroupHtml(group, open) {
   const key = escapeHtml(group[0].slice(0, 200));
   return `<details class="rd-tools" data-k="${key}"${open ? ' open' : ''}><summary>${group.length} command${group.length === 1 ? '' : 's'} \u00b7 ${escapeHtml(what)}</summary><pre>${escapeHtml(group.map((g) => g.slice(1, -1)).join('\n'))}</pre></details>`;
 }
+// file paths in the reply open the file panel (file-links.js / file-panel.js); a Mac session's files are not on codebox
+const withFileLinks = (html, n) => (String(n).startsWith('mac:') ? html : linkFilePaths(html, n));
+document.addEventListener('click', (e) => {
+  const a = e.target.closest?.('a.rd-path');
+  if (!a || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey) return;   // ctrl / middle click: the link's new tab
+  e.preventDefault(); e.stopPropagation();
+  openFilePanel({ session: a.closest('[data-session]')?.dataset.session || new URL(a.href, location.href).searchParams.get('s') || '', path: a.dataset.p, line: Number(a.dataset.l) || 0, line2: Number(a.dataset.l2) || 0, base: a.dataset.b || '' });
+}, true);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && filePanelOpen()) { e.preventDefault(); e.stopPropagation(); closeFilePanel(); } }, true);
+
 function renderReply(text, ai = [], openTools = null, session = '') {
   if (!text || !text.trim()) return '<div class="rd-empty">No reply yet.</div>';
   const lines = String(text).replace(/\t/g, '    ').split('\n');
@@ -5698,6 +5711,7 @@ wireFontUi();
 // The app is one page, so back would leave it. Keep a sentinel history entry and use each back press
 // to close the topmost thing (sheet, menu, task doc, card view); at the top level, press twice to exit.
 function handleBack() {
+  if (closeFilePanel()) return true;
   if (sheetEl) { closeSheet(); return true; }
   const mp = $('#morePop');
   if (mp && !mp.classList.contains('hidden')) { mp.classList.add('hidden'); return true; }

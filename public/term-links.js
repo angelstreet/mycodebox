@@ -2,6 +2,7 @@
 // continues in the same column on the next row, before the cell's closing "│"), so a URL can span several rows.
 // urlChains() follows those wraps; the terminal turns each segment into a link to the whole URL.
 import { fileUrl, mediaSpansIn } from './media-links.js';
+import { filePathSpans } from './file-links.js';
 
 const URL_AT = /https?:\/\/[^\s│┃|<>"'`]+/g;
 const TRAIL = /[.,;:!?)\]}>]+$/;
@@ -90,11 +91,18 @@ export function registerUrlLinks(term, open) {
 export function fileLinksOf(line, session) {
   return mediaSpansIn(line, { relative: true }).map((s) => ({ ...s, url: fileUrl(s.path, session) })).filter((s) => s.url);
 }
-export function registerFileLinks(term, session, open) {
+// text files ("docs/X.md", "server.js:120") -> [{ path, line, line2, start, end }], for the file panel (owner 2026-11-23)
+export function textLinksOf(line) {
+  return filePathSpans(line, { bare: true });
+}
+export function registerFileLinks(term, session, open, openText = null) {
   term.registerLinkProvider({
     provideLinks(y, cb) {
       const line = term.buffer.active.getLine(y - 1)?.translateToString(true) || '';
       const out = fileLinksOf(line, session()).map((s) => ({ text: s.url, range: { start: { x: s.start + 1, y }, end: { x: s.end, y } }, activate: () => open(s.url) }));
+      if (openText) for (const s of textLinksOf(line)) {
+        if (!out.some((o) => s.start < o.range.end.x && s.end > o.range.start.x - 1)) out.push({ text: s.path, range: { start: { x: s.start + 1, y }, end: { x: s.end, y } }, activate: () => openText({ path: s.path, line: s.line, line2: s.line2 }) });
+      }
       cb(out.length ? out : undefined);
     },
   });
