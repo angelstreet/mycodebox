@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **Manager and integration-lane messages are gray, not owner-blue (owner 2026-11-23)** — a prompt starting "Manager:" or "Integration int-<id>" is recognised as the AI side's even when its send was not logged, so the reader shows it gray with its label instead of as the owner's (`prompt-sig.js` `aiSenderOf`) · area: dashboard
+
 - **The dashboard server no longer stalls on the scorecard (owner 2026-11-23)** — every scorecard load re-read and parsed the whole 190 MB usage ledger and 40 MB stall log on the server's main thread (profile: about 60 % of its time, event-loop stalls of 1.2 s), which delayed every other answer (reply, transcript, status). It now streams the files and parses only the window (days + 8), and concurrent loads share one (`readJsonl` `since`, `cachedScorecard` in `scorecard.js`); same numbers, longest event-loop stall 1188 ms → 16 ms · area: dashboard
 
 - **A parked session leaves the list at once (owner 2026-11-23)** — after Park the session stayed listed until a status frame removed it (slow over a relayed link), and a second Park showed "Can't park …: no such session". The dashboard now drops the session as soon as the park succeeds or the server says it is not running, with the toast "is not running (already parked)" (`parkSession` in `public/app.js`) · area: dashboard
