@@ -1,6 +1,8 @@
 // Clickable URLs in the terminal cards. A pane snapshot is hard-wrapped by the agent (and by table cells: the URL
 // continues in the same column on the next row, before the cell's closing "│"), so a URL can span several rows.
 // urlChains() follows those wraps; the terminal turns each segment into a link to the whole URL.
+import { fileUrl, mediaSpansIn } from './media-links.js';
+
 const URL_AT = /https?:\/\/[^\s│┃|<>"'`]+/g;
 const TRAIL = /[.,;:!?)\]}>]+$/;
 const BORDER = /^\s*[│┃|]/;
@@ -77,6 +79,22 @@ export function registerUrlLinks(term, open) {
           }
         }
       }
+      cb(out.length ? out : undefined);
+    },
+  });
+}
+
+// Picture / video / page / PDF paths in the output open the file in a new tab (owner 2026-11-23: on the phone the card is the
+// terminal, and "[file] out/ep01.mp4" was not clickable). A relative path resolves in the session's folder (/files-in/, server).
+// One row only: an agent prints a file path unwrapped in practice. session() is read at click time: a card can be reused.
+export function fileLinksOf(line, session) {
+  return mediaSpansIn(line, { relative: true }).map((s) => ({ ...s, url: fileUrl(s.path, session) })).filter((s) => s.url);
+}
+export function registerFileLinks(term, session, open) {
+  term.registerLinkProvider({
+    provideLinks(y, cb) {
+      const line = term.buffer.active.getLine(y - 1)?.translateToString(true) || '';
+      const out = fileLinksOf(line, session()).map((s) => ({ text: s.url, range: { start: { x: s.start + 1, y }, end: { x: s.end, y } }, activate: () => open(s.url) }));
       cb(out.length ? out : undefined);
     },
   });

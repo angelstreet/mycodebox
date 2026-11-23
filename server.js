@@ -154,7 +154,7 @@ import { createSessionHistory } from './session-history.js';
 import { paneLinesOk } from './pane-lines.js';
 import { scrollPlan, wheelPlan, altScrollApplies } from './alt-scroll.js';
 import { findSessionFile, readConversation } from './conversation.js';
-import { resolveServedFile } from './files-route.js';
+import { findInFolder, resolveServedFile } from './files-route.js';
 import { createHistoryView } from './history-view.js';
 import { createQuota, defaults as quotaDefaults } from './quota.js';
 import { createClaudeAccounts, rateFile as claudeRateFile, accountOfPid, scanClaudeLimit, DEFAULT_ID as CLAUDE_DEFAULT_ACCOUNT } from './claude-accounts.js';
@@ -2628,6 +2628,18 @@ async function handleHttp(req, res) {
     if (r.sandbox) h['content-security-policy'] = 'sandbox allow-scripts allow-popups allow-forms';
     res.writeHead(200, h);
     return createReadStream(r.file).on('error', () => { try { res.end(); } catch {} }).pipe(res);
+  }
+  if (req.method === 'GET' && p.startsWith('/files-in/')) {   // a relative path a session printed -> /files/<abs> (files-route.js findInFolder)
+    const rest = p.slice('/files-in/'.length), i = rest.indexOf('/');
+    let session = '', rel = '';
+    try { session = decodeURIComponent(rest.slice(0, i)); rel = decodeURIComponent(rest.slice(i + 1)); } catch { /* bad escape: 400 below */ }
+    if (i <= 0 || !session || !rel) { res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' }); return res.end('bad path'); }
+    let cwd = '';
+    try { cwd = (await exec(TMUX, ['display-message', '-p', '-t', tgt(session), '#{pane_current_path}'])).stdout.trim(); } catch { /* no session */ }
+    const file = cwd ? findInFolder(cwd, rel) : null;
+    if (!file) { res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }); return res.end('no such file in the session folder'); }
+    res.writeHead(302, { location: '/files' + file.split('/').map(encodeURIComponent).join('/'), 'cache-control': 'no-store' });
+    return res.end();
   }
   if (req.method === 'GET' && p.startsWith('/api/senders/')) {   // the AI side's recent prompts in a session: [{ sig, by }] (prompt-sig.js)
     return json(res, 200, { session: decodeURIComponent(p.slice('/api/senders/'.length)), ai: promptSenders.of(decodeURIComponent(p.slice('/api/senders/'.length))) });

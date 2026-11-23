@@ -17,7 +17,7 @@ import { aiSenderOf, senderLabel } from '/prompt-sig.js';
 import { MEDIA_LINE, mediaPathsIn, mediaRowHtml } from '/media-links.js';
 import { fitAction, fitSatisfied } from '/fit-policy.js';
 import { fitFont, canShrinkFont, isSettling } from '/fit-font.js';
-import { registerUrlLinks } from '/term-links.js';
+import { registerFileLinks, registerUrlLinks } from '/term-links.js';
 import { jevTabHtml, jevRowHtml, creditRowHtml, filtersHtml, decisionsHtml, creditChip } from '/jev-view.js';
 import { anthropicChips } from '/anthropic-chips.js';
 import { audioChipHtml, wireAudioChips } from '/audio-chip.js';
@@ -451,6 +451,7 @@ function getTerm(session) {
     },
   });
   registerUrlLinks(term, (url) => { window.open(url, '_blank', 'noopener'); });   // URLs in the output open in a new tab, wrapped ones included
+  registerFileLinks(term, () => session, (url) => { window.open(url, '_blank', 'noopener'); });   // and picture / video / page paths (media-links.js)
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
   entry = { term, fit, host: null, ro: null, lastPane: null, cols: 0, rows: 0, paneCols: 0, paneRows: 0, historyLines: 1000, laidOut: '', reqKey: '', reqTimer: 0, noFit: false };
@@ -2701,7 +2702,7 @@ function paintReader(cell, n, opts = {}) {
   const full = c && c.full != null;
   if (full && c.full) text = c.full;
   if (!state.toolOpen.has(n)) state.toolOpen.set(n, new Set());
-  const body = text && text.trim() ? renderReply(text, sendersOf(n), state.toolOpen.get(n)) : '<div class="rd-empty">no reply yet \u2014 tap &gt;_ for terminal</div>';
+  const body = text && text.trim() ? renderReply(text, sendersOf(n), state.toolOpen.get(n), n) : '<div class="rd-empty">no reply yet \u2014 tap &gt;_ for terminal</div>';
   // QF-16 — copy the reply to the clipboard and read it aloud. Both are
   // present on the popup / task doc / multi-question popover via
   // copy-prompt.js + audio-chip.js; the reader was the only place they
@@ -2848,16 +2849,17 @@ function toolGroupHtml(group, open) {
   const key = escapeHtml(group[0].slice(0, 200));
   return `<details class="rd-tools" data-k="${key}"${open ? ' open' : ''}><summary>${group.length} command${group.length === 1 ? '' : 's'} \u00b7 ${escapeHtml(what)}</summary><pre>${escapeHtml(group.map((g) => g.slice(1, -1)).join('\n'))}</pre></details>`;
 }
-function renderReply(text, ai = [], openTools = null) {
+function renderReply(text, ai = [], openTools = null, session = '') {
   if (!text || !text.trim()) return '<div class="rd-empty">No reply yet.</div>';
   const lines = String(text).replace(/\t/g, '    ').split('\n');
   const out = [];
   let para = [], code = null, fence = false;
   // a prompt the AI side typed keeps the gray block with its sender's label; the owner's own prompts are blue (.rq.me)
   const promptHtml = () => { const by = aiSenderOf((para.raw || []).join(' '), ai); return by ? `<div class="rq ai"><span class="rq-by">AI · ${escapeHtml(senderLabel(by))}</span>${para.join('<br>')}</div>` : `<div class="rq me">${para.join('<br>')}</div>`; };
+  const rel = !!session && !String(session).startsWith('mac:');   // relative paths resolve in a codebox session's folder (a Mac's files are not here)
   const seen = new Set();   // a picture is shown once per reply, however often its path is named
-  const flushPara = () => { if (para.length) { out.push(para.prompt ? promptHtml() : `<p>${para.join('<br>')}</p>`); if (para.media) out.push(mediaRowHtml(para.media, seen)); para = []; } };
-  const noteMedia = (l) => { const m = mediaPathsIn(l); if (m.length) (para.media ||= []).push(...m); };
+  const flushPara = () => { if (para.length) { out.push(para.prompt ? promptHtml() : `<p>${para.join('<br>')}</p>`); if (para.media) out.push(mediaRowHtml(para.media, seen, rel ? session : '')); para = []; } };
+  const noteMedia = (l) => { const m = mediaPathsIn(l, { relative: rel }); if (m.length) (para.media ||= []).push(...m); };
   const flushCode = () => { if (code) { out.push(`<pre>${escapeHtml(code.join('\n'))}</pre>`); code = null; } };
   for (let li = 0; li < lines.length; li++) {
     const raw = lines[li];
@@ -2874,7 +2876,7 @@ function renderReply(text, ai = [], openTools = null) {
       const paths = [];
       let k = li;
       for (; k < lines.length; k++) { const m = MEDIA_LINE.exec(lines[k].trim()); if (!m) break; paths.push(m[1]); }
-      flushPara(); flushCode(); out.push(mediaRowHtml(paths, seen)); li = k - 1; continue;
+      flushPara(); flushCode(); out.push(mediaRowHtml(paths, seen, rel ? session : '')); li = k - 1; continue;
     }
     if (!fence && TOOL_LINE.test(line.trim())) {
       const group = [];

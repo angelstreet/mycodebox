@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **Picture, video and page paths are clickable in the terminal too (owner 2026-11-23)** — on the phone the card shows the terminal, where only URLs were links, so `[file] out/ep01.mp4` could not be opened. A picture / video / page / PDF path in the terminal now opens in a new tab, and the reader also shows relative paths (`out/a.png`) inline. A relative path is looked up in the session's folder by `/files-in/<session>/<path>` (`findInFolder`: `<cwd>/<path>`, else a bounded search; dot folders skipped), which redirects to the checked `/files/` route · area: dashboard
+
 - **Fingerprint gate reads the real retest report verdict (owner 2026-11-22)** — the lane required **PASS** on the first non-empty line, but `fingerprint_retest.py` reports start with a title (or frontmatter) and carry the verdict on line 3, so a passing retest was returned. The verdict is now the first line within the first 15 lines containing **PASS** or **FAIL**; FAIL first or none still blocks · area: integration lane
 
 - **Park / move on the owner's word kills the session's own running work (owner 2026-11-22)** — the dashboard Park button, the account switch and `claude-account move` used to answer "Can't park …: busy, background job, running child process". They now end the turn, stop only the descendants of that session's Claude pane (SIGTERM, SIGKILL after 4 s) and park / resume anyway; the toast and CLI name the killed pids and the leases still held (not released). `--safe` and the automatic limit swap keep the refusal · area: sessions
