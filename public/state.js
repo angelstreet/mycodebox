@@ -25,12 +25,17 @@ const isOwnWait = (stall) => stall.status === 'waiting' && stall.case === 'waiti
 // green because the reporter still counted one task, while its claude process had no child at all). Real process signals still count.
 const saidDone = (stall) => !!stall && stall.case === 'done' && stall.source === 'rule' && stall.no_status === false;
 
+// A closing "STATUS: needs-owner / needs-manager / blocked / failed" line hands the turn to someone else: a background task the reporter still counts
+// does not make it "working" (owner 2026-11-23: task250-small-model asked the owner a question and stayed green). Process signals still count.
+const STOP_STATUS = new Set(['needs-owner', 'needs-manager', 'blocked', 'failed']);
+const saidStop = (status) => STOP_STATUS.has(status.lastTurn?.status) && status.lastTurn?.source === 'reporter';
+
 export function isLoopWaiting(status) {
   if (!status) return false;
-  const r = status.reporter;
+  const r = status.reporter, stop = saidStop(status);
   return !!(
-    (r && (r.backgroundWork > 0 || r.crons > 0) && !saidDone(status.stall)) ||
-    (status.stall && (status.stall.case === 'background_wait' || status.stall.case === 'own_job_wait' || isOwnWait(status.stall))) ||
+    (r && (r.backgroundWork > 0 || r.crons > 0) && !saidDone(status.stall) && !stop) ||
+    (!stop && status.stall && (status.stall.case === 'background_wait' || status.stall.case === 'own_job_wait' || isOwnWait(status.stall))) ||
     status.paneBackground ||
     status.scriptBusy
   );
