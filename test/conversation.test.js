@@ -46,3 +46,9 @@ test('a prompt sent while the agent worked (queued_command) is the owner\'s; big
   assert.equal(await readConversation(f), 'First.\n\n> and the reader?\n\nLast.');
   fs.rmSync(root, { recursive: true });
 });
+
+import { tailChars, MAX_CHARS as MAXC } from '../conversation.js';
+test('tailChars: absent or junk = everything (0); else clamped between 5000 and MAX_CHARS', () => {
+  assert.equal(tailChars(undefined), 0); assert.equal(tailChars(null), 0); assert.equal(tailChars('abc'), 0); assert.equal(tailChars('-5'), 0); assert.equal(tailChars('0'), 0);
+  assert.equal(tailChars('40000'), 40000); assert.equal(tailChars('100'), 5000); assert.equal(tailChars('99999999'), MAXC);
+});

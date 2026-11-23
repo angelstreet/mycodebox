@@ -22,7 +22,7 @@ Forwarding stays as the path for the setting off, for apps without a conversatio
 | Scrollbar | `barMetrics` kind `alt` | An estimate: notches sent, over 1.4 x the conversation's line count |
 | Read mode | `paintReader`, `public/reader-paint.js`, `/api/transcript` (`conversation.js`) | The conversation read from the session file (newest 3 MB), rendered once as HTML, scrolled by the browser |
 
-The conversation is already loaded for every fullscreen card (the `snapshot` handler preloads `/api/transcript` on the
+A non-fullscreen Claude card loads only the newest 40 000 characters first (`/api/transcript/<s>?max=40000`, `partial: true` when older text exists); the rest comes when the reader is scrolled near its top or "older conversation" is pressed (`loadOlderConversation`, scroll position held). The conversation is already loaded for every fullscreen card (the `snapshot` handler preloads `/api/transcript` on the
 first alternate-screen snapshot; it was the reader's source only).
 
 History: scrolling a fullscreen terminal did switch the card to the reader for a few hours on 2026-11-20. It flipped the
