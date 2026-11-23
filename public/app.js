@@ -1004,7 +1004,7 @@ function connectSession(session) {
           entry.preloaded = true;
           const c = state.replies.get(msg.session) || { hash: null, at: 0, text: '' };
           state.replies.set(msg.session, c);
-          if (!c.autoFull) { c.autoFull = true; loadTranscript(msg.session, c).then(() => { const cur = cardCell(msg.session); if (cur && state.smoothScroll) paintReader(cur, msg.session); }); }   // painted while hidden: the first scroll shows it at once
+          if (!c.autoFull) { c.autoFull = true; c.wantFull = true; loadTranscript(msg.session, c).then(() => { const cur = cardCell(msg.session); if (cur && state.smoothScroll) paintReader(cur, msg.session); }); }   // painted while hidden: the first scroll shows it at once
         }   // alternate screen, no scrollback: the wheel goes to the app (altScroll)
         if (entry?.historyLines > 1000) {
           fetch(`/api/pane/${encodeURIComponent(msg.session)}?lines=${entry.historyLines}`)
@@ -2649,9 +2649,28 @@ function toggleReader() {
   if (a) { relayoutTerm(a); setTimeout(() => relayoutTerm(a), 60); }
 }
 // "earlier conversation": the whole captured history (prompts, replies, tool names) instead of just the last reply
-function loadTranscript(n, c) {
-  return fetch(`/api/transcript/${encodeURIComponent(n)}`).then((r) => r.ok ? r.json() : Promise.reject(r.status))
-    .then((d) => { c.full = d.text || ''; c.fullSource = d.source || ''; c.fullAt = Date.now(); c.fullPane = state.terms.get(n)?.lastPane; }).catch(() => {});
+// The first load is the newest part only (owner 2026-11-23: a 205 KB conversation took 10+ s to open over a relayed link): the older text
+// comes when the reader is scrolled near its top or "older conversation" is pressed (loadOlderConversation). A fullscreen session scrolls locally on
+// the whole conversation and a "more" press asks for all of it, so those load everything. Refreshes keep the mode they started in.
+const TAIL_CHARS = 40000;
+function loadTranscript(n, c, opts) {
+  const tail = opts?.full ? false : c.full == null ? !(c.wantFull || state.terms.get(n)?.alt) : !!c.fullPartial;
+  const seq = c.tseq = (c.tseq || 0) + 1;   // answers apply in the order asked: a tail refresh still on its way must not replace the older text that was loaded after it
+  return fetch(`/api/transcript/${encodeURIComponent(n)}${tail ? `?max=${TAIL_CHARS}` : ''}`).then((r) => r.ok ? r.json() : Promise.reject(r.status))
+    .then((d) => { if (seq < (c.tseqDone || 0)) return; c.tseqDone = seq; c.full = d.text || ''; c.fullSource = d.source || ''; c.fullPartial = !!d.partial; c.fullAt = Date.now(); c.fullPane = state.terms.get(n)?.lastPane; }).catch(() => {});
+}
+// the rest of the conversation, prepended; the reader keeps showing what it showed (scroll position held at the old top)
+async function loadOlderConversation(n) {
+  const c = state.replies.get(n);
+  if (!c || !c.fullPartial || c.olderBusy) return;
+  c.olderBusy = true; c.wantFull = true;
+  const cell = cardCell(n), el = cell?.querySelector('.reader');
+  const h0 = el ? el.scrollHeight : 0, t0 = el ? el.scrollTop : 0;
+  try {
+    await loadTranscript(n, c, { full: true });
+    if (c.fullPartial) return;   // the request failed: stay on the tail, try again on the next scroll
+    if (el && cell.isConnected) { paintReader(cell, n, { keepTop: true }); el.scrollTop = t0 + (el.scrollHeight - h0); }   // keepTop swaps the text at once (a plain paint defers while the reader is not at the bottom)
+  } finally { c.olderBusy = false; }
 }
 function syncReader(cell, n) {
   const st = state.status[n] || {};
@@ -2716,7 +2735,8 @@ function paintReader(cell, n, opts = {}) {
   const actions = audioText
     ? `<div class="rd-actions">${copyPromptButtonHtml({ text: audioText, label: 'Copy reply' })}${audioChipHtml({ text: audioText, label: 'Read reply aloud' })}</div>`
     : '';
-  const html = `<button class="rd-more" data-act="${full ? 'less' : 'more'}">${full ? 'last reply only' : '\u2191 earlier conversation'}</button>${body}${actions}`;
+  const more = full && c.fullPartial ? '<button class="rd-more" data-act="older">\u2191 older conversation</button>' : '';
+  const html = `<button class="rd-more" data-act="${full ? 'less' : 'more'}">${full ? 'last reply only' : '\u2191 earlier conversation'}</button>${more}${body}${actions}`;
   // The freshest payload wins: when a previous paint was deferred because the
   // user is mid-scroll, dataset.pending carries the latest html and the pending
   // is what we want to keep around (and what we'd paint if the user next lands
@@ -2743,9 +2763,11 @@ function paintReader(cell, n, opts = {}) {
       e.stopPropagation();
       const cc = state.replies.get(n);
       if (!cc) return;
-      if (b.dataset.act === 'more') { await loadTranscript(n, cc); } else { cc.full = null; }
+      if (b.dataset.act === 'older') { await loadOlderConversation(n); return; }
+      if (b.dataset.act === 'more') { cc.wantFull = true; await loadTranscript(n, cc); } else { cc.full = null; cc.wantFull = false; cc.fullPartial = false; cc.tseqDone = (cc.tseq || 0) + 1; }   // answers still on their way are dropped
       el.dataset.h = '';
       el.dataset.pending = '';
+      el._busyUntil = 0; el.scrollTop = el.scrollHeight;   // a paint is deferred while the reader is scrolled up: from the bottom it rebuilds at once
       paintReader(cell, n);
       el.scrollTop = b.dataset.act === 'more' ? el.scrollHeight : 0;
     });
@@ -2766,7 +2788,7 @@ function paintReader(cell, n, opts = {}) {
     };
     for (const ev of ['touchstart', 'touchmove', 'wheel', 'scroll']) el.addEventListener(ev, (e) => {
       busy();
-      if (e.type === 'scroll') flushPending();
+      if (e.type === 'scroll') { flushPending(); if (el.scrollTop < 300 && state.replies.get(n)?.fullPartial) loadOlderConversation(n); }
     }, { passive: true });
   }
   const decision = decideReaderPaint({

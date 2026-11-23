@@ -155,7 +155,7 @@ import { pickableProject, launchArgs, codexModels, CLAUDE_MODELS, MINIMAX_MODELS
 import { createSessionHistory } from './session-history.js';
 import { paneLinesOk } from './pane-lines.js';
 import { scrollPlan, wheelPlan, altScrollApplies } from './alt-scroll.js';
-import { findSessionFile, readConversation } from './conversation.js';
+import { findSessionFile, readConversation, tailChars } from './conversation.js';
 import { findInFolder, resolveServedFile } from './files-route.js';
 import { readViewFile } from './file-view.js';
 import { uploadTarget } from './upload-kind.js';
@@ -2636,7 +2636,9 @@ async function handleHttp(req, res) {
       // A Claude session: its own session file holds the whole conversation (the pane of a fullscreen session holds one screen).
       const sid = latest?.status?.[session]?.claudeSessionId;
       const file = sid ? await findSessionFile(sid).catch(() => null) : null;
-      if (file) { const text = await readConversation(file); if (text) return json(res, 200, { session, text, hash: shortHash(text), source: 'session-file' }); }
+      // ?max=N: only about the newest N characters (the reader's first load); `partial` says older text exists
+      const max = tailChars(url.searchParams.get('max'));
+      if (file) { const text = await readConversation(file, max ? { maxChars: max } : {}); if (text) return json(res, 200, { session, text, hash: shortHash(text), source: 'session-file', ...(max ? { partial: text.length >= max } : {}) }); }
       const lines = plainLines(await capturePane(session));
       const text = transcriptOf(lines, bodyEnd(lines));
       return json(res, 200, { session, text, hash: shortHash(text), source: 'pane' });

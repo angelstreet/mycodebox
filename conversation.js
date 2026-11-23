@@ -68,6 +68,8 @@ export function renderConversation(jsonl) {
 }
 
 export const MAX_CHARS = 200_000;          // enough conversation for a long scroll back
+// ?max=N on /api/transcript: 0 (everything) when absent or not a number, else N kept between 5 000 and MAX_CHARS
+export const tailChars = (raw) => { const n = Number(raw) || 0; return n > 0 ? Math.min(MAX_CHARS, Math.max(5000, Math.round(n))) : 0; };
 export const MAX_SCAN = 96 * 1024 * 1024;  // never read more than this from the end of the file
 const CHUNK = 4 * 1024 * 1024;
 // The newest part of the conversation: the file is read backwards in chunks until MAX_CHARS of text are found (a session file is mostly
