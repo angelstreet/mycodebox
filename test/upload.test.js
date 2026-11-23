@@ -131,3 +131,27 @@ test('uploadOne: missing file.type defaults to application/octet-stream', async 
   await uploadOne({ name: 'x' }, { fetchImpl: fn, timeoutMs: 0 });
   assert.equal(calls[0].init.headers['content-type'], 'application/octet-stream');
 });
+
+test('text uploads from a Mac: .md / .txt with no type or text/plain are taken and keep their name (owner 2026-11-23)', async () => {
+  const { uploadType, uploadOne } = await import('../public/upload.js');
+  const { uploadTarget } = await import('../upload-kind.js');
+  const f = (name, type = '') => ({ name, type });
+  assert.equal(uploadType(f('ai_bot_story_ep01_final_script.md')), 'text/markdown', 'a .md with no type');
+  assert.equal(uploadType(f('ai_bot_story_ep01_voice_only.txt')), 'text/plain');
+  assert.equal(uploadType(f('notes.txt', 'text/plain')), 'text/plain');
+  assert.equal(uploadType(f('a.png', 'image/png')), 'image/png');
+  assert.equal(uploadType(f('a.zip', 'application/zip')), '');
+  assert.equal(uploadType(f('a.heic', 'image/heic')), '');
+  assert.deepEqual(uploadTarget('text/markdown', 'ai_bot_story_ep01_final_script.md'), { ext: 'md', stem: 'ai_bot_story_ep01_final_script' });
+  assert.deepEqual(uploadTarget('text/plain', 'ai_bot_story_ep01_voice_only.txt'), { ext: 'txt', stem: 'ai_bot_story_ep01_voice_only' });
+  assert.deepEqual(uploadTarget('text/plain', 'Mon fichier (v2).md'), { ext: 'md', stem: 'Mon_fichier_v2' });
+  assert.deepEqual(uploadTarget('text/plain'), { ext: 'md', stem: '' }, 'no name: the old .md');
+  assert.deepEqual(uploadTarget('image/png', 'shot.png'), { ext: 'png', stem: 'shot' });
+  assert.deepEqual(uploadTarget('text/plain', '../../etc/passwd.txt'), { ext: 'txt', stem: 'passwd' }, 'only the base name');
+  assert.equal(uploadTarget('application/octet-stream', 'a.md'), null);
+  assert.equal(uploadTarget('text/html', 'a.html'), null);
+  let sent = null;
+  const file = Object.assign(new Blob(['# x']), { name: 'ai bot.md' });
+  await uploadOne(file, { timeoutMs: 0, fetchImpl: async (u, o) => { sent = o.headers; return { ok: true, json: async () => ({ ok: true, path: '/p' }) }; } });
+  assert.deepEqual(sent, { 'content-type': 'text/markdown', 'x-upload-name': 'ai%20bot.md' });
+});

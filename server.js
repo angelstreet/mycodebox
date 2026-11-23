@@ -156,6 +156,7 @@ import { scrollPlan, wheelPlan, altScrollApplies } from './alt-scroll.js';
 import { findSessionFile, readConversation } from './conversation.js';
 import { findInFolder, resolveServedFile } from './files-route.js';
 import { readViewFile } from './file-view.js';
+import { uploadTarget } from './upload-kind.js';
 import { createHistoryView } from './history-view.js';
 import { createQuota, defaults as quotaDefaults } from './quota.js';
 import { createClaudeAccounts, rateFile as claudeRateFile, accountOfPid, scanClaudeLimit, DEFAULT_ID as CLAUDE_DEFAULT_ACCOUNT } from './claude-accounts.js';
@@ -1848,10 +1849,7 @@ function ttsJobOf(hash) {
   const st = existsSync(out);
   return { state: st ? 'ready' : 'pending', at: Date.now() };
 }
-// /api/upload accepts images (png/jpeg/gif/webp) and .md files. The .md MIME types
-// vary by OS and browser: macOS often sends text/plain, Linux text/x-markdown,
-// recent browsers text/markdown. The filename check at the route covers text/plain.
-const UPLOAD_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp', 'text/markdown': 'md', 'text/x-markdown': 'md' };
+// /api/upload: what it accepts and how it names the file is upload-kind.js
 async function readJsonBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -2404,7 +2402,7 @@ async function handleHttp(req, res) {
   if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'DELETE'
       && req.method !== 'OPTIONS' && !/application\/json/i.test(req.headers['content-type'] || '')
       && !(p === '/api/transcribe' && /^audio\//i.test(req.headers['content-type'] || ''))
-      && !(p === '/api/upload' && (/^image\//i.test(req.headers['content-type'] || '') || /^text\/(markdown|x-markdown|plain)$/i.test(req.headers['content-type'] || '')))) {   // image/* and text/markdown are not CORS-safelisted either
+      && !(p === '/api/upload' && (/^image\//i.test(req.headers['content-type'] || '') || /^text\/(markdown|x-markdown|plain|csv)$/i.test(req.headers['content-type'] || '')))) {   // image/* and text/markdown are not CORS-safelisted either
     return json(res, 415, { ok: false, error: 'content-type must be application/json' });
   }
 
@@ -2446,19 +2444,16 @@ async function handleHttp(req, res) {
     }
     catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
   }
-  if (req.method === 'POST' && p === '/api/upload') {   // dock attach / paste / drop: image or .md body -> saved on the codebox -> { path }
+  if (req.method === 'POST' && p === '/api/upload') {   // dock attach / paste / drop: an image or a text file -> saved on the codebox -> { path } (upload-kind.js)
     try {
-      const ct = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
-      let ext = UPLOAD_EXT[ct];
-      // text/plain (macOS often sends this for .md) is treated as .md so the owner can
-      // attach notes from TextEdit, Notes, etc. without a special picker filter.
-      if (!ext && ct === 'text/plain') ext = 'md';
-      if (!ext) return json(res, 415, { ok: false, error: 'png, jpeg, gif, webp images or .md files only' });
+      let name = ''; try { name = decodeURIComponent(String(req.headers['x-upload-name'] || '')); } catch { /* keep no name */ }
+      const t = uploadTarget(req.headers['content-type'], name);
+      if (!t) return json(res, 415, { ok: false, error: 'images (png, jpeg, gif, webp) or text files (.md, .txt, .csv, .json, .yaml, .log) only' });
       const img = await readRawBody(req, MAX_IMAGE);
       if (!img.length) return json(res, 400, { ok: false, error: 'empty file' });
       const dir = join(homedir(), '.ghosty', 'uploads');
       await mkdir(dir, { recursive: true });
-      const file = join(dir, `${Date.now()}-${randomBytes(3).toString('hex')}.${ext}`);
+      const file = join(dir, `${Date.now()}-${randomBytes(3).toString('hex')}${t.stem ? `-${t.stem}` : ''}.${t.ext}`);
       await writeFile(file, img, { mode: 0o600 });
       return json(res, 200, { ok: true, path: file });
     } catch (err) { return json(res, err.status || 500, { ok: false, error: err.message }); }
