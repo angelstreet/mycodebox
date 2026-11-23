@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **New session: leave the name empty and the prompt names it (owner 2026-11-23)** — type a first message and the name field stays empty ("named from your prompt"); on create one Haiku call (`POST /api/new-session/name`, about 6 s, no session file kept) returns a 2 to 4 word kebab-case name, falling back to the prompt's first meaningful words, then to the project name; a name you type wins and a taken one gets `-2`. The prompt box is 5 lines in a smaller font (`new-session.js` `cleanAiName`, `nameFromWords`) · area: dashboard
+
 - **Commands group and fold in the reader when the session file is not found (owner 2026-11-23)** — with no session file the reader falls back to the pane, which writes tool lines as `Bash(cd …` (often cut before the closing paren); only the `Bash cd …` form of the session file was grouped, so each command stood alone. Both forms are now one collapsed group per run of consecutive commands (`public/tool-lines.js`) · area: dashboard
 
 - **Context summaries and long AI messages fold in the reader (owner 2026-11-23)** — Claude Code's "This session is being continued from a previous conversation…" summary was shown blue, as if the owner had typed it. It is now an AI prompt (gray, "AI · context summary"), and any AI prompt over 4 lines or 400 characters (summary, manager message, check) starts folded to its first line; a click opens it and the reader keeps it open across repaints (`public/prompt-sig.js` `foldsPrompt`) · area: dashboard

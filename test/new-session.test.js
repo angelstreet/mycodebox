@@ -35,3 +35,16 @@ test('a Mac Claude worktree reports its repo as the project', () => {
   assert.equal(projectFromCwd('/Users/x/virtualpytest/.claude/worktrees/a/sub'), 'virtualpytest');
   assert.equal(projectFromCwd('/Users/x/virtualpytest'), null);
 });
+
+import { aiNamePrompt, cleanAiName, nameFromWords } from '../new-session.js';
+test('session name from the prompt: a model answer is cleaned, a sentence is refused, the words are the fallback', () => {
+  assert.equal(cleanAiName('vpt-stream-device-quality\n\nSTATUS: done — x'), 'vpt-stream-device-quality');
+  assert.equal(cleanAiName('`Default Stream Quality`'), '');
+  assert.equal(cleanAiName('"stream-quality."'), 'stream-quality');
+  assert.equal(cleanAiName("I haven't started on this yet."), '');
+  assert.equal(cleanAiName('a-very-long-name-that-keeps-going-and-going'), '');
+  assert.ok(cleanAiName('alpha-bravo-charlie-delta-echo').length <= 28);
+  assert.equal(nameFromWords('i need a new .env optionnal argument in host so that we can for vpt-stream define a stream quality'), 'env-optionnal-argument-host');
+  assert.equal(nameFromWords('@/home/u/.ghosty/uploads/x.png https://x.example/a'), '');
+  assert.match(aiNamePrompt('x'.repeat(5000)), /<request>\nx{1500}\n<\/request>/);
+});

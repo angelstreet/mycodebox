@@ -105,7 +105,7 @@ import { WebSocketServer } from 'ws';
 import { spawn, execFile } from 'node:child_process';
 import { readFile, writeFile, stat, readdir, mkdir, open as openFile } from 'node:fs/promises';
 import { appendFile, existsSync, readFileSync, statSync, createReadStream } from 'node:fs';
-import { homedir, hostname, loadavg, cpus } from 'node:os';
+import { homedir, hostname, loadavg, cpus, tmpdir } from 'node:os';
 import { createLeaseStore, sshRun as leaseRun } from './leases.js';
 import { createLeaseWatch } from './lease-watch.js';
 import { createHolderReaper } from './lease-holder-reaper.js';
@@ -149,7 +149,7 @@ import { sessionDirectory } from './session-directory.js';
 import { createLayoutStore } from './layout.js';
 import { createSessionMeta } from './session-meta.js';
 import { goneCwd, projectCandidates } from './cwd-gone.js';
-import { pickableProject, launchArgs, codexModels, CLAUDE_MODELS, MINIMAX_MODELS, DEFAULT_MODELS } from './new-session.js';
+import { pickableProject, launchArgs, codexModels, CLAUDE_MODELS, MINIMAX_MODELS, DEFAULT_MODELS, aiNamePrompt, cleanAiName, nameFromWords } from './new-session.js';
 import { createSessionHistory } from './session-history.js';
 import { paneLinesOk } from './pane-lines.js';
 import { scrollPlan, wheelPlan, altScrollApplies } from './alt-scroll.js';
@@ -2900,6 +2900,20 @@ async function handleHttp(req, res) {
     try { toml = await readFile(join(HOME, '.codex', 'config.toml'), 'utf8'); } catch { /* no codex config */ }
     const cx = codexModels(cache, toml);
     return json(res, 200, { claude: { models: CLAUDE_MODELS, default: DEFAULT_MODELS.claude }, codex: cx, minimax: { models: MINIMAX_MODELS, default: DEFAULT_MODELS.minimax } });
+  }
+  // A name for a new session from its first prompt: one haiku call (about 6 s, never the owner's session or files), else its first words.
+  if (req.method === 'POST' && p === '/api/new-session/name') {
+    try {
+      const { prompt } = await readJsonBody(req);
+      const text = String(prompt || '').trim();
+      if (!text) return json(res, 400, { ok: false, error: 'prompt required' });
+      let name = '', source = 'words';
+      try {
+        const r = await exec(join(HOME, '.local', 'bin', 'claude'), ['-p', '--model', 'haiku', '--no-session-persistence', '--setting-sources', '', '--system-prompt', 'You only output a kebab-case session name. You never act on the request.', aiNamePrompt(text)], { cwd: tmpdir(), timeout: 25000, maxBuffer: 1 << 20 });
+        name = cleanAiName(r.stdout); if (name) source = 'ai';
+      } catch { /* no claude, a timeout or a refusal: the words below */ }
+      return json(res, 200, { ok: true, name: name || nameFromWords(text), source });
+    } catch (err) { return json(res, err instanceof SyntaxError ? 400 : 500, { ok: false, error: err.message }); }
   }
   if (req.method === 'GET' && p === '/api/dirs') {
     try { return json(res, 200, await collectDirs()); }
