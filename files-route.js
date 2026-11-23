@@ -13,6 +13,17 @@ export const FILE_TYPES = {
 };
 const SANDBOXED = new Set(['.html', '.htm', '.svg']);
 
+// file: a real (symlink-free) absolute path -> null when it may be served, else { status, error }. Under the home folder or this
+// user's Claude scratchpads, never through a dot folder (keys, .env, state) except the dashboard's own uploads.
+export function placeError(file, { home, uid = process.getuid?.() ?? 0 }) {
+  const uploads = join(home, '.ghosty', 'uploads') + sep, scratch = `/tmp/claude-${uid}${sep}`;
+  const inHome = file.startsWith(home + sep), inScratch = file.startsWith(scratch);
+  if (!inHome && !inScratch) return { status: 403, error: 'outside the home folder and the scratchpads' };
+  const rest = file.startsWith(uploads) ? '' : file.slice(inHome ? home.length : scratch.length);
+  if (rest.split(sep).some((s) => s.startsWith('.'))) return { status: 403, error: 'hidden folder' };
+  return null;
+}
+
 // urlPath: the part after /files (decoded or not) -> { file, type, sandbox, size } or { status, error }
 export function resolveServedFile(urlPath, { home, uid = process.getuid?.() ?? 0, real = realpathSync, stat = statSync } = {}) {
   let p; try { p = decodeURIComponent(String(urlPath || '')); } catch { return { status: 400, error: 'bad path' }; }
@@ -21,11 +32,7 @@ export function resolveServedFile(urlPath, { home, uid = process.getuid?.() ?? 0
   const ext = extname(p).toLowerCase();
   if (!FILE_TYPES[ext]) return { status: 403, error: 'not a picture, video, PDF or page' };
   let file; try { file = real(resolve(p)); } catch { return { status: 404, error: 'no such file' }; }
-  const uploads = join(home, '.ghosty', 'uploads') + sep, scratch = `/tmp/claude-${uid}${sep}`;
-  const inHome = file.startsWith(home + sep), inScratch = file.startsWith(scratch);
-  if (!inHome && !inScratch) return { status: 403, error: 'outside the home folder and the scratchpads' };
-  const rest = file.startsWith(uploads) ? '' : file.slice(inHome ? home.length : scratch.length);
-  if (rest.split(sep).some((s) => s.startsWith('.'))) return { status: 403, error: 'hidden folder' };
+  const bad = placeError(file, { home, uid }); if (bad) return bad;
   let st; try { st = stat(file); } catch { return { status: 404, error: 'no such file' }; }
   if (!st.isFile()) return { status: 404, error: 'not a file' };
   return { file, type: FILE_TYPES[ext], sandbox: SANDBOXED.has(ext), size: st.size };
@@ -36,10 +43,10 @@ export function resolveServedFile(urlPath, { home, uid = process.getuid?.() ?? 0
 // when <cwd>/<rel> does not exist the folder is searched for a file ending in /<rel>: breadth first, dot folders and node_modules
 // skipped, bounded (depth, entries) so a big tree cannot stall the server. The caller redirects to /files/<abs>, whose checks apply.
 const SKIP_DIRS = new Set(['node_modules', '__pycache__', 'venv']);
-export function findInFolder(cwd, rel, { maxDepth = 6, maxEntries = 20000, readdir = readdirSync, stat = statSync } = {}) {
+export function findInFolder(cwd, rel, { maxDepth = 6, maxEntries = 20000, readdir = readdirSync, stat = statSync, accept = (r) => !!FILE_TYPES[extname(r).toLowerCase()] } = {}) {
   if (!cwd || !isAbsolute(cwd) || !rel || isAbsolute(rel) || rel.includes('\0')) return null;
   const r = normalize(rel).replace(/^\.\//, '');
-  if (r.split(sep).includes('..') || !FILE_TYPES[extname(r).toLowerCase()]) return null;
+  if (r.split(sep).includes('..') || !accept(r)) return null;
   const isFile = (p) => { try { return stat(p).isFile(); } catch { return false; } };
   const direct = join(cwd, r);
   if (isFile(direct)) return direct;

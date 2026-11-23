@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0f1014">
+  <title>File · mycodebox</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body class="fv-page">
+  <main class="fv-panel fv-standalone"><div class="fv-body"><div class="fv-note">loading…</div></div></main>
+  <script type="module">
+    // a file from the panel's "open in a new tab" (file-panel.js): /view.html?s=<session>&p=<path>&l=<line>&b=<folder>; its file links open here
+    import { fetchFile, linkedBodyHtml, headHtml, flashCopy, scrollToLine } from '/file-panel.js';
+    const q = new URLSearchParams(location.search), s = q.get('s') || '', p = q.get('p') || '', l = Number(q.get('l')) || 0, b = q.get('b') || '';
+    const main = document.querySelector('main');
+    const esc = (t) => String(t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+    try {
+      const j = await fetchFile(s, p, b);
+      document.title = `${j.name} · mycodebox`;
+      main.innerHTML = headHtml({ name: j.name, path: j.path, standalone: true }) + `<div class="fv-body">${linkedBodyHtml(j, s, l)}</div>`;
+      main.addEventListener('click', (e) => { const b = e.target.closest('.fv-btn'); if (b) flashCopy(b, b.classList.contains('fv-copy') ? j.text : j.path); });
+      scrollToLine(main, l);
+    } catch (err) { main.innerHTML = `<div class="fv-body"><div class="fv-note fv-err">${esc(p)}: ${esc(err.message)}</div></div>`; }
+  </script>
+</body>
+</html>

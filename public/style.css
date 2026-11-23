@@ -2926,3 +2926,33 @@ body.reading #diskBanner{ display:none !important; }
 .reader .rd-file{ display:inline-flex; align-items:center; gap:4px; padding:6px 10px; border:1px solid var(--line-2); border-radius:8px; background:var(--bg-2); color:var(--ink); text-decoration:none; font-size:12px; }
 .reader .rd-file em{ font-style:normal; color:var(--accent); }
 .reader .rd-file:hover{ border-color:var(--accent); }
+
+/* file panel (file-panel.js, owner 2026-11-23): a file an agent named opens beside the session; full screen on a phone or on demand */
+.reader a.rd-path{ color:inherit; text-decoration:underline dotted rgba(255,196,160,0.55); text-underline-offset:3px; cursor:pointer; }
+.reader a.rd-path:hover{ text-decoration-style:solid; text-decoration-color:var(--accent); }
+.fv-panel{ position:fixed; top:var(--top-h); right:0; bottom:0; width:min(48vw, 820px); min-width:360px; z-index:60; display:flex; flex-direction:column;
+  background:var(--bg-2); border-left:1px solid var(--line-2); box-shadow:-12px 0 32px rgba(0,0,0,0.35); color:var(--ink); }
+.fv-panel[hidden]{ display:none; }
+.fv-panel.full{ top:0; left:0; width:auto; min-width:0; border-left:0; z-index:80; }
+.fv-head{ display:flex; align-items:center; gap:6px; padding:8px 10px; border-bottom:1px solid var(--line); background:var(--bg-3); }
+.fv-ico{ color:var(--ink-3); display:flex; }
+.fv-title{ flex:1; min-width:0; display:flex; flex-direction:column; line-height:1.25; }
+.fv-title b{ font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.fv-path{ font-size:11px; color:var(--ink-3); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.fv-panel a.rd-path{ color:#9ab1ff; text-decoration:underline dotted; text-underline-offset:3px; }
+.fv-btn{ display:inline-flex; align-items:center; justify-content:center; width:34px; height:34px; border-radius:8px; border:1px solid var(--line-2);
+  background:transparent; color:var(--ink-2); cursor:pointer; text-decoration:none; flex:none; }
+.fv-btn:hover{ color:var(--ink); border-color:var(--ink-3); }
+.fv-btn.done{ color:var(--working); border-color:var(--working); }
+.fv-body{ flex:1; overflow:auto; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; }
+.fv-md{ padding:16px 22px 40px; max-width:var(--reader-measure); font-size:14px; line-height:1.6; }
+.fv-code{ font-family:'JetBrains Mono', ui-monospace, monospace; font-size:12.5px; line-height:1.55; padding:8px 0 40px; min-width:max-content; }
+.fv-row{ display:flex; white-space:pre; }
+.fv-row.on{ background:rgba(232,154,74,0.16); }
+.fv-ln{ flex:none; width:4.5em; padding-right:12px; text-align:right; color:var(--ink-3); user-select:none; }
+.fv-tx{ padding-right:16px; }
+.fv-note{ padding:10px 16px; font-size:12px; color:var(--ink-3); }
+.fv-err{ color:var(--waiting); }
+@media (max-width: 720px){ .fv-panel{ top:0; left:0; width:auto; min-width:0; border-left:0; z-index:80; } .fv-btn{ width:40px; height:40px; } .fv-panel .fv-full{ display:none; } }
+body.fv-page{ margin:0; background:var(--bg); }
+.fv-panel.fv-standalone{ position:static; width:auto; min-width:0; height:100vh; height:100dvh; border-left:0; box-shadow:none; }
