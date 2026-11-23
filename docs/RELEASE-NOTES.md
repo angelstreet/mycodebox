@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **Context summaries and long AI messages fold in the reader (owner 2026-11-23)** — Claude Code's "This session is being continued from a previous conversation…" summary was shown blue, as if the owner had typed it. It is now an AI prompt (gray, "AI · context summary"), and any AI prompt over 4 lines or 400 characters (summary, manager message, check) starts folded to its first line; a click opens it and the reader keeps it open across repaints (`public/prompt-sig.js` `foldsPrompt`) · area: dashboard
+
 - **Web links in the reader open on a tap (owner 2026-11-23)** — the phone app shows the reader, and a plain `https://…` URL in an answer was plain text there (only the terminal linked it). URLs in the reader are now links that open in a new tab; sentence punctuation stays outside the link and a path inside a URL is not also a file link (`public/file-links.js` `linkUrls`) · area: dashboard
 
 - **Attaching .md and .txt files from a Mac works (owner 2026-11-23)** — a Mac browser often gives a .md / .txt no type, so the upload went out as `application/octet-stream` and was refused, and .txt was refused outright. The attach button, drop, paste and the new-session dialog now take images and text files (.md, .txt, .csv, .json, .yaml, .log) by extension, and the saved copy keeps its name (`<time>-<id>-ai_bot_story_ep01_final_script.md`), so the agent sees what it is (`upload-kind.js`, `public/upload.js` `uploadType`) · area: dashboard
