@@ -13,6 +13,8 @@ what changed and why it matters, ending with `· area: <area>`.
 ## Unreleased
 
 
+- **The top strip hides NEEDS YOU when nothing needs you** — on a wide screen the block with "none" is no longer shown (as for an idle DEPLOY); the blocks that remain share the row, LEASES taking what is left (`.alertrow` in `public/style.css`; phones unchanged) · area: ui
+
 - **A session that says `STATUS: done` is no longer green because of background tasks the reporter still counts** — the closing-line rule that already covered needs-owner / needs-manager / blocked / failed now covers `done` as well, so the reporter's background count and the state-derived `background_wait` stall no longer turn it back to working (owner 2026-11-24: lol-first-waves-opus, 3 counted tasks, green after its done line); real process signals (pane child, script) still show working · area: dashboard
 - **The card header drops the "n / N" counter and gets a text-size button and the fullscreen icon (owner 2026-11-24)** — one button shows S, M or L and cycles M, L, S, M (M is the default font, L is 2 above, S is 2 below; stored like the old size, so the top-bar A− / A+ keep working and the letter follows them); the fullscreen icon is now shown in the desktop card header too (`.fsz`, `.open`, `cycleSize` in `public/app.js`) · area: dashboard
 - **The top strip hides an idle DEPLOY block and sizes NEEDS YOU to its chips** — on a wide screen DEPLOY shows only while a deploy runs or waits, NEEDS YOU is as wide as its chips (at most 45%) and LEASES takes all the rest, so lease chips are no longer cut off · area: ui
