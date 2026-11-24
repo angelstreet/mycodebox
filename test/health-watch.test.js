@@ -480,3 +480,22 @@ test('helpers: worktree porcelain, proc cwds and the deleted suffix', () => {
     (p) => '/x/y', (p) => (p === '/proc/7/fd' ? ['3', '4'] : []));
   assert.deepEqual(fds, [{ pid: 7, fd: '3', path: '/x/y' }, { pid: 7, fd: '4', path: '/x/y' }], 'only own processes');
 });
+
+import { investigateDecision, NICE_PREFIX } from '../scripts/health-watch.js';
+test('investigateDecision: unchanged issue is skipped for 30 min, worse / new / after 30 min / forced investigate', () => {
+  const t0 = Date.parse('2026-11-24T17:00:00Z'), min = 60000;
+  const disk = (sev) => ({ type: 'disk', key: 'disk', severity: sev });
+  const last = { at: t0, issues: { disk: 85 } };
+  const state = { issues: { 'health:disk': { at: t0, severity: 85 } } };
+  const d = (o) => investigateDecision({ issues: [disk(85)], last, state, now: t0 + 5 * min, ...o });
+  assert.equal(d({}).investigate, false, 'unchanged within 30 min');
+  assert.equal(d({ issues: [disk(86)] }).investigate, false, '+1 point is not worse');
+  assert.equal(d({ issues: [disk(87)] }).investigate, true, 'worse');
+  assert.equal(d({ issues: [disk(85), { type: 'ram', key: 'ram', severity: 91 }] }).investigate, true, 'new key');
+  assert.equal(d({ now: t0 + 30 * min }).investigate, true, 'after 30 min');
+  assert.equal(d({ force: true }).investigate, true, 'forced');
+  assert.equal(d({ last: undefined }).investigate, true, 'no previous investigation');
+  assert.equal(d({ now: t0 + 6 * 3600000, last: { at: t0 + 6 * 3600000 - 5 * min, issues: { disk: 85 } } }).investigate, true, 'manager wake due (6 h debounce)');
+  assert.equal(d({ issues: [{ type: 'load', key: 'load', severity: 11 }], last: { at: t0, issues: { load: 10 } }, state: { issues: { 'health:load': { at: t0 } } } }).investigate, false, '10 % rule for load');
+  assert.deepEqual(NICE_PREFIX, ['nice', '-n', '19', 'ionice', '-c3']);
+});
