@@ -35,6 +35,10 @@ INSTALL_VERIFY = int(os.environ.get('RTSP_INSTALL_VERIFY_SECONDS', '300'))
 # The host reports its device list (with the device names) every 30 s. A renamed device shows its new name
 # in the app only once the host has reported it, so the night waits for that report (bug-ee21b77c).
 TITLE_CHECK = int(os.environ.get('RTSP_TITLE_CHECK_SECONDS', '90'))
+# A live channel can be dark for a scene longer than the window the live layer is read over (30 s): the tile read
+# black at 05:48 and the browser played it bright 4 min later (vpt-nipogi/DEVICE13, 2026-11-24). Before the night
+# blames the capture side for a black tile, it reads the tile's live layer once more, this long after the first read.
+TILE_RECHECK = int(os.environ.get('RTSP_TILE_RECHECK_SECONDS', '120'))
 AGENT = 'codebox:rtsp-nightly'
 
 
@@ -122,6 +126,18 @@ def confirm_down(entry, ssh_map, timeout):
     """A live TV channel can blink or answer slowly: re-probe 20 s later with 3x the timeout. -> the confirmed status."""
     time.sleep(int(os.environ.get('RTSP_CONFIRM_SECONDS', '20')))
     return rc.check_stream(entry['url'], timeout * 3, ssh_map.get(entry['host']))['status']
+
+
+def recheck_tile_live(entry, timeout=20):
+    """The tile's live layer read again, TILE_RECHECK seconds after the night read it the first time: a dark scene
+    can outlast the window the live layer is judged over. -> its luma, or None when the layer cannot be read (a layer
+    that cannot be read is no signal at all, bug-4f69009f: it never means a dark one)."""
+    base = rc.tile_base(entry)
+    if not base:
+        return None
+    time.sleep(TILE_RECHECK)
+    _, live = rc.stream_media(base, timeout)
+    return None if live is None else round(live, 1)
 
 
 def pick(entry, pool, ssh_map, timeout, exclude=()):
@@ -378,6 +394,18 @@ def run(mode, timeout=10):
             y = rc.source_luma(e['url'], 20, ssh_map.get(e['host']))
             row['source_luma'] = None if y is None else round(y, 1)
             black_src = y is not None and y < rc.BLACK_LUMA
+            if not black_src:
+                # The channel plays, so the tile's darkness is a moment of the channel, not a dead channel. The live
+                # layer is read over a 30 s window, and a dark scene can outlast it (vpt-nipogi/DEVICE13 read black at
+                # 05:48 and the browser played it bright 4 min later, 2026-11-24): read the tile once more before the
+                # night calls it black (bug-9a0cd4c9).
+                again = recheck_tile_live(e)
+                if again is not None:
+                    cap['live_luma'] = again
+                    row['live_luma'] = again
+                    if again >= rc.BLACK_LUMA:
+                        cap['capture'] = 'ok'
+                        row['capture'] = 'ok'
         if e['kind'] == 'youtube':
             # A YouTube device (its source is in DEVICE_YOUTUBE_URL) is not an RTSP stream: the nightly has nothing
             # to probe and nothing to replace, and it is not a down stream (2026-11-22).
@@ -408,7 +436,10 @@ def run(mode, timeout=10):
                         else f"the tile's snapshot is {cap['capture']}")
                 row['action'] = (f"report: the source plays but {what}"
                                  + (f" ({cap['age']} s old)" if cap['capture'] == 'stale' and cap.get('age') is not None else '')
-                                 + ": host capture side (vpt-stream / thumbnails), not changed")
+                                 + ": host capture side (vpt-stream / thumbnails), not changed"
+                                 + (f" (the live layer was re-read {TILE_RECHECK} s later: still dark, live luma {cap['live_luma']:.0f})"
+                                    if cap.get('live_luma') is not None and cap['live_luma'] < rc.BLACK_LUMA
+                                    and cap['capture'] == 'black' else ''))
         elif src_ok and not black_src:
             # The thumbnail was dark but the live video plays: the tile is not broken, a looping clip simply moves
             # (2026-11-13, bug-6b227d92). Say so instead of losing it.
