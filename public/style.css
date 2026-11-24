@@ -2986,3 +2986,13 @@ body.fv-page{ margin:0; background:var(--bg); }
 .cell .h .fsz{ flex-shrink:0; min-width:36px; height:30px; padding:0 8px; background:var(--bg-3); color:var(--accent); border:1px solid var(--line-2); border-radius:7px; font:inherit; font-size:12px; font-weight:700; cursor:pointer; }
 .grid-pane .cell .h .fsz{ display:none; }
 .card-pane .cell .h .open{ display:inline-flex; width:36px; height:30px; background:var(--bg-3); color:var(--accent); border:1px solid var(--line-2); border-radius:7px; align-items:center; justify-content:center; }
+
+/* owner 2026-11-24: NEEDS YOU with nothing to answer is hidden too (like an idle DEPLOY); what is left shares the row: chips-wide blocks first, LEASES takes the rest */
+@media (min-width: 901px){
+  .alertrow{ display:flex; }
+  .alertrow > *{ flex:0 1 auto; min-width:0; }
+  .alertrow .attention{ max-width:45%; }
+  .alertrow .deployban{ max-width:40%; }
+  .alertrow .leasebar{ flex:1 1 0; }
+  .alertrow .attention.none{ display:none; }
+}
