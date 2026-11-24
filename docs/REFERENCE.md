@@ -1218,6 +1218,7 @@ One block per platform/env, BLOCKED first, then DEPLOYING, then FREE: a status p
 **IN USE** (every lease, red when it blocks the next deploy), **LIVE** (every target in the ledger, red when its last
 attempt failed) and a collapsed **History**. Agent ids are shortened for display; "session gone" means a recognized local holder has no live tmux session.
 See `public/platforms.js` for legacy alias handling.
+Display-only cleanup (2026-11-24, `public/platforms-view.js`): an env whose every ledger row has agent `test:*` and is older than 24 h is hidden and counted in one "N test env hidden" line; a host key equal to another key written twice (A+A) is not a row; env/host labels drop `-vpt` / `vpt-` (`envLabel` / `hostLabel`, skipped when two names would collide), real names stay in titles, data and requests. No ledger row is deleted.
 What blocks follows the runner: full deploys wait on `run` and env-wide leases, host deploys on env-wide ones
 (`effectiveBlockers` in `public/platforms-view.js`, same rule as `vpt-lease` with `--skip-leased`).
 
