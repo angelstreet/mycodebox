@@ -21,7 +21,7 @@
 // topic sessions each get their own), lane returned > 5 (a return that a later request for the same repo+branch landed is
 // resolved and does not count), CI red > 120 min, disk > 90 %, MemAvailable < 2 GB, any approvalRefused.
 // Registered by the manager in the private <stateDir>/daily-checks.json (id "harness-health"); this repo never edits it.
-import { readFileSync, statfsSync } from 'node:fs';
+import { readFileSync, statfsSync, readdirSync, statSync } from 'node:fs';
 import { appendFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -210,10 +210,50 @@ export async function fetchSessions(fetchImpl = fetch, url = sessionsUrl()) {
   } catch { return { sessions: null, needsYou: null }; }
 }
 
+// ---- hidden agent work (pure over transcript lines) ------------------------------------------------------------------
+// Owner 2026-11-24: an Agent-tool subagent has no pane and no dashboard row. One whose result suggests a change
+// ("recommend", "propose", "fix") and that is not followed by a `cbsession` start in the same turn left work with no visible
+// owner. Lines are one Claude Code transcript (jsonl) in order; a turn starts at each user message that is not a tool result.
+export const HIDDEN_RE = /\b(recommend\w*|propos\w*|fix\w*)\b/i;
+const blocks = (r) => (Array.isArray(r?.message?.content) ? r.message.content : []);
+const textOf = (c) => (typeof c === 'string' ? c : Array.isArray(c) ? c.map((x) => (typeof x === 'string' ? x : x?.text || '')).join('\n') : '');
+export function hiddenAgentWork(lines, { now, hours = HOURS }) {
+  const agents = []; const results = new Map(); const starts = []; let turn = 0, i = 0;
+  for (const raw of lines) {
+    i++;
+    let r; try { r = JSON.parse(raw); } catch { continue; }
+    if (!r || typeof r !== 'object') continue;
+    if (r.type === 'user' && !blocks(r).some((b) => b?.type === 'tool_result')) turn++;
+    for (const b of blocks(r)) {
+      if (b?.type === 'tool_use' && (b.name === 'Agent' || b.name === 'Task')) agents.push({ id: b.id, at: r.timestamp, turn, i, name: String(b.input?.description || b.input?.subagent_type || 'agent').slice(0, 60) });
+      else if (b?.type === 'tool_use' && b.name === 'Bash' && /\bcbsession\b/.test(String(b.input?.command || ''))) starts.push({ turn, i });
+      else if (b?.type === 'tool_result' && b.tool_use_id) results.set(b.tool_use_id, textOf(b.content));
+    }
+  }
+  const hidden = agents.filter((a) => inWindow(a.at, now, hours) && HIDDEN_RE.test(results.get(a.id) || '')
+    && !starts.some((s) => s.turn === a.turn && s.i > a.i));
+  return { count: hidden.length, names: hidden.map((a) => a.name) };
+}
+// The manager's own transcripts: ~/.claude/projects/<its worktree path with / as ->/*.jsonl, files touched in the window.
+export const managerTranscriptDir = () => process.env.GHOSTY_MANAGER_TRANSCRIPTS
+  || join(homedir(), '.claude/projects', (process.env.MANAGER_DIR || join(homedir(), 'ghosty-sessions-manager')).replace(/[/.]/g, '-'));
+export function hiddenAgentStats({ dir = managerTranscriptDir(), now = Date.now(), hours = HOURS } = {}) {
+  let files; try { files = readdirSync(dir).filter((f) => f.endsWith('.jsonl')); } catch { return { count: null, names: [] }; }
+  let count = 0; const names = [];
+  for (const f of files) {
+    try {
+      if (statSync(join(dir, f)).mtimeMs < now - hours * 3600000) continue;
+      const r = hiddenAgentWork(readFileSync(join(dir, f), 'utf8').split('\n').filter(Boolean), { now, hours });
+      count += r.count; names.push(...r.names);
+    } catch { /* an unreadable transcript is skipped */ }
+  }
+  return { count, names };
+}
+
 // ---- collect (io) ---------------------------------------------------------------------------------------------------
 const readLines = (p) => { try { return { lines: readFileSync(p, 'utf8').split('\n').filter(Boolean), ok: true }; } catch { return { lines: [], ok: false }; } };
 
-export function collect({ stateDir: dir = stateDir(), now = Date.now(), hours = HOURS, box = boxStats() } = {}) {
+export function collect({ stateDir: dir = stateDir(), now = Date.now(), hours = HOURS, box = boxStats(), transcriptDir } = {}) {
   const win = { now, hours };
   const notFound = [];
   const src = (name) => { const r = readLines(join(dir, name)); if (!r.ok) notFound.push(name); return r.lines; };
@@ -221,7 +261,8 @@ export function collect({ stateDir: dir = stateDir(), now = Date.now(), hours = 
   const decisions = src('manager-decisions.jsonl').filter((l) => { let r; try { r = JSON.parse(l); } catch { return false; } return inWindow(r?.at, now, hours); }).length;
   const lane = laneStats(src(join('integration', 'requests.jsonl')), win);
   const ci = ciStats(src('ci-watch.jsonl'), win);
-  return { date: new Date(now).toISOString().slice(0, 10), ...asks, decisions, ...lane, ci, box, notFound };
+  const h = hiddenAgentStats({ dir: transcriptDir, now, hours });
+  return { date: new Date(now).toISOString().slice(0, 10), ...asks, decisions, ...lane, ci, box, hiddenAgentWork: h.count, hiddenAgentNames: h.names, notFound };
 }
 
 // ---- summarize (pure) -----------------------------------------------------------------------------------------------
@@ -251,6 +292,7 @@ export function summarize(today, prev) {
   if ((today.ci?.redMinutes || 0) > CI_RED_MIN_MAX) add('ci-red', `CI red ${today.ci.redMinutes} min in 24 h`, `${today.ci.redTransitions || 0} red tick(s), ${today.ci.greenTransitions || 0} green. Above ${CI_RED_MIN_MAX} min main was unusable for sessions waiting on a deploy.`);
   if (today.box?.diskPct != null && today.box.diskPct > DISK_PCT_MAX) add('disk', `root disk ${today.box.diskPct} %`, `Above ${DISK_PCT_MAX} % on /. health-watch cleans its share; the rest is worktrees, tmp and caches.`);
   if (today.box?.memAvailableMb != null && today.box.memAvailableMb < MEM_MIN_MB) add('memory', `${today.box.memAvailableMb} MB MemAvailable`, `Below ${MEM_MIN_MB} MB. New sessions and parking both need headroom; load 1 min was ${n(today.box?.load1)}.`);
+  if ((today.hiddenAgentWork || 0) > 0) add('hidden-agent-work', `hidden-agent-work: ${today.hiddenAgentWork}`, `${today.hiddenAgentWork} manager Agent-tool subagent(s) returned fix/recommend results with no cbsession start in the same turn: ${(today.hiddenAgentNames || []).join(', ')}. Work that changes something must be a named session on the dashboard (manual §5).`);
   if ((today.approvalRefused || 0) > 0) add('approval-refused', `${today.approvalRefused} lane approval(s) refused`, `${today.approvalRefused} integration request(s) carried approvalRefused: the lane was asked to push or deploy and stopped. A refusal is a floor stop, not a bug — but a day with several means the autonomy switches disagree with the requesters.`);
 
   const p = prev || null;
@@ -266,6 +308,7 @@ export function summarize(today, prev) {
     ['load 1 / 5 min', `${n(today.box.load1)} / ${n(today.box.load15)}`, p ? n(p.box?.load1) : 'n/a'],
     ['MemAvailable', `${n(today.box.memAvailableMb)} MB`, p ? `${n(p.box?.memAvailableMb)} MB` : 'n/a'],
     ['disk /', `${n(today.box.diskPct)} %`, p ? `${n(p.box?.diskPct)} %` : 'n/a'],
+    ['hidden-agent-work', n(today.hiddenAgentWork), p ? n(p.hiddenAgentWork) : 'n/a'],
     ['sessions (needs you)', `${n(today.sessions)} (${n(today.needsYou)})`, p ? `${n(p.sessions)} (${n(p.needsYou)})` : 'n/a'],
   ];
   const report = ['| metric | today (24 h) | previous day |', '| --- | --- | --- |',

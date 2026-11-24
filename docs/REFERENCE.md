@@ -594,6 +594,7 @@ in the summary line and the table row), lane returned > 5, CI red > 120 min, dis
 `approvalRefused`. `summary` is one plain line,
 `report` a markdown table today vs previous. The pure parts (`askStats`, `laneStats`, `ciStats`, `summarize`, `prevLine`)
 are tested in `test/harness-health-check.test.js` with fixture files in a temp state dir and an injected sessions fetch.
+`hidden-agent-work` (owner 2026-11-24): the check also scans the manager's transcripts (`~/.claude/projects/<manager worktree>/*.jsonl`, override `GHOSTY_MANAGER_TRANSCRIPTS`) for Agent-tool calls whose result matches recommend / propose / fix with no `cbsession` Bash call later in the same turn; the count is a table row and, above 0, one finding `harness-health:hidden-agent-work` naming the subagents.
 It is registered by the manager in the private `daily-checks.json` (id `harness-health`) after review; this repo never
 edits that file.
 

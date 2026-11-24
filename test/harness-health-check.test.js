@@ -7,7 +7,7 @@ import { join } from 'node:path';
 
 import {
   askStats, laneStats, ciStats, loadAvgs, memAvailableMb, diskPct, inWindow,
-  fetchSessions, collect, summarize, prevLine, run, FINAL_STATES, MEM_MIN_MB,
+  fetchSessions, collect, summarize, prevLine, run, FINAL_STATES, MEM_MIN_MB, hiddenAgentWork, hiddenAgentStats,
 } from '../scripts/harness-health-check.js';
 import { tmp } from './helpers-tmp.js';
 
@@ -378,4 +378,37 @@ test('collect: reads the real /proc and / for the box numbers', () => {
   assert.ok(Number.isFinite(c.box.memAvailableMb) && c.box.memAvailableMb > 0, '/proc/meminfo read');
   assert.ok(Number.isFinite(c.box.diskPct), 'statfs(/) read');
   assert.ok(c.box.diskPct >= 0 && c.box.diskPct <= 100);
+});
+// ---- hidden agent work (owner 2026-11-24) -------------------------------------------------------------------------
+const tu = (id, name, input, at) => line({ type: 'assistant', timestamp: at, message: { content: [{ type: 'tool_use', id, name, input }] } });
+const tr = (id, text) => line({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, content: text }] } });
+const um = (t) => line({ type: 'user', message: { content: t } });
+test('hiddenAgentWork: counts fix/recommend subagent results with no cbsession in the same turn', () => {
+  const at = ago(3600000);
+  const lines = [
+    um('review it'),
+    tu('a1', 'Agent', { description: 'review vpt-monitor-subtitle' }, at), tr('a1', 'I recommend fixing the regex.'),
+    um('next'),                                                    // a1's turn ended with no cbsession
+    tu('a2', 'Agent', { description: 'lookup' }, at), tr('a2', 'The file lists 3 sessions.'),   // nothing suggested
+    um('again'),
+    tu('a3', 'Agent', { description: 'review B' }, at), tr('a3', 'Propose a change.'),
+    tu('b1', 'Bash', { command: 'cbsession -n topic-b -d ~/x' }, at), tr('b1', 'started'),      // started in the same turn
+  ];
+  const r = hiddenAgentWork(lines, win);
+  assert.equal(r.count, 1);
+  assert.deepEqual(r.names, ['review vpt-monitor-subtitle']);
+  assert.equal(hiddenAgentWork(lines, { now: NOW, hours: 0.01 }).count, 0, 'outside the window');
+});
+test('hiddenAgentStats + summarize: count line and a finding; missing dir is n/a, not 0', () => {
+  const dir = tmp('hidden');
+  const at = new Date().toISOString();
+  writeFileSync(join(dir, 's.jsonl'), [um('go'), tu('a', 'Agent', { description: 'opus review' }, at), tr('a', 'please fix X')].join('\n'));
+  const st = hiddenAgentStats({ dir, now: Date.now() });
+  assert.equal(st.count, 1);
+  const base = { states: {}, ci: {}, box: {}, hiddenAgentWork: 1, hiddenAgentNames: ['opus review'] };
+  const s = summarize(base, null);
+  assert.ok(s.findings.some((f) => f.key === 'harness-health:hidden-agent-work' && f.body.includes('opus review')));
+  assert.ok(s.report.includes('| hidden-agent-work | 1 |'));
+  assert.equal(hiddenAgentStats({ dir: join(dir, 'nope') }).count, null);
+  assert.ok(!summarize({ ...base, hiddenAgentWork: 0 }, null).findings.some((f) => /hidden/.test(f.key)));
 });
