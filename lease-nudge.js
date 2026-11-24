@@ -38,6 +38,7 @@ export const MAC_IDLE_NUDGE_MIN = 10;      // a holder with no session (Mac, scr
 export function reasonsOf(l, { now, idleMin = null, minIdle = IDLE_MIN }) {
   const out = [];
   if (l.expectMin != null && l.sinceMs && now - l.sinceMs > l.expectMin * 60000) out.push(`past its expected ${l.expectMin} min`);
+  if (l.stalled) out.push(`lease held, run not progressing: ${l.stalled}`);   // the holder's own wrapped run says so (vpt-lease run progress file)
   if (idleMin != null && idleMin >= minIdle) out.push(`idle ${idleMin} min`);
   const wide = (l.resources || []).includes('*') || l.kind === 'server';
   if (wide && SINGLE_RE.test(l.purpose || '') && !WIDE_RE.test(l.purpose || '')) out.push('broader than its purpose');

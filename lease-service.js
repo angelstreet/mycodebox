@@ -220,7 +220,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
         break;
       }
       case 'renew': { const l = S.leases[f.id]; if (l) { l.expires = f.expires; l.ttlMin = f.ttlMin; l.lastHb = f.lastHb ?? f.at; } break; }
-      case 'hb': { const l = S.leases[f.id]; if (l) { l.lastHb = f.at; l.reservedUntil = null; const c = clk.get(l.id); if (c) { c.hb = mono(); if (f.active) c.act = mono(); } } break; }
+      case 'hb': { const l = S.leases[f.id]; if (l) { l.lastHb = f.at; l.reservedUntil = null; l.stalled = f.stalled || null; const c = clk.get(l.id); if (c) { c.hb = mono(); if (f.active) c.act = mono(); } } break; }
       case 'yield': { const l = S.leases[f.id]; if (l) { if (f.clear) delete l.yieldAt; else { l.yieldAt = f.at; ev('yield', l, f.at, { priority: prioOf(l), waiting: f.waiting, reason: 'a claim of higher priority is waiting: stop at the next turn boundary and release' }); } } break; }
       case 'collect': { const l = S.leases[f.id]; if (l) l.reservedUntil = null; break; }
       case 'tkt_pass': for (const id of f.ids) if (S.tickets[id]) S.tickets[id].passed = (S.tickets[id].passed || 0) + 1; break;
@@ -377,7 +377,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
       id: l.id, env: l.env, resources: l.resources, legacy: l.resources.map((c) => legacyName(P(c))), type: leaseType(l), mode: l.mode,
       kind: l.kind, kinds: l.resKinds || null, agent: l.agent, client: l.client || null, session: l.session || null, purpose: l.purpose || '', provider: l.provider || '',
       shared: !!l.shared, since: iso(l.since), expires_at: iso(l.expires), ttl_min: l.ttlMin, ttlLeftMin: Math.floor((l.expires - t) / MIN),
-      long: l.ttlMin > 240, idleMin: Math.floor((mono() - (clk.get(l.id)?.act ?? mono())) / MIN), lastHeartbeatAt: iso(l.lastHb), generation: l.generation, gens: l.gens,
+      long: l.ttlMin > 240, idleMin: Math.floor((mono() - (clk.get(l.id)?.act ?? mono())) / MIN), lastHeartbeatAt: iso(l.lastHb), stalled: l.stalled || null, generation: l.generation, gens: l.gens,
       heartbeat_s: l.heartbeatS ?? null, holder_pid: l.holderPid ?? null, holder_host: l.holderHost ?? null, holder_src: l.holderSrc ?? null, expect_min: l.expectMin ?? null, eta: iso(expectedEnd(l)), eta_latest: iso(l.expires), eta_basis: etaBasis(l), system: !!l.system, deploy_id: l.deployId || null, reserved_until: iso(l.reservedUntil),  goneAt: iso(l.goneAt), imported: !!l.imported,
       priority: prioOf(l), priority_source: l.prioritySrc || 'default', ttl_clamped_from: l.ttlClampedFrom ?? null, yield_required: yieldWaiters(l).length > 0,
     };
@@ -1053,7 +1053,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
       if (fenced(l, a.generation)) return fail('E_FENCED', 'stale generation: the lease is no longer yours');
       if (!l) return fail('E_NOT_FOUND', 'no such active lease');
       const no = holderCheck(l, a); if (no) return no;
-      emit({ t: 'hb', id: l.id, active: !!a.active });
+      emit({ t: 'hb', id: l.id, active: !!a.active, stalled: typeof a.stalled === 'string' && a.stalled ? a.stalled.slice(0, 200) : null });
       const ws = yieldWaiters(S.leases[l.id]);
       return { ok: true, lease: leaseView(S.leases[l.id]), ...(ws.length ? { yield_required: true, yield_message: `a claim of higher priority waits: stop at the next turn boundary and release ${l.id}` } : {}) };
     });

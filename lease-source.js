@@ -42,7 +42,7 @@ export function normLease(l, now) {
   const ttl = Number.isFinite(l.ttlLeftMin) ? l.ttlLeftMin : expiresMs ? Math.max(0, Math.floor((expiresMs - now) / 60000)) : null;
   return {
     id: String(l.id), env, resources, mode: l.mode || 'exclusive', kind: l.kind || 'host', agent: l.agent || '', session: l.session || '', purpose: l.purpose || '',
-    deployId: l.deploy_id || null, sinceMs, ttlLeftMin: ttl, lastHeartbeatMs: tms(l.lastHeartbeatAt ?? l.last_heartbeat_at), idleMin: Number.isFinite(l.idleMin) ? l.idleMin : null, heartbeatS: l.heartbeat_s ?? null,
+    deployId: l.deploy_id || null, sinceMs, ttlLeftMin: ttl, lastHeartbeatMs: tms(l.lastHeartbeatAt ?? l.last_heartbeat_at), stalled: l.stalled || null, idleMin: Number.isFinite(l.idleMin) ? l.idleMin : null, heartbeatS: l.heartbeat_s ?? null,
     expectMin: Number.isFinite(l.expect_min) ? l.expect_min : null,   // the holder's own stated hold time (lease-nudge.js)
   };
 }
