@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **Catch-up vs device leases pinned, bug-ec1e2d3b closed as not a bug (2026-11-24)** — the 08:10Z catch-ups on vpt-nipogi / vpt-mf1 started in a gap: the lease journal shows no device lease live on either host during the restart (device50 released 08:00:07, next claim 08:24:10; device3 released 08:02:35, next 08:27:19). A regression test (`test/lease-service.test.js`) now fixes the rule: a strict catch-up is refused under a device lease, and once running it holds the host so device claims wait; `docs/LEASE-RULES.md` states it · area: lease service
+
 - **A session that asked the owner something no longer shows green (owner 2026-11-23)** — `task250-small-model` ended on `STATUS: needs-owner: …` but stayed green (working) because the reporter still counted one background task and the stall classifier said `background_wait`. A closing `needs-owner`, `needs-manager`, `blocked` or `failed` line now outranks those two signals; a real process in the pane (background marker, script child) still shows working (`public/state.js` `isLoopWaiting`) · area: dashboard
 
 - **Manager and integration-lane messages are gray, not owner-blue (owner 2026-11-23)** — a prompt starting "Manager:" or "Integration int-<id>" is recognised as the AI side's even when its send was not logged, so the reader shows it gray with its label instead of as the owner's (`prompt-sig.js` `aiSenderOf`) · area: dashboard

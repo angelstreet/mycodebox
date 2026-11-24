@@ -177,6 +177,11 @@ Hours were lost waiting on one web host while the other was free. When the work 
   another running or older overlapping deploy). A request limited to `--hosts` that is blocked on only some of them starts on the free ones;
   the busy hosts go back to the queue as their own strict request (same ref and age, `split-to=` in `deploy list`); a catch-up also yields per host to a ticket that waited over 10 min, so only the hosts that ticket touches stay queued. A request whose host
   another queued deploy lists at a ref that contains its own loses that host (`superseded-by=`): an older ref never deploys over a newer one.
+- A catch-up never restarts vpt-host under a live lease (bug-ec1e2d3b, 2026-11-24). The first deploy syncs a leased host's code and defers the restart
+  (`SKIPPED_HOSTS`, `deploy start` reports it in `skipped_hosts` and grants nothing for it); the catch-up it queues is strict, so `deploy start` refuses it
+  (`E_HELD`) while ANY exclusive lease, device leases included, is live on the host. When it does start, it holds `host:<h>` for the restart, so a device claim
+  waits behind it. A restart that looks like it hit a lease was in a gap between two runs: check the lease journal (`vpt-lease events --json --after <n>`,
+  granted/released times) against the deploy's `started`/`finished` before filing. Only a `--force` or a hand `systemctl restart` bypasses this, and the session guard refuses the latter.
 - `vpt-lease list` / `claim --wait` say what gates a ticket that looks grantable (`note: gated by deploy <id> (<state>, <why>)`).
 - `vpt-lease list` prints `OLD CODE  <env>/<host>  restart deferred ...: catch-up <id> ...` for every host a queued or running catch-up deploy covers: that host had its code synced (or was dropped) while leased, so its vpt-host and vpt-kpi still run the code from before that deploy. `--json` carries it as `old_code`. Freeing the host lets the catch-up restart it (2026-11-11).
 - A host deploy releases each host as soon as it is done with it (rolling, owner 2026-10-31): update_core.sh reports each host's health,
