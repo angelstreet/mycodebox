@@ -499,6 +499,7 @@ function layoutTerm(session) {
   const { term, fit, host } = entry;
   const w = host.clientWidth, h = host.clientHeight;
   if (w < 20 || h < 20) return false;
+  if (entry.laidOut && dragging()) return false;   // mid-drag: keep the last layout (cropped, steady); the settled call lays out once
   const propose = () => { try { return fit.proposeDimensions(); } catch { return null; } };
   let p = propose();
   const cols = entry.paneCols || state.status?.[session]?.cols || (p && p.cols) || 80;
@@ -553,7 +554,7 @@ function scheduleFit(session) {
   if (!entry) return;
   clearTimeout(entry.reqTimer);
   if (!state.fit || entry.noFit) return;
-  entry.reqTimer = setTimeout(() => sendFit(session), entry.asked ? 400 : 60);   // the first ask of a card goes out at once: it is what the owner waits for
+  entry.reqTimer = setTimeout(() => sendFit(session), entry.asked ? 700 : 60);   // the first ask of a card goes out at once: it is what the owner waits for
 }
 async function sendFit(session) {
   const entry = state.terms.get(session);
@@ -645,6 +646,20 @@ function syncFontUi() {
   const f = $('#fitToggle'); if (f) f.classList.toggle('on', state.fit);
 }
 
+// A window drag fires a resize every frame; each one re-fitted the font, resized xterm and cleared and rewrote the whole screen (about 25 full
+// repaints in a 5 s drag: the flashing and the text size jumping, owner 2026-11-24). Now the first event of a drag lays out at once and the rest wait
+// until the size has been quiet for SETTLE_MS, then lay out once.
+const SETTLE_MS = 400;
+let lastSizeEvent = 0;   // any window or card size event: layoutTerm (also reached from every status tick) waits while a drag is going on
+const dragging = () => Date.now() - lastSizeEvent < SETTLE_MS;
+function settled(fn) {
+  let last = 0, timer = 0;
+  return () => {
+    const now = Date.now(), quiet = now - last > SETTLE_MS * 2; last = now; lastSizeEvent = now;
+    clearTimeout(timer);
+    if (quiet) { lastSizeEvent = 0; requestAnimationFrame(fn); } else timer = setTimeout(fn, SETTLE_MS + 30);
+  };
+}
 function relayoutTerm(session) {
   const entry = state.terms.get(session);
   if (!entry) return;
@@ -893,11 +908,7 @@ function mountTerm(session, host) {
     bindAltScroll(session, host);
     if (entry.ro) entry.ro.disconnect();
     if (typeof ResizeObserver !== 'undefined') {
-      let raf = 0;
-      entry.ro = new ResizeObserver(() => {
-        cancelAnimationFrame(raf);
-        raf = requestAnimationFrame(() => relayoutTerm(session));
-      });
+      entry.ro = new ResizeObserver(settled(() => relayoutTerm(session)));
       entry.ro.observe(host);
     }
   }
@@ -5806,9 +5817,7 @@ function handleBack() {
   });
 }
 
-window.addEventListener('resize', () => {
-  for (const name of state.terms.keys()) relayoutTerm(name);
-});
+window.addEventListener('resize', settled(() => { for (const name of state.terms.keys()) relayoutTerm(name); }));
 
 
 document.addEventListener('visibilitychange', () => {
