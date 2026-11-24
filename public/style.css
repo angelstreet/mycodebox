@@ -2974,3 +2974,10 @@ body.fv-page{ margin:0; background:var(--bg); }
   .sheet.platforms .pf-row:not([data-res]) .pf-r{ flex:1 1 auto; overflow-wrap:normal; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .sheet.platforms .pf-row:not([data-res]) .pf-w{ flex:0 1 auto; overflow-wrap:normal; white-space:nowrap; }
 }
+
+/* owner 2026-11-24: an idle DEPLOY block is hidden, NEEDS YOU is as wide as its chips (never more than 45%), and LEASES gets the rest */
+@media (min-width: 901px){
+  .alertrow{ grid-template-columns:fit-content(45%) minmax(0,1fr); }
+  .alertrow:has(.deployban:not(.idle)){ grid-template-columns:fit-content(45%) fit-content(30%) minmax(0,1fr); }
+  .alertrow .deployban.idle{ display:none; }
+}
