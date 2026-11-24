@@ -2966,3 +2966,11 @@ body.reading #diskBanner{ display:none !important; }
 @media (max-width: 720px){ .fv-panel{ top:0; left:0; width:auto; min-width:0; border-left:0; z-index:80; } .fv-btn{ width:40px; height:40px; } .fv-panel .fv-full{ display:none; } }
 body.fv-page{ margin:0; background:var(--bg); }
 .fv-panel.fv-standalone{ position:static; width:auto; min-width:0; height:100vh; height:100dvh; border-left:0; box-shadow:none; }
+
+/* Platforms sheet (owner 2026-11-24): wider, and one line per host / device on a desktop-width window (the failed reason used to wrap under the version) */
+.sheet.platforms{ max-width:min(1040px, 96vw); }
+@media (min-width: 700px){
+  .sheet.platforms .pf-row:not([data-res]){ flex-wrap:nowrap; }   /* the LIVE rows; an IN USE row carries more fields and keeps its wrap */
+  .sheet.platforms .pf-row:not([data-res]) .pf-r{ flex:1 1 auto; overflow-wrap:normal; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .sheet.platforms .pf-row:not([data-res]) .pf-w{ flex:0 1 auto; overflow-wrap:normal; white-space:nowrap; }
+}
