@@ -28,6 +28,7 @@ Exit codes: 0 ok, 1 error / not found, 3 busy, 4 deploy pending, 5 UNAVAILABLE (
 5 when the service is unavailable. Call it right before each protected step (a restart, a deploy step).
 """
 import argparse, contextlib, io, json, os, re, shlex, signal, socket, subprocess, sys, threading, time, uuid
+import tempfile
 import urllib.error, urllib.parse, urllib.request
 from datetime import datetime, timezone
 
@@ -1294,6 +1295,9 @@ def cap_lost(capped_until, code):
     return None
 
 
+PROGRESS_STALE_S = float(os.environ.get("VPT_LEASE_PROGRESS_STALE_S", "300"))
+
+
 class HeartbeatThread(threading.Thread):
     """Heartbeats while the wrapped command runs. A refused heartbeat (fenced / lease gone) or a lease that is no longer
     exclusive is reported loudly and heartbeating stops; run exits non-zero after the command (or kills it: --on-fence
@@ -1305,6 +1309,22 @@ class HeartbeatThread(threading.Thread):
         self.stop, self.fenced = threading.Event(), None
         self.yielded = False
         self.capped_until = None
+        self.progress_file = None   # VPT_LEASE_PROGRESS_FILE: the wrapped command (vpt_run) touches it while its run progresses
+
+    def progress(self):
+        """-> (active, stalled text). A command that never writes the file is always active (as before). One that did and
+        went quiet for PROGRESS_STALE_S is not: its heartbeat no longer resets the idle clock and names the stall
+        (2026-11-24: a run polled a dead server 40 min and held a device lease, heartbeating 'active' all along)."""
+        try:
+            if self.progress_file and os.path.exists(self.progress_file):
+                age = time.time() - os.path.getmtime(self.progress_file)
+                if age > PROGRESS_STALE_S:
+                    with open(self.progress_file) as f:
+                        note = f.read().strip()[:200] or "no progress"
+                    return False, note
+        except OSError:
+            pass
+        return True, None
 
     def say_cap(self, exp):
         if not self.capped_until:
@@ -1321,7 +1341,12 @@ class HeartbeatThread(threading.Thread):
     def run(self):
         while not self.stop.wait(self.every):
             try:
-                r = api("POST", "/heartbeat", {"id": self.lease_id, "active": True}, timeout=10)
+                active, stalled = self.progress()
+                body = {"id": self.lease_id, "active": active}
+                if stalled:
+                    body["stalled"] = stalled
+                    eprint("vpt-lease: lease %s held, run not progressing: %s" % (self.lease_id, stalled))
+                r = api("POST", "/heartbeat", body, timeout=10)
                 if r.get("ok") and r.get("yield_required"):
                     self.say_yield()
                 lost = None
@@ -1696,14 +1721,17 @@ def cmd_run(a, command):
         if not lease_id:
             eprint("vpt-lease: the legacy claim succeeded but printed no lease id; not running the command")
             return 1
+    progress_file = os.path.join(tempfile.gettempdir(), "vpt-lease-progress-%s-%d" % (lease_id, os.getpid()))
     old = {s: signal.signal(s, forward) for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)}
     code = 1
     try:
         try:
-            env = None
+            env = dict(os.environ, VPT_LEASE_PROGRESS_FILE=progress_file)
+            if hb is not None:
+                hb.progress_file = progress_file
             if granted_res:
                 first = granted_res.split(",")[0].split("/")
-                env = dict(os.environ, VPT_LEASE_RESOURCE=granted_res, VPT_LEASE_HOST=first[0], VPT_LEASE_DEVICE=first[1] if len(first) > 1 else "")
+                env.update(VPT_LEASE_RESOURCE=granted_res, VPT_LEASE_HOST=first[0], VPT_LEASE_DEVICE=first[1] if len(first) > 1 else "")
                 moved = bool(requested) and {legacy_res(x) for x in granted_res.split(",")} != {legacy_res(x) for x in requested}
                 if moved and not a.switched_from:
                     a.switched_from = ",".join(requested)
@@ -1744,6 +1772,8 @@ def cmd_run(a, command):
         if hb:
             hb.stop.set()
             hb.join(timeout=12)     # an in-flight heartbeat must not land after the release
+        with contextlib.suppress(OSError):
+            os.unlink(progress_file)
         for s, h in old.items():
             signal.signal(s, signal.SIG_IGN)       # nothing may interrupt the release
         try:

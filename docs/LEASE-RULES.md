@@ -112,6 +112,12 @@ Hours were lost waiting on one web host while the other was free. When the work 
 - Heartbeat: `run` does it for you; otherwise `vpt-lease heartbeat <id> --active` while you use the resource. Only `run` and
   other heartbeating leases (those that declared a heartbeat interval) are released when their heartbeats stop; a plain
   `claim; work; release` keeps working and is bounded by its TTL.
+- **Progress (2026-11-24):** `run` exports `VPT_LEASE_PROGRESS_FILE` to the command. A command that writes it (`vpt_run.py` does: the
+  mtime is the server's last answer, the text is `<task id>, server answering|not answering`) is *progressing* while the file is younger
+  than `VPT_LEASE_PROGRESS_STALE_S` (300). When stale, the heartbeat is sent `active:false` with `stalled:<text>`: the idle clock is not
+  reset, `list` shows `stalled`, the nudge says `lease held, run not progressing: <text>`, and `run` prints the same on stderr. A command
+  that never writes the file is unaffected. `vpt_run.py` itself exits 3 after 300 s without an answer from the server and 4 (`task lost:
+  server restarted`) when the server answers again and no longer knows the task, so `run` releases the lease.
 - **Holder death (owner 2026-10-27):** a dead holder never blocks a device. The service records a local holder pid with its start time: the
   claim's `holder_pid` (`vpt-lease claim ... --holder-pid <pid>` or `$VPT_HOLDER_PID`; pass the pid of the long-lived dispatcher/script, never
   of a shell that exits after the claim) or the `-<pid>` of an agent named `codebox:<name>-<pid>`. If that process is gone, or the pid now has

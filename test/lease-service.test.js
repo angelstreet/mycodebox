@@ -1274,3 +1274,12 @@ test('catch-up supersede in the registry: only a containing ref cancels, the sur
     assert.deepEqual([...cu.hosts].sort(), expectCancel ? ['host-1', 'host-2'] : ['host-1'], 'a cancelled request\'s hosts are carried, never dropped');
   }
 });
+
+test('heartbeat with a stalled note: shown on the lease, cleared by the next plain heartbeat; idle clock not reset', async () => {
+  const h = harness();
+  const a = (await h.claim('st', 'host-1/device1', { heartbeat_s: 120 })).lease;
+  await h.svc.heartbeat({ id: a.id, active: false, stalled: 'task t1, server not answering' });
+  assert.equal((await h.svc.list({})).leases.find((l) => l.id === a.id).stalled, 'task t1, server not answering');
+  await h.svc.heartbeat({ id: a.id, active: true });
+  assert.equal((await h.svc.list({})).leases.find((l) => l.id === a.id).stalled, null);
+});

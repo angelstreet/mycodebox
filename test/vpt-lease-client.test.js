@@ -789,3 +789,16 @@ test('priority: --priority accepts P3 and sends it', async () => {
   const r = await run(['claim', 'env-a', 'host-1/stb-1', '--agent', 'codebox:bot', '--priority', 'P3']);
   assert.equal(r.code, 0); assert.equal(calls[0].body.priority, 'P3');
 });
+
+test('run: a command that wrote its progress file and went quiet heartbeats inactive and names the stall (2026-11-24)', async () => {
+  process.env.VPT_LEASE_PROGRESS_STALE_S = '1';
+  try {
+    setup((c) => (c.path === '/claim' ? { ok: true, lease: lease({ id: 'STALL1' }) } : { ok: true, released: ['STALL1'] }));
+    const r = await run(['run', 'env-a', 'host-1/stb-1', '--agent', 'codebox:x', '--', 'sh', '-c',
+      'echo "task t1, server not answering" > "$VPT_LEASE_PROGRESS_FILE"; touch -d "10 min ago" "$VPT_LEASE_PROGRESS_FILE"; sleep 1.2']);
+    assert.equal(r.code, 0);
+    const hb = calls.filter((c) => c.path === '/heartbeat');
+    assert.ok(hb.some((c) => c.body.active === false && c.body.stalled === 'task t1, server not answering'), 'a stalled heartbeat names the task');
+    assert.match(r.err, /run not progressing: task t1, server not answering/);
+  } finally { delete process.env.VPT_LEASE_PROGRESS_STALE_S; }
+});

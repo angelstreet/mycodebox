@@ -176,3 +176,7 @@ test('a waiter whose chat cannot take the note is journaled once as chat-cannot-
   const lines = readFileSync(join(dir, 'lease-nudges.jsonl'), 'utf8').trim().split('\n');
   assert.equal(lines.length, 1); assert.match(lines[0], /"flag":"chat-cannot-take-note"/); assert.match(lines[0], /"ticketId":"T1"/);
 });
+
+test('a lease whose own run reports it is stalled is nudgeable with the task named', () => {
+  assert.deepEqual(reasonsOf(lease({ stalled: 'task t1, server not answering' }), { now: NOW }), ['lease held, run not progressing: task t1, server not answering']);
+});
