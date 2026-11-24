@@ -858,6 +858,28 @@ test('a catch-up that defers again queues a strict catch-up that waits for the h
   assert.equal((await d.start({ id: f.catchup, skip_leased: true })).code, 'E_HELD', 'strict: waits for the device lease');
 });
 
+// bug-ec1e2d3b (2026-11-24): the catch-up that restarted vpt-nipogi / vpt-mf1 looked like a restart under a live device lease. The
+// lease journal showed none: the catch-up started in a gap between two device runs. This pins the rule both ways: no start while a
+// device lease is live, and once running the catch-up holds the host so no device run can begin under its restart.
+test('a strict catch-up never restarts a host under a live device lease; once it runs, new device claims wait for it', async () => {
+  const h = harness();
+  const d = h.svc.deploy;
+  const dev = await h.claim('run', 'host-1/device3', { kind: 'host' });
+  const r = await d.request({ env: 'env-a', scope: 'host', ref: 'abc', agent: 'ag', hosts: ['host-1'], approved: true, purpose: 'catch-up for x: skipped host-1' });
+  const f = await (async () => { await d.start({ id: r.id, skip_leased: true }); return d.finish({ id: r.id, status: 'done', skipped_hosts: 'host-1' }); })();
+  await h.advance(11 * MIN);
+  const live = await d.start({ id: f.catchup, skip_leased: true });
+  assert.equal(live.code, 'E_HELD', 'device lease live: the strict catch-up does not start, so nothing restarts');
+  await h.svc.release({ agent: 'run' });
+  const go = await d.start({ id: f.catchup, skip_leased: true });
+  assert.equal(go.ok, true, 'the gap: it starts and holds the host');
+  assert.deepEqual(go.granted, ['host:host-1']);
+  assert.equal((await h.claim('late', 'host-1/device3', { kind: 'host' })).ok, false, 'a device run cannot begin during the restart');
+  await d.finish({ id: f.catchup, status: 'done' });
+  assert.ok((await h.claim('late', 'host-1/device3', { kind: 'host' })).ok, 'after the restart the device run goes ahead');
+  assert.ok(dev.ok);
+});
+
 // ---- queue: grant per conflicting resource, never strict FIFO across disjoint resources ------------------------------------
 test('tickets on disjoint resources are granted out of order; conflicting tickets stay FIFO', async () => {
   const h = harness();
