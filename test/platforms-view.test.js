@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { whoName, effectiveBlockers, envStatus, liveRows, platformsBlocks, etaText, leftText, kindLabel, resourceLabel } from '../public/platforms-view.js';
+import { whoName, effectiveBlockers, envStatus, liveRows, platformsBlocks, etaText, leftText, kindLabel, resourceLabel, envLabel, hostLabel, isDoubledHost, isTestResidueEnv, hiddenTestEnvs } from '../public/platforms-view.js';
 import { machinesOf } from '../public/platforms.js';
 
 const M = machinesOf('codebox-vm');
@@ -29,7 +29,7 @@ test('kind label, time and resource text', () => {
   assert.equal(kindLabel('run'), 'server-bound'); assert.equal(kindLabel('maintenance'), 'host-bound');   // old registry names
   assert.equal(etaText(55), '~55 min'); assert.equal(etaText(100), '~1h40'); assert.equal(etaText(0), '<1 min'); assert.equal(etaText(null), '');
   assert.equal(leftText(20), '20 min left'); assert.equal(leftText(65), '1h05 left');
-  assert.equal(resourceLabel(lease()), 'vpt-pi1 · device1'); assert.equal(resourceLabel(lease({ resource: '*' })), `${E} (all)`);
+  assert.equal(resourceLabel(lease()), 'pi1 · device1'); assert.equal(resourceLabel(lease({ resource: '*' })), `${envLabel(E)} (all)`);
 });
 test('effectiveBlockers mirrors vpt-lease blockers(skip_leased): full = server leases + env-wide, host = env-wide only', () => {
   const run = lease({ id: 'a' }), maint = lease({ id: 'b', kind: 'host' }), wide = lease({ id: 'c', resource: '*', kind: 'host' }), fe = lease({ id: 'd', resource: 'frontend', kind: 'host' });
@@ -98,4 +98,30 @@ test('platformsBlocks: queued order, approve flag, history, deploying block, env
   assert.deepEqual(e.history.map((h) => [h.id, h.ok, h.ago]), [['h2', false, '2m ago'], ['h1', true, '37m ago']]);
   const blocked = platformsBlocks({ leases: [lease()], deploys: [dep({ env: 'a-free' }), dep({ blocking: [lease()] })], sessionNames: NAMES, machines: M, nowMs: NOW });
   assert.deepEqual(blocked.map((x) => x.status), ['BLOCKED', 'FREE']);
+});
+
+test('envLabel / hostLabel strip the redundant prefix, display only, never on a collision', () => {
+  assert.equal(envLabel('node1-vpt'), 'node1'); assert.equal(envLabel('node3-qualiai'), 'node3-qualiai');
+  assert.equal(envLabel('node1-vpt', ['node1-vpt', 'node1']), 'node1-vpt');
+  assert.equal(hostLabel('vpt-wise1'), 'wise1'); assert.equal(hostLabel('host-clone-1'), 'host-clone-1');
+  assert.equal(hostLabel('vpt-pi1', ['vpt-pi1', 'pi1']), 'vpt-pi1');
+});
+
+test('doubled host key (A+A) is not shown as a row', () => {
+  const at = 1_000_000, row = { at, version: 'v' };
+  const rows = liveRows({ 'vpt-wise1': row, 'vpt-wise1vpt-wise1': row, 'vpt-pi1': row }, (at + 60) * 1000);
+  assert.deepEqual(rows.map((r) => r.target).sort(), ['vpt-pi1', 'vpt-wise1']);
+  assert.ok(isDoubledHost('xx', ['x'])); assert.ok(!isDoubledHost('vpt-pi1', ['vpt-pi1']));
+});
+
+test('test-residue env (every agent test:*, older than 24 h) is hidden and counted, not deleted', () => {
+  const now = 2_000_000_000_000, old = now / 1000 - 3 * 86400;
+  const junk = { frontend: { at: old, agent: 'test:agent' }, h1: { at: old, agent: 'test:agent' } };
+  const mixed = { frontend: { at: old, agent: 'test:agent' }, h1: { at: old, agent: 'manager:deploy' } };
+  const fresh = { frontend: { at: now / 1000 - 60, agent: 'test:agent' } };
+  assert.ok(isTestResidueEnv(junk, now)); assert.ok(!isTestResidueEnv(mixed, now)); assert.ok(!isTestResidueEnv(fresh, now)); assert.ok(!isTestResidueEnv({}, now));
+  const deployed = { e: junk, real: mixed };
+  assert.deepEqual(platformsBlocks({ deployed, nowMs: now }).map((b) => b.env), ['real']);
+  assert.deepEqual(hiddenTestEnvs({ deployed, nowMs: now }), ['e']);
+  assert.deepEqual(platformsBlocks({ leases: [{ env: 'e', resource: '*', id: 'l' }], deployed, nowMs: now }).map((b) => b.env).sort(), ['e', 'real']);
 });

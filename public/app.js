@@ -8,7 +8,7 @@ import { byPriority, PRIORITIES, DEFAULT_PRIORITY } from '/prio.js';
 import { limitStopNote } from '/policy.js';
 import { needsOwner } from '/buttons.js';
 import { diskBannerView, diskDetailNote } from '/disk-banner.js';
-import { platformsBlocks } from '/platforms-view.js';
+import { platformsBlocks, hiddenTestEnvs, envLabel, hostLabel } from '/platforms-view.js';
 import { stripSentEcho } from '/sent-echo.js';
 import { closeBgAtNewlines } from '/term-sgr.js';
 import { planPaint } from '/term-paint.js';
@@ -3590,11 +3590,11 @@ function platformBlockHtml(e) {
     <div class="pf-row${r.blocks ? ' blk' : ''}" data-res="${escapeHtml(e.env + '|' + r.resource)}"><span class="pf-r">${escapeHtml(r.label)}</span><span class="pf-w">${whoHtml(r.who)} &middot; ${escapeHtml(r.kindLabel)}</span><span class="pf-l">${escapeHtml(r.left)}</span>${r.vptLock ? `<span class="pf-vl${r.vptLock.endsWith('unknown') ? ' unk' : ''}">${escapeHtml(r.vptLock)}</span>` : ''}</div>`).join('')}` : '';
   const vptOther = e.vptOther?.length || e.vptUnknown ? `<div class="pf-sub">VPT TAKE-CONTROL LOCKS</div>${e.vptUnknown ? '<div class="pf-row"><span class="pf-r">VPT lock: unknown</span></div>' : ''}${(e.vptOther || []).map((x) => `<div class="pf-row"><span class="pf-r">${escapeHtml(x.resource)}</span><span class="pf-w">${escapeHtml(x.text)}</span></div>`).join('')}` : '';
   const live = `<div class="pf-sub">LIVE</div>${e.live.length ? e.live.map((r) => `
-    <div class="pf-row${r.failed ? ' bad' : ''}"><span class="pf-r">${escapeHtml(r.target)}</span><span class="pf-w">${r.deployed ? escapeHtml(r.version || '?') : 'never deployed'}${r.ago ? ` &middot; ${escapeHtml(r.ago)}` : ''}</span><span class="pf-l">${r.failed ? `${icon('x', 11)} ${escapeHtml(r.reason || 'last deploy failed')}` : icon('check', 11)}</span></div>`).join('') : '<div class="dim pf-none">nothing recorded yet</div>'}`;
+    <div class="pf-row${r.failed ? ' bad' : ''}"><span class="pf-r" title="${escapeHtml(r.target)}">${escapeHtml(hostLabel(r.target, e.live.map((x) => x.target)))}</span><span class="pf-w">${r.deployed ? escapeHtml(r.version || '?') : 'never deployed'}${r.ago ? ` &middot; ${escapeHtml(r.ago)}` : ''}</span><span class="pf-l">${r.failed ? `${icon('x', 11)} ${escapeHtml(r.reason || 'last deploy failed')}` : icon('check', 11)}</span></div>`).join('') : '<div class="dim pf-none">nothing recorded yet</div>'}`;
   const hist = e.history.length ? `<button class="pf-more" data-pf-toggle="${escapeHtml(key('h'))}"><span class="uch${platOpen.has(key('h')) ? ' on' : ''}"></span>History (${e.history.length})</button>${platOpen.has(key('h')) ? e.history.map((h) => `
     <div class="pf-hist${h.ok ? '' : ' bad'}">${escapeHtml(h.ago)} &middot; ${h.ok ? '&#10003;' : h.state === 'failed' ? '&#10007;' : escapeHtml(h.state)} &middot; ${escapeHtml(h.scope)} &middot; ${escapeHtml(h.ref)} &middot; ${whoHtml(h.who)}</div>`).join('') : ''}` : '';
   return `<section class="pf-env" data-env="${escapeHtml(e.env)}">
-    <div class="pf-h"><span class="pf-name">${escapeHtml(e.env)}</span>${pill}</div>${deploying}${next}${inUse}${vptOther}${live}${hist}</section>`;
+    <div class="pf-h"><span class="pf-name" title="${escapeHtml(e.env)}">${escapeHtml(envLabel(e.env, e.allEnvs))}</span>${pill}</div>${deploying}${next}${inUse}${vptOther}${live}${hist}</section>`;
 }
 function platformsHtml() {
   const { l, d0, view } = platformsData();
@@ -3602,7 +3602,9 @@ function platformsHtml() {
   const err = [l.error ? `registry unreachable &middot; ${escapeHtml(l.error)}` : '', d0 && d0.ok === false ? `deploy queue unreachable &middot; ${escapeHtml(d0.error || '')}` : ''].filter(Boolean);
   const head = err.map((e) => `<div class="mnote dwarn">${e}</div>`).join('');
   if (!view.length) return `${head}<div class="sheet-empty">no leases, no deploys: every platform is free</div>`;
-  return head + view.map(platformBlockHtml).join('');
+  const hid = hiddenTestEnvs({ leases: l.leases || [], deploys: d0?.deploys || [], deployed: d0?.deployed || {}, nowMs: Date.now() });
+  const hidden = hid.length ? `<div class="dim pf-none pf-hidden" title="${escapeHtml(hid.join(', '))}">${hid.length} test env hidden</div>` : '';
+  return head + view.map(platformBlockHtml).join('') + hidden;
 }
 function openPlatforms(focus) {
   openSheet('Platforms', ({ body, close }) => {

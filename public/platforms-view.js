@@ -59,7 +59,7 @@ export function effectiveBlockers(d) {
 export const scopeText = (d) => (d.scope === 'host' && d.hosts?.length ? `host (${d.hosts.length})` : d.scope);
 
 export function resourceLabel(l) {
-  return l.resource === '*' ? `${l.env} (all)` : l.resource.replace('/', ' · ');
+  return l.resource === '*' ? `${envLabel(l.env)} (all)` : l.resource.split('/').map((x, i) => (i === 0 ? hostLabel(x) : x)).join(' · ');
 }
 
 // Per env: 'BLOCKED' (a pending deploy waits on a lease) / 'DEPLOYING' (one runs) / 'FREE'.
@@ -69,9 +69,26 @@ export function envStatus(deploys) {
   return 'FREE';
 }
 
+// A host key that is another key of the same env written twice ("vpt-wise1vpt-wise1" next to "vpt-wise1"): old junk from a
+// glued host list, not a host. The registry refuses new ones (bug-2495f66e); this hides the ones already recorded.
+export const isDoubledHost = (name, keys) => keys.some((k) => k && name === k + k);
+// Env whose every row was written by a test agent ("test:agent") more than a day ago: registry residue, hidden (never deleted).
+export function isTestResidueEnv(ledger, nowMs) {
+  const rows = Object.values(ledger || {});
+  return rows.length > 0 && rows.every((e) => /^test:/.test(String(e?.agent || '')) && (e.at || 0) * 1000 < nowMs - 86400000);
+}
+// Display-only short names (the data, titles, API and deploy requests keep the real ones): "node1-vpt" -> "node1", "vpt-pi1" -> "pi1".
+// Stripping is skipped when it would make two names of the same list collide.
+const shorten = (name, re, siblings) => {
+  const n = String(name ?? ''), short = n.replace(re, '');
+  return short && short !== n && !(siblings || []).some((x) => x !== n && String(x).replace(re, '') === short) ? short : n;
+};
+export const envLabel = (env, envs = []) => shorten(env, /-vpt$/, envs);
+export const hostLabel = (host, hosts = []) => shorten(host, /^vpt-/, hosts);
 export function liveRows(ledger, nowMs) {
   const nowSec = nowMs / 1000;
-  return Object.keys(ledger || {}).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b)).map((target) => {
+  const keys = Object.keys(ledger || {});
+  return keys.filter((t) => !isDoubledHost(t, keys)).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b)).map((target) => {
     const e = ledger[target] || {};
     const la = e.lastAttempt && (!e.at || e.lastAttempt.at >= e.at) ? e.lastAttempt : null;   // only when newer than the live one
     const reason = la ? String(la.reason || la.note || la.error || '').trim().slice(0, 60) : '';
@@ -100,10 +117,17 @@ export function vptLockLabel(vpt, resource) {
   return m.length ? `VPT lock: ${m.map(lockText).join('; ')}` : 'VPT lock: free';
 }
 
+// Names of the hidden test-residue envs (for the one "N test env hidden" line).
+export const hiddenTestEnvs = ({ leases = [], deploys = [], deployed = {}, nowMs = Date.now() }) => {
+  const busy = new Set([...leases.map((l) => l.env), ...deploys.filter((d) => PENDING.includes(d.state) || d.state === 'running').map((d) => d.env)]);
+  return Object.keys(deployed || {}).filter((e) => !busy.has(e) && isTestResidueEnv(deployed[e], nowMs));
+};
 export function platformsBlocks({ leases = [], deploys = [], deployed = {}, sessionNames = [], machines = new Set(), nowMs = Date.now(), vptLocks = null }) {
   const nowSec = nowMs / 1000;
   const active = (d) => PENDING.includes(d.state) || d.state === 'running';
-  const envs = new Set([...leases.map((l) => l.env), ...deploys.filter(active).map((d) => d.env), ...Object.keys(deployed || {})]);
+  const busy = new Set([...leases.map((l) => l.env), ...deploys.filter(active).map((d) => d.env)]);
+  const residue = Object.keys(deployed || {}).filter((e) => !busy.has(e) && isTestResidueEnv(deployed[e], nowMs));
+  const envs = new Set([...busy, ...Object.keys(deployed || {}).filter((e) => !residue.includes(e))]);
   if (vptLocks?.ok && vptLocks.locks?.length && vptLocks.env) envs.add(vptLocks.env);   // a held lock shows even when no lease or deploy names the env
   const who = (a) => whoName(a, sessionNames, machines);
   return [...envs].map((env) => {
@@ -131,7 +155,7 @@ export function platformsBlocks({ leases = [], deploys = [], deployed = {}, sess
     const vptOther = mine && vptLocks.ok ? (vptLocks.locks || []).filter((x) => !covered.has(x)).map((x) => ({ resource: `${x.host}${x.device ? ` · ${x.device}` : ''}`, text: lockText(x) })) : [];
     const vptUnknown = mine && !vptLocks.ok;
     return {
-      env, status, inUse, vptOther, vptUnknown, next, history, live: liveRows(deployed[env], nowMs),
+      env, allEnvs: [...envs], status, inUse, vptOther, vptUnknown, next, history, live: liveRows(deployed[env], nowMs),
       deploying: running ? { id: running.id, scope: scopeText(running), ref: running.ref, who: who(running.agent), startedAgo: running.started ? agoText(running.started, nowSec) : '' } : null,
     };
   }).sort((a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status] || a.env.localeCompare(b.env));
