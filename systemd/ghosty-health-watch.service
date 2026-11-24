@@ -10,3 +10,5 @@ Environment=HOME=/home/<user>
 ExecStart=/usr/local/bin/node /home/<user>/ghosty-sessions/scripts/health-watch.js
 TimeoutStartSec=10min
 Nice=10
+CPUWeight=20
+IOSchedulingClass=idle

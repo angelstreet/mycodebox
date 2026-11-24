@@ -289,6 +289,22 @@ export function shouldWake(issue, prev, now, debounceHours) {
   return { wake: false, why: 'debounced' };
 }
 
+// Investigation cooldown (2026-11-24: disk stuck at its limit re-ran the 48 s INVESTIGATE every tick).
+// Skip while every tripped issue was in the last investigation, is not worse by more than 1 point / 10 %,
+// and no issue is due a manager wake (debounce window elapsed or worsened by its step).
+export const INVESTIGATE_COOLDOWN_MIN = 30;
+export function investigateDecision({ issues, last, state, now, force = false, debounceHours = 6, cooldownMin = INVESTIGATE_COOLDOWN_MIN }) {
+  if (force) return { investigate: true, why: 'forced' };
+  if (!last || !last.issues || !(now - last.at < cooldownMin * 60000) || now < last.at) return { investigate: true, why: last ? 'cooldown over' : 'first' };
+  for (const i of issues) {
+    if (!(i.key in last.issues)) return { investigate: true, why: `new issue ${i.key}` };
+    const was = Number(last.issues[i.key]), cur = Number(i.severity);
+    if (cur > was + (['disk', 'ram', 'inode'].includes(i.type) ? 1 : Math.max(1, Math.abs(was) * 0.1))) return { investigate: true, why: `worse ${i.key}` };
+    if (shouldWake(i, state?.issues?.[`health:${i.key}`], now, debounceHours).wake) return { investigate: true, why: `wake due ${i.key}` };
+  }
+  return { investigate: false, why: `unchanged since ${new Date(last.at).toISOString()}` };
+}
+
 export function buildEvent(issue, fixedNote, reportPath, now) {
   const cut = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
   const body = cut(`${issue.what}${fixedNote ? ' ' + fixedNote : ''} Report: ${reportPath}`, 300);
@@ -334,7 +350,11 @@ export function evaluate(m, cfg, loadTrip) {
 
 const sh = (cmd, args, timeout = 20000) => { try { return execFileSync(cmd, args, { encoding: 'utf8', timeout, stdio: ['ignore', 'pipe', 'ignore'] }); } catch { return null; } };
 // du exits non-zero on unreadable entries but its stdout is still the answer
-const shOut = (cmd, args, timeout) => { try { return execFileSync(cmd, args, { encoding: 'utf8', timeout, stdio: ['ignore', 'pipe', 'ignore'] }); } catch (e) { return typeof e.stdout === 'string' ? e.stdout : null; } };
+// Expensive reads (du walks, ps, journalctl, docker) run at lowest CPU and idle I/O priority so a tick never competes with sessions.
+export const NICE_PREFIX = ['nice', '-n', '19', 'ionice', '-c3'];
+const niced = (cmd, args) => (process.env.HEALTH_WATCH_NO_NICE ? [cmd, args] : [NICE_PREFIX[0], [...NICE_PREFIX.slice(1), cmd, ...args]]);
+const shLow = (cmd, args, timeout = 20000) => { const [c, a] = niced(cmd, args); return sh(c, a, timeout); };
+const shOut = (cmd, args, timeout) => { [cmd, args] = niced(cmd, args); try { return execFileSync(cmd, args, { encoding: 'utf8', timeout, stdio: ['ignore', 'pipe', 'ignore'] }); } catch (e) { return typeof e.stdout === 'string' ? e.stdout : null; } };
 const duKB = (path) => { const o = shOut('du', ['-sk', path], 120000); const n = o ? parseInt(o, 10) : NaN; return Number.isFinite(n) ? n : 0; };
 // Report-only sizes: they change slowly, but while the disk alarm stayed on, re-walking /tmp and 41 worktrees took ~60 s
 // of every 5-min tick (2026-10-20). Cached for DU_TTL_MS in health-du-cache.json; cleanup steps still measure fresh.
@@ -358,7 +378,7 @@ export function parsePs(text, myUid) {
   }
   return out;
 }
-const readPs = () => parsePs(sh('ps', ['-eo', 'pid=,ppid=,etimes=,rss=,uid=,pcpu=,stat=,args='], 20000) || '', process.getuid());
+const readPs = () => parsePs(shLow('ps', ['-eo', 'pid=,ppid=,etimes=,rss=,uid=,pcpu=,stat=,args='], 20000) || '', process.getuid());
 
 const cpuTicks = (pid) => { try { const f = readFileSync(`/proc/${pid}/stat`, 'utf8'); const r = f.slice(f.lastIndexOf(')') + 2).split(' '); return (+r[11]) + (+r[12]); } catch { return null; } };
 const pidAlive = (pid) => existsSync(`/proc/${pid}`);
@@ -466,7 +486,7 @@ export function loadConfig(path) {
   if (!FIX_LEVELS.includes(out.fixLevel)) out.fixLevel = 'report';   // unknown level: do nothing destructive
   return out;
 }
-function loadState(path) { try { const s = JSON.parse(readFileSync(path, 'utf8')); return { samples: s.samples || [], issues: s.issues || {}, gitHygieneAt: s.gitHygieneAt || {} }; } catch { return { samples: [], issues: {} }; } }
+function loadState(path) { try { const s = JSON.parse(readFileSync(path, 'utf8')); return { samples: s.samples || [], issues: s.issues || {}, gitHygieneAt: s.gitHygieneAt || {}, lastInvestigation: s.lastInvestigation }; } catch { return { samples: [], issues: {} }; } }
 const saveState = (path, s) => writeFileSync(path, JSON.stringify(s) + '\n');
 
 // ---------------------------------------------------------------- investigation
@@ -922,11 +942,11 @@ function investigate(ctx) {
   L.push(`- ~/.cache total: ${human(cacheK.total)}`);
   for (const k of cacheK.kids) L.push(`  - ${k.path.replace(home, '~')}: ${human(k.kb)}`);
   L.push(`- ~/.claude: ${human(duR(join(home, '.claude')))}`, `- ~/.npm: ${human(duR(join(home, '.npm')))}`, `- ~/.local/state/ghosty: ${human(duR(join(home, '.local/state/ghosty')))}`);
-  const jd = sh('journalctl', ['--user', '--disk-usage']) || sh('journalctl', ['--disk-usage']);
+  const jd = shLow('journalctl', ['--user', '--disk-usage']) || shLow('journalctl', ['--disk-usage']);
   L.push(`- journal: ${jd ? jd.trim() : 'n/a'}`, '');
   L.push(worktreeReport(wtScan), '');
   L.push(cloneReport(cloneScan), '');
-  const dk = sh('docker', ['system', 'df']);
+  const dk = shLow('docker', ['system', 'df']);
   L.push('## Docker', '', dk ? '```\n' + dk.trim() + '\n```' : 'skipped (docker not usable without sudo)', '');
   return L.join('\n');
 }
@@ -1095,11 +1115,18 @@ export async function run({ home = homedir(), argv = process.argv.slice(2), now 
   if (hygieneLog.length) out(hygieneLog.join('\n'));
 
   if (!issues.length) {
-    state.issues = {};   // everything recovered: a recurrence wakes the manager again
+    state.issues = {}; delete state.lastInvestigation;   // everything recovered: a recurrence wakes the manager again
     if (!force) { saveState(statePath, state); return { status: 'healthy', issues: [] }; }
   }
   // Keep debounce entries only for issues still present.
   for (const k of Object.keys(state.issues)) if (!issues.some((i) => `health:${i.key}` === k)) delete state.issues[k];
+
+  const dec = investigateDecision({ issues, last: state.lastInvestigation, state, now, force, debounceHours: cfg.debounceHours });
+  if (!dec.investigate) {
+    if (!dryRun) saveState(statePath, state);
+    out(`health-watch: ${issues.length} tripped (${issues.map((i) => i.key).join(', ')}), unchanged: ${dec.why}, investigation skipped (cooldown ${INVESTIGATE_COOLDOWN_MIN} min)`);
+    return { status: 'problem', issues, remaining: issues, events: [], freedKB: 0, skipped: true };
+  }
 
   // INVESTIGATE
   const iso = new Date(now).toISOString().replace(/[:.]/g, '-');
@@ -1170,7 +1197,7 @@ export async function run({ home = homedir(), argv = process.argv.slice(2), now 
   writeFileSync(reportPath, R.join('\n') + '\n');
   // retention: 7 days
   try { for (const f of readdirSync(reportsDir)) { const p = join(reportsDir, f); if (f.endsWith('.md') && now - statSync(p).mtimeMs > 7 * 86400000) rmSync(p); } } catch {}
-  if (!dryRun) saveState(statePath, state); else saveState(statePath, { ...state, issues: loadState(statePath).issues });
+  if (!dryRun) { state.lastInvestigation = { at: now, issues: Object.fromEntries(remaining.map((i) => [i.key, Number(i.severity)])) }; saveState(statePath, state); } else saveState(statePath, { ...state, issues: loadState(statePath).issues });
   out(`health-watch: ${issues.length} tripped (${issues.map((i) => i.key).join(', ') || 'none'}), ${dryRun ? 'would free' : 'freed'} ${human(freedKB)}, ${events.length} event(s) ${dryRun ? 'would be written' : 'written'}, report ${reportPath}`);
   return { status: remaining.length ? 'problem' : 'fixed', issues, remaining, events, freedKB, reportPath };
 }
