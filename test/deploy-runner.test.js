@@ -24,7 +24,7 @@ function fakeRegistry({ leases = [], deploys = [], armCatchUp = false } = {}) {
     if (sub === 'start') {
       if (!d || d.state !== 'queued') return { code: 1, stdout: '', stderr: 'not queued' };
       if (st.deploys.some((x) => x.env === d.env && x.state === 'running' && !((x.scope === 'frontend' && d.scope === 'host') || (x.scope === 'host' && d.scope === 'frontend')))) return { code: 3, stdout: '', stderr: 'running' };
-      if (st.leases.some((l) => l.env === d.env && l.agent !== 'manager:deploy' && (touches(d.scope, l.resource) || (d.strict && d.hosts?.includes(l.resource))))) return { code: 3, stdout: '', stderr: 'leases' };
+      if (st.leases.some((l) => l.env === d.env && l.agent !== 'manager:deploy' && !l.heartbeat_s && (touches(d.scope, l.resource) || (d.strict && d.hosts?.includes(l.resource))))) return { code: 3, stdout: '', stderr: 'leases' };
       d.state = 'running'; if (st.grantLease) st.leases.push({ id: `L${d.id}`, env: d.env, resource: 'server', agent: 'manager:deploy', deploy_id: d.id }); return { code: 0, stdout: 'running', stderr: '' };
     }
     if (sub === 'finish') {
@@ -940,4 +940,47 @@ test('a host request the registry split per host runs with the narrowed host lis
   await until(() => ran.length > 0);
   assert.match(ran[0].remoteCmd, /host-a/);
   assert.doesNotMatch(ran[0].remoteCmd, /host-b/);
+});
+
+
+const runLease = (o = {}) => ({ id: 'r1', env: 'node1-vpt', resources: ['vpt-mf1/device3'], agent: 'codebox:cockpit', kind: 'host', heartbeat_s: 300, lastHeartbeatAt: new Date().toISOString(), stalled: null, ...o });
+
+test('runsAtRisk: only heartbeating run leases on a server/full deploy; stalled or silent runs are not "progressing"', async () => {
+  const { runsAtRisk } = await import('../deploy-runner.js');
+  const d = { env: 'node1-vpt', scope: 'server' };
+  const old = new Date(Date.now() - 20 * 60000).toISOString();
+  const r = runsAtRisk([runLease(), runLease({ id: 'r2', stalled: 'task t1, server not answering' }), runLease({ id: 'r3', lastHeartbeatAt: old }),
+    runLease({ id: 'p1', heartbeat_s: null }), runLease({ id: 'p2', agent: 'manager:deploy' }), runLease({ id: 'p3', resources: ['*'] }), runLease({ id: 'p4', env: 'other' })], d);
+  assert.deepEqual(r.map((x) => [x.id, x.progressing]), [['r1', true], ['r2', false], ['r3', false]]);
+  assert.deepEqual(runsAtRisk([runLease()], { env: 'node1-vpt', scope: 'host' }), []);
+  assert.deepEqual(runsAtRisk([runLease()], { env: 'node1-vpt', scope: 'frontend' }), []);
+});
+
+test('a server deploy names the runs it would cut, waits while one progresses, then proceeds and warns again', async () => {
+  const reg = fakeRegistry({ leases: [runLease()], deploys: [dep('1', { scope: 'server' })] });
+  const alerts = [], ran = [];
+  const runner = createDeployRunner({ stateDir: mkTmp('ghosty-dep-'), registry: reg.fn, isEnabled: () => true, restartWaitMs: 150, restartPollMs: 30, log: { error() {} },
+    alert: (k, p) => alerts.push([k, p.title]),
+    run: async (env, o) => { ran.push(o); o.onLine('deploying'); return { code: 0 }; } });
+  await runner.tick(); await until(() => reg.deploys[0].state === 'done');
+  const warns = alerts.filter(([k]) => k === 'deploy:1:warning');
+  assert.equal(warns.length, 2);
+  assert.match(warns[0][1], /server restart will lose 1 running task\(s\): r1 \(codebox:cockpit on vpt-mf1\/device3, progressing\)/);
+  assert.equal(ran.length, 1);
+});
+
+test('a run that ends during the wait lets the restart go with no second warning; a host deploy is never delayed', async () => {
+  const reg = fakeRegistry({ leases: [runLease()], deploys: [dep('1', { scope: 'server' })] });
+  setTimeout(() => { reg.leases.length = 0; }, 60);
+  const alerts = [];
+  const runner = createDeployRunner({ stateDir: mkTmp('ghosty-dep-'), registry: reg.fn, isEnabled: () => true, restartWaitMs: 5000, restartPollMs: 30, log: { error() {} },
+    alert: (k, p) => alerts.push([k, p.title]), run: async (env, o) => { o.onLine('deploying'); return { code: 0 }; } });
+  await runner.tick(); await until(() => reg.deploys[0].state === 'done');
+  assert.equal(alerts.filter(([k]) => k === 'deploy:1:warning').length, 1);
+  const reg2 = fakeRegistry({ leases: [runLease()], deploys: [dep('2', { scope: 'host' })] });
+  const a2 = [];
+  const r2 = createDeployRunner({ stateDir: mkTmp('ghosty-dep-'), registry: reg2.fn, isEnabled: () => true, restartWaitMs: 5000, log: { error() {} },
+    alert: (k, p) => a2.push(k), run: async (env, o) => { o.onLine('x'); return { code: 0 }; } });
+  await r2.tick(); await until(() => reg2.deploys[0].state === 'done');
+  assert.equal(a2.filter((k) => k.endsWith(':warning')).length, 0);
 });

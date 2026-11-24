@@ -240,9 +240,25 @@ export function rollingTracker() {
   };
 }
 
+// Runs a server restart would cut (2026-11-24: a deploy restarted the server under a `vpt-lease run ... vpt_run.py`; its task was lost and the
+// lease sat until the hold cap). A `vpt-lease run` lease = exclusive-looking, heartbeating (heartbeat_s), on a host/device, not a platform lease.
+// `progressing`: heartbeat fresh and the run's own progress file not stalled (the heartbeat carries `stalled`).
+const resOf = (l) => (Array.isArray(l.resources) && l.resources.length ? l.resources : l.resource ? [l.resource] : []);
+export function runsAtRisk(leases, d, { runnerAgent = 'manager:deploy', nowMs = Date.now() } = {}) {
+  if (d.scope !== 'server' && d.scope !== 'full') return [];     // hosts-only / frontend deploys never restart the server
+  return (leases || []).filter((l) => l.env === d.env && l.agent && l.agent !== runnerAgent && !String(l.agent).startsWith('update_core:')
+    && !/^(manager:|deployment:)/.test(l.agent) && !l.system && !l.deploy_id && Number(l.heartbeat_s) > 0 && resOf(l).length && !resOf(l).some((r) => ['*', 'server', 'frontend'].includes(r)))
+    .map((l) => {
+      const hb = Date.parse(l.lastHeartbeatAt || l.last_heartbeat_at || '');
+      const fresh = Number.isFinite(hb) ? nowMs - hb < 2 * Number(l.heartbeat_s) * 1000 : true;
+      return { id: l.id, agent: l.agent, resource: resOf(l).join(','), progressing: fresh && !l.stalled, stalled: l.stalled || null };
+    });
+}
+export const riskLine = (runs) => `server restart will lose ${runs.length} running task(s): ${runs.map((r) => `${r.id} (${r.agent} on ${r.resource}${r.stalled ? `, stalled: ${r.stalled}` : r.progressing ? ', progressing' : ', no heartbeat'})`).join(', ')}`;
+
 export function createDeployRunner({
   stateDir, alert = () => {}, managerItem = null, onChange = () => {}, isEnabled = () => false,
-  registry = defaultRegistry(), run = defaultRun, timeoutMs = 11 * 60 * 1000, maxMs = DEFAULT_MAX_MS, holdCeilingMs = DEFAULT_HOLD_CEILING_MS, pollMs = 30000,
+  registry = defaultRegistry(), run = defaultRun, timeoutMs = 11 * 60 * 1000, maxMs = DEFAULT_MAX_MS, holdCeilingMs = DEFAULT_HOLD_CEILING_MS, pollMs = 30000, restartWaitMs = 10 * 60 * 1000, restartPollMs = 30000,
   orphanIdleMs = DEFAULT_ORPHAN_IDLE_MS, followPollMs = 1000, catchUp = true, follow = followDetached, log = console,
   isAncestor = gitContains(process.env.DEPLOY_REPO_DIR || ''),   // (newer, older) => true|false|null: does ref `newer` contain `older`
   backoffBaseMs = BACKOFF_BASE_MS,      // the per-host back-off between two catch-up tries (tests shorten it)
@@ -414,6 +430,19 @@ export function createDeployRunner({
     else onLine(`# deploy ${d.id} ${d.env} scope=${d.scope} ref=${d.ref}${d.hosts?.length ? ` hosts=${d.hosts.join(',')}` : ''} requested by ${d.agent}${merged.length ? ` (+${merged.length} merged)` : ''}`);
     if (!adopt) alert(`deploy:${d.id}:start`, { title: `deploy ${d.env} ${d.scope} started`, body: `${d.ref} for ${d.agent}`, priority: 'default', ntfyTags: 'rocket', tag: `ghosty-deploy-${d.id}`, url: '/?deploys=1', blockedBy: everBlocked.has(d.id) ? ['lease'] : null }, 0);
     let status = 'failed', rc = null, timedOut = false;
+    if (!adopt && (d.scope === 'server' || d.scope === 'full')) {
+      // Before the server restarts: name the runs it would cut and give a progressing one up to restartWaitMs to end (never forever, never forced).
+      const read = async () => { const r = await reg(['deploy', 'list', '--json']); try { return runsAtRisk(JSON.parse(r.stdout).leases, d, { runnerAgent: RUNNER_AGENT }); } catch { return runsAtRisk(liveLeases, d, { runnerAgent: RUNNER_AGENT }); } };
+      const warn = (runs, phase) => { onLine(`# ${riskLine(runs)}${phase}`); alert(`deploy:${d.id}:warning`, { title: `deploy ${d.env} ${d.scope}: ${riskLine(runs)}`, body: `holders: ${runs.map((r) => r.agent).join(', ')}${phase}`, priority: 'high', ntfyTags: 'warning', tag: `ghosty-deploy-${d.id}`, url: '/?deploys=1' }, 0); };
+      let runs = await read();
+      if (runs.length) {
+        warn(runs, runs.some((r) => r.progressing) ? ` — waiting up to ${Math.round(restartWaitMs / 60000)} min for them to end` : '');
+        const until = Date.now() + restartWaitMs;
+        while (runs.some((r) => r.progressing) && Date.now() < until) { await nap(Math.min(restartPollMs, Math.max(1, until - Date.now()))); runs = await read(); }
+        if (runs.length) warn(runs, ' — restarting now');
+        else onLine('# the runs ended: restarting the server');
+      }
+    }
     try {
       const remoteCmd = `VPT_LEASE_AGENT=${RUNNER_AGENT} VPT_DEPLOY_ID=${d.id}${leaseIds.get(d.id) ? ` DEPLOY_LEASE_TTL_MIN=${Math.round(holdCeilingMs / 60000)}` : ''}${leaseIds.get(d.id) ? ` VPT_LEASE_ID=${shq(leaseIds.get(d.id))}` : ''} ${envCfg.cmd || 'bash update_core.sh'} ${[d.ref, ...flags, ...extraFlagsFor(d)].map(shq).join(' ')}`;
       if (adopt) ({ code: rc, timedOut } = await follow(logDir, d.id, { onLine, timeoutMs, maxMs, holdCeilingMs, pollMs: followPollMs, pid: adopt.pid }));

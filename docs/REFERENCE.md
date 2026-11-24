@@ -1177,6 +1177,8 @@ on each `VPT_PROGRESS` health ok|skipped, restarts its hold clock (`timeoutMs`) 
 
 ## Deploy queue (TASK-44 phase 7)
 
+- **Restart warning and wait (2026-11-24, bug-f5f73163).** Before a `server` or `full` deploy starts its restart, the runner reads the lease list of the env and picks the `vpt-lease run` leases (heartbeating, on a host/device, not a platform / deploy lease: `runsAtRisk`). For those it writes the plan-log line `server restart will lose N running task(s): <lease id (holder on resource, progressing|stalled|no heartbeat)>` and raises the manager event `deploy:<id>:warning` (feed kind `deploy`, state `warning`, high priority). While one of them is *progressing* (heartbeat fresh and not `stalled`, see LEASE-RULES "Progress") it delays the restart up to `restartWaitMs` (10 min, polled every `restartPollMs` 30 s), then proceeds and warns again. It never waits forever and never forces; host and frontend deploys are unaffected. Tests: `test/deploy-runner.test.js` (`runsAtRisk`, wait then warn twice, run ends, host deploy).
+
 Agents do not run `update_core.sh`; they queue a request in the shared lease registry (`vpt-lease deploy request ...`)
 and wait (`vpt-lease deploy wait <id> --agent A`). `deploy-runner.js` polls the queue every 30 s and shows it on the
 **Platforms page** (approve / cancel, what each request waits on, live log of the running one, a warning when the ref
