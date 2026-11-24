@@ -2981,3 +2981,8 @@ body.fv-page{ margin:0; background:var(--bg); }
   .alertrow:has(.deployban:not(.idle)){ grid-template-columns:fit-content(45%) fit-content(30%) minmax(0,1fr); }
   .alertrow .deployban.idle{ display:none; }
 }
+
+/* owner 2026-11-24: card header = text size S/M/L + fullscreen, no "n / N" counter */
+.cell .h .fsz{ flex-shrink:0; min-width:36px; height:30px; padding:0 8px; background:var(--bg-3); color:var(--accent); border:1px solid var(--line-2); border-radius:7px; font:inherit; font-size:12px; font-weight:700; cursor:pointer; }
+.grid-pane .cell .h .fsz{ display:none; }
+.card-pane .cell .h .open{ display:inline-flex; width:36px; height:30px; background:var(--bg-3); color:var(--accent); border:1px solid var(--line-2); border-radius:7px; align-items:center; justify-content:center; }

@@ -641,7 +641,16 @@ function setFit(on) {
   for (const name of state.terms.keys()) relayoutTerm(name);
   syncFontUi();
 }
+// S / M / L (owner 2026-11-24): M is the default font, S and L are 2 below / above it; one button cycles M -> L -> S -> M
+const MEDIUM_FONT = matchMedia('(max-width: 720px)').matches ? 11 : 12;
+const sizeLetter = () => state.font > MEDIUM_FONT ? 'L' : state.font < MEDIUM_FONT ? 'S' : 'M';
+function cycleSize() { const l = sizeLetter(); setFont(MEDIUM_FONT + (l === 'M' ? 2 : l === 'L' ? -2 : 0)); }
+function syncSizeBtn(root) {
+  const l = sizeLetter(), name = { S: 'small', M: 'medium', L: 'large' }[l];
+  for (const b of (root || document).querySelectorAll('.fsz')) { b.textContent = l; b.setAttribute('aria-label', `Text size: ${name}`); }
+}
 function syncFontUi() {
+  syncSizeBtn();
   const sz = $('#fontSize'); if (sz) sz.textContent = String(state.font);
   const f = $('#fitToggle'); if (f) f.classList.toggle('on', state.fit);
 }
@@ -2251,7 +2260,6 @@ function buildCell(s) {
       <span class="ag"></span>
       <div class="nm"><span class="nmr"><span class="name">${escapeHtml(displayName(s.name))}</span><button class="rn" aria-label="Rename session" title="Rename (or double-tap the name)">${icon('pencil', 12)}</button></span><span class="mt">&nbsp;</span></div>
       <span class="proj"></span>
-      <span class="pos"></span>
       <span class="tgt">&rarr; send target</span>
       <span class="mv" title="Move card">
         <button data-dir="left" aria-label="Move left">${icon('chevron-left', 13)}</button><button data-dir="up" aria-label="Move up">${icon('chevron-up', 13)}</button><button data-dir="down" aria-label="Move down">${icon('chevron-down', 13)}</button><button data-dir="right" aria-label="Move right">${icon('chevron-right', 13)}</button>
@@ -2262,6 +2270,7 @@ function buildCell(s) {
       <button class="td hidden" aria-label="Task document" title="Task document (.md)">MD</button>
       <button class="rd" aria-label="Toggle reader" title="Reader / terminal"></button>
       <button class="lk" aria-label="Lock card" aria-pressed="false" title="Lock this card so nav taps keep it focused">${icon('lock', 14)}</button>
+      <button class="fsz" aria-label="Text size: medium" title="Text size: S / M / L">M</button>
       <button class="open" aria-label="Open full screen" title="Open">${icon('expand', 14)}</button>
     </div>
     <div class="ask hidden"></div>
@@ -2283,6 +2292,8 @@ function buildCell(s) {
   for (const b of cell.querySelectorAll('.jump button')) {
     b.onclick = (e) => { e.stopPropagation(); jumpTo(cell, s.name, b.dataset.j); };
   }
+  cell.querySelector('.fsz').onclick = (e) => { e.stopPropagation(); cycleSize(); };
+  syncSizeBtn(cell);
   cell.querySelector('.rn').onclick = (e) => { e.stopPropagation(); beginInlineRename(cell.querySelector('.name'), s.name); };
   // one tap = select the card and put the cursor in the message box; two taps = open it as a full card.
   // The cursor waits out the double-tap window so the keyboard doesn't open under the second tap.
@@ -2557,11 +2568,6 @@ function syncCell(cell) {
     for (const b of cell.querySelectorAll('.mv button')) b.classList.toggle('na', !ok[b.dataset.dir]);
     cell.querySelector('.mv').classList.toggle('na', !Object.values(ok).some(Boolean));
   }
-  const pos = cell.querySelector('.pos');
-  if (inCard) {
-    const order = byUrgency(visibleSessions()), i = order.findIndex((x) => x.name === n);
-    pos.textContent = order.length > 1 && i >= 0 ? `${i + 1} / ${order.length}` : '';
-  } else pos.textContent = '';
   if (inCard && readerOn(n)) syncReader(cell, n);
 }
 
