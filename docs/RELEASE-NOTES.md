@@ -3,6 +3,8 @@
 The release note of this repo (owner 2026-11-13). Every merged code change (not docs-only) adds one entry at the top of
 `## Unreleased`; the done-check reads the merged diff for this file (REFERENCE "Closing review"). Entry form: one line,
 
+- **A server deploy warns, and waits up to 10 min, for the `vpt-lease run` tasks it would cut** — before a `server` / `full` deploy restarts the server, the runner names the running tasks (`server restart will lose N running task(s): <lease ids / holders>`, plan log plus a `deploy:<id>:warning` manager event), gives a progressing run up to 10 min (30 s polls) to end, then proceeds and warns again; never forced, hosts-only deploys unaffected (incident 2026-11-24: a restart lost task 3a6273b2 and its lease sat 40 min) · area: deploy
+
 - **A run that stopped progressing no longer looks active to the lease service** — `vpt-lease run` gives the wrapped command `$VPT_LEASE_PROGRESS_FILE`; `vpt_run.py` keeps its mtime at the last answer of the server. When it is older than 5 min (`VPT_LEASE_PROGRESS_STALE_S`) the heartbeat goes `active:false` with `stalled: "<task id>, server not answering"`, the idle clock stops being reset, the lease shows `stalled`, and the nudge text names `lease held, run not progressing: <task id>, server …` (incident 2026-11-24: 40 min of 502 held a device lease, heartbeating active) · area: lease
 what changed and why it matters, ending with `· area: <area>`.
 
