@@ -486,6 +486,15 @@ def stream_media(base, timeout=20):
     return audio, live
 
 
+def tile_base(e):
+    """The URL prefix of the tile the app shows for a device: its snapshot and the stream its live player loads.
+    None when the device has no capture path (an empty source has no tile)."""
+    cap = e.get('capture')
+    if not cap or not e.get('server'):
+        return None
+    return f"{e['server'].rstrip('/')}/host/{urllib.parse.quote(e['host'])}/stream/{urllib.parse.quote(cap)}"
+
+
 def capture_check(e, timeout=20):
     """-> {capture: ok|black|stale|multi_audio|missing|unreachable|unknown, age, luma, live_luma, audio}. What the app
     shows of the device: the tile's snapshot (thumbnail luma) and the stream its live player loads (live_luma), read
@@ -494,7 +503,7 @@ def capture_check(e, timeout=20):
     cap = e.get('capture')
     if not cap or not e.get('server'):
         return {'capture': 'unknown', 'age': None, 'luma': None, 'live_luma': None, 'audio': None}
-    base = f"{e['server'].rstrip('/')}/host/{urllib.parse.quote(e['host'])}/stream/{urllib.parse.quote(cap)}"
+    base = tile_base(e)
     st, body, last = _fetch(f'{base}/thumbnails/latest.jpg', timeout)
     if st != 'ok':
         return {'capture': st, 'age': None, 'luma': None, 'live_luma': None, 'audio': None}

@@ -82,7 +82,7 @@ test('rtsp_check: --host probes a loopback source from that host (alias from RTS
 // ---- the replacement run ----
 async function world({ devices, pool, leaseBusy = false, leaseMissing = false, leaseBusyFirst = false, leaseGranted = false, leaseGrantedDead = false, hostConfigFails = false, brokenAfterSave = false, flaky502 = null, snapshots = {}, appTitles = null }) {
   const { dir, env } = fakes();
-  const posts = []; const restarts = []; let reads = 0;
+  const posts = []; const restarts = []; let reads = 0; const plReads = {};
   const server = http.createServer((req, res) => {
     let b = ''; req.on('data', (c) => { b += c; }); req.on('end', () => {
       const u = new URL(req.url, 'http://x'); const send = (o) => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(o)); };
@@ -121,12 +121,21 @@ async function world({ devices, pool, leaseBusy = false, leaseMissing = false, l
         const n = kind.startsWith('MULTI') ? kind.slice(5) : '1';
         if (sg[3] === 'output.m3u8') {
           // DARKNEWEST: the newest segment is dark, the one before it plays (the live layer over a window)
+          // BLACKLIVETHENBRIGHT: the live layer is dark on the first read and plays on the next one: a dark scene
+          // that outlasts the window the night reads it over (the night reads the tile again, bug-9a0cd4c9)
+          if (kind === 'BLACKLIVETHENBRIGHT') {
+            plReads[sg[2]] = (plReads[sg[2]] || 0) + 1;
+            return res.end(plReads[sg[2]] === 1
+              ? '#EXTM3U\n#EXTINF:0.4,\nsegment_dark.ts\n'
+              : '#EXTM3U\n#EXTINF:0.4,\nsegment_1.ts\n');
+          }
           return res.end(kind === 'DARKNEWEST'
             ? '#EXTM3U\n#EXTINF:0.4,\nsegment_1.ts\n#EXTINF:0.4,\nsegment_2.ts\n'
             : '#EXTM3U\n#EXTINF:0.4,\nsegment_1.ts\n');
         }
         if (kind === 'DARKNOLIVE') { res.statusCode = 404; return res.end(); } // the live layer cannot be read
         if (kind === 'DARKNEWEST' && sg[3] === 'segment_2.ts') return res.end('BLACKTS');
+        if (kind === 'BLACKLIVETHENBRIGHT' && sg[3] === 'segment_dark.ts') return res.end('BLACKTS');
         return res.end(kind === 'BLACKLIVE' ? 'BLACKTS' : `TS${n}`);
       }
       res.statusCode = 404; send({});
@@ -148,7 +157,7 @@ async function world({ devices, pool, leaseBusy = false, leaseMissing = false, l
   const E = { ...env, PATH: pathV, GHOSTY_STATE_DIR: state, RTSP_POOL_FILE: poolFile, RTSP_CHECK_TOKEN_CMD: path.join(dir, 'tok'),
     RTSP_CHECK_SERVERS: `envA=http://127.0.0.1:${server.address().port}`, RTSP_SETTLE_SECONDS: '0', RTSP_CONFIRM_SECONDS: '0', RTSP_API_RETRY_SECONDS: '0', RTSP_BLACK_RESAMPLE_SECONDS: '0',
     RTSP_SOURCE_LUMA_RESAMPLE_SECONDS: '0', RTSP_CHECK_SSH: 'h1=local', RTSP_LOOPBACK_HOSTS: 'h1',
-    RTSP_INSTALL_VERIFY_SECONDS: '0', RTSP_TITLE_CHECK_SECONDS: '0' };  // the night verifies what it installed: no wait in the tests
+    RTSP_INSTALL_VERIFY_SECONDS: '0', RTSP_TITLE_CHECK_SECONDS: '0', RTSP_TILE_RECHECK_SECONDS: '0' };  // the night verifies what it installed: no wait in the tests
   // the ssh alias must not run ssh in tests: the probe goes through a fake ssh that runs the command locally
   sh(dir, 'ssh', 'shift 5 2>/dev/null; eval "$*"');
   return { E, state, posts, restarts, devices, close: () => server.close() };
@@ -562,6 +571,23 @@ test('a black tile needs both layers dark: a dark thumbnail with a live tile tha
   const two = rep.streams.find((s) => s.device === 'DEVICE2');
   assert.equal(two.capture, 'black');
   assert.ok(two.live_luma < 32, 'the live layer is black too');
+  assert.equal(w.posts.length, 0);
+});
+
+test('a tile that was black at the check but plays on the re-read is a note, not a black tile (bug-9a0cd4c9)', async () => {
+  const w = await world({ pool: POOL, snapshots: { 'cap-Scene': 'BLACKLIVETHENBRIGHT' }, devices: {
+    DEVICE1: { ...dev('Scene', 'https://cdn.example/good/scene.m3u8'), DEVICE_MODEL: 'rtsp_video' } } });
+  const r = await py(REPLACE, ['--mode', 'live'], w.E);
+  const day = new Date().toISOString().slice(0, 10);
+  const rep = JSON.parse(readFileSync(path.join(w.state, 'rtsp-nightly', `report-${day}.json`), 'utf8'));
+  w.close();
+  assert.match(r.stdout, /DEVICE1\s+hls\s+ok -> note: the tile's snapshot was dark but the live video plays/, r.stdout);
+  assert.doesNotMatch(r.stdout, /host capture side/, 'a tile that plays on the re-read is not blamed on the capture side');
+  assert.match(r.stdout, /tile snapshots \(what the app shows\): \{"ok": 1\}/);
+  const one = rep.streams.find((s) => s.device === 'DEVICE1');
+  assert.equal(one.capture, 'ok');
+  assert.ok(one.luma < 32, 'the thumbnail was dark');
+  assert.ok(one.live_luma > 32, 'the live layer plays on the re-read');
   assert.equal(w.posts.length, 0);
 });
 

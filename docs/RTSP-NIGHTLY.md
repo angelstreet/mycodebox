@@ -617,6 +617,57 @@ the live pass and nothing else: no `replace`, no `rolled_back`, no `lease_not_gr
     re-probed alone from `vpt-pi4` it plays (h264 640x360). Both are transients of a loaded host, not dead sources. Such a
     channel now reads the status `flaky` (it plays), so it is not counted as down (2026-11-22).
 
+### Night of 2026-11-24 (live, run by the nightly session)
+
+103 streams checked, **95 ok, 0 down**, **0 replaced**, 0 rolled back, 0 cameras down, 0 unverified. 16 hosts walked, 16 read,
+**no inventory error** (every server and every host answered the host-config GET). The journal holds 103 `check` events for
+this night and nothing else: no `replace`, no `rolled_back`, no `lease_not_granted`, no `apply_failed`, no `verify`.
+
+- **Nothing was really down**, so nothing had to be replaced and the pool was never used. The 103 devices are 67 files, 28 HLS
+  channels, 7 devices with an empty source (`vpt-nipogi` DEVICE4, 5, 6, 17, 22, 23, 24) and 1 YouTube device
+  (`vpt-pi4/DEVICE2`, not managed, not down). The fleet carries **no IP camera device** tonight, so no camera is down.
+- What the app shows (tile snapshots): 93 ok, 3 black, 6 unknown, 1 missing.
+  - **No `multi_audio` tile**: no host runs the old `run_ffmpeg.sh`, so no `vpt-stream` restart was needed tonight.
+  - The 3 black, each opened in the browser (hover, live layer): **all three play**.
+    - `lenovo-local-low/DEVICE23` ("Low 360p Clip 23") and `lenovo-local-low/DEVICE36` ("Low 360p Clip 36") are files: the
+      clip's own picture is what the tile shows (the browser sees the film's credits frame, brightest 227, and the clip's own
+      dark credits frame, mean luma 2.8). A file is only reported, never changed (bug-59664715).
+    - `vpt-nipogi/DEVICE13` ("FR Movie 4 — Cine Romance by Pluto TV") is the interesting one: the source plays (luma 151) while
+      the tile's snapshot (0) and its live layer (16) are dark at the time of the check, and **the browser plays the channel
+      bright** 4 min later (`readyState` 4, the clock advances, brightest 253/255). A dark scene can outlast the 30 s window
+      the live layer is judged over, so the night called a playing tile black. **bug-9a0cd4c9**: the night now reads the
+      tile's live layer once more (`RTSP_TILE_RECHECK_SECONDS`, 120 s) before it blames the capture side, and writes a tile
+      that plays then as the note it is. Fixed the same day (see the commit below).
+  - The 1 note, `vpt-nipogi/DEVICE10` ("FR Movie 7 — Pluto TV Dating"): the snapshot was dark but the live video plays
+    (snapshot luma 14, live luma 204); the browser confirms it (`readyState` 4, brightest 255/255).
+  - The 6 `unknown` are the empty slots (no capture path) and the 1 `missing` is `vpt-nipogi/DEVICE5` (an empty source: there
+    is no snapshot of a stream that was never set up).
+- **Every tile of the grid was opened in the browser**, one by one (the pi4 server's device-control grid: 108 cards, 5 pages
+  of 24), so the night's numbers are not the night's own opinion. All **96** tiles of the night's stream devices were
+  matched and measured: **92 play** (the clock advances and the picture is not black), **2 are black** and **2 show the clip's
+  own dark frame** while they advance.
+  - The 2 that are black are browser-layer faults, not dead streams (the nightly read both as `ok`, and their sources play):
+    **BFM2** (`vpt-lenovo5/DEVICE1`: `readyState` 1, a black picture, a clock that advances while the host snapshot is
+    bright) is bug-c54ea30f (the audio drifts ahead of the video), and **`vpt-nipogi/DEVICE36`** ("FR Regional 5 — TV3V")
+    shows the same signature (`readyState` 1, a black picture, a clock that does not move) while the host serves the
+    playlist and the segments with HTTP 200.
+    - The host's own segment says why: probed with ffprobe, `capture36`'s newest segment has the **video at 83321.047 and
+      the audio at 83300.903 — the audio 20 s ahead of the video**, while the healthy captures of the same host
+      (`capture13`, `capture31`) carry the audio and the video on the same start time. The browser cannot sync them, so the
+      video never starts: a black tile with a clock that does not move. Filed as **bug-3954b7de** (the A/V drift of
+      bug-c54ea30f on a second channel, with the measured offset).
+  - The 2 that advance on a dark picture are files: the clip's own frame (`lenovo-local-low/DEVICE12` and `DEVICE35`).
+  - The 12 other cards of the grid are not the night's stream devices: 7 have no video at all (the PC hosts, the two
+    drones) and 5 play. The proof is in the evidence folder of the night
+    (`~/.local/state/ghosty/rtsp-nightly/evidence-2026-11-24/`), with a screenshot per tile that did not show a picture.
+- The pool was not touched: re-probed, `smoke` plays (the only vetted entry, from `vpt-pi4`) and the three public candidates
+  still time out on port 554 from codebox, so nothing new is vetted (bug-c7c2bb0e, still `wontfix`).
+- **A trap the night's own browser proof walked into** (fixed the same day): the device-control grid appears only after the
+  auth round trip and the host fetch — 0 cards while the page reads "Checking authentication…", the grid after ~24 s on the
+  pi4 server — and it is paginated (24 cards per page, 5 pages). A probe that lists the card titles after a fixed 6 s wait
+  reads an empty grid and reports a present device as absent. The recipe is in the `vpt-headless-verify` skill and in
+  `docs/agent/validation/TESTING.md` of the VirtualPyTest repo.
+
 ## Private config (not in the repo)
 
 `~/.config/rtsp-nightly/env`, sourced by the session: `RTSP_CHECK_SERVERS="<label>=<server url>,..."` (one per backend server), `RTSP_LEASE_ENV` (the `vpt-lease` environment of the hosts, default
