@@ -62,6 +62,9 @@ still work: "Do recommended", "Wait", or "Speak it" when you pick the phone up.
 - Speech recognition is whisper on the server (`/api/transcribe`), not the browser's Web Speech API. It needs the optional `faster-whisper`
   install and a secure context (https) for the microphone. Short answers can be misheard; anything not understood is asked again, never guessed.
 - No wake word: the loop listens after each question, not all the time.
+- Server renders are niced (10), limited to 2 cores and run one at a time (`tts.js`; `tts-piper-shim.py` sets the onnxruntime thread
+  count, `GHOSTY_TTS_THREADS`). 8000 characters, the most one render accepts, take about 1 minute on codebox; later renders wait their turn,
+  so voice mode can fall back to the browser voice (15 s) while a long one runs. The read-aloud chip waits up to 10 minutes.
 - Piper is English only, one voice. The first rendering of a new sentence takes a moment; the browser voice speaks when piper is missing.
 - A notification button needs the service worker to reach the server; if the phone is offline it shows "Not answered".
 
