@@ -17,7 +17,7 @@
 # `lease-token.js add <name> --integrate`), as for the Mac Stop hook; on the codebox with neither: loopback + the reporter token.
 # Exit: 0 merged / deployed / CI superseded, 1 error, 3 returned (reason printed) or cancelled, 4 merged but CI red / deploy failed, 5 service unreachable.
 
-CLIENT_SCRIPTS_VERSION=7   # bump with every change to scripts/integrate or scripts/found-bug (same number in both); the server compares it
+CLIENT_SCRIPTS_VERSION=8   # bump with every change to scripts/integrate or scripts/found-bug (same number in both); the server compares it
 
 CFG_DIR="${MYCODEBOX_CONFIG_DIR:-$HOME/.config/mycodebox}"
 cfg() { [ -r "$CFG_DIR/config" ] && sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$CFG_DIR/config" | tail -n 1 | sed 's/[[:space:]]*$//; s/^"\(.*\)"$/\1/'; }
@@ -95,9 +95,9 @@ report() {
   _state=$(val state); _text=$(val text); _reason=$(val reason); _exit=$(val exit)
   printf '%s\n' "$_text"
   case "$_state" in
-    returned|merged_ci_red|deploy_failed)
+    returned|returned_after_deploy|merged_ci_red|deploy_failed)
       _t=$(tail_of); [ -n "$_t" ] && printf '%s\n' "$_t"
-      case "$_state" in returned) if [ "$(val outcome)" = needs_approval ]; then printf 'Waiting for the manager: a manager item was created; it approves with integrate request <branch> --approved-by manager.\n'; else printf 'Fix it on your branch, push it and run integrate request again.\n'; fi ;; *) printf 'The merge is on the target; the manager decides what happens next. Do not revert it yourself.\n' ;; esac ;;
+      case "$_state" in returned|returned_after_deploy) if [ "$(val outcome)" = needs_approval ]; then printf 'Waiting for the manager: a manager item was created; it approves with integrate request <branch> --approved-by manager.\n'; else printf 'Fix it on your branch, push it and run integrate request again.\n'; fi ;; *) printf 'The merge is on the target; the manager decides what happens next. Do not revert it yourself.\n' ;; esac ;;
   esac
   [ -n "$_exit" ] || exit 1
   exit "$_exit"

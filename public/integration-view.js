@@ -7,9 +7,9 @@
 import { icon } from './icons.js';
 
 export const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-export const FINAL = ['merged', 'deployed', 'returned', 'merged_ci_red', 'merged_ci_superseded', 'deploy_failed', 'cancelled'];
-export const LABEL = { queued: 'queued', running: 'running', merged: 'merged', deployed: 'deployed', returned: 'returned', merged_ci_red: 'merged, CI red', merged_ci_superseded: 'merged, CI superseded', deploy_failed: 'merged, deploy failed', cancelled: 'cancelled' };
-const BAD = ['returned', 'merged_ci_red', 'deploy_failed'];   // a superseded run is not a failure: nothing to fix
+export const FINAL = ['merged', 'deployed', 'returned', 'merged_ci_red', 'merged_ci_superseded', 'deploy_failed', 'returned_after_deploy', 'cancelled'];
+export const LABEL = { queued: 'queued', running: 'running', merged: 'merged', deployed: 'deployed', returned: 'returned', merged_ci_red: 'merged, CI red', merged_ci_superseded: 'merged, CI superseded', deploy_failed: 'merged, deploy failed', cancelled: 'cancelled', returned_after_deploy: 'returned after deploy' };
+const BAD = ['returned', 'returned_after_deploy', 'merged_ci_red', 'deploy_failed'];   // a superseded run is not a failure: nothing to fix
 const TAIL_LINES = 12;
 const toMs = (s) => { const n = Date.parse(String(s || '')); return Number.isFinite(n) ? n : null; };
 

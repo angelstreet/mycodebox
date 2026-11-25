@@ -180,7 +180,9 @@ import { cachedScorecard } from './scorecard.js';
 import { createDeployRunner, defaultRegistry as defaultDeployRegistry } from './deploy-runner.js';
 import { quotaLine, leasesLine, deploysLine } from './triage.js';
 import { createReporter, isLoopback, TOKEN_HEADER } from './reporter.js';
-import { createIntegrationLane, createTmuxRestart } from './integration-lane.js';   // round 13: the integration lane (INTEGRATION BLOCK below)
+import { createIntegrationLane, createTmuxRestart, createDefaultGit, createDefaultRun, loadConfig as loadIntegrationConfig } from './integration-lane.js';
+import { createUiReview, createNightlyUiReview } from './ui-review-lane.js';
+import { createAskReview, createAskRunner } from './ui-review-ask.js';   // round 13: the integration lane (INTEGRATION BLOCK below)
 import { createIntegrationRoutes, PREFIX as INTEGRATION_API } from './integration-routes.js';
 import { createPeerSession } from './peer-session.js';
 import { createHostAllow } from './host-allow.js';
@@ -1466,10 +1468,30 @@ function voiceItemOf(session, kind, stateHint = null) {
 }
 // Debounced per session and kind, so a "done" never swallows a "needs you" that follows it.
 // one open ask per session (owner, 2026-10-31): an open ledger ask of the session absorbs its further asks / waiting alerts
+// The UI reviewer (ui-review-lane.js) and the hold on needs-owner asks about something visual (ui-review-ask.js).
+const uiReviewRun = createDefaultRun();
+const uiReviewer = createUiReview({ stateDir: STATE_DIR, git: createDefaultGit(), run: uiReviewRun, log: (...a) => console.error('[ui-review]', ...a) });
+const uiReviewConfig = () => Object.values(loadIntegrationConfig(STATE_DIR).repos).find((r) => r.uiReview?.repo === 'virtualpytest')?.uiReview || null;
+const askReviewOn = () => { try { if (JSON.parse(readFileSync(managerConfigFile, 'utf8')).uiReviewAsk === 'off') return false; } catch { /* default on */ } return !!uiReviewConfig(); };
+const askReview = createAskReview({ stateDir: STATE_DIR, run: uiReviewRun,
+  review: createAskRunner({ lane: uiReviewer, cfg: uiReviewConfig, stateDir: STATE_DIR, run: uiReviewRun }),
+  branchOf: async (session) => {
+    const cwd = (await listPanes()).get(session)?.cwd;
+    if (!cwd) return null;
+    const git = async (args) => (await exec('git', ['-C', cwd, ...args], { timeout: 30000, maxBuffer: 8 * 1024 * 1024 })).stdout.trim();
+    const base = await git(['merge-base', 'HEAD', 'origin/HEAD']).catch(() => git(['merge-base', 'HEAD', 'origin/main']));
+    return { cwd, base, files: (await git(['diff', '--name-only', base, 'HEAD'])).split('\n').filter(Boolean) };
+  },
+  send: (session, text) => harnessSend(session, text),
+  journal: (e) => appendJsonLine(join(STATE_DIR, 'ui-review-ask.jsonl'), { at: new Date().toISOString(), ...e }),
+  log: (...a) => console.error('[ui-review]', ...a) });
 const askFold = createAskFold({ file: join(STATE_DIR, 'manager-owner-asks.jsonl') });
 askFold.refresh();
-function notifySession(session, kind, body, meta, stateHint = null) {
+function notifySession(session, kind, body, meta, stateHint = null, reviewed = false) {
   if ((kind === 'waiting' || kind === 'asks') && loadOwnerHiddenSessions().includes(session)) return;   // the manager's own session (and the shadow standby) never pushes the owner
+  // a needs-owner stop on something to look at is reviewed by ghosty before the owner hears of it (ui-review-ask.js)
+  if (!reviewed && kind === 'waiting' && askReviewOn() && askReview.take(session, closingTextOf(latest?.status?.[session]?.stall),
+    (note) => notifySession(session, kind, note ? `${note.split('\n')[0]}\n${body || ''}\n${note.split('\n').slice(1).join('\n')}` : body, meta, stateHint, true))) return;
   if (askFold.folds(session, kind)) return;   // folded into the session's open ask: no new push, no new event until it is answered or superseded
   const waiting = kind === 'waiting' || kind === 'asks';
   // The agent's STATUS verdict + what the turn took (elapsed, tokens) + its own info, first in the body so every cut keeps it.
@@ -1756,7 +1778,8 @@ let latest = null; // { at, sessions, status }
 let inflight = null;
 function poll() {
   if (inflight) return inflight;
-  inflight = pollOnce().then((r) => { latest = { at: Date.now(), ...r }; return latest; })
+  inflight = pollOnce().then((r) => { for (const [n, st] of Object.entries(r.status || {})) { const c = askReview.cardOf(n); if (c) st.uiReview = c; }   // the verdict on the dashboard card
+    latest = { at: Date.now(), ...r }; return latest; })
     .finally(() => { inflight = null; });
   return inflight;
 }
@@ -3336,6 +3359,10 @@ const integrationLane = createIntegrationLane({ stateDir: STATE_DIR, mergeOptOut
   managerItem: (it) => { const ev = it.kind === 'merge' ? { key: `merge:${it.id}:manager-item`, title: `${it.repo}: ${it.branch} needs infra approval`, body: String(it.text).slice(0, 1500), url: '/', priority: 'default', session: it.session || undefined } : it;
     Promise.resolve(managerEvents.record(ev)).catch((e) => console.error('[integration] manager item', e.message)); },
   journal: (rec) => { appendFile(join(STATE_DIR, 'merge-decisions.jsonl'), `${JSON.stringify(rec)}\n`, (e) => { if (e) console.error('[integration] journal', e.message); }); } });
+// The nightly UI review of the key pages (owner 2026-11-25): only what changed since the night before reaches the manager.
+const nightlyUiReview = createNightlyUiReview({ stateDir: STATE_DIR, config: () => loadIntegrationConfig(STATE_DIR), review: uiReviewer.review,
+  event: (ev) => Promise.resolve(managerEvents.record(ev)), log: (...a) => console.error('[ui-review]', ...a) });
+if (!process.env.GHOSTY_NO_UI_REVIEW_NIGHTLY) nightlyUiReview.start();
 const integrationRoutes = createIntegrationRoutes({ deployLive, lane: integrationLane, stateDir: STATE_DIR, isLoopback, reporterOk: (t) => reporter.tokenOk(t),
   sessionCwd: async (name) => (await listPanes()).get(name)?.cwd || null,
   sessionKnown: async (name) => (await listPanes()).has(name),   // --for <session>: a live tmux session

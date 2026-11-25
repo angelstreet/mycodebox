@@ -33,7 +33,7 @@ export const LANE_RETURNED_MAX = 5;
 export const CI_RED_MIN_MAX = 120;
 export const DISK_PCT_MAX = 90;
 export const MEM_MIN_MB = 2048;
-export const FINAL_STATES = ['merged', 'deployed', 'returned', 'merged_ci_red', 'merged_ci_superseded', 'deploy_failed', 'cancelled'];
+export const FINAL_STATES = ['merged', 'deployed', 'returned', 'merged_ci_red', 'merged_ci_superseded', 'deploy_failed', 'returned_after_deploy', 'cancelled'];
 
 export const stateDir = () => process.env.GHOSTY_STATE_DIR || join(homedir(), '.local/state/ghosty');
 export const sessionsUrl = () => `${process.env.GHOSTY_URL || 'http://127.0.0.1:7777'}/api/sessions`;

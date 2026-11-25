@@ -11,6 +11,8 @@ already authorise: do it. Verify UI yourself with headless Playwright (skill `vp
 owner to look. Only hard-floor items (data deletion, credentials, money, sudoers, force-push) are questions. End every
 turn with a STATUS line.
 
+**UI review is automatic (owner / manager 2026-11-25):** the lane and ghosty review graphical work themselves; fix what the table says and ask again; never skip, edit or grade the review ([REFERENCE](docs/REFERENCE.md#ui-review-gate-owner-2026-11-25)).
+
 **Proof by risk (owner 2026-11-25):** cosmetic (wording, layout, CSS, docs) = no e2e; a fix or feature on the web UI = headless e2e on the deployed URL after the deploy, with the screenshot path and the URL in the closing text ([REFERENCE](docs/REFERENCE.md#proof-by-risk-owner-2026-11-25)).
 
 **The seven STATUS words (owner 2026-11-11). Take the first row that is true.**

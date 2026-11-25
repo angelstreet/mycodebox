@@ -7,7 +7,7 @@
 //                    endedAt (ISO, on final), createdAt/startedAt/updatedAt (ISO), live { step, tail } (while running) };
 // the session side reads different names — `normRequest(r)` maps the lane shape onto the names below.
 import { pendingText, liveAfterSkipText } from './deploy-live.js';
-export const FINAL_STATES = ['merged', 'deployed', 'returned', 'merged_ci_red', 'merged_ci_superseded', 'deploy_failed', 'cancelled'];
+export const FINAL_STATES = ['merged', 'deployed', 'returned', 'merged_ci_red', 'merged_ci_superseded', 'deploy_failed', 'returned_after_deploy', 'cancelled'];
 export const isFinal = (state) => FINAL_STATES.includes(state);
 
 // Integration notices that must NOT take a slot in the owner's push feed: a merge or a deploy is routine.
@@ -72,6 +72,8 @@ export function timeline(r) {
   return { events, durations, text };
 }
 
+// a UI review answer is the table the session fixes from: more lines than a test tail
+const UI_LINES = { lines: 18, chars: 2600 };
 // Live truth (deploy-live.js, owner 2026-11-25): a deployed request whose host restart was deferred is NOT live. The notify path attaches `liveTruth`.
 const liveSuffix = (n, id) => (n.liveTruth?.state === 'pending'
   ? ` — ${pendingText(n.liveTruth)}. Do not say "deployed" or "live" yet: end on STATUS: waiting: integration ${id} and you are woken when it is live`
@@ -96,8 +98,10 @@ export function integrationText(r) {
     case 'deployed': if (sd) return `Integration ${id}: merged ${where(n)}, deployed live ghosty at ${sha12(sd.newSha)} (was ${sha12(sd.prevSha)})${sd.note ? `, ${one(sd.note)}` : ''}.${rollback}${sup}`;
       if (none) return `Integration ${id}: ${none}; redeployed ${one(n.target) || 'the target'} as ${one(n.version) || 'the same version'} to ${one(n.env) || 'the environment'}${scopeOf(n) ? ` (scope ${scopeOf(n)})` : ''}, with no new code of yours.${sup}`;
       return `Integration ${id}: merged ${where(n)}, deployed ${one(n.version) || 'the new version'} to ${one(n.env) || 'the environment'}${scopeOf(n) ? ` (scope ${scopeOf(n)})` : ''}${liveSuffix(n, id)}.${sup}`;
+    case 'returned_after_deploy':
+      return `Integration ${id}: merged ${where(n)} and deployed, then returned to you: ${reason.replace(/[.\s]+$/, '')}. The merge stays live: fix it on a new commit and run integrate request again.\n${tailLines(n.tail, UI_LINES)}`;
     case 'returned': {
-      const t = tailLines(n.tail);
+      const t = tailLines(n.tail, n.outcome === 'ui_review' ? UI_LINES : undefined);
       return `Integration ${id} (${one(n.branch) || '?'}) returned: ${reason.replace(/[.\s]+$/, '')}. Fix it on your branch and run integrate request again.${t ? `\n${t}` : ''}`;
     }
     case 'merged_ci_red': return `Integration ${id}: merged ${where(n)} but CI is red (${reason.replace(/[.\s]+$/, '')}). The merge stays on ${one(n.target) || 'the target'}; the manager decides, do not revert it yourself.`;
@@ -115,6 +119,7 @@ export function integrationNotice(r) {
   const title = {
     merged: `Integration ${id} merged: ${what}`, deployed: `Integration ${id} deployed${n.liveTruth?.state === 'pending' ? ', NOT live yet' : ''}: ${what}`, returned: `Integration ${id} returned: ${what}`,
     merged_ci_red: `Integration ${id} merged, CI red: ${what}`, merged_ci_superseded: `Integration ${id} merged, CI superseded: ${what}`, deploy_failed: `Integration ${id} merged, deploy failed: ${what}`, cancelled: `Integration ${id} cancelled: ${what}`,
+    returned_after_deploy: `Integration ${id} returned after deploy (UI review): ${what}`,
   }[n.state] || `Integration ${id}: ${n.state}`;
   const t = n.state === 'returned' ? tailLines(n.tail, { lines: 3, chars: 240 }) : '';
   const body = [integrationText(r)?.split('\n')[0], t].filter(Boolean).join('\n').slice(0, 600);
@@ -124,7 +129,7 @@ export function integrationNotice(r) {
 // Final states the requesting session acts on by itself once told (fix and request again; nothing to fix; it asked for the cancel):
 // the manager event is marked handled when the line reached, or is kept for, the session. merged_ci_red and deploy_failed stay the
 // manager's (the merge is on the target and needs a decision); merged / deployed are routine already (the filter drops them).
-export const SESSION_OWNED_STATES = ['returned', 'merged_ci_superseded', 'cancelled'];
+export const SESSION_OWNED_STATES = ['returned', 'returned_after_deploy', 'merged_ci_superseded', 'cancelled'];
 
 // deps: { status: (session) => { state, stall } | undefined, isRemote: (session) => bool, canSend: (status) => bool, send: (session, text) => Promise,
 //         feed: (item) => void, digest: (item) => void, quiet: (state) => bool, managerEvent: (event) => Promise, afterSend: (session, request) => void, log }
@@ -151,7 +156,8 @@ export function createIntegrationNotify({ liveTruth = async () => null, status =
   branch: one(request.branch) || '?', target: one(request.target) || '?' };
       try {
         // a quiet state (merged, deployed) waits for the digest: it must not take a slot in the owner's feed
-        if (quiet(request.state)) digest(item); else feed(item);
+        // what the UI review sends back is the session's to fix: the owner is not woken for it
+        if (quiet(request.state) || request.outcome === 'ui_review') digest(item); else feed(item);
       } catch (e) { log({ type: 'integration_feed_failed', id: request.id, error: e.message }); }
       const managerEventOf = (handled) => ({ key: `integration:${request.id}:${request.state}`, title: n.title, body: n.body, url, priority: n.priority, ...(session ? { session } : {}), ...(handled ? { handled } : {}) });
       // Who is told: the session named by `--for` (forSession) first, then the requester, once each. Without --for it is the requester only.

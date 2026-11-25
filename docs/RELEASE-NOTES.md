@@ -21,6 +21,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **Graphical work is reviewed by ghosty before you are asked to look at it** — sessions delivered screens nobody had opened, and the owner was the first reviewer. A repo with a `uiReview` block now has the lane preview every visual change before the merge and return it with a table when a page got worse (nothing merges, deploys or asks), review the live pages after a frontend deploy (`returned_after_deploy`), and review the key pages every night; a `needs-owner` stop on something visual is held, reviewed and sent back up to 2 rounds before the owner is pushed with the verdict. The reviewer is taken from the product's main branch, so a session cannot skip, edit or grade it · area: harness
+
 - **The reader no longer sometimes reloads in the raw boxed style** — `/api/transcript` read the Claude session id from the status cache, which many actions clear; for that moment it fell back to the wrapped tmux pane text (boxed lines, tables as plain text). It now polls first, so the session file is always used.
 
 - **The manager is restarted fresh when its context passes 300k, not only at night** — the context reached 887k between two nightly restarts and calls over 400k were half of the manager's cost. `scripts/manager-context-cap.js` (run by the 5-min manager watchdog, no tokens) uses the nightly path (`manager-fresh.sh`: idle with no draft, `/exit`, relaunch, kickoff from the open items), never while the manager works, at most 2 a day, with a decision line in `manager-actions.jsonl` each time. Switch: `manager.json` `contextCap` (`0` = off). · area: manager
