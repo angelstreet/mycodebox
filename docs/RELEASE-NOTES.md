@@ -18,6 +18,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **Mockups are checked for readability before the owner sees them** — `POST /api/mockups` reads the page (`/files/<path>` or a loopback url) and refuses it (422, nothing in the feed) when a sentence has over 12 words, a text block over 140 characters, a string repeats, helper text sits on the page (hint / help / note / caption / description classes, "Note:", "This page"...), a table header has over 2 words or 18 characters, or the page has over 250 words; the posting session is sent up to 8 defect lines and re-posts. Tooltips are not counted. Switch `manager.json` `mockupLint` live (default) | dry | off (`mockup-lint.js`) · area: mockups
+
 
 - **The scorecard no longer inflates the server on every refresh (cause of the slow reader opens, owner 2026-11-25)** — one scorecard load is ~2 s of CPU and adds 230 MB (7 days) to 660 MB (30 days) of heap on the server's one thread, and the Usage sheet and cards asked again every minute; the server grew to 2.6 GB resident over a few hours, and then every child process it starts (tmux, git) blocks the thread ~40 ms instead of ~6 ms. The result is now kept 5 min and served stale for up to 30 min while one background load refreshes it (`cachedScorecard`, `scorecard.js`); the first load of a window still waits · area: server
 - **A resumed session no longer shows under Parked (owner 2026-11-25: cockpit)** — the "over the limit" part of Parked lists LIVE sessions to park, and it listed up to 3 more than the number over the limit, including the pinned manager and a session resumed a minute ago; it now shows only the idlest ones (as many as are over the limit), none idle under 10 min and none pinned · area: dashboard
