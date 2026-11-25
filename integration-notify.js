@@ -79,6 +79,12 @@ const liveSuffix = (n, id) => (n.liveTruth?.state === 'pending'
   ? ` — ${pendingText(n.liveTruth)}. Do not say "deployed" or "live" yet: end on STATUS: waiting: integration ${id} and you are woken when it is live`
   : n.liveTruth?.state === 'live' && n.liveTruth.skipped?.length ? ` — ${liveAfterSkipText(n.liveTruth)}` : '');
 
+// a merge or a deploy whose UI review left something out says so: it is not a reviewed pass
+const notReviewed = (n) => {
+  const u = [n.uiReviewLive, n.uiReview].find((x) => x?.verdict === 'partial');
+  return u ? ` UI review: NOT fully reviewed, not a pass: ${one(u.summary)}.` : '';
+};
+
 // -> the line for the session (and the own-job wake), or null when the state is not final
 export function integrationText(r) {
   if (!r || !isFinal(r.state)) return null;
@@ -88,7 +94,8 @@ export function integrationText(r) {
   const rollback = n.rollback ? ` Rollback: ${one(n.rollback)}` : '';
   const sd = n.selfDeploy && typeof n.selfDeploy === 'object' ? n.selfDeploy : null;
   // a merge whose CI run was cancelled by a newer commit on the target: the session must not chase it again
-  const sup = n.supersededBy ? ` Your commit was superseded by ${sha12(n.supersededBy)}; CI runs on the newer tip, nothing to fix, do not branch again.` : '';
+  const unseen = notReviewed(n);
+  const sup = (n.supersededBy ? ` Your commit was superseded by ${sha12(n.supersededBy)}; CI runs on the newer tip, nothing to fix, do not branch again.` : '') + unseen;
   // the branch tip was already on the target (a request sent before its commit was pushed, or a re-request): nothing of the session's
   // was merged. Said first and plainly: "merged <branch> at <someone else's sha>" read as "my fix shipped" (stb3 review 2026-11-13)
   const none = n.alreadyMerged && !n.revertOf ? `nothing new: ${one(n.branch) || '?'}${n.branchSha ? ` at ${sha12(n.branchSha)}` : ''} is already in ${one(n.target) || 'the target'}, no commit of yours was merged (just committed? push the branch, check git status, request again)` : '';
