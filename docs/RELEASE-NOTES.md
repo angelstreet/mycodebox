@@ -29,6 +29,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The needs-owner hold now really holds** — it listened on the `waiting` alert (a prompt on screen), but a `STATUS: needs-owner` stop reaches the owner as the manager's `asks` alert, so it never fired. `test/ui-review-wire.test.js` drives a real server with a stand-in agent pane; it fails on the old wiring · area: harness
+
 - **A server the UI review cannot sign in to is reported as not reviewed** — the lane takes the new `partial` verdict: the request goes on and its message says "NOT fully reviewed, not a pass" · area: harness
 
 - **A failing UI review chip on a session card is red, not green** · area: harness

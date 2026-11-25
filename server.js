@@ -1490,7 +1490,7 @@ askFold.refresh();
 function notifySession(session, kind, body, meta, stateHint = null, reviewed = false) {
   if ((kind === 'waiting' || kind === 'asks') && loadOwnerHiddenSessions().includes(session)) return;   // the manager's own session (and the shadow standby) never pushes the owner
   // a needs-owner stop on something to look at is reviewed by ghosty before the owner hears of it (ui-review-ask.js)
-  if (!reviewed && kind === 'waiting' && askReviewOn() && askReview.take(session, closingTextOf(latest?.status?.[session]?.stall),
+  if (!reviewed && askReviewOn() && askReview.takeAlert(session, { kind, state: stateHint, status: meta?.status, text: meta?.closing || closingTextOf(latest?.status?.[session]?.stall) },
     (note) => notifySession(session, kind, note ? `${note.split('\n')[0]}\n${body || ''}\n${note.split('\n').slice(1).join('\n')}` : body, meta, stateHint, true))) return;
   if (askFold.folds(session, kind)) return;   // folded into the session's open ask: no new push, no new event until it is answered or superseded
   const waiting = kind === 'waiting' || kind === 'asks';
@@ -3627,7 +3627,7 @@ server.listen(PORT, HOST, async () => {
     },
     managerSessions: loadManagerSessions,
     credits: () => credits.peek(),
-    onOwnerNeeded: (session, stall, reason, state) => notifySession(session, 'asks', [reason, stall.question || stall.case, stall.aiLine ? `AI ${stall.aiLine}` : null].filter(Boolean).join('\n'), { case: stall.case, question: stall.question || reason, answer: stall.aiLine, status: stall.status, info: stall.status ? stall.question : undefined }, state),
+    onOwnerNeeded: (session, stall, reason, state) => notifySession(session, 'asks', [reason, stall.question || stall.case, stall.aiLine ? `AI ${stall.aiLine}` : null].filter(Boolean).join('\n'), { closing: closingTextOf(stall), case: stall.case, question: stall.question || reason, answer: stall.aiLine, status: stall.status, info: stall.status ? stall.question : undefined }, state),
     context: (session) => ({ priority: sessionMeta.priority(session), quota: quotaLine(quota.get()), leases: leasesLine(leaseSource.peek()), deploys: deploysLine(deployRunner.snapshot()) }),
     sendKey: guardSendKey, sendKeys: guardSendKeys, paused: (n) => sessionMeta.isPaused(n),
     policy: (n, agent) => evaluatePolicy({ priority: sessionMeta.priority(n), agent, quota: quota.get(), billing: latest?.status?.[n]?.apiKeyBilling ? 'api_key' : undefined, now: Date.now(), config: policyConfig() }),
