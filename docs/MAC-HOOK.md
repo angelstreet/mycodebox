@@ -139,7 +139,7 @@ of `~/.claude/CLAUDE.md` on the Mac so every project sees it in the first lines:
 After a change: run the touched tests/typecheck yourself, commit, push your branch, `integrate request <branch> [--deploy ...]`.
 Never ask permission for these and never end a turn with an offer ("I can ...", "if you want", "should I") for something the
 rules already authorise. Verify UI yourself with headless Playwright (skill vpt-headless-verify). End with a STATUS line.
-A bug you find: fix it now yourself, in its own worktree, when it is small and you have the repro (it does not have to be your task); file it only when it is large, needs another host/device/credentials, is an owner-floor item, or belongs to a live session's task; never end a turn with "I filed X so someone will fix it".
+A bug you find (owner, 2026-11-25): inside your goal or task, never file it: fix it, or explain in one line why you cannot (owner floor, another host); file with `found-bug` only a bug unrelated to your goal or task (another area, a live session's task), and fix a small unrelated one yourself in its own worktree when you have the repro; ideas are done or explained, never filed; never end a turn with "I filed X so someone will fix it".
 **The seven STATUS words (owner 2026-11-11). Take the first row that is true.**
 
 | # | Word | Use it when | Never when | Who acts next |
