@@ -21,6 +21,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The reader no longer sometimes reloads in the raw boxed style** — `/api/transcript` read the Claude session id from the status cache, which many actions clear; for that moment it fell back to the wrapped tmux pane text (boxed lines, tables as plain text). It now polls first, so the session file is always used.
+
 - **The manager is restarted fresh when its context passes 300k, not only at night** — the context reached 887k between two nightly restarts and calls over 400k were half of the manager's cost. `scripts/manager-context-cap.js` (run by the 5-min manager watchdog, no tokens) uses the nightly path (`manager-fresh.sh`: idle with no draft, `/exit`, relaunch, kickoff from the open items), never while the manager works, at most 2 a day, with a decision line in `manager-actions.jsonl` each time. Switch: `manager.json` `contextCap` (`0` = off). · area: manager
 - **The daily report has a Manager cost section** — wakes, cost per wake, median and p90 context and idle share for the last 24 h against the 7-day average, with one `daily:manager-cost` finding past a threshold (`daily-checks.json` `managerCost`). Each wake now records its model calls and largest context. The section says that quality still only becomes real when the owner taps "wrong" on a bad manager action. · area: manager
 

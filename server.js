@@ -2667,7 +2667,8 @@ async function handleHttp(req, res) {
     const session = decodeURIComponent(p.slice('/api/transcript/'.length));
     try {
       // A Claude session: its own session file holds the whole conversation (the pane of a fullscreen session holds one screen).
-      const sid = latest?.status?.[session]?.claudeSessionId;
+      // `latest` is cleared after many actions: without a poll first the id is missing and the reader got the wrapped pane text (boxed lines, raw tables)
+      const sid = (latest || await poll().catch(() => null))?.status?.[session]?.claudeSessionId;
       const file = sid ? await findSessionFile(sid).catch(() => null) : null;
       // ?max=N: only about the newest N characters (the reader's first load); `partial` says older text exists
       const max = tailChars(url.searchParams.get('max'));
