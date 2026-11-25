@@ -16,3 +16,9 @@ test('the client drops a row the server calls an invalid session name, like "no 
   assert.match(app, /no such session\|invalid session name/);
   assert.match(app, /removed from the list/);
 });
+
+test('the X on a Parked row posts JSON (the server refuses a POST without a JSON content-type)', () => {
+  const i = app.indexOf('/forget-parked`');
+  assert.ok(i > 0);
+  assert.match(app.slice(i, i + 160), /'content-type': 'application\/json'/);
+});
