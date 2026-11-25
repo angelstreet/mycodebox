@@ -55,3 +55,16 @@ token skips that account until the CLI renews it). Switch: `manager.json` `archi
 See REFERENCE.md "Archived in the Claude app". Code: `archive-sync.js`, `parking.js` (`autoParkArchived` cloudArchived), `server.js`
 (`archiveSyncTick` every 60 s, `autoParkTick` every 30 s), `remote-stops.js` (row title), `scripts/mac-stop-hook.sh` (bridge URL from
 the transcript; the Mac copy picks it up at the next hook install, the title match works without it).
+
+## Live checks (2026-11-25, after int-1a2137601faaaf6b1, server restarted 16:10:31 UTC on 0e72baa)
+
+- codebox: throw-away `zz-archtest-b` (idle, Remote Control on) archived through the same API action the app uses
+  (`POST /v1/code/sessions/<id>/archive`) at 16:10:49 UTC; parked at 16:11:41 (52 s), feed `Archived in Claude, parked: zz-archtest-b`,
+  tmux gone; then cleared with X on Parked.
+- No false positive: the shipped `fetchAll` over the 3 accounts (117 sessions, 98 archived) marks none of the 15 live tmux sessions.
+- Mac rows: the shipped `macRowsToDrop` run on the 5 live `mac:` rows before the restart picked exactly the 4 the owner had archived
+  (Bluetooth remote panel button history, Tooltip helper and message deletion, Zap report image/401 errors, Cockpit table layout scrolling)
+  and kept `Testing-coverage-Task-208` (active). The restart itself cleared those in-memory rows; the next real removal is journaled
+  in `<state>/archive-sync.jsonl`.
+- Manual routes, headless Playwright on http://127.0.0.1:7777: Park on `mac:Bluetooth-remote-panel-button-history-a55888` → POST 200,
+  row gone, toast "parked"; X on Parked `zz-archtest-a` → `forget-parked` 200, toast "zz-archtest-a removed from Parked", 580 → 579.

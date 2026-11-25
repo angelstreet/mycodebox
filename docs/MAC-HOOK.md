@@ -28,7 +28,7 @@ text, needs nothing on the Mac besides the hook, and travels over the same authe
 Remote Control cannot type into a stopped session from the server side, and an answer file needs a second poller. The
 limit: an answer can only be delivered **while the hook waits**. Anything later (you answer on the dashboard after the
 countdown, or a stop that was escalated) goes through the Mac itself or Remote Control; the dashboard shows the Remote
-Control link on the row when the hook sends `remote_control_url` (set `MYCODEBOX_RC_URL` in the environment Claude Code runs in).
+Control link on the row when the hook sends `remote_control_url` (`MYCODEBOX_RC_URL` when set, else the last `/remote-control is active` URL in the transcript, since 2026-11-25). Archiving the session in the Claude app removes the row within about a minute (REFERENCE "Archived in the Claude app"; matched by that id, else by title).
 
 Rules the server enforces on this channel:
 
