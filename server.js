@@ -3218,13 +3218,13 @@ async function handleHttp(req, res) {
     catch (e) { return json(res, /needs a date/.test(e.message) ? 400 : 500, { ok: false, error: String(e.message || e) }); }
   }
   if (req.method === 'GET' && p === '/api/manager/scorecard') {
-    // 60 s in-process cache: the file is ~35k lines and the UI re-renders on every status tick.
+    // 5 min in-process cache, served stale for up to 30 min while one background load refreshes it (a load is ~2 s of CPU and 230-660 MB of heap).
     // Scorecard reports tokens + calls per bucket (session / subagents / workers / Jev / reviewer / judge / total — no USD),
     // claude_weekly_pct / claude_today_pct (manager's share of the Claude Max weekly plan) and efficiency vs the
     // planBudget.claudeWeeklyPct pro-rated to the elapsed fraction of the plan-week. The plan-week ends at the
     // Claude seven_day resets_at (read from claude-rate-limits.json by the loader), else the rolling last 7 days.
     const days = Math.max(1, Math.min(30, Number(url.searchParams.get('days')) || 7));
-    const sc = await cachedScorecard({ days, ttlMs: 60000, deployList: () => deployRunner.snapshot().deploys });
+    const sc = await cachedScorecard({ days, deployList: () => deployRunner.snapshot().deploys });
     return json(res, 200, { ...sc, bugs: await foundBugs.week(days) });   // fix-first (owner, 2026-11-11): filed vs fixed by the finder vs by a worker
   }
   if (req.method === 'GET' && p === '/api/vm') {
