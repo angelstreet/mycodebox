@@ -111,7 +111,7 @@ One waiter at a time: the launch writes the waiter shell's pid to `<id>.pid`. If
 Files: `integration-lane.js` (queue, steps, restart), `integration-routes.js` (HTTP), `scripts/integrate` (CLI). The queue is
 `<state>/integration/requests.jsonl` (one snapshot per line, the last wins). A client token for the Mac:
 `node scripts/lease-token.js add <name> --integrate`. A request's states: `queued`, `running`, then one final state
-(`merged`, `deployed`, `returned`, `merged_ci_red`, `merged_ci_superseded`, `deploy_failed`, `cancelled`). `notify(request, event)` fires on every
+(`merged`, `deployed`, `returned`, `returned_after_deploy`, `merged_ci_red`, `merged_ci_superseded`, `deploy_failed`, `cancelled`). `notify(request, event)` fires on every
 transition; `event.kind` is `queued | running | step | resumed | state | coalesced | final`, `event.final` is true on a final state.
 
 **Coalescing and the settle window** (2026-10-20). One branch merged three times in three minutes, restarting the target CI each
@@ -121,6 +121,11 @@ same id and queue position, the newest tip, the notes appended, the widest `--de
 is `running` is queued as a second entry and marked `afterId`; the lane is serial per repo, so it starts only after that one ends.
 A queued request is picked once it has sat unchanged for `settleMs` (top level in `integration.json`, or per repo; default 60 s,
 0 disables). The request records `settleUntil` (ISO); a coalesce pushes it back.
+
+## UI review before the merge (2026-11-25)
+
+A repo with `uiReview` gets a step `ui-review` between the tests and the push for every visual diff, and `ui-review-live`
+after a frontend deploy (state `returned_after_deploy` on a fail). Rules: [REFERENCE](../REFERENCE.md#ui-review-gate-owner-2026-11-25).
 
 ## Infra paths and manager approval
 

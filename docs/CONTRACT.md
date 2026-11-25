@@ -12,6 +12,7 @@ Read [AGENTS.md](../AGENTS.md) first. This contract applies to repository change
 
 ## Invariants
 
+- The UI review (lane gate, post-deploy, nightly, needs-owner hold) runs the product reviewer from the product's **main** branch, never from the branch or session under review; a review that cannot run is never a pass; only a manager approval waives the lane gate ([REFERENCE](REFERENCE.md#ui-review-gate-owner-2026-11-25)).
 - The server has no login. Bind explicitly to loopback behind private Tailscale Serve, or to a Tailscale IP for direct access. Never publish it with Funnel, public tunnels or public reverse proxies.
 - `127.0.0.1` is the source default. Explicit listener overrides are not a security boundary. Tailnet grants/ACLs must restrict who can reach the endpoint; allowed users can act as the owner.
 - The hard floor wins over every manager decision and every automatic path; merges, pushes and deploys are evaluated, not forbidden. Both are defined in [Who may do what](#who-may-do-what-one-rule-text). Preserve countdown cancellation, draft checks and actor attribution.

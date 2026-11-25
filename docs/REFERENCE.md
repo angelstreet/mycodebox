@@ -1582,6 +1582,27 @@ Optional `"fixWindow": {"from": 1, "to": 6, "tz": "Europe/Zurich"}` (owner, 2026
 "fixer waits for 01:00"; the red gets its dispatch on the first tick inside the window. A running fixer keeps working past the end. Missing or `null` = always on.
 `GET /api/ci-watch` shows the last verdict, the action and the red streak.
 
+## UI review gate (owner, 2026-11-25)
+
+The reviewer itself is in the product repo (`scripts/review/ui_review*.py`, page map `ui_pages.jsonl`, rules and measured
+false positives in `docs/agent/platform/UI_REVIEW.md`). ghosty only starts it and acts on the verdict. It is exported from
+the product's **main** branch (`ui-review-lane.js`), never from the branch under review. Until it is on main the gate stays
+out of the way (`absent`).
+
+| Where | What | A fail |
+|---|---|---|
+| lane, after tests, before the push | request diff touches `uiReview.paths` (tests and `.md` do not count) | `returned`, `outcome: ui_review`; the table goes to the session; digest only, the owner is not told |
+| lane, after a deploy whose scope is in `liveScopes` | same paths | state `returned_after_deploy` (the merge stays) |
+| nightly, first tick after 03:00 UTC | key pages, new findings only | manager event `ui-review:nightly:<day>` |
+| a `needs-owner` stop on something visual (`ui-review-ask.js`) | the files the text names, else the session's branch | owner push held, table sent to the session; after 2 rounds the owner is pushed with "STILL FAILING"; a review that cannot run never swallows the ask |
+
+A review that cannot run returns the lane request ("nothing was merged"). `--approved-by manager` (manager sessions only)
+waives it and the request records `uiReview.verdict: waived`. Config per repo in `<state>/integration.json`:
+`"uiReview": {"paths": [...], "from": "<clone holding the reviewer>", "ref": "origin/main", "repo": "virtualpytest|website", "liveScopes": [...], "timeoutMin": 15}`.
+`manager.json` `uiReviewAsk: "off"` switches the needs-owner hold off; `GHOSTY_NO_UI_REVIEW_NIGHTLY=1` the nightly run.
+Journals: `<state>/integration/ui-review/<request id>/` (table, frames, `result.json`), `<state>/ui-review-ask.jsonl`.
+The lane is serial per repo: a review adds about 3 minutes to a graphical request and nothing to any other.
+
 ## Done check (owner/manager, 2026-10-15)
 
 A session's `STATUS: done` is checked against git, not trusted (TASK59 said "shipped, nothing pending" with 7 commits

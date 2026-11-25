@@ -3,7 +3,7 @@
 // pushes with a compare-and-swap, waits for CI on that exact commit and queues the deploy when asked. Every transition goes
 // to notify(request, event). Everything outside (git, the shell, CI, the deploy queue, the merge floor) is injected.
 //
-// Final states: merged | deployed | returned (reason + tail) | merged_ci_red | merged_ci_superseded | deploy_failed | cancelled.
+// Final states: merged | deployed | returned (reason + tail) | returned_after_deploy (live UI review failed) | merged_ci_red | merged_ci_superseded | deploy_failed | cancelled.
 // A merge that reached the target is never reverted here: CI red / deploy failed are reported and the manager decides.
 // merged_ci_superseded is the other half of "CI red": the run was CANCELLED because a newer commit landed on the target, so
 // CI runs on that newer tip and this commit was never verified on its own. Nothing to fix, and the session must not branch again.
@@ -19,8 +19,9 @@ import { reportVerdict, reportCandidates, fingerprintGate, parseFingerprintPaths
 import { mergeReleaseNote } from './release-note-merge.js';
 import { cleanupWorktree } from './worktree-cleanup.js';
 import { attribute, readLedgerTail, rowCwdMatchesWorktree } from './usage-window.js';
+import { createUiReview, parseUiReview, touchesVisual, uiReviewLines } from './ui-review-lane.js';
 
-export const FINAL = Object.freeze(['merged', 'deployed', 'returned', 'merged_ci_red', 'merged_ci_superseded', 'deploy_failed', 'cancelled']);
+export const FINAL = Object.freeze(['merged', 'deployed', 'returned', 'merged_ci_red', 'merged_ci_superseded', 'deploy_failed', 'returned_after_deploy', 'cancelled']);
 export const STATES = Object.freeze(['queued', 'running', ...FINAL]);
 const BRANCH_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
 const KEY_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -131,9 +132,16 @@ export function validateConfig(raw) {
     repos[key] = { key, clone: c.clone, remote, target, test: c.test ? c.test.trim() : null, testTimeoutMin: mins(c.testTimeoutMin, 30),
       ci: c.ci ?? null, ciTimeoutMin: mins(c.ciTimeoutMin, 60), deploy, conventions, conventionResolver, unionFiles, regenerate,
       ...(settle == null ? {} : { settleMs: settle }),
+      ...uiReviewOf(c.uiReview, bad),
       ...(Number.isInteger(c.deployCoalesceMs) && c.deployCoalesceMs >= 0 ? { deployCoalesceMs: c.deployCoalesceMs } : {}) };
   }
   return { repos, settleMs: globalSettle, errors };
+}
+// An invalid uiReview block is reported and dropped: it must not take the whole repo out of the lane.
+function uiReviewOf(raw, bad) {
+  const u = parseUiReview(raw);
+  if (u?.error) { bad(u.error); return {}; }
+  return u ? { uiReview: u } : {};
 }
 export function loadConfig(stateDir) {
   try { return validateConfig(JSON.parse(fs.readFileSync(path.join(stateDir, 'integration.json'), 'utf8'))); } catch { return { repos: {}, settleMs: null, errors: [] }; }
@@ -322,6 +330,7 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
   // function returning the current manager session names (server.js passes loadManagerSessions). Absent = older wiring / tests:
   // every caller keeps today's behaviour, so an un-wired lane is never suddenly stricter.
   managerSessions = null,
+  uiReviewer = null,   // ui-review-lane.js; null: built from this lane's own git / run
   settleQuietMs = DEFAULT_SETTLE_QUIET_MS,   // 0 = every request settles (the first of a branch included)
   // Worktree cleanup (2026-11-10): worktreeCleanup() -> bool (the lane.worktreeCleanup switch, default ON); liveCwds() -> cwds of live tmux sessions;
   // leaseHeld(session, worktree) -> bool; liveCheckouts: paths never removed. Un-wired = nothing known about sessions/leases, so only the git guards apply.
@@ -329,6 +338,7 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
   pollMs = 15_000, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), restart = createTmuxRestart(), pidAlive = waiterAlive } = {}) {
   if (!stateDir) throw coded('E_CONFIG', 'integration lane: stateDir required');
   const dir = path.join(stateDir, 'integration');
+  const ui = uiReviewer || createUiReview({ stateDir, git, run, log });
   const file = path.join(dir, 'requests.jsonl');
   const reqs = new Map();          // id -> request (insertion = enqueue order)
   const live = new Map();          // id -> { step, tail } (memory only: the running step's output)
@@ -771,6 +781,7 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
           if (!t.ok && t.info?.releaseNote) throw new Ret('release note conflict with main: merge origin/main and keep main\'s shipped sections', r.steps.at(-1).tail, { conflicts: ['docs/release_note/README.md'] });
           if (!t.ok) throw new Ret(t.info?.timedOut ? `tests timed out after ${c.testTimeoutMin} min` : `tests red (exit ${t.info?.code})${names}`, r.steps.at(-1).tail, failing.length ? { failing } : {});
         }
+        if (c.uiReview && !r.revertOf) await uiGate(r, c, wt, targetSha, sha);
         if (c.deploy?.kind === 'self') {
           // this repo restarts the service that runs the lane: a merge that does not even parse is never pushed
           const k = await step(r, 'precheck', async () => {
@@ -798,6 +809,53 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
       } finally { await dropWorktree(r, c); }
     }
     throw new Ret('target keeps moving: gave up after 3 attempts');
+  }
+
+  // Graphical changes are reviewed on a preview of the merged tree before anything is pushed (ui-review-lane.js). Only a pass goes on:
+  // a fail and a review that could not run both return the request. A manager's approval waives it, and says so on the request.
+  const changedFiles = async (r, c, a, b, cwd) => {
+    const x = await git(['diff', '--name-only', '-z', a, b], { cwd: cwd || c.clone, timeoutMs: 60_000 });
+    return x.code === 0 ? x.out.split('\0').filter(Boolean) : null;
+  };
+  async function uiGate(r, c, wt, targetSha, sha) {
+    const files = await changedFiles(r, c, targetSha, sha, wt);
+    if (files && !touchesVisual(c.uiReview, files)) return;
+    if (r.approvedBy) { r.uiReview = { verdict: 'waived', summary: `waived by ${r.approvedBy}` }; persist(r); return; }
+    let u;
+    await step(r, 'ui-review', async (setLive) => {
+      u = await ui.review(c.uiReview, { id: r.id, mode: 'pre-merge', tree: wt, base: targetSha, head: sha, onData: setLive });
+      return { ok: u.verdict !== 'fail' && u.verdict !== 'cannot', tail: u.summary, info: { verdict: u.verdict, dir: u.dir } };
+    });
+    r.uiReview = u; persist(r);
+    if (u.verdict === 'fail') throw new Ret(`UI review before the merge: ${u.summary}`, uiReviewLines(u), { outcome: 'ui_review' });
+    if (u.verdict === 'cannot') throw new Ret(`UI review could not run, so nothing was merged: ${u.summary}. Request again; if it repeats, ask the manager`, uiReviewLines(u), { outcome: 'ui_review' });
+  }
+
+  // The second net: the deployed pages, once the frontend is live. A fail hands the request back to its session; the merge stays.
+  async function liveUiReview(r, c) {
+    const u = c.uiReview;
+    if (!u || r.revertOf || r.uiReview?.verdict === 'waived' || !u.liveScopes.includes(r.deployScope || '')) return false;
+    const files = await changedFiles(r, c, r.targetBase, r.sha);
+    if (!files || !touchesVisual(u, files)) return false;
+    const wt = path.join(dir, 'wt', `${r.id}-live`);
+    const add = await G(r, c, ['worktree', 'add', '--detach', wt, r.sha]);
+    if (add.code !== 0) { r.uiReviewLive = { verdict: 'cannot', summary: `no worktree: ${add.err}` }; persist(r); return false; }
+    try {
+      let res;
+      await step(r, 'ui-review-live', async (setLive) => {
+        res = await ui.review(u, { id: r.id, mode: 'live', tree: wt, base: r.targetBase, head: r.sha, onData: setLive });
+        return { ok: res.verdict !== 'fail', tail: res.summary, info: { verdict: res.verdict, dir: res.dir } };
+      });
+      r.uiReviewLive = res; persist(r);
+      return res.verdict === 'fail';
+    } finally { await G(r, c, ['worktree', 'remove', '--force', wt]); }
+  }
+  async function finishDeployed(r, c, patch = {}) {
+    Object.assign(r, patch);
+    let failed = false;
+    try { failed = await liveUiReview(r, c); } catch (e) { log('live ui review', r.id, e.message); }
+    if (failed) transition(r, 'returned_after_deploy', { reason: `UI review after the deploy: ${r.uiReviewLive.summary}`, tail: uiReviewLines(r.uiReviewLive), outcome: 'ui_review' });
+    else transition(r, 'deployed', { reason: null });
   }
 
   // Wait for the CI of one commit. The merge commit by default; the deploy gate also watches a newer tip (see processRequest).
@@ -1129,11 +1187,11 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
       // Coalesce (owner 2026-11-01): a later request of this repo, still queued or merging, deploys a main that carries this merge.
       // Wait for it (bounded) and ride its deploy instead of deploying twice; if it does not deploy, deploy ourselves.
       const cover = await coverDeploy(r, c);
-      if (cover) { journalDeploy(r, c, { env: c.deploy.env, scope: cover.deployed.scope, coveredBy: cover.id }); transition(r, 'deployed', { reason: null, deployed: cover.deployed, coveredBy: cover.id }); return; }
+      if (cover) { journalDeploy(r, c, { env: c.deploy.env, scope: cover.deployed.scope, coveredBy: cover.id }); await finishDeployed(r, c, { deployed: cover.deployed, coveredBy: cover.id }); return; }
       const d = await doDeploy(r, c);
       if (!d.ok) { transition(r, 'deploy_failed', { reason: `deploy failed: ${d.tail}`, tail: d.tail }); return; }
       journalDeploy(r, c, { env: c.deploy.env, scope: r.deployScope });
-      transition(r, 'deployed', { reason: null }); return;
+      await finishDeployed(r, c); return;
     }
     transition(r, 'merged', { reason: null });
   }
