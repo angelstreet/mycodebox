@@ -114,14 +114,19 @@ export function splitWakes(records, { prices = null } = {}) {
   const close = () => {
     if (!cur) return;
     const tok = { input: 0, output: 0, cache_read: 0, cache_write: 0 };
-    let usd = 0, priced = false, unpriced = false;
+    let usd = 0, priced = false, unpriced = false, ctxMax = 0;
     for (const m of msgs.values()) {
+      // Context of one model call = everything it read (fresh input + cache read + cache written): what a wake pays for.
+      ctxMax = Math.max(ctxMax, m.usage.input + m.usage.cache_read + m.usage.cache_write_5m + m.usage.cache_write_1h);
       tok.input += m.usage.input; tok.output += m.usage.output; tok.cache_read += m.usage.cache_read; tok.cache_write += m.usage.cache_write_5m + m.usage.cache_write_1h;
       const c = prices ? costOf(priceFor(prices, m.model), m.usage) : null;
       if (c) { usd += c.total; priced = true; } else unpriced = true;
     }
+    const calls = msgs.size;
     msgs.clear();
     const w = cur;
+    w.calls = calls;
+    w.ctxMax = ctxMax;
     w.durationSec = Math.max(0, Math.round((w._end - w._start) / 1000));
     w.start = new Date(w._start).toISOString();
     w.end = new Date(w._end).toISOString();
@@ -180,7 +185,7 @@ export function splitWakes(records, { prices = null } = {}) {
   return wakes.map(order);
 }
 function order(w) {
-  return { start: w.start, end: w.end, durationSec: w.durationSec, trigger: w.trigger, triggerSummary: w.triggerSummary, ...(w.waitChain ? { waitChain: true } : {}), tools: w.tools, alertsSent: w.alertsSent, sendsToSessions: w.sendsToSessions, workersStarted: w.workersStarted, fileWrites: w.fileWrites, ...(w.decisionLines ? { decisionLines: w.decisionLines } : {}), decision: w.decision, tokens: w.tokens, usd: w.usd, nothing: w.nothing };
+  return { start: w.start, end: w.end, durationSec: w.durationSec, trigger: w.trigger, triggerSummary: w.triggerSummary, ...(w.waitChain ? { waitChain: true } : {}), tools: w.tools, alertsSent: w.alertsSent, sendsToSessions: w.sendsToSessions, workersStarted: w.workersStarted, fileWrites: w.fileWrites, ...(w.decisionLines ? { decisionLines: w.decisionLines } : {}), decision: w.decision, tokens: w.tokens, calls: w.calls, ctxMax: w.ctxMax, usd: w.usd, nothing: w.nothing };
 }
 
 const dayOf = (iso) => String(iso || '').slice(0, 10);   // UTC day, like the usage ledger

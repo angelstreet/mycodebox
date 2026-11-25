@@ -30,6 +30,8 @@ import { join, dirname } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { loadShare, summarizeShare } from './decision-share.js';
 import { loadLeaseStats } from '../lease-stats.js';
+import { computeWakes } from '../manager-wakes.js';
+import { costWindows, costLines, costFinding } from '../manager-cost.js';
 
 // Pure: the G8 section of the daily report (autonomy >= 80 %, regret <= 5 %) from summarizeShare() results.
 export function g8Lines(today, week) {
@@ -121,11 +123,25 @@ export async function run({ home = homedir(), now = Date.now(), argv = process.a
   try { R.push(...loadLeaseStats({ stateDir, now })); }
   catch (e) { R.push('## Leases (TASK-58 C1)', '', `could not be computed: ${e.message}`, ''); }
 
+  // Manager cost: built in (it reads the manager's own transcripts, not a repository). One finding at most, debounced like the
+  // others. Switch: daily-checks.json "managerCost": false; an object there overrides the thresholds (manager-cost.js).
+  const builtIn = [];
+  if (!only && cfg.managerCost !== false) {
+    try {
+      const { wakes } = await computeWakes({ stateDir, claudeDir: process.env.CLAUDE_PROJECTS_DIR || join(home, '.claude', 'projects') });
+      const th = cfg.managerCost && typeof cfg.managerCost === 'object' ? cfg.managerCost : {};
+      const win = costWindows(wakes, now);
+      R.push(...costLines(win, th));
+      const f = costFinding(win, th);
+      if (f) builtIn.push(f);
+    } catch (e) { R.push('## Manager cost', '', `could not be computed: ${e.message}`, ''); }
+  }
+
   const state = loadState(statePath);
   const seen = new Set();
   const events = [];
   R.push('## Manager wake', '');
-  const all = results.flatMap((r) => r.findings);
+  const all = results.flatMap((r) => r.findings).concat(builtIn);
   if (!all.length) R.push('No finding: manager NOT woken.');
   for (const f of all) {
     const ev = buildEvent(f, reportPath, now);
