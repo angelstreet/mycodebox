@@ -8,6 +8,7 @@
 // Registry: ssh proxmox '~/bin/vpt-lease ...' by default; DEPLOY_REGISTRY='["python3","/path/vpt-lease"]' runs it locally.
 import { spawn, execFile } from 'node:child_process';
 import { planCatchUps, gitContains } from './catchup-supersede.js';
+import { recordSkipped } from './deploy-live.js';   // live truth: which hosts this deploy left on old code
 import { mkdir, readFile, writeFile, appendFile, stat, open } from 'node:fs/promises';
 import { createWriteStream, openSync, closeSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -474,6 +475,7 @@ export function createDeployRunner({
     const version = [...lines].reverse().map((l) => l.match(VERSION_RE)?.[1]).find(Boolean) || '';
     await new Promise((r) => out.end(r));
     const tail = lines.slice(-40).join('\n');
+    if (skipped.length) recordSkipped(logDir, [d.id, ...merged.map((m) => m.id)], { env: d.env, ref: d.ref, hosts: skipped });   // before finish: the lane reads it the moment the deploy is done
     const fin = await reg(['deploy', 'finish', d.id, '--status', status, ...(version ? ['--version', version] : []),
       // always: the registry arms the strict re-arm for a catch-up that skipped again (it waits for the lease to be released).
       // Without it the skipped host is abandoned: nothing is queued for it any more.
