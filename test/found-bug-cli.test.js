@@ -41,10 +41,10 @@ test('found-bug files over GHOSTY_URL with the bearer token and escapes quotes/n
   const s = await stub(tmp('fb-srv-'), { requireToken: true });
   try {
     const env = { HOME: home, GHOSTY_URL: s.url, GHOSTY_STATE_DIR: state, MYCODEBOX_CONFIG_DIR: cfg, FOUND_BUG_SESSION: 'mac-test' };
-    const r = await run([...PF, '--why-not-fixed', 'large', '--reason', 'r', '--title', 'A "quoted" title', '--error', 'line1\nline2 \\ back', '--blocking', 'yes', '--test'], env);
+    const r = await run([...PF, '--why-not-fixed', 'other-area', '--reason', 'r', '--title', 'A "quoted" title', '--error', 'line1\nline2 \\ back', '--blocking', 'yes', '--test'], env);
     assert.equal(r.code, 0, r.stderr); assert.match(r.stdout, /^filed bug-[0-9a-f]{8} \(blocking\)/);
     const [b] = await s.bugs.list(); assert.equal(b.title, 'A "quoted" title'); assert.equal(b.error, 'line1\nline2 \\ back'); assert.equal(b.session, 'mac-test'); assert.equal(b.test, true);
-    const d = await run([...PF, '--why-not-fixed', 'large', '--reason', 'r', '--title', 'A "quoted" title'], env); assert.match(d.stdout, /already filed/);
+    const d = await run([...PF, '--why-not-fixed', 'other-area', '--reason', 'r', '--title', 'A "quoted" title'], env); assert.match(d.stdout, /already filed/);
     assert.match((await run(['list'], env)).stdout, /mac-test: A "quoted" title/);
     assert.equal((await run(['--help'], env)).code, 0);
     assert.equal(existsSync(join(state, 'found-bug-queue.jsonl')), false);
@@ -54,10 +54,10 @@ test('found-bug files over GHOSTY_URL with the bearer token and escapes quotes/n
 test('found-bug unreachable: saves the record, prints the fallback, exits 5; the next call posts it', async () => {
   const state = tmp('fb-state-'), home = tmp('fb-home-');
   const env = { HOME: home, GHOSTY_URL: 'http://127.0.0.1:1', GHOSTY_STATE_DIR: state, MYCODEBOX_CONFIG_DIR: join(home, 'none'), FOUND_BUG_SESSION: 'mac-q' };
-  const r = await run([...PF, '--why-not-fixed', 'large', '--reason', 'r', '--title', 'offline bug', '--error', 'boom at x'], env);
+  const r = await run([...PF, '--why-not-fixed', 'other-area', '--reason', 'r', '--title', 'offline bug', '--error', 'boom at x'], env);
   assert.equal(r.code, 5); assert.match(r.stderr, /SAVED in .*found-bug-queue\.jsonl/); assert.match(r.stderr, /curl -sS -X POST/);
   assert.match(readFileSync(join(state, 'found-bug-queue.jsonl'), 'utf8'), /offline bug/);
-  const r2 = await run([...PF, '--why-not-fixed', 'large', '--reason', 'r', '--title', 'second offline'], env); assert.equal(r2.code, 5);
+  const r2 = await run([...PF, '--why-not-fixed', 'other-area', '--reason', 'r', '--title', 'second offline'], env); assert.equal(r2.code, 5);
   assert.equal(readFileSync(join(state, 'found-bug-queue.jsonl'), 'utf8').trim().split('\n').length, 2);
   const s = await stub(tmp('fb-srv-'));
   try {
@@ -84,10 +84,10 @@ test('bugClient: only an integrate client bearer token passes', () => {
 test('found-bug without --why-not-fixed exits 2 with the fix-it-yourself message and files nothing; --reason is required too', async () => {
   const home = tmp('fb-home-'), env = { HOME: home, GHOSTY_URL: 'http://127.0.0.1:1', GHOSTY_STATE_DIR: tmp('fb-state-'), FOUND_BUG_SESSION: 's' };
   const a = await run(['--title', 'x'], env);
-  assert.equal(a.code, 2); assert.match(a.stderr, /Fix it yourself now \(small \+ you have the repro\)\. If you really cannot, re-run with --why-not-fixed/);
+  assert.equal(a.code, 2); assert.match(a.stderr, /Only a bug unrelated to your goal or task is filed .*re-run with --why-not-fixed/);
   const b = await run(['--title', 'x', '--why-not-fixed', 'bogus', '--reason', 'r'], env); assert.equal(b.code, 2);
-  const c = await run(['--title', 'x', '--why-not-fixed', 'large'], env); assert.equal(c.code, 2); assert.match(c.stderr, /--reason/);
-  const h = await run(['--help'], env); assert.match(h.stdout, /LAST RESORT/);
+  const c = await run(['--title', 'x', '--why-not-fixed', 'other-area'], env); assert.equal(c.code, 2); assert.match(c.stderr, /--reason/);
+  const h = await run(['--help'], env); assert.match(h.stdout, /ONLY for a bug unrelated to your goal or task/);
 });
 
 test('found-bug --claim: the first session claims, a second is refused with exit 3 (bug-e1c49ec8), release frees it (Mac path: token + GHOSTY_URL)', async () => {
@@ -110,12 +110,12 @@ test('found-bug --claim: the first session claims, a second is refused with exit
 test('found-bug refuses a filing without proof (exit 2 + the rule) and accepts one with it', async () => {
   const state = tmp('fb-state-'), home = tmp('fb-home-');
   const env = { HOME: home, GHOSTY_URL: 'http://127.0.0.1:1', GHOSTY_STATE_DIR: state, MYCODEBOX_CONFIG_DIR: join(home, 'none'), FOUND_BUG_SESSION: 'mac-p' };
-  const base = ['--why-not-fixed', 'large', '--reason', 'r', '--title', 'no proof'];
+  const base = ['--why-not-fixed', 'other-area', '--reason', 'r', '--title', 'no proof'];
   for (const [extra, re] of [[[], /--checked-main/], [['--checked-main', 'nothex'], /--checked-main/], [['--checked-main', 'abc1234'], /--error/], [['--checked-main', 'abc1234', '--error', 'HTTP 500 x'], /--tried/]]) {
     const r = await run([...base, ...extra], env); assert.equal(r.code, 2, r.stderr); assert.match(r.stderr, re); assert.match(r.stderr, /current main/);
   }
   assert.equal(existsSync(join(state, 'found-bug-queue.jsonl')), false, 'a refused filing is not queued');
-  assert.equal((await run(['--title', 'idea: a timer', '--why-not-fixed', 'large', '--reason', 'r'], env)).code, 5, 'ideas need no proof (manager unreachable here)');
+  assert.equal((await run(['--title', 'idea: a timer', '--why-not-fixed', 'other-area', '--reason', 'r'], env)).code, 5, 'ideas need no proof (manager unreachable here)');
   assert.equal((await run([...base, ...PF], env)).code, 5, 'with proof it goes on to the manager (unreachable here: queued)');
 });
 
@@ -127,10 +127,17 @@ test('found-bug sends the repo: --repo, else the cwd repo (a virtualpytest check
   try {
     const env = { HOME: home, GHOSTY_URL: s.url, GHOSTY_STATE_DIR: tmp('fb-state-'), MYCODEBOX_CONFIG_DIR: join(home, 'none'), FOUND_BUG_SESSION: 'w' };
     const go = (args, cwd) => new Promise((res) => execFile('sh', [BIN, ...args], { cwd, env: { PATH: process.env.PATH, ...env }, timeout: 30000 }, (e, stdout, stderr) => res({ code: e ? e.code : 0, stdout, stderr })));
-    const a = ['--why-not-fixed', 'large', '--reason', 'r', ...PF];
+    const a = ['--why-not-fixed', 'other-area', '--reason', 'r', ...PF];
     assert.equal((await go([...a, '--title', 'from vpt cwd'], vpt)).code, 0);
     assert.equal((await go([...a, '--title', 'explicit repo', '--repo', 'mycodebox'], vpt)).code, 0);
     const rows = await s.bugs.list(), by = (t) => rows.find((b) => b.title === t);
     assert.equal(by('from vpt cwd').repo, 'virtualpytest'); assert.equal(by('explicit repo').repo, 'mycodebox');
   } finally { await s.close(); }
+});
+
+test('found-bug refuses an in-task reason: only a bug unrelated to the task is filed (owner 2026-11-25)', async () => {
+  for (const why of ['large', 'host-or-device', 'credentials', 'owner-floor']) {
+    const r = await run(['--title', 'x', '--why-not-fixed', why, '--reason', 'r'], {});
+    assert.equal(r.code, 2, why); assert.match(r.stderr, /unrelated to your goal or task/);
+  }
 });

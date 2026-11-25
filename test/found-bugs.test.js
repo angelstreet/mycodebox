@@ -153,7 +153,7 @@ test('CLI: every flag set files cleanly against a store with marker lines', asyn
     const { promisify } = await import('node:util');
     const { execFile } = await import('node:child_process');
     const env = { ...process.env, PORT: String(srv.address().port), MYCODEBOX_CONFIG_DIR: '/nonexistent', GHOSTY_URL: '', MYCODEBOX_URL: '' };
-    const flags = ['--checked-main', 'abc1234', '--tried', 'read the handler and tried', '--why-not-fixed', 'large', '--reason', 'r', '--title', 'host unreachable (No route to host)', '--endpoint', 'ssh host:227', '--repro', 'ssh from codebox', '--error', 'ssh: No route to host', '--workaround', 'none', '--blocking', 'no', '--session', 'cli-test'];
+    const flags = ['--checked-main', 'abc1234', '--tried', 'read the handler and tried', '--why-not-fixed', 'other-area', '--reason', 'r', '--title', 'host unreachable (No route to host)', '--endpoint', 'ssh host:227', '--repro', 'ssh from codebox', '--error', 'ssh: No route to host', '--workaround', 'none', '--blocking', 'no', '--session', 'cli-test'];
     const out = await promisify(execFile)('sh', ['scripts/found-bug', ...flags], { env });
     assert.match(out.stdout, /^filed bug-[0-9a-f]{8}/);
     const again = await promisify(execFile)('sh', ['scripts/found-bug', ...flags], { env });
