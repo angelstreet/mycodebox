@@ -29,6 +29,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A restart no longer blocks the review after a deploy** — a ghosty restart during `ui-review-live` left its worktree, and the resumed request answered "could not run" on its own leftover · area: harness
+
 - **A session with a background shell after its turn reads green again** — Claude's footer `1 shell · ↓ to manage` / `1 shell still running` was not recognised as background work, so such a session showed the blue done dot · area: sessions
 
 - **A cited screenshot no longer fails a needs-owner ask** — the hold reviews the HTML / SVG file or the branch, never the evidence frames a session names · area: harness
