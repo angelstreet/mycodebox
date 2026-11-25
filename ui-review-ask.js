@@ -87,6 +87,12 @@ export function createAskReview({ stateDir, review, run, branchOf, send, journal
   }
 
   return {
+    // The alert path's question (server.js notifySession). A STATUS stop reaches the owner as the manager's `asks` alert, once the
+    // turn has ended (state `done`). A `waiting` alert, or an `asks` over a live menu, is a prompt on screen: nothing is typed into it.
+    takeAlert(session, { kind, state, status, text }, onPush) {
+      if (kind !== 'asks' || state === 'waiting' || (status && status !== 'needs-owner')) return false;
+      return this.take(session, text, onPush);
+    },
     // Synchronous front door for the alert path: true = this alert is taken over; onPush(note) is called when the owner should be pushed.
     take(session, text, onPush) {
       if (!NEEDS_OWNER.test(String(text || ''))) return false;

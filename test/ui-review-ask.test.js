@@ -80,3 +80,10 @@ test('a screenshot cited as evidence is not reviewed as the deliverable; a mocku
   await b.handle('s2', `Mockup: ${join(dir, 'frame.png')}\nSTATUS: needs-owner: mockup ok?`);
   assert.match(sent[0], /HTML file behind it/);
 });
+
+test('only the alert of a finished needs-owner turn is taken: never one over a prompt on screen', () => {
+  const { a } = rig(['pass']);
+  for (const alert of [{ kind: 'waiting', state: null }, { kind: 'asks', state: 'waiting' }, { kind: 'done', state: null }, { kind: 'asks', state: 'done', status: 'blocked' }]) {
+    assert.equal(a.takeAlert('s1', { ...alert, text: ask() }, () => assert.fail('not taken')), false, JSON.stringify(alert));
+  }
+});
