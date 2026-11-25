@@ -884,6 +884,7 @@ const { alert, queueDigest, resetDebounce, digestTick } = createAlerts({ push, n
 const reporter = createReporter({ stateDir: STATE_DIR });   // events from the ghosty-reporter Claude Code plugin (claude-plugin/)
 const mockups = createMockups({
   file: join(STATE_DIR, 'mockups.jsonl'), push, tokenOk: (t) => reporter.tokenOk(t), windowMin: () => managerConfig().mockupWindowMin,
+  lintMode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).mockupLint; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } }, log: (m) => console.log(m),
   send: async (session, text, by) => { await assertAgentPane(session, by); await sendKeys(session, text, true); logSend(session, by, { keys: text }); noteAnswerer(session, by, 'mockup'); },   // the same guarded send as every other owner send
 });
 // Found bugs (found-bugs.js, owner 2026-10-28): a session files a bug outside its scope; owner feed (counter) + manager feed kind `bug`.
@@ -1250,6 +1251,7 @@ const doneCheck = createDoneCheck({
   goalGate,   // (H) goal check
   integrationsOf: (name) => integrationLane.mergedFor(name),   // (O) release note / bug record evidence
   pendingLiveOf: async (name) => deployLive.pendingOf(integrationLane.list({ state: 'deployed', limit: 100 }).filter((r) => (r.session === name || r.forSession === name) && Date.now() - (Date.parse(r.endedAt || '') || 0) < 12 * 3600e3)),   // (P) "deployed" claimed for an integration that is not live yet
+  proofMode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).proofRisk; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },   // (P) proof by risk
   send: (name, text) => harnessSend(name, text),
   pressure: hostPressure,
   record: (e) => managerEvents.record(e),

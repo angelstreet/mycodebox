@@ -11,6 +11,8 @@ already authorise: do it. Verify UI yourself with headless Playwright (skill `vp
 owner to look. Only hard-floor items (data deletion, credentials, money, sudoers, force-push) are questions. End every
 turn with a STATUS line.
 
+**Proof by risk (owner 2026-11-25):** cosmetic (wording, layout, CSS, docs) = no e2e; a fix or feature on the web UI = headless e2e on the deployed URL after the deploy, with the screenshot path and the URL in the closing text ([REFERENCE](docs/REFERENCE.md#proof-by-risk-owner-2026-11-25)).
+
 **The seven STATUS words (owner 2026-11-11). Take the first row that is true.**
 
 | # | Word | Use it when | Never when | Who acts next |
@@ -41,8 +43,8 @@ to restate it, and the manager is told ([REFERENCE](docs/REFERENCE.md#status-voc
 Goal check (owner 2026-11-11): before a done is accepted the harness asks once "Goal as given: <your first task line>. Did you reach it? Quote
 the evidence for each part"; reply by restating the goal with evidence per part (file, run / integration id, screenshot, KPI number) or keep
 working. A done listing 2+ filed leftovers in your own area is sent back: fix the small ones ([REFERENCE](docs/REFERENCE.md#goal-check-owner-2026-11-11)).
-A bug you find: fix it now yourself, in its own worktree, when it is small and you have the repro (it does not have to be your task); file it only when it is large, needs another host/device/credentials, is an owner-floor item, or belongs to a live session's task; never end a turn with "I filed X so someone will fix it".
-Filing needs `found-bug --why-not-fixed <large|other-area|host-or-device|credentials|owner-floor|live-session-task> --reason "..."`. "Needs live tuning on a device" is not a reason: the intake answers 400 with the rule; claim the device (`vpt-lease claim <env> --any <group> --wait`) and fix it.
+A bug you find (owner, 2026-11-25): inside your goal or task, never file it: fix it, or explain in one line why you cannot (owner floor, another host); file with `found-bug` only a bug unrelated to your goal or task (another area, a live session's task), and fix a small unrelated one yourself in its own worktree when you have the repro; ideas are done or explained, never filed; never end a turn with "I filed X so someone will fix it".
+Filing (unrelated bugs only) needs `found-bug --why-not-fixed <other-area|live-session-task> --reason "..."`. "Needs live tuning on a device" is not a reason: the intake answers 400 with the rule; claim the device (`vpt-lease claim <env> --any <group> --wait`) and fix it.
 This overrides the built-in "commit only when asked" default; a ghosty watcher pushes once per
 closing text (at most 2 a day) a session that ends on such an offer with unpushed work (docs/REFERENCE.md "Done check").
 Who may commit, push, merge, deploy, restart or close a session, and the hard floor, are stated once:
