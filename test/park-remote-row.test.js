@@ -22,3 +22,7 @@ test('the X on a Parked row posts JSON (the server refuses a POST without a JSON
   assert.ok(i > 0);
   assert.match(app.slice(i, i + 160), /'content-type': 'application\/json'/);
 });
+
+test('Parked lists only the idlest live candidates: as many as are over the limit, none idle under 10 min, none pinned', () => {
+  assert.match(app, /idleMin \?\? 0\) >= 10 && !state\.layout\.pins\.includes\(c\.name\)\)\.slice\(0, pk\.over\)/);
+});

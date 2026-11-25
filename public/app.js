@@ -1374,8 +1374,11 @@ function renderParking() {
       // search: a long parked list is found by name (owner 2026-11-25); the time on a row is the time since its last message, Resume shows on hover
       if (pk.parked.length + (pk.candidates || []).length > 6 || q) h += `<input id="parkQ" class="parkq" type="search" placeholder="find a session" autocomplete="off" spellcheck="false" value="${escapeHtml(state.parkQ || '')}">`;
       if (pk.over) {
-        h += `<div class="pnote">${pk.over} over the limit. Park the idlest to free memory:</div>`;
-        for (const c of pk.candidates) if (hit(c.name)) h += `<div class="prow"><span class="pn">${escapeHtml(c.name)}</span><span class="pm">${idleText(c.idleMin)}</span></div>`;
+        // These are LIVE sessions (not parked ones): only the idlest `over` of them, and none touched in the last 10 min or pinned, so a session just
+        // resumed does not sit under Parked (owner 2026-11-25: cockpit was resumed and still listed)
+        const cands = (pk.candidates || []).filter((c) => (c.idleMin ?? 0) >= 10 && !state.layout.pins.includes(c.name)).slice(0, pk.over);
+        if (cands.length) h += `<div class="pnote">${pk.over} live over the limit \u00b7 idlest, park them to free memory:</div>`;
+        for (const c of cands) if (hit(c.name)) h += `<div class="prow"><span class="pn">${escapeHtml(c.name)}</span><span class="pm">${idleText(c.idleMin)}</span></div>`;
       }
       const ago = (p) => { const t = p.lastActivity || p.parkedAt; return t ? idleText(Math.max(0, Math.round((Date.now() - t) / 60000))) : '?'; };
       for (const p of pk.parked) if (hit(p.session)) h += `<div class="prow park"><span class="pn" title="${escapeHtml(p.cwd)} · ${p.rssMb || '?'} MB">${escapeHtml(p.session)}</span><span class="pm">${ago(p)}</span><button class="sbtn" data-resume="${escapeHtml(p.session)}" title="Resume ${escapeHtml(p.session)}">Resume</button><button class="pclr" data-forget="${escapeHtml(p.session)}" aria-label="Remove ${escapeHtml(p.session)} from Parked" title="Remove from Parked (the conversation file stays)">${icon('x', 12)}</button></div>`;
