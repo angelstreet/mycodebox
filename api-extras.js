@@ -70,6 +70,8 @@ export function shouldRefuse({ by, live, scriptBusy = false }) {
 // "\bN background active\b" tolerates "Tasks · 1 background active" (the MiniMax footer)
 // and Codex's "1 background task" variants, and the inline `… · 2 background active · …` form.
 const PANE_BG_COUNT_RE = /\b\d+\s+background\s+(?:active|tasks?)\b/i;
+// Claude Code's own footer: "· 1 shell · ↓ to manage" and "✻ Cooked for 7m · 1 shell still running" (a background Bash the turn left behind).
+const PANE_SHELL_RE = /\b\d+\s+shells?\s+(?:still\s+running\b|·\s*↓\s*to manage|$)|\b\d+\s+shells?\s*·\s*↓/i;
 // "Running 14min50s", "Running 3s", Codex's "… Running 5m" inline.
 const PANE_RUNNING_RE = /\bRunning\s+\d+(?:[hms])/i;
 // Inline spinner glyphs (Codex uses ⠇ ⠋ ⠙ …).
@@ -82,7 +84,7 @@ export function paneBackgroundOf(plain) {
   const tail = plain.filter((l) => String(l || '').trim()).slice(-6);
   for (const l of tail) {
     if (PANE_BG_COUNT_RE.test(l)) return true;
-    if (PANE_RUNNING_RE.test(l)) return true;
+    if (PANE_RUNNING_RE.test(l) || PANE_SHELL_RE.test(l)) return true;
     if (PANE_SPINNER_RE.test(l)) return true;
   }
   return false;

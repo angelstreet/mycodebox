@@ -1,7 +1,9 @@
 # mycodebox release notes
 
 The release note of this repo (owner 2026-11-13). Every merged code change (not docs-only) adds one entry at the top of
-`## Unreleased`; the done-check reads the merged diff for this file (REFERENCE "Closing review"). Entry form: one line,
+`## Unreleased
+
+- A Claude session whose footer shows a background shell (`1 shell · ↓ to manage`, `1 shell still running`) after its turn now reads green (working) instead of the blue done dot.`; the done-check reads the merged diff for this file (REFERENCE "Closing review"). Entry form: one line,
 
 - **Open tabs pick up the play-on-tap change, and a late render stays silent** — a tab reloads only when `sw.js` changes, so tabs opened earlier kept rendering every reply; the shell cache version is bumped. Audio no longer starts if you left the reply while it rendered · area: voice
 

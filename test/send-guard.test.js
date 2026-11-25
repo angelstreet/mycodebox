@@ -318,3 +318,7 @@ test('shouldRefuse: non-owner on a pane with an interactive agent + background m
     'interactive REPL with background mcode exec is not scriptBusy → non-owner allowed',
   );
 });
+test('paneBackgroundOf: Claude footer "1 shell still running" / "1 shell · ↓ to manage" counts', () => {
+  assert.equal(paneBackgroundOf(['✻ Cooked for 6m 57s · done 10:50 PM · 1 shell still running', '❯ ', '  ⏵⏵ bypass permissions on · 1 shell · ↓ to manage']), true);
+  assert.equal(paneBackgroundOf(['❯ ', '  ⏵⏵ bypass permissions on (shift+tab to cycle) · ⧉ 3']), false);
+});
