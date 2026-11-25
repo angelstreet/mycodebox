@@ -11,10 +11,10 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, statSync, readdirSync, utimesSync } from 'node:fs';
+import { writeFileSync, readFileSync, statSync, readdirSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createTts } from '../tts.js';
+import { createTts, piperCommand, runPiper } from '../tts.js';
 import { tmp } from './helpers-tmp.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -156,4 +156,63 @@ test('parseRange: byte ranges for iOS audio playback', async () => {
   assert.equal(parseRange('bytes=5-2', 1000), 'bad');
   assert.equal(parseRange(undefined, 1000), null);
   assert.equal(parseRange('items=0-1', 1000), null);
+});
+
+test('render: one piper at a time; further renders queue, a repeat of the same text joins, a failure does not stall', async () => {
+  let running = 0, peak = 0;
+  const seen = [];
+  const t = createTts({ cacheDir: freshCache(), piperRunner: async (_b, _v, textFile, outFile) => {
+    peak = Math.max(peak, ++running);
+    const text = readFileSync(textFile, 'utf8');
+    seen.push(text);
+    await sleep(20);
+    running--;
+    if (text === 'two') throw new Error('boom');
+    writeFileSync(outFile, 'audio');
+  } });
+  const r = await Promise.allSettled(['one', 'two', 'three', 'one'].map((x) => t.render(x)));
+  assert.equal(peak, 1);
+  assert.deepEqual(seen, ['one', 'two', 'three']);
+  assert.deepEqual(r.map((x) => x.status), ['fulfilled', 'rejected', 'fulfilled', 'fulfilled']);
+});
+
+test('render: the .wav appears only when piper has finished; a failed render leaves nothing', async () => {
+  const dir = freshCache();
+  let fail = false;
+  const t = createTts({ cacheDir: dir, piperRunner: async (_b, _v, _t, outFile) => {
+    writeFileSync(outFile, 'half');
+    assert.equal(readdirSync(dir).filter((f) => f.endsWith('.wav')).length, fail ? 1 : 0);   // only earlier, complete renders
+    if (fail) throw new Error('killed');
+  } });
+  await t.render('whole');
+  assert.equal(readdirSync(dir).length, 1);
+  fail = true;
+  await assert.rejects(() => t.render('cut off'), /killed/);
+  assert.equal(readdirSync(dir).length, 1);
+});
+
+test('piperCommand: a Python piper goes through the thread-limit shim; anything else runs as is', () => {
+  const dir = freshCache();
+  const script = join(dir, 'piper'), native = join(dir, 'native');
+  writeFileSync(script, '#!/usr/bin/env python3\nprint()\n');
+  writeFileSync(native, Buffer.from([0x7f, 0x45, 0x4c, 0x46]));
+  const [cmd, args] = piperCommand(script, ['--model', 'v']);
+  assert.equal(cmd, '/usr/bin/env');
+  assert.equal(args[0], 'python3');
+  assert.match(args[1], /tts-piper-shim\.py$/);
+  assert.deepEqual(args.slice(2), [script, '--model', 'v']);
+  assert.deepEqual(piperCommand(native, ['-x']), [native, ['-x']]);
+  assert.deepEqual(piperCommand(join(dir, 'absent'), []), [join(dir, 'absent'), []]);
+});
+
+test('runPiper: the child is niced, gets the thread limit, and is killed on timeout', { skip: process.platform === 'win32' }, async () => {
+  const dir = freshCache();
+  const bin = join(dir, 'fake'), text = join(dir, 'in.txt'), out = join(dir, 'out');
+  writeFileSync(bin, '#!/bin/sh\nsleep 0.3\necho "$(nice) $GHOSTY_TTS_THREADS" > "$4"\n', { mode: 0o755 });
+  writeFileSync(text, 'x');
+  await runPiper(bin, 'v', text, out);
+  const [nice, threads] = readFileSync(out, 'utf8').trim().split(' ');
+  assert.ok(Number(nice) >= 10, `nice ${nice}`);
+  assert.equal(threads, process.env.GHOSTY_TTS_THREADS || '2');
+  await assert.rejects(() => runPiper(bin, 'v', text, out, { timeoutMs: 50 }), /timed out/);
 });

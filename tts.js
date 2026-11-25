@@ -12,15 +12,20 @@
 // Both are injected via the createTts factory so tests can mock them.
 
 import { spawn } from 'node:child_process';
-import { createReadStream } from 'node:fs';
-import { writeFile, unlink, stat, readdir, mkdir, rm } from 'node:fs/promises';
-import { tmpdir, homedir } from 'node:os';
+import { createReadStream, openSync, readSync, closeSync } from 'node:fs';
+import { writeFile, unlink, stat, readdir, mkdir, rm, rename } from 'node:fs/promises';
+import { tmpdir, homedir, setPriority } from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 
 const IDLE_MS = 10 * 60e3;        // worker idle timeout (kept for shape parity with transcribe.js; piper is one-shot here)
 const KEEP_DAYS = 14;              // Q95=1 — matches daily-checks.json keepDays
 const MAX_TEXT = 8000;             // briefs are well under this
+const NICE = 10;                   // renders yield to sessions, the server and test runs
+const THREADS = 2;                 // onnxruntime threads per render = cores used (GHOSTY_TTS_THREADS)
+const RENDER_MAX_MS = 10 * 60e3;   // a hung piper must not hold the queue for ever
+const SHIM = fileURLToPath(new URL('./tts-piper-shim.py', import.meta.url));
 
 export function createTts({
   bin = process.env.PIPER_BIN || path.join(homedir(), '.local', 'share', 'piper', 'piper'),
@@ -45,6 +50,18 @@ export function createTts({
     return path.join(cacheDir, `${hash}.wav`);   // piper's default output is RIFF WAVE PCM, not MP3
   }
 
+  // One piper at a time: parallel renders each take THREADS cores. `inflight` joins a repeat POST of the same text.
+  let tail = Promise.resolve();
+  const inflight = new Map();
+  function enqueue(hash, job) {
+    let p = inflight.get(hash);
+    if (p) return p;
+    p = tail.then(job).finally(() => inflight.delete(hash));
+    inflight.set(hash, p);
+    tail = p.catch(() => {});
+    return p;
+  }
+
   // Returns the path to a rendered mp3 for the given text. Cached by hash. Async (Q96=1).
   async function render(text, givenHash) {
     const trimmed = String(text || '').trim();
@@ -67,17 +84,25 @@ export function createTts({
 
     // cache miss: render. Piper is one-shot per invocation (no JSON stdio protocol), so we spawn it
     // per job. For repeat hashes, the cache hit path above skips the spawn entirely.
+    await enqueue(hash, () => renderOne(trimmed, out));
+    return { path: out, hash, cached: false };
+  }
+
+  // Piper writes to <out>.part: the POST route calls any non-empty .wav ready, so it appears only when complete.
+  async function renderOne(text, out) {
     await mkdir(cacheDir, { recursive: true });
     const inFile = path.join(tmpdir(), `ghosty-tts-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`);
-    await writeFile(inFile, trimmed, { mode: 0o600 });
+    const part = `${out}.part`;
+    await writeFile(inFile, text, { mode: 0o600 });
     try {
-      await piperRunner(bin, voice, inFile, out);
+      await piperRunner(bin, voice, inFile, part);
+      const st = await stat(part).catch(() => null);
+      if (!st || !st.size) throw new Error('piper produced no output');
+      await rename(part, out);
     } finally {
       unlink(inFile).catch(() => {});
+      await rm(part, { force: true });
     }
-    const st = await stat(out).catch(() => null);
-    if (!st || !st.size) throw new Error('piper produced no output');
-    return { path: out, hash, cached: false };
   }
 
   // Q95=1: 14-day prune. Removes .wav files in cacheDir whose mtime is older than KEEP_DAYS days.
@@ -87,7 +112,7 @@ export function createTts({
     let files = [];
     try { files = await readdir(cacheDir); } catch { return { removed: 0 }; }
     for (const f of files) {
-      if (!f.endsWith('.wav')) continue;
+      if (!f.endsWith('.wav') && !f.endsWith('.wav.part')) continue;   // .part: cut off by a restart
       const full = path.join(cacheDir, f);
       try {
         const st = await stat(full);
@@ -100,18 +125,41 @@ export function createTts({
   return { render, prune, hashText, cachePath, KEEP_DAYS };
 }
 
-// Default piper runner: `piper --model <voice> --output_file <out> < text_file`.
+// The command for one render. The pip `piper` is a Python script: it runs through the shim, which caps the
+// onnxruntime threads. Any other binary runs as it is (niced only).
+export function piperCommand(bin, args) {
+  let head = '';
+  try {
+    const fd = openSync(bin, 'r');
+    try { const b = Buffer.alloc(256); head = b.toString('utf8', 0, readSync(fd, b, 0, b.length, 0)); } finally { closeSync(fd); }
+  } catch { /* missing or unreadable: spawn reports it */ }
+  const shebang = /^#![ \t]*([^\r\n]*python[^\r\n]*)/.exec(head);
+  if (!shebang) return [bin, args];
+  const [interpreter, ...flags] = shebang[1].trim().split(/\s+/);
+  return [interpreter, [...flags, SHIM, bin, ...args]];
+}
+
+// Default piper runner: `piper --model <voice> --output_file <out> < text_file`, niced and thread-limited.
 // Tested with piper-tts 1.2.0 binary.
-async function runPiper(bin, voice, textFile, outFile) {
+export async function runPiper(bin, voice, textFile, outFile, { timeoutMs = RENDER_MAX_MS } = {}) {
   return new Promise((resolve, reject) => {
-    const p = spawn(bin, ['--model', voice, '--output_file', outFile], { stdio: ['pipe', 'ignore', 'pipe'] });
+    const [cmd, args] = piperCommand(bin, ['--model', voice, '--output_file', outFile]);
+    const env = { ...process.env, GHOSTY_TTS_THREADS: process.env.GHOSTY_TTS_THREADS || String(THREADS) };
+    const p = spawn(cmd, args, { stdio: ['pipe', 'ignore', 'pipe'], env });
+    // Set at once, before piper starts threads (Linux niceness is per thread, inherited). No `nice` binary needed.
+    try { if (p.pid) setPriority(p.pid, NICE); } catch { /* not permitted or already gone: render anyway */ }
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; p.kill('SIGKILL'); }, timeoutMs);
     let errTail = '';
     p.stderr.on('data', (d) => { errTail = (errTail + d).slice(-400); });
-    p.on('error', reject);
+    p.on('error', (e) => { clearTimeout(timer); reject(e); });
     p.on('exit', (code) => {
+      clearTimeout(timer);
       if (code === 0) resolve();
+      else if (timedOut) reject(new Error(`piper timed out after ${Math.round(timeoutMs / 1000)} s`));
       else reject(new Error(`piper exited (${code})${errTail ? `: ${errTail.trim().split('\n').pop()}` : ''}`));
     });
+    p.stdin.on('error', () => {});   // piper died before reading: the exit code reports it
     const rs = createReadStream(textFile);
     rs.on('error', reject);
     rs.pipe(p.stdin);
