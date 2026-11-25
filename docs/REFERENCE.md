@@ -1624,7 +1624,8 @@ out of the way (`absent`).
 | nightly, first tick after 03:00 UTC | key pages, new findings only | manager event `ui-review:nightly:<day>` |
 | a `needs-owner` stop on something visual (`ui-review-ask.js`) | the `.html` / `.svg` files the text names, else the session's branch (pictures are evidence, never the deliverable; a mockup shown only as a picture or artifact is asked for its HTML) | owner push held, table sent to the session; after 2 rounds the owner is pushed with "STILL FAILING"; a review that cannot run never swallows the ask |
 
-A review that cannot run returns the lane request ("nothing was merged"). A verdict counts only when the exit code and the
+A sign-in the review cannot fix (401 / 403 that is not the change's doing) is `partial` (exit 4): the request goes on, and
+the request, its message and the table say NOT REVIEWED; it is never a pass and never a page fault. A review that cannot run returns the lane request ("nothing was merged"). A verdict counts only when the exit code and the
 reviewer's own last line agree (an exit code alone once read a missing script as "skip"). `--approved-by manager` (manager sessions only)
 waives it and the request records `uiReview.verdict: waived`. Config per repo in `<state>/integration.json`:
 `"uiReview": {"paths": [...], "from": "<clone holding the reviewer>", "ref": "origin/main", "repo": "virtualpytest|website", "liveScopes": [...], "timeoutMin": 15}`.

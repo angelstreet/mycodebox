@@ -29,6 +29,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A server the UI review cannot sign in to is reported as not reviewed** — the lane takes the new `partial` verdict: the request goes on and its message says "NOT fully reviewed, not a pass" · area: harness
+
 - **A failing UI review chip on a session card is red, not green** · area: harness
 
 - **A restart no longer loses the day's nightly UI review** — the day is stamped when the run ends, not when it starts · area: harness

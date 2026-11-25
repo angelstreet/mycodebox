@@ -18,6 +18,8 @@ text = ''.join(p.read_text() for p in pathlib.Path(get('--tree') or '.').rglob('
 bad = 'LIVEONLY' if mode == 'live' else 'BROKEN\\n'
 if 'CANNOT' in text:
     print('ui-review-gate: cannot uir-1 the preview did not start'); sys.exit(3)
+if 'SIGNIN' in text:
+    print('ui-review-gate: partial uir-1 NOT REVIEWED in part: sign-in refused by peer'); sys.exit(4)
 if bad in text:
     (out / 'table.md').write_text('### incidents: FAIL\\n| layout.nothing_cut | FAIL | pill cut by td |\\n')
     print('ui-review-gate: fail uir-1 1 of 1 page(s) got worse: incidents'); sys.exit(1)
@@ -80,6 +82,14 @@ test('a review that cannot run is not a pass', async () => {
   const w = world(); w.branch('feat', { 'frontend/src/Page.tsx': 'CANNOT\n' });
   const r = await go(mk(w), { branch: 'feat', session: 's1' });
   assert.equal(r.state, 'returned'); assert.match(r.reason, /could not run, so nothing was merged/);
+});
+
+test('a part the review cannot sign in to goes on, and every message says it was not reviewed', async () => {
+  const w = world(); w.branch('feat', { 'frontend/src/Page.tsx': 'SIGNIN\n' });
+  const r = await go(mk(w), { branch: 'feat', session: 's1' });
+  assert.equal(r.state, 'merged', JSON.stringify(r));
+  assert.equal(r.uiReview.verdict, 'partial');
+  assert.match(integrationText(r), /NOT fully reviewed, not a pass: NOT REVIEWED in part: sign-in refused/);
 });
 
 test('an exit code without the reviewer saying so is never a skip or a pass', async () => {

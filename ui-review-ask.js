@@ -76,7 +76,8 @@ export function createAskReview({ stateDir, review, run, branchOf, send, journal
       last.set(session, { verdict: 'fail', line: `UI review failed, sent back (round ${mine.rounds + 1}): ${u.summary}`.slice(0, 200), at: now() });
       return { push: false };
     }
-    const head = fail ? `UI review: STILL FAILING after ${mine.rounds} send-backs` : u.verdict === 'pass' ? 'UI review: pass' : 'UI review could not run';
+    const head = fail ? `UI review: STILL FAILING after ${mine.rounds} send-backs` : u.verdict === 'pass' ? 'UI review: pass'
+      : u.verdict === 'partial' ? 'UI review: NOT fully reviewed' : 'UI review could not run';
     const note = `${head}\n${table}`;
     st[session] = { rounds: u.verdict === 'pass' ? 0 : mine.rounds, sig, at: now(), pushed: true, note };
     save(st);

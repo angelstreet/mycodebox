@@ -56,7 +56,8 @@ export function createUiReview({ stateDir, git, run, log = () => {} }) {
 
   const readText = (f, max) => { try { return fs.readFileSync(f, 'utf8').slice(0, max); } catch { return ''; } };
 
-  // mode 'pre-merge' | 'live' | 'nightly'. -> { verdict: pass|fail|skip|cannot|absent, summary, table, dir }
+  // mode 'pre-merge' | 'live' | 'nightly'. -> { verdict: pass|fail|partial|skip|cannot|absent, summary, table, dir }
+  // partial: nothing got worse, but part was NOT reviewed (a sign-in the review cannot fix): the request goes on and says so
   async function review(cfg, { id, mode, tree = null, base = null, head = null, onData }) {
     const dir = path.join(root, id, mode);
     fs.rmSync(dir, { recursive: true, force: true });
@@ -70,7 +71,7 @@ export function createUiReview({ stateDir, git, run, log = () => {} }) {
       const x = await run(`python3 ${sq(path.join(home, GATE))} ${args.join(' ')}`, { cwd: dir, timeoutMs: cfg.timeoutMin * 60_000, onData });
       const last = /^ui-review-gate: (\w+) (?:uir-\S+ )?(.*)$/m.exec(x.out.split('\n').reverse().join('\n'));
       // the exit code alone proves nothing (python exits 2 when it cannot open the script): the reviewer's own last line must agree
-      const said = { 0: 'pass', 1: 'fail', 2: 'skip' }[x.code];
+      const said = { 0: 'pass', 1: 'fail', 2: 'skip', 4: 'partial' }[x.code];
       const verdict = !x.timedOut && said && last?.[1] === said ? said : 'cannot';
       const summary = x.timedOut ? `no answer in ${cfg.timeoutMin} min` : (last?.[2] || x.out.trim().split('\n').at(-1) || `exit ${x.code}`).slice(0, 400);
       return { verdict, summary, table: readText(path.join(dir, 'table.md'), 6000), dir };
@@ -85,7 +86,7 @@ export function createUiReview({ stateDir, git, run, log = () => {} }) {
 // What the session reads: the verdict, where the full table and frames are, and the failing rows.
 export function uiReviewLines(u, lines = 14) {
   if (!u) return '';
-  const rows = String(u.table || '').split('\n').filter((l) => /^### |\| FAIL \||^Model advice|^NOT REVIEWED/.test(l)).slice(0, lines).map((l) => l.slice(0, 420));
+  const rows = String(u.table || '').split('\n').filter((l) => /^### |\| FAIL \||\| NOT REVIEWED \||^Model advice|^NOT REVIEWED/.test(l)).slice(0, lines).map((l) => l.slice(0, 420));
   return [`UI review: ${u.verdict}. ${u.summary}`, ...rows, u.dir ? `Full table and frames: ${u.dir}` : ''].filter(Boolean).join('\n');
 }
 
