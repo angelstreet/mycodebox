@@ -4,6 +4,7 @@
 // stamps ignored) and uncommitted tracked files. A mismatch gets one feed line and one message to the session (while it
 // is idle and the host is not busy), once per finding. Switch: manager.json `doneCheck` "live" (default) | "dry" | "off".
 // Journal: done-check.jsonl.
+import { claimsLive, claimMessage } from './deploy-live.js';
 import { proofGapOf, proofGapMessage } from './proof-risk.js';
 import { pushableItems } from './done-leftovers.js';
 import { computeStopState, doneWhileMessage } from './stop-state.js';
@@ -244,6 +245,7 @@ export function uncommittedOf(porcelain) {
 export function createDoneCheck({
   stateDir, git, listDone, send: sendRaw, record = async () => {}, equivalentOf = async () => null, goalOf = async () => '', mode = () => 'live', home = process.env.HOME || '',
   pressure = () => ({ loadPerCore: 0, ramAvailPct: 100 }), now = Date.now, pollMs = POLL_MS, log = console, ignoreBranches = () => DEFAULT_IGNORE_BRANCHES,
+  pendingLiveOf = async () => [],   // (P) the session's deployed integrations that are not live yet: [{ id, deployId, truth }] (deploy-live.js)
   integrationsOf = async () => [],   // (O) the session's merged lane requests: [{ id, repo, branch, files, subjects }]
   goalGate = null,   // goal-check.js createGoalGate: (H) below
   goalEntryOf = () => null, listSessions = async () => [], timeBoxMode = () => 'dry', draftNow = async () => false,   // (K) Verification block per stored Done-when line; (L) time box wake (dry first)
@@ -611,6 +613,23 @@ export function createDoneCheck({
         if (!quiet || nudged >= MAX_NUDGES_PER_TICK) continue;
         try { await send(s.name, evidenceGapMessage(g)); st.toldEvidence[s.name] = { sig }; nudged++; await note({ session: s.name, evidenceGap: g }); }
         catch (e) { log.error?.('[done-check] send evidence gap', s.name, e.message); }
+      }
+      // (Q) a closing text that claims deployed / live for an integration that is still pending (host restart deferred behind a lease): one push
+      // per set of pending integrations; wording and detection in deploy-live.js (claimsLive, claimMessage).
+      st.toldLive ||= {};
+      for (const n of Object.keys(st.toldLive)) if (!live.has(n)) delete st.toldLive[n];
+      for (const s of sessions) {
+        if (s.working || s.draft || touched.has(s.name) || !claimsLive(s.text)) continue;
+        if (s.doneAt && now() - s.doneAt > REVIEW_MAX_AGE_MS) continue;
+        let items = [];
+        try { items = await pendingLiveOf(s.name); } catch (e) { log.error?.('[done-check] pending live', s.name, e.message); }
+        if (!items.length) continue;
+        const sig = items.map((i) => i.id).sort().join(',');
+        if (st.toldLive[s.name] === sig) continue;
+        if (m === 'dry') { await note({ dry: true, session: s.name, claimsLiveWhilePending: sig }); st.toldLive[s.name] = sig; continue; }
+        if (!quiet || nudged >= MAX_NUDGES_PER_TICK) continue;
+        try { await send(s.name, claimMessage(items)); st.toldLive[s.name] = sig; nudged++; await note({ session: s.name, claimsLiveWhilePending: sig }); }
+        catch (e) { log.error?.('[done-check] send not-live', s.name, e.message); }
       }
       // (P) proof by risk (proof-risk.js, owner 2026-11-25): a UI fix / feature needs a headless run on the deployed URL; cosmetic needs none. ONE push per
       // done line; a second distinct miss goes to the manager, not to the session. Counts as evidenceOpen so the goal question waits.

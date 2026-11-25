@@ -101,6 +101,14 @@ try:
         if re.match(r'^int-[0-9a-f]+:(merged|deployed)$', e.get('kind') or '') and datetime.datetime.fromisoformat(e['at'].replace('Z', '+00:00')).timestamp() >= cut: n += 1
     if n: hits.append({'session': 'integration', 'status': '%d routine integration events skipped (last hour)' % n})
 except Exception: pass
+# integrations deployed but NOT live: a leased host's restart is deferred (deploy-live.js, GET /api/integration/live); the notify text says the same
+try:
+    import os, urllib.request
+    sd = os.environ.get('GHOSTY_STATE_DIR') or os.path.expanduser('~/.local/state/ghosty')
+    tok = open(os.path.join(sd, 'reporter.token')).read().strip()
+    rq = urllib.request.Request('http://127.0.0.1:%s/api/integration/live' % os.environ.get('PORT', '7777'), headers={'x-ghosty-reporter-token': tok})
+    for x in json.load(urllib.request.urlopen(rq, timeout=5)).get('pending', []): hits.append({'session': x['id'], 'status': 'deployed-not-live: ' + x.get('text', '')[:200]})
+except Exception: pass
 if as_json: print(json.dumps(hits))
 else:
     for h in hits: print(f"{h['session']}: {h['status']}")

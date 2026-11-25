@@ -210,6 +210,7 @@ import { createIntegrationNotify, integrationDigestEnabled, isQuietState } from 
 import { createCrashResumer, findClaudeSessionId } from './crash-resume.js';
 import { createQuotaResumer } from './quota-resume.js';
 import { createIntegrationDeploys } from './integration-deploys.js';
+import { createDeployLive } from './deploy-live.js';
 import { createMockups } from './mockups.js';
 import { createVoice, feedActions, stopItem as voiceStopItem, decidedFor as voiceDecidedFor } from './voice.js';
 
@@ -1201,6 +1202,9 @@ const goalGate = createGoalGate({
 // uncommitted files); a mismatch is told once to the session and the feed. manager.json `doneCheck`: live | dry | off.
 let stopFactsImpl = async () => ({});   // set where the manager is initialised (it needs own-jobs and the lane): stop-state.js facts
 const stopStateMode = () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).stopState; return m === 'live' || m === 'off' ? m : 'dry'; } catch { return 'dry'; } };
+// Live truth of deploys (deploy-live.js): "deployed" is not "live" while a leased host's restart waits for its catch-up deploy.
+const deployLive = createDeployLive({ dir: join(STATE_DIR, 'deploys'), deploys: () => (deployRunner.snapshot().ok ? deployRunner.snapshot().deploys : null),
+  leases: async () => (await leaseSource.view(false))?.leases || [] });
 const doneCheck = createDoneCheck({
   stopFacts: (n, o) => stopFactsImpl(n, o), stateMode: stopStateMode,
   draftNow: async (n) => { try { return !!inputBox((await capturePane(n, 30)).split('\n')).draft; } catch { return true; } },
@@ -1246,6 +1250,7 @@ const doneCheck = createDoneCheck({
   goalOf: async (name) => { try { return goalOfPrompt(readFileSync(join(homedir(), 'handovers', `${String(name).replace(/[^\w.-]/g, '')}.prompt.md`), 'utf8')); } catch { return ''; } },
   goalGate,   // (H) goal check
   integrationsOf: (name) => integrationLane.mergedFor(name),   // (O) release note / bug record evidence
+  pendingLiveOf: async (name) => deployLive.pendingOf(integrationLane.list({ state: 'deployed', limit: 100 }).filter((r) => (r.session === name || r.forSession === name) && Date.now() - (Date.parse(r.endedAt || '') || 0) < 12 * 3600e3)),   // (P) "deployed" claimed for an integration that is not live yet
   proofMode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).proofRisk; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },   // (P) proof by risk
   send: (name, text) => harnessSend(name, text),
   pressure: hostPressure,
@@ -3330,7 +3335,7 @@ const integrationLane = createIntegrationLane({ stateDir: STATE_DIR, mergeOptOut
   managerItem: (it) => { const ev = it.kind === 'merge' ? { key: `merge:${it.id}:manager-item`, title: `${it.repo}: ${it.branch} needs infra approval`, body: String(it.text).slice(0, 1500), url: '/', priority: 'default', session: it.session || undefined } : it;
     Promise.resolve(managerEvents.record(ev)).catch((e) => console.error('[integration] manager item', e.message)); },
   journal: (rec) => { appendFile(join(STATE_DIR, 'merge-decisions.jsonl'), `${JSON.stringify(rec)}\n`, (e) => { if (e) console.error('[integration] journal', e.message); }); } });
-const integrationRoutes = createIntegrationRoutes({ lane: integrationLane, stateDir: STATE_DIR, isLoopback, reporterOk: (t) => reporter.tokenOk(t),
+const integrationRoutes = createIntegrationRoutes({ deployLive, lane: integrationLane, stateDir: STATE_DIR, isLoopback, reporterOk: (t) => reporter.tokenOk(t),
   sessionCwd: async (name) => (await listPanes()).get(name)?.cwd || null,
   sessionKnown: async (name) => (await listPanes()).has(name),   // --for <session>: a live tmux session
   remoteResolve: (name, client) => remote.resolveFor(name, client),
@@ -3349,6 +3354,7 @@ const remote = createRemoteStops({ manager: managerApi, dir: join(STATE_DIR, 'le
 // deploys: request + wait through the same deploy registry as the runner. integrationOwnJobs is set when own-jobs starts (it forgets a session we just told).
 let integrationOwnJobs = null;
 const integrationNotify = createIntegrationNotify({
+  liveTruth: (r) => deployLive.forRequest(r),   // a deployed request whose host restart is deferred is told as NOT live
   status: (session) => latest?.status?.[session],
   isRemote: (session) => remote.owns(session),
   canSend: noteAllowed,   // stopped on a finished turn, no draft, no menu
@@ -3362,7 +3368,7 @@ const integrationNotify = createIntegrationNotify({
   managerEvent: (e) => managerEvents.record(e),
   onMerged: (session, r) => resolveMovedOn(join(STATE_DIR, 'manager-owner-asks.jsonl'), session, { status: 'merged', text: String(r.branch || ''), now: new Date() })
     .then((ids) => { if (ids.length) { logEvent({ type: 'owner-ask-moved-on', session, ids, merged: r.id }); askFold.refresh(); } }).catch((e) => console.error(`[owner-asks] merged: ${e.message}`)),
-  afterSend: (session, r) => { if (integrationOwnJobs?.jobOf(session)?.id === r.id) integrationOwnJobs.forget(session); },
+  afterSend: (session, r) => { if (integrationOwnJobs?.jobOf(session)?.id === r.id && r.liveTruth?.state !== 'pending') integrationOwnJobs.forget(session); },   // pending: keep the watch, the flip to live wakes it
   defer: (session, r, text) => !!pendingWakes.add({ session, key: `integration:${r.id}:${r.state}:${session}`, text, by: 'integration' }).queued,   // not stopped / not listed now: kept for the next stop
   log: (r) => logEvent(r),
 });
@@ -3551,6 +3557,7 @@ server.listen(PORT, HOST, async () => {
     table: processTable,
     agentPid: async (name) => { const p = (await listPanes()).get(name); return p?.pid ? agentPidFromTree(p.pid, await processTable()) : null; },
     startedAt: async (pids) => { const m = new Map(); try { for (const l of (await exec('ps', ['-o', 'pid=,etimes=', '-p', pids.join(',')])).stdout.split('\n')) { const x = l.trim().split(/\s+/); if (x.length === 2) m.set(Number(x[0]), Date.now() - Number(x[1]) * 1000); } } catch {} return m; },
+    liveTruth: ({ request, deployId }) => (request ? deployLive.forRequest(request) : deployLive.forDeploy(deployId)),   // deployed but not live yet = still waiting
     deployState: (id) => { const d = (deployRunner.snapshot().deploys || []).find((x) => String(x.id) === String(id)); return d ? { state: d.state, finished: d.finished ? d.finished * (d.finished < 1e12 ? 1000 : 1) : null } : null; },
     integrationState: async (id) => integrationLane.get(id),   // the lane's request (GET /api/integration/requests/:id)
     scriptRun: createScriptRunSource({ jevUrl: process.env.JEV_URL || '', apiKey: process.env.JEV_API_KEY || '', teamId: process.env.VPT_TEAM_ID || '' }),   // platform run rows, read-only GET (same key as Jev)

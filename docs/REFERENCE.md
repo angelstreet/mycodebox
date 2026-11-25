@@ -2361,3 +2361,20 @@ Two sessions changing the same file cost hours on 2026-10-28 (script-naming, mig
 ## No workers by default (owner, 2026-11-13)
 
 A session started by the owner or the dashboard does all the work itself; it starts no workers (cbsession, other sessions, V2 tasks) and hands nothing to peers unless its brief or the owner says `workers: allowed`. The manager and the workers it starts for the owner are exempt. `scripts/cbsession` writes the rule into every prompt (`**No workers**`, or `**Workers**` with `-K`), exports `CBSESSION_PARENT=<name>` (and `CBSESSION_WORKERS_OK=1` with `-K`) in the launch file, and refuses (exit 2) a start whose caller has `CBSESSION_PARENT` without `CBSESSION_WORKERS_OK`; `-A` automation (lane, bug-drain, ci-watch) and callers outside cbsession sessions are not checked. Light enforcement: a session can still bypass it by editing its env, the rule text is the primary control.
+
+## Live truth of a deploy (owner, 2026-11-25)
+
+"Deployed" is not "live": a host deploy run with `--skip-leased` syncs a leased host's code and defers its vpt-host restart to a catch-up deploy, so that host
+runs old code until the lease ends (117 of 273 deploy runs 2026-11-24..25 ended `SKIPPED: RUNNING OLD CODE`). `deploy-live.js` (header has the rules):
+
+- **Record**: `deploy-runner.js` writes `<state>/deploys/<id>.skipped.json` (`{ env, ref, hosts, at }`) for the deploy and each request it closed, BEFORE `deploy finish`.
+- **Truth** (`liveTruth`, pure): a skipped host is waiting while an active (queued / running) catch-up deploy of the same env lists it (the registry's `old_code`), or for 90 s after the record
+  (the catch-up is queued just after the finish). No skipped host waiting = `live`; else `pending` with `{ host, holder, until, catchUp, running }` per host (holder = the catch-up's `blocking` lease, else a lease on the host or one of its
+  devices). No registry answer = `unknown`: a statement nobody acts on (an outage never blocks a session).
+- **Told**: `integration-notify.js` attaches the truth to a `deployed` request (not a ghosty self-deploy): the session line reads `... NOT live yet on vpt-pi1: restart deferred (lease X, until ~HH:MM UTC). Do not say "deployed" or "live"
+  yet: end on STATUS: waiting: integration <id>`; the feed title says "deployed, NOT live yet"; a pending request keeps its own-job watch (afterSend does not forget it).
+- **Read**: `GET /api/integration/requests/:id` adds `liveTruth`, `live`, `notLiveText`, `pendingHosts`; `GET /api/integration/live` lists the pending integrations; `scripts/manager-status-scan.sh` prints `deployed-not-live: ...`.
+- **Wake**: own-jobs: `STATUS: waiting: integration <id>` / `deploy <id>` stays `running` while pending and ends (wake text "now live on every host: the deferred restart of <hosts> ran") when the catch-up is gone.
+- **Done-check (P)**: a closing text that claims deployed / live / in prod (`claimsLive`, not a negation, not a `waiting: deploy|integration` line) for a session's pending integration gets one push per set of pending integrations
+  (`claimMessage`: "not live on <hosts> yet; end on STATUS: waiting: deploy <id>"). Dep `pendingLiveOf(session)`.
+- Limits: a catch-up that the runner never queued (cap of 3 reached, "not requested") leaves the host looking live here; the cap already raises its own manager item. Tests: `test/deploy-live.test.js`.
