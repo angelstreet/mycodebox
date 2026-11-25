@@ -30,14 +30,14 @@ const hhmm = (t) => (t ? `${new Date(t).toISOString().slice(11, 16)} UTC` : '');
 // ---- the record the runner leaves --------------------------------------------------------------------------------------------------
 export const skippedFile = (dir, id) => join(dir, `${id}.skipped.json`);
 // ids: the deploy id and every request it closed (coalesced). Best effort: a failed write only means "no statement".
-export function recordSkipped(dir, ids, { env, ref, hosts, at = Date.now() } = {}) {
+export function recordSkipped(dir, ids, { env, ref, hosts, capped = [], at = Date.now() } = {}) {
   const list = (hosts || []).map(one).filter(Boolean);
   if (!dir || !list.length) return false;
   try {
     mkdirSync(dir, { recursive: true });
     for (const id of [...new Set((ids || []).map(String))].filter((x) => SAFE_ID.test(x))) {
       const f = skippedFile(dir, id), tmp = `${f}.tmp`;
-      writeFileSync(tmp, JSON.stringify({ id, env: one(env), ref: one(ref), hosts: list, at }));
+      writeFileSync(tmp, JSON.stringify({ id, env: one(env), ref: one(ref), hosts: list, ...(capped.length ? { capped: capped.map(one) } : {}), at }));
       renameSync(tmp, f);
     }
     return true;
@@ -61,12 +61,13 @@ export function liveTruth({ records = [], deploys = null, leases = [], now = Dat
     const mine = recs.filter((r) => r.hosts.includes(h));
     const catchUp = deploys.find((d) => isCatchUp(d) && ACTIVE.has(String(d.state)) && (d.hosts || []).includes(h) && (!d.env || mine.some((r) => !r.env || r.env === d.env)));
     const fresh = mine.some((r) => now - (Number(r.at) || 0) < GRACE_MS);
-    if (!catchUp && !fresh) continue;   // the catch-up ran (or the registry dropped it): this host is live
+    const gaveUp = !catchUp && mine.some((r) => (r.capped || []).includes(h));   // the runner stopped asking after CATCHUP_CAP tries: the host still runs old code
+    if (!catchUp && !fresh && !gaveUp) continue;   // the catch-up ran (or the registry dropped it): this host is live
     const blocking = (catchUp?.blocking || []).find((b) => b && b.agent);
     const lease = blocking || (leases || []).find((l) => l && l.agent && !/^(update_core|integration|manager:deploy)/.test(l.agent)
       && (l.resources || []).some((r) => String(r) === h || String(r).startsWith(`${h}/`)) && l.mode !== 'shared');
     const untilMs = blocking ? ms(blocking.expires_at ?? blocking.expires) : lease && Number.isFinite(lease.ttlLeftMin) ? now + lease.ttlLeftMin * 60000 : null;
-    hosts.push({ host: h, holder: lease ? one(lease.agent).slice(0, 80) : null, until: untilMs || null, catchUp: catchUp ? String(catchUp.id) : null, running: catchUp?.state === 'running' });
+    hosts.push({ host: h, holder: lease ? one(lease.agent).slice(0, 80) : null, until: untilMs || null, catchUp: catchUp ? String(catchUp.id) : null, running: catchUp?.state === 'running', gaveUp });
   }
   return hosts.length ? { state: 'pending', hosts, skipped } : { state: 'live', hosts: [], skipped };
 }
@@ -74,7 +75,7 @@ export function liveTruth({ records = [], deploys = null, leases = [], now = Dat
 // the words for a session / the scan: `NOT live yet on vpt-pi1: restart deferred (lease X, until ~21:24 UTC)`
 export function pendingText(t) {
   if (!t || t.state !== 'pending' || !t.hosts?.length) return '';
-  const why = (h) => (h.running ? 'catch-up deploy running' : h.holder ? `lease ${h.holder}${h.until ? `, until ~${hhmm(h.until)}` : ''}` : `waiting for its catch-up deploy${h.catchUp ? ` ${h.catchUp}` : ''}`);
+  const why = (h) => (h.gaveUp ? 'catch-up gave up after 3 tries' : h.running ? 'catch-up deploy running' : h.holder ? `lease ${h.holder}${h.until ? `, until ~${hhmm(h.until)}` : ''}` : `waiting for its catch-up deploy${h.catchUp ? ` ${h.catchUp}` : ''}`);
   const names = t.hosts.map((h) => h.host).join(', ');
   return t.hosts.length === 1 ? `NOT live yet on ${names}: restart deferred (${why(t.hosts[0])})`
     : `NOT live yet on ${names}: restart deferred (${t.hosts.map((h) => `${h.host}: ${why(h)}`).join('; ')})`;

@@ -494,6 +494,7 @@ export function createDeployRunner({
       const capped = skipped.filter((h) => triesOf(d, h, deploys) >= CATCHUP_CAP);
       if (capped.length) await say(`# catch-up for ${capped.join(',')} not requested: ${CATCHUP_CAP} catch-ups at ${d.ref} already skipped it`);
       const want = skipped.filter((h) => !capped.includes(h));
+      if (capped.length) recordSkipped(logDir, [d.id, ...merged.map((m) => m.id)], { env: d.env, ref: d.ref, hosts: skipped, capped });   // the lane reads these as NOT live, never as live
       // what the queue already holds for these hosts decides: several deploys that skip the same leased hosts cannot pile up
       // duplicates (or an older ref that would roll the hosts back). The registry arms the re-arm itself (for a catch-up that
       // skipped again: the strict one, which waits for the lease), so the runner only asks when nothing covers the hosts.

@@ -165,3 +165,15 @@ test('C: done-check pushes ONCE when the closing text claims deployed for a pend
   assert.equal(h2.sent.filter((x) => /not live on/.test(x[1])).length, 0);
   assert.match(claimMessage([{ id: 'int-7', deployId: null, truth }]), /waiting: integration int-7/);
 });
+
+test('a host whose catch-up hit the cap stays pending ("catch-up gave up after 3 tries"), never live', (t) => {
+  const dir = tmpDir(t);
+  recordSkipped(dir, ['d1'], { env: 'node1-vpt', ref: 'abc', hosts: ['vpt-pi1', 'vpt-mf1'], at: NOW - 3600e3 });
+  recordSkipped(dir, ['d1'], { env: 'node1-vpt', ref: 'abc', hosts: ['vpt-pi1', 'vpt-mf1'], capped: ['vpt-pi1'], at: NOW - 3600e3 });
+  assert.deepEqual(readSkipped(dir, 'd1').capped, ['vpt-pi1']);
+  const tr = liveTruth({ records: [readSkipped(dir, 'd1')], deploys: [], now: NOW });
+  assert.equal(tr.state, 'pending');
+  assert.deepEqual(tr.hosts.map((h) => h.host), ['vpt-pi1'], 'vpt-mf1 (catch-up ran) is live');
+  assert.equal(pendingText(tr), 'NOT live yet on vpt-pi1: restart deferred (catch-up gave up after 3 tries)');
+  assert.equal(liveTruth({ records: [readSkipped(dir, 'd1')], deploys: [catchUp()], now: NOW }).hosts[0].gaveUp, false, 'a new active catch-up replaces the give-up');
+});
