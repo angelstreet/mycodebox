@@ -1,6 +1,5 @@
 // Text-to-speech (TASK-70 Part 1): piper binary talks the wake brief / stall summary aloud.
-// One worker, started on first request and stopped after IDLE_MS without a job. Cached at
-// Cached at <state dir>/tts/<hash>.wav (RIFF WAVE PCM 16-bit, piper's default) so repeat plays
+// No resident worker: each render starts piper, which exits when it is done. Cached at <state dir>/tts/<hash>.wav (RIFF WAVE PCM 16-bit, piper's default) so repeat plays
 // are instant; downloads are just GET of that file.
 //
 // Voice: en_US-amy-low (Q93=2 — owner picked the piper default over joe-medium). Quality trade-off
@@ -19,7 +18,6 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
-const IDLE_MS = 10 * 60e3;        // worker idle timeout (kept for shape parity with transcribe.js; piper is one-shot here)
 const KEEP_DAYS = 14;              // Q95=1 — matches daily-checks.json keepDays
 const MAX_TEXT = 8000;             // briefs are well under this
 const NICE = 10;                   // renders yield to sessions, the server and test runs

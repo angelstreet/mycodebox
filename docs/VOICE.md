@@ -4,7 +4,7 @@ Goal: hear what needs you, answer by voice, keep the fleet moving without lookin
 
 ## What existed before this round
 
-- Text to speech: the server renders speech with piper (`/api/tts/<hash>`, cached WAV), played by `public/audio-chip.js` on a tap. Chips read
+- Text to speech: the server renders speech with piper (`/api/tts/<hash>`, cached WAV), played by `public/audio-chip.js`. A chip renders only when you tap play (piper starts for that render and exits; nothing stays resident). Chips read
   a question or a reply, not the options.
 - Speech to text: whisper on the server (`POST /api/transcribe`), used by the dock mic (tap to start, tap to stop). The transcript was typed
   into the active session; it was never matched to an open question.
