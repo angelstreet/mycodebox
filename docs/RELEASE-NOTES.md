@@ -29,6 +29,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A failing UI review chip on a session card is red, not green** · area: harness
+
 - **A restart no longer loses the day's nightly UI review** — the day is stamped when the run ends, not when it starts · area: harness
 
 - **A restart no longer blocks the review after a deploy** — a ghosty restart during `ui-review-live` left its worktree, and the resumed request answered "could not run" on its own leftover · area: harness
