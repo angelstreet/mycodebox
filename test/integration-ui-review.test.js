@@ -1,7 +1,7 @@
 // The UI review gate of the lane: real throwaway git repos, a stand-in reviewer script committed on main, fake deploys.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createIntegrationLane, validateConfig } from '../integration-lane.js';
 import { createNightlyUiReview, parseUiReview, touchesVisual } from '../ui-review-lane.js';
@@ -123,6 +123,24 @@ test('after a frontend deploy a worse live page hands the request back, and the 
   assert.equal(w.main(), r.sha);
   assert.match(integrationText(r), /merged .* and deployed, then returned to you[\s\S]*pill cut by td/);
   assert.equal(existsSync(join(w.root, 'nothing')), false);
+});
+
+test('a tree left by an interrupted post-deploy review does not stop the resumed one', async () => {
+  const w = world(); w.branch('feat', { 'frontend/src/Page.tsx': 'LIVEONLY\n' });
+  let stateDir;
+  const deploys = { request: async () => ({ id: 'd1' }), wait: async () => {
+    const wt = join(stateDir, 'integration', 'wt');
+    mkdirSync(join(wt, `${current}-live`, 'left'), { recursive: true });
+    return { ok: true, version: 'v1' };
+  } };
+  let current = null;
+  stateDir = tmp('lane-state-');
+  const lane = createIntegrationLane({ stateDir, config: { repos: { 'env-a': w.cfg({ uiReview: uiCfg(w, { liveScopes: ['frontend'] }), deploy: { env: 'env-a', defaultScope: 'frontend' } }) } },
+    deploys, journal: () => {}, pollMs: 1, sleep: () => new Promise((r) => setTimeout(r, 1)) });
+  lane.start();
+  const q = lane.enqueue({ repo: 'env-a', branch: 'feat', session: 's1', deploy: 'frontend' }); current = q.id;
+  const r = await lane.wait(q.id, 60000);
+  assert.equal(r.state, 'returned_after_deploy', JSON.stringify(r.uiReviewLive));
 });
 
 test('what the review sends back goes to the digest and the session, not to the owner', async () => {

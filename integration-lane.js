@@ -838,6 +838,9 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
     const files = await changedFiles(r, c, r.targetBase, r.sha);
     if (!files || !touchesVisual(u, files)) return false;
     const wt = path.join(dir, 'wt', `${r.id}-live`);
+    // a restart in the middle of this review leaves its tree behind: a resumed request must not be refused by its own leftover
+    const drop = async () => { await G(r, c, ['worktree', 'remove', '--force', wt]); fs.rmSync(wt, { recursive: true, force: true }); await G(r, c, ['worktree', 'prune']); };
+    await drop();
     const add = await G(r, c, ['worktree', 'add', '--detach', wt, r.sha]);
     if (add.code !== 0) { r.uiReviewLive = { verdict: 'cannot', summary: `no worktree: ${add.err}` }; persist(r); return false; }
     try {
@@ -848,7 +851,7 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
       });
       r.uiReviewLive = res; persist(r);
       return res.verdict === 'fail';
-    } finally { await G(r, c, ['worktree', 'remove', '--force', wt]); }
+    } finally { await drop(); }
   }
   async function finishDeployed(r, c, patch = {}) {
     Object.assign(r, patch);
