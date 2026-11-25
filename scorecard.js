@@ -705,20 +705,29 @@ async function readConfig(env, fsLib) {
   } catch { return {}; }
 }
 
-// Cache wrapper: < 60 s we serve from the in-memory map.
+// Cache wrapper, stale-while-revalidate (owner 2026-11-25: a scorecard load is ~2 s of CPU and 230-660 MB of heap on the server's one thread, and the
+// Usage sheet and cards ask again every minute; the server grew to 2.6 GB over a few hours and every child process it started then cost ~40 ms).
+// Younger than ttlMs: served as is. Older but younger than staleMs: served at once and refreshed in the background, at most one load per key at a time.
+// Older still, or never loaded: the caller waits for the load.
 const cache = new Map();      // key -> { at, value }
 const inflight = new Map();   // key -> promise of a load in progress
-export async function cachedScorecard({ days = 7, ttlMs = 60000, env = process.env, deployList = null } = {}) {
+export async function cachedScorecard({ days = 7, ttlMs = 300000, staleMs = 1800000, env = process.env, deployList = null } = {}) {
   const key = `${days}`;
   const hit = cache.get(key);
-  if (hit && Date.now() - hit.at < ttlMs) return hit.value;
-  if (inflight.has(key)) return inflight.get(key);   // one load at a time: concurrent callers share it
-  const p = loadScorecardDays({ days, env, deployList: typeof deployList === 'function' ? deployList() : deployList })
-    .then((value) => { cache.set(key, { at: Date.now(), value }); return value; })
-    .finally(() => inflight.delete(key));
-  inflight.set(key, p);
-  return p;
+  const age = hit ? Date.now() - hit.at : Infinity;
+  if (hit && age < ttlMs) return hit.value;
+  const load = () => {
+    if (inflight.has(key)) return inflight.get(key);   // one load at a time: concurrent callers share it
+    const p = loadScorecardDays({ days, env, deployList: typeof deployList === 'function' ? deployList() : deployList })
+      .then((value) => { cache.set(key, { at: Date.now(), value }); return value; })
+      .finally(() => inflight.delete(key));
+    inflight.set(key, p);
+    return p;
+  };
+  if (hit && age < staleMs) { load().catch(() => {}); return hit.value; }
+  return load();
 }
+export function _resetScorecardCache() { cache.clear(); inflight.clear(); }
 
 // A small helper used by the Langfuse posting: build the events for one scorecard.
 export function langfuseScoreEvents(scorecard, { traceId = 'manager-scorecard', traceName = 'manager-scorecard', sentAt = Date.now() } = {}) {
