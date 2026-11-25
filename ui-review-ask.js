@@ -43,10 +43,11 @@ export function createAskReview({ stateDir, review, run, branchOf, send, journal
 
   async function judge(session, ask, text) {
     const b = await branchOf(session).catch(() => null);
-    const files = ask.files.map((f) => f.replace(/^~/, home)).filter((f) => fs.existsSync(f));
+    // pictures are usually the session's evidence frames, not the deliverable: a page or drawing file comes first, then the branch
+    const files = ask.files.map((f) => f.replace(/^~/, home)).filter((f) => /\.(?:html|svg)$/i.test(f) && fs.existsSync(f));
     if (files.length) return review({ id: `ask-${session}-${now()}`, files: files.map((f) => ({ file: f, kind: kindOf(f, text) })) });
     if (b && b.files.some((f) => VISUAL_PATHS.test(f))) return review({ id: `ask-${session}-${now()}`, tree: b.cwd, base: b.base });
-    if (ask.artifact) return { verdict: 'fail', summary: 'the ask links a claude.ai artifact that the reviewer cannot open: put the absolute path of the HTML file behind it in your closing text', table: '' };
+    if (ask.artifact || (ask.files.length && /\bmock-?ups?\b|\bposters?\b|\blessons?\b/i.test(text))) return { verdict: 'fail', summary: 'the reviewer cannot judge a claude.ai artifact or a flat picture: put the absolute path of the HTML file behind it in your closing text', table: '' };
     return null;   // words only ("the layout of the config file"): nothing to look at
   }
 

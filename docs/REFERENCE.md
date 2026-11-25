@@ -1622,7 +1622,7 @@ out of the way (`absent`).
 | lane, after tests, before the push | request diff touches `uiReview.paths` (tests and `.md` do not count) | `returned`, `outcome: ui_review`; the table goes to the session; digest only, the owner is not told |
 | lane, after a deploy whose scope is in `liveScopes` | same paths | state `returned_after_deploy` (the merge stays) |
 | nightly, first tick after 03:00 UTC | key pages, new findings only | manager event `ui-review:nightly:<day>` |
-| a `needs-owner` stop on something visual (`ui-review-ask.js`) | the files the text names, else the session's branch | owner push held, table sent to the session; after 2 rounds the owner is pushed with "STILL FAILING"; a review that cannot run never swallows the ask |
+| a `needs-owner` stop on something visual (`ui-review-ask.js`) | the `.html` / `.svg` files the text names, else the session's branch (pictures are evidence, never the deliverable; a mockup shown only as a picture or artifact is asked for its HTML) | owner push held, table sent to the session; after 2 rounds the owner is pushed with "STILL FAILING"; a review that cannot run never swallows the ask |
 
 A review that cannot run returns the lane request ("nothing was merged"). A verdict counts only when the exit code and the
 reviewer's own last line agree (an exit code alone once read a missing script as "skip"). `--approved-by manager` (manager sessions only)
