@@ -1,15 +1,15 @@
 #!/bin/sh
-# found-bug: LAST RESORT (owner, 2026-11-11). A bug you find: fix it now yourself, in its own worktree, when it is small and you have the repro
-# (it does not have to be your task); file it only when it is large, needs another host/device/credentials, is an owner-floor item, or belongs to a
-# live session's task. Never end a turn with "I filed X so someone will fix it". POSIX sh + curl: codebox, Mac, cloud.
-#   found-bug --title "REST list of virtual scripts errors" --why-not-fixed large|other-area|host-or-device|credentials|owner-floor|live-session-task
+# found-bug: ONLY for a bug unrelated to your goal or task (owner, 2026-11-25). A bug, leftover or idea inside your task is fixed or explained
+# in your reply, never filed; a small unrelated bug with a repro is fixed too, in its own worktree. Never end a turn with "I filed X so someone
+# will fix it". POSIX sh + curl: codebox, Mac, cloud.
+#   found-bug --title "REST list of virtual scripts errors" --why-not-fixed other-area|live-session-task
 #             --reason "one line: why you could not fix it now" --checked-main <sha> --tried "one line: what you tried" --error "exact text"
 #             [--endpoint GET /api/x] [--repro "..."] 
 #             [--workaround "..."] [--blocking yes|no] [--session NAME] [--repo mycodebox|virtualpytest] [--test]
 #   REPO (2026-11-16): --checked-main is checked against the origin/main of the repo the bug belongs to: --repo, else an endpoint naming it, else the repo of your cwd
 #   (a ~/virtualpytest checkout = virtualpytest), else the dashboard (mycodebox). Run `git rev-parse origin/main` in that repo.
 #   PROOF (owner, 2026-11-16): a filing needs --checked-main <sha> (git fetch; git rev-parse origin/main, where you re-ran the repro and it still fails),
-#   the exact --error and --tried (one line). Without them: exit 2 and the rule. Fixed on main already = do not file. "idea:" titles are exempt.
+#   the exact --error and --tried (one line). Without them: exit 2 and the rule. Fixed on main already = do not file. Ideas are never filed (owner 2026-11-25).
 #   found-bug --checked <id> [--session NAME]            the bug drain: a possibly-fixed bug was checked against main and still reproduces
 #   found-bug --flush                                    post the reports queued while the manager was unreachable
 #   found-bug --resolve <id> --commit <sha|integration id> [--state fixed|wontfix|doc-only|duplicate] [--note text] [--session NAME]   (codebox only)
@@ -201,8 +201,8 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "$title" ] || die "--title is required"
-WHYS="large other-area host-or-device credentials owner-floor live-session-task"
-case " $WHYS " in *" $why "*) [ -n "$why" ] ;; *) false ;; esac || { printf 'found-bug: Fix it yourself now (small + you have the repro). If you really cannot, re-run with --why-not-fixed <%s> --reason "one line".\n' "$(echo $WHYS | tr ' ' '|')" >&2; exit 2; }
+WHYS="other-area live-session-task"
+case " $WHYS " in *" $why "*) [ -n "$why" ] ;; *) false ;; esac || { printf 'found-bug: Only a bug unrelated to your goal or task is filed (owner 2026-11-25). Inside your task: fix it, or explain in your reply why not. Unrelated: re-run with --why-not-fixed <%s> --reason "one line".\n' "$(echo $WHYS | tr ' ' '|')" >&2; exit 2; }
 [ -n "$reason" ] || { printf 'found-bug: --reason "one line: why you could not fix it now" is required with --why-not-fixed. Fix it yourself now if it is small and you have the repro.\n' >&2; exit 2; }
 case "$title" in [Ii][Dd][Ee][Aa]:*|[Ii][Dd][Ee][Aa]\ :*) ;; *)
   PROOF='A bug is filed only with proof it is real on current main and that you could not fix it: --checked-main <sha> (git fetch; git rev-parse origin/main, where you re-ran the repro and it still fails), --error "<exact error text>", --tried "<one line: what you tried>". If it no longer fails on main it is fixed: do not file. If it is small, fix it yourself now.'
