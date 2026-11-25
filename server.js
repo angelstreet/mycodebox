@@ -156,6 +156,7 @@ import { createSessionHistory } from './session-history.js';
 import { paneLinesOk } from './pane-lines.js';
 import { scrollPlan, wheelPlan, altScrollApplies } from './alt-scroll.js';
 import { findSessionFile, readConversation, tailChars } from './conversation.js';
+import { createLimiter, createCoalescer } from './pane-cache.js';
 import { findInFolder, resolveServedFile } from './files-route.js';
 import { readViewFile } from './file-view.js';
 import { uploadTarget } from './upload-kind.js';
@@ -402,14 +403,20 @@ async function assertAgentPane(session, by) {
 const tgt = (s) => `=${s}:`;
 const SHELLS = new Set(['bash', 'zsh', 'sh', 'fish', 'dash']);
 
+// At most PANE_CAPTURES tmux captures run at once (each child process costs the server's one thread ~40 ms); the rest wait their turn.
+const paneLimit = createLimiter(Math.max(1, Number(process.env.PANE_CAPTURES) || 4));
 async function capturePane(session, lines = PANE_LINES) {
   // Visible pane + scrollback. No -J: keep tmux's own line breaks so
   // the client can size xterm to the pane's cols. -e keeps colour escapes.
-  const { stdout } = await exec(TMUX, [
+  const { stdout } = await paneLimit(() => exec(TMUX, [
     'capture-pane', '-t', tgt(session), '-p', '-e', '-S', `-${lines}`,
-  ], { maxBuffer: 16 * 1024 * 1024 });
+  ], { maxBuffer: 16 * 1024 * 1024 }));
   return stdout;
 }
+// What a click on a session asks for (its reply, a transcript fallback, a snapshot): ten clicks make one capture, and a send forgets it .
+const paneShared = createCoalescer({ ttlMs: Number(process.env.PANE_SHARE_MS) || 1500 });
+const capturePaneShared = (session, lines = PANE_LINES) => paneShared.get(`${session}|${lines}`, () => capturePane(session, lines));
+const transcriptShared = createCoalescer({ ttlMs: Number(process.env.PANE_SHARE_MS) || 1500 });
 
 const lastSendAt = new Map();    // session -> ms epoch
 const lastSendText = new Map();  // session -> what was sent (for the manager's outcome log)
@@ -425,7 +432,7 @@ async function sendKey(session, key) {
   } else {
     const e = new Error('key not allowed'); e.status = 400; throw e;
   }
-  lastSendAt.set(session, Date.now());
+  lastSendAt.set(session, Date.now()); paneShared.invalidate(session); transcriptShared.invalidate(session);
   lastSendText.set(session, key);
   return { ok: true, key };
 }
@@ -465,7 +472,7 @@ async function sendKeys(session, keys, enter = true) {
       void verifyDelivered({ text, draftNow, pressEnter, sleep, onRetry: (n) => logEvent({ type: 'send-enter-retry', session, attempt: n }) }).catch(() => {});
     }
   }
-  lastSendAt.set(session, Date.now());
+  lastSendAt.set(session, Date.now()); paneShared.invalidate(session); transcriptShared.invalidate(session);
   lastSendText.set(session, String(keys || ''));
   if (submitted === false) { logEvent({ type: 'send-unsubmitted', session }); return { ok: true, sent: true, submitted: false }; }
   return submitted === true ? { ok: true, sent: lines.length, submitted: true } : { ok: true, sent: lines.length };
@@ -2638,8 +2645,8 @@ async function handleHttp(req, res) {
       const file = sid ? await findSessionFile(sid).catch(() => null) : null;
       // ?max=N: only about the newest N characters (the reader's first load); `partial` says older text exists
       const max = tailChars(url.searchParams.get('max'));
-      if (file) { const text = await readConversation(file, max ? { maxChars: max } : {}); if (text) return json(res, 200, { session, text, hash: shortHash(text), source: 'session-file', ...(max ? { partial: text.length >= max } : {}) }); }
-      const lines = plainLines(await capturePane(session));
+      if (file) { const text = await transcriptShared.get(`${session}|${max || 0}`, () => readConversation(file, max ? { maxChars: max } : {})); if (text) return json(res, 200, { session, text, hash: shortHash(text), source: 'session-file', ...(max ? { partial: text.length >= max } : {}) }); }
+      const lines = plainLines(await capturePaneShared(session));
       const text = transcriptOf(lines, bodyEnd(lines));
       return json(res, 200, { session, text, hash: shortHash(text), source: 'pane' });
     } catch {
@@ -2686,7 +2693,7 @@ async function handleHttp(req, res) {
     if (remote.owns(session)) reply = remote.lastText(session);   // a Mac session: its last stop is the reply
     else if (!t) {
       try {
-        const lines = plainLines(await capturePane(session));
+        const lines = plainLines(await capturePaneShared(session));
         reply = replyOf(lines, bodyEnd(lines));
       } catch {
         return json(res, 404, { ok: false, error: 'no such session' });
@@ -2730,7 +2737,7 @@ async function handleHttp(req, res) {
     const session = decodeURIComponent(p.slice('/api/snapshot/'.length));
     let snap = lastSnapshots.get(session);
     if (!snap) {
-      try { snap = { pane: await capturePane(session) }; } catch { snap = { pane: '' }; }
+      try { snap = { pane: await capturePaneShared(session) }; } catch { snap = { pane: '' }; }
     }
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ session, pane: snap.pane, cols: snap.cols, rows: snap.rows }));
