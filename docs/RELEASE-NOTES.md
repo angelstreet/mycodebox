@@ -17,6 +17,8 @@ what changed and why it matters, ending with `· area: <area>`.
 ## Unreleased
 
 
+- **A resumed session no longer shows under Parked (owner 2026-11-25: cockpit)** — the "over the limit" part of Parked lists LIVE sessions to park, and it listed up to 3 more than the number over the limit, including the pinned manager and a session resumed a minute ago; it now shows only the idlest ones (as many as are over the limit), none idle under 10 min and none pinned · area: dashboard
+
 - **Opening a session costs the server fewer tmux captures and transcript reads (owner 2026-11-25: 3 to 5 s on a click)** — the reads a click makes (`/api/reply` and `/api/transcript` fallbacks, `/api/snapshot`, the conversation tail) are shared per session for 1.5 s (`PANE_SHARE_MS`, single flight: ten clicks make one capture, a send forgets the session's copy), and every `tmux capture-pane` of the server runs at most 4 at a time (`PANE_CAPTURES`), the tick's own captures included; the poll tick itself still captures fresh (`pane-cache.js`, `server.js`). Measured on the live server (2.6 GB resident): each child process the server starts blocks its one thread for ~40 ms (fork of the big process), 7.3 s of 8.2 s of main-thread time in a profile, which is why replies stall under load · area: server
 
 - **The X on a Parked row works** — the request went out without a JSON content-type and the server answered 400 (`content-type must be application/json`), found by probing the live route after the deploy; the button now sends `{}` as JSON · area: dashboard
