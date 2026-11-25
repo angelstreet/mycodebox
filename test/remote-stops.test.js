@@ -297,6 +297,8 @@ test('drop: Park on a mac: row removes it from the dashboard rows (it has no tmu
   const r = await post({ session_name: 'to-remove' });
   const NM = r.body.session;
   assert.ok(remote.statusRows()[NM] && remote.names().includes(NM));
+  const ar = remote.archiveRows().find((x) => x.name === NM);   // archive-sync.js reads the title key and the last stop of each row
+  assert.equal(ar.titleKey, 'to-remove'); assert.ok(ar.lastSeen > 0);
   assert.equal(remote.drop(NM), true);
   assert.equal(remote.statusRows()[NM], undefined); assert.ok(!remote.names().includes(NM)); assert.equal(remote.owns(NM), false);
   assert.equal(remote.drop(NM), false);

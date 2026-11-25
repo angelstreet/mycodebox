@@ -1618,7 +1618,17 @@ No ghosty tick sends `/exit` or `/quit` or kills a tmux session on its own. This
 returns `close:false`, `tick()` is a no-op, `server.js` does not start it and `manager.json` `workerAutoClose` is ignored
 (bug-9e811bf0: it typed `/exit` into a session the owner was following). `GET /api/worker-auto-close` stays and reports mode `off`.
 `parking.js` closes only on the explicit `POST /api/sessions/:name/park`; the one automatic path is `autoParkArchived`
-(a session the owner archived in the Claude app), switch `manager.json` `autoParkArchived:false`. `scripts/manager-fresh.sh` only touches the `manager` session.
+(a session the owner archived in the Claude app), switch `manager.json` `autoParkArchived:false`.
+
+### Archived in the Claude app (owner, 2026-11-25)
+
+Archiving is the owner's own close, so ghosty mirrors it and nothing else ([task doc](tasks/TASK-mac-archive-sync.md)). Signal: the
+Claude sessions API (`archive-sync.js`, `archiveSyncTick` every 60 s over every account of `claude-accounts.json`, the account's OAuth
+access token read in memory for the GET only, never stored, logged or refreshed) and, for codebox panes, the 4090 transcript line.
+Only `status: archived` acts: a codebox pane is parked through the usual checks (idle, no lease, no running job; retried every 30 s,
+refusal announced once), a `mac:` row is removed (id from its Remote Control URL, else every same-titled session archived and no stop
+after the archive + 60 s). Idle, done, disconnected, usage limit or a session missing from the list never act. Journal
+`<state>/archive-sync.jsonl`, feed tag `auto-park`. Switch: `manager.json` `archiveSync:false` (API poll) / `autoParkArchived:false` (all). `scripts/manager-fresh.sh` only touches the `manager` session.
 
 ## Done with leftovers (owner, 2026-10-28)
 

@@ -31,6 +31,8 @@ const MARGIN_MS = 5000;         // the countdown ends this long before the hook'
 export const HOOK_LOST = 'the Mac hook stopped waiting before the answer';
 const clean = (s) => String(s).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '');
 const slug = (s) => String(s).trim().replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'session';
+// the title part of a `mac:` row name; archive-sync.js compares it with the Claude app's session title
+export const titleSlug = (t) => { const n = slugName(t, ''); return n ? slug(n) : ''; };
 const tms = (v) => { const t = Date.parse(v); return Number.isFinite(t) ? t : null; };
 
 // -> { ok: true, v } | { ok: false, error }. Everything bounded; nothing here is trusted.
@@ -173,7 +175,7 @@ export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goa
     let s = sessions.get(name);
     const first = !s;
     if (!s) { s = { name, machine: v.machine, project: v.project, sessionId: v.session_id, client: client.name, open: null, last: null, lastSendAt: null, lastSendText: null }; sessions.set(name, s); }
-    Object.assign(s, { project: v.project, lastSeen: t, client: client.name, rcUrl: v.remote_control_url || null, cwd: v.cwd || null });
+    Object.assign(s, { project: v.project, lastSeen: t, client: client.name, rcUrl: v.remote_control_url || null, cwd: v.cwd || null, titleKey: v.session_name ? titleSlug(v.session_name) : null });
     // Only the deploy topic is evaluated for a Mac session (it reads origin); merge and push escalate in manager.js (remote block). A project without a
     // configured local checkout gets a path that does not exist, so every evaluation finds no repository and escalates.
     if (v.first_prompt && goals) { try { goals.capture(name, v.first_prompt, 'mac-first-prompt'); } catch { /* best effort */ } }
@@ -390,5 +392,7 @@ export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goa
     sessions.delete(name); manager.forget(name);
     return !!s;
   }
-  return { drop, handle, deliver, deliverKey, resolveFor, paneText, lastText, owns: (n) => String(n).startsWith(manager.REMOTE_PREFIX) && sessions.has(n), names, statusRows, config, _sessions: sessions };
+  // rows for archive-sync.js: a row is removed when the Claude app archived its session
+  const archiveRows = () => [...sessions.values()].map((s) => ({ name: s.name, titleKey: s.titleKey || null, rcUrl: s.rcUrl || null, lastSeen: s.lastSeen }));
+  return { drop, archiveRows, handle, deliver, deliverKey, resolveFor, paneText, lastText, owns: (n) => String(n).startsWith(manager.REMOTE_PREFIX) && sessions.has(n), names, statusRows, config, _sessions: sessions };
 }

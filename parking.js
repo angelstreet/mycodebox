@@ -480,15 +480,19 @@ export function createParking({ file, tmux, exitWaitMs = 30000, pollMs = 500, sl
 }
 // Auto-park sessions archived in the Claude app (Remote Control). One pass over the live panes:
 //   panes: [{ name, claude: {pid, info} }]; tailOf(info) -> transcript tail text; factsOf(name); park(name); notice({session, parked, reasons}).
-// Archived = no bridge in Claude's session file AND the 4090 line in the transcript (rcArchivedInTail). A session that is
-// not parkable yet (turn running, lease held) is retried on the next pass; its refusal is announced once per reason set.
-export async function autoParkArchived({ panes, tailOf, factsOf, park, checks, notice, seen, skip = () => false }) {
+// Archived = the Claude sessions API says `archived` for its bridge id (cloudArchived(info), archive-sync.js), OR no bridge in Claude's
+// session file AND the 4090 line in the transcript (rcArchivedInTail). A session that is not parkable yet (turn running, lease held)
+// is retried on the next pass; its refusal is announced once per reason set.
+export async function autoParkArchived({ panes, tailOf, factsOf, park, checks, notice, seen, skip = () => false, cloudArchived = () => false }) {
   const out = [];
   for (const { name, claude } of panes) {
-    if (!claude || claude.info.bridgeSessionId || skip(name)) continue;
-    let tail = '';
-    try { tail = await tailOf(claude.info); } catch { continue; }
-    if (!rcArchivedInTail(tail)) continue;
+    if (!claude || skip(name)) continue;
+    if (!(claude.info.bridgeSessionId && cloudArchived(claude.info))) {
+      if (claude.info.bridgeSessionId) continue;
+      let tail = '';
+      try { tail = await tailOf(claude.info); } catch { continue; }
+      if (!rcArchivedInTail(tail)) continue;
+    }
     const facts = await factsOf(name);
     const reasons = checks(facts);
     if (reasons.length) {
