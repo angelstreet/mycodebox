@@ -1839,6 +1839,11 @@ whose reply approves the plan around the question (round 9 `approvedAction`).
 - **Mockup-first** (`mockups.js`; `mockupFirst`, `mockupWindowMin` default 10): `POST /api/mockups` (loopback + reporter token) records a feed item
   `kind: mockup` with a link and a deadline; a stop asking to show the mockup before building is answered "post it to the feed and build"; the owner's
   "Object" (notification button or `POST /api/mockups/<id>/object`) sends the session "The owner objects to the mockup: wait for their notes."
+  **Mockup lint** (`mockup-lint.js`, manager.json `mockupLint` `live` default | `dry` | `off`, owner 2026-11-25): before a mockup reaches the feed its HTML
+  (read from `/files/<path>` or a loopback http url; other urls are skipped and logged) is checked for sentences over 12 words, text blocks over 140
+  characters, a string of 3+ words shown twice, helper text (class / role / id hint, help, note, caption, description; "Note:", "Tip:", "This shows",
+  "This page", "Here you"), `th` over 2 words or 18 characters, and over 250 visible words. Tooltips (`title`, tooltip elements), scripts and styles are
+  ignored. A failing mockup is `422 { error: 'mockup-lint', defects }`, not posted, and the session is sent up to 8 defect lines to fix and re-post; `dry` only logs.
 - **Waiting on its own job** (`job-refs.js`, `own-jobs.js`): a STATUS `blocked` / `waiting` that names a pid, a log file, a run id or a deploy id is
   case `own_job_wait`, never shown as needs-you; the job is watched (deploy state, `/proc/<pid>` or the pane's process tree, a log file's mtime)
   and when it ends the session gets "your <job> finished at <time>, continue". A detached job (`nohup`, `setsid`, `disown`, `&`) is flagged in the feed.
