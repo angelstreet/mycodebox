@@ -66,5 +66,8 @@ the transcript; the Mac copy picks it up at the next hook install, the title mat
   (Bluetooth remote panel button history, Tooltip helper and message deletion, Zap report image/401 errors, Cockpit table layout scrolling)
   and kept `Testing-coverage-Task-208` (active). The restart itself cleared those in-memory rows; the next real removal is journaled
   in `<state>/archive-sync.jsonl`.
+- Mac rows, live (21:31 UTC): the owner archived "Prompt audit" (two sessions with that title, both `archived` at 21:31:04);
+  the next tick removed `mac:Prompt-audit-e980f8` and `mac:Prompt-audit-a934a0` at 21:31:52 (48 s, `by: title`, journaled in
+  `archive-sync.jsonl`), both rows gone from `/api/sessions`.
 - Manual routes, headless Playwright on http://127.0.0.1:7777: Park on `mac:Bluetooth-remote-panel-button-history-a55888` → POST 200,
   row gone, toast "parked"; X on Parked `zz-archtest-a` → `forget-parked` 200, toast "zz-archtest-a removed from Parked", 580 → 579.
