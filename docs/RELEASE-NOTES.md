@@ -3,6 +3,8 @@
 The release note of this repo (owner 2026-11-13). Every merged code change (not docs-only) adds one entry at the top of
 `## Unreleased`; the done-check reads the merged diff for this file (REFERENCE "Closing review"). Entry form: one line,
 
+- **Open tabs pick up the play-on-tap change, and a late render stays silent** — a tab reloads only when `sw.js` changes, so tabs opened earlier kept rendering every reply; the shell cache version is bumped. Audio no longer starts if you left the reply while it rendered · area: voice
+
 - **Read-aloud renders only when you tap play** — every reply the reader showed started a piper render (90 in 24 h) whether or not it was heard. The first tap now renders, then plays; on a browser that refuses the late start (iPhone), tap play again · area: voice
 
 - **The read-aloud play and speed buttons work** — since 2026-10-08 the chip returned right after a successful render, before attaching their click listeners, so play did nothing · area: voice
