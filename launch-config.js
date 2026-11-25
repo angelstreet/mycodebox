@@ -45,5 +45,8 @@ export function launchWarnings(env = process.env) {
 // The manager runs on Sonnet (owner 2026-10-21); MANAGER_MODEL overrides (a model alias or id: letters, digits, . _ - [ ] only).
 export function managerCommand(env = process.env) {
   const model = /^[\w.\-\[\]]+$/.test(env.MANAGER_MODEL || '') ? env.MANAGER_MODEL : 'sonnet';
-  return `${launchConfig(env).commands.claude} --model ${model} --remote-control manager -n manager`;
+  // MANAGER_FRESH_SESSION: manager-fresh.sh run against another tmux session (a throw-away one when the restart path is
+  // verified) must not register a second remote control called "manager".
+  const name = /^[\w.\-]+$/.test(env.MANAGER_FRESH_SESSION || '') ? env.MANAGER_FRESH_SESSION : 'manager';
+  return `${launchConfig(env).commands.claude} --model ${model} --remote-control ${name} -n ${name}`;
 }

@@ -6,6 +6,7 @@
 // request (lane): { id, repo, branch, target, session, deployScope, deployed { id, version, env, scope }, state, sha, reason, tail,
 //                    endedAt (ISO, on final), createdAt/startedAt/updatedAt (ISO), live { step, tail } (while running) };
 // the session side reads different names — `normRequest(r)` maps the lane shape onto the names below.
+import { pendingText, liveAfterSkipText } from './deploy-live.js';
 export const FINAL_STATES = ['merged', 'deployed', 'returned', 'merged_ci_red', 'merged_ci_superseded', 'deploy_failed', 'returned_after_deploy', 'cancelled'];
 export const isFinal = (state) => FINAL_STATES.includes(state);
 
@@ -73,6 +74,10 @@ export function timeline(r) {
 
 // a UI review answer is the table the session fixes from: more lines than a test tail
 const UI_LINES = { lines: 18, chars: 2600 };
+// Live truth (deploy-live.js, owner 2026-11-25): a deployed request whose host restart was deferred is NOT live. The notify path attaches `liveTruth`.
+const liveSuffix = (n, id) => (n.liveTruth?.state === 'pending'
+  ? ` — ${pendingText(n.liveTruth)}. Do not say "deployed" or "live" yet: end on STATUS: waiting: integration ${id} and you are woken when it is live`
+  : n.liveTruth?.state === 'live' && n.liveTruth.skipped?.length ? ` — ${liveAfterSkipText(n.liveTruth)}` : '');
 
 // -> the line for the session (and the own-job wake), or null when the state is not final
 export function integrationText(r) {
@@ -92,7 +97,7 @@ export function integrationText(r) {
       return `Integration ${id}: merged ${where(n)}.${sup}`;
     case 'deployed': if (sd) return `Integration ${id}: merged ${where(n)}, deployed live ghosty at ${sha12(sd.newSha)} (was ${sha12(sd.prevSha)})${sd.note ? `, ${one(sd.note)}` : ''}.${rollback}${sup}`;
       if (none) return `Integration ${id}: ${none}; redeployed ${one(n.target) || 'the target'} as ${one(n.version) || 'the same version'} to ${one(n.env) || 'the environment'}${scopeOf(n) ? ` (scope ${scopeOf(n)})` : ''}, with no new code of yours.${sup}`;
-      return `Integration ${id}: merged ${where(n)}, deployed ${one(n.version) || 'the new version'} to ${one(n.env) || 'the environment'}${scopeOf(n) ? ` (scope ${scopeOf(n)})` : ''}.${sup}`;
+      return `Integration ${id}: merged ${where(n)}, deployed ${one(n.version) || 'the new version'} to ${one(n.env) || 'the environment'}${scopeOf(n) ? ` (scope ${scopeOf(n)})` : ''}${liveSuffix(n, id)}.${sup}`;
     case 'returned_after_deploy':
       return `Integration ${id}: merged ${where(n)} and deployed, then returned to you: ${reason.replace(/[.\s]+$/, '')}. The merge stays live: fix it on a new commit and run integrate request again.\n${tailLines(n.tail, UI_LINES)}`;
     case 'returned': {
@@ -112,7 +117,7 @@ export function integrationNotice(r) {
   const n = normRequest(r);
   const id = one(n.id), what = `${one(n.branch) || '?'} -> ${one(n.target) || '?'}`;
   const title = {
-    merged: `Integration ${id} merged: ${what}`, deployed: `Integration ${id} deployed: ${what}`, returned: `Integration ${id} returned: ${what}`,
+    merged: `Integration ${id} merged: ${what}`, deployed: `Integration ${id} deployed${n.liveTruth?.state === 'pending' ? ', NOT live yet' : ''}: ${what}`, returned: `Integration ${id} returned: ${what}`,
     merged_ci_red: `Integration ${id} merged, CI red: ${what}`, merged_ci_superseded: `Integration ${id} merged, CI superseded: ${what}`, deploy_failed: `Integration ${id} merged, deploy failed: ${what}`, cancelled: `Integration ${id} cancelled: ${what}`,
     returned_after_deploy: `Integration ${id} returned after deploy (UI review): ${what}`,
   }[n.state] || `Integration ${id}: ${n.state}`;
@@ -132,11 +137,12 @@ export const SESSION_OWNED_STATES = ['returned', 'returned_after_deploy', 'merge
 // defer: (session, request, text) => bool; keeps the wake for the next stop of a session that is not stopped / not listed now (pending-wakes.js).
 //   When it takes the wake, afterSend runs at once (the own-job watch is not needed: the pending wake owns the delivery).
 // quiet: the server decides which states are quiet (manager.json integrationDigest, default on).
-export function createIntegrationNotify({ status = () => undefined, isRemote = () => false, canSend = () => false, send = async () => {}, feed = () => {}, digest = () => {}, quiet = () => false, managerEvent = async () => {}, onMerged = () => {}, afterSend = () => {}, defer = null, log = () => {} } = {}) {
+export function createIntegrationNotify({ liveTruth = async () => null, status = () => undefined, isRemote = () => false, canSend = () => false, send = async () => {}, feed = () => {}, digest = () => {}, quiet = () => false, managerEvent = async () => {}, onMerged = () => {}, afterSend = () => {}, defer = null, log = () => {} } = {}) {
   const done = new Set();   // `${id}:${state}`: a transition is told once per process
   return async function notify(request, event = {}) {
     try {
       if (!request || !isFinal(request.state)) return { told: false };
+      if (request.state === 'deployed') { try { const t = await liveTruth(request); if (t) request = { ...request, liveTruth: t }; } catch { /* no statement: the plain text */ } }
       const key = `${request.id}:${request.state}`;
       if (done.has(key)) return { told: false, dup: true };
       done.add(key);

@@ -62,6 +62,13 @@ say "manager alive, state=$st lastTurn=${turnAt:-0} lastSend=${lastSendAt:-0}"
 # Never interrupt a manager that is working: it may be mid-turn with a background waiter already armed.
 [ "$st" = working ] && exit 0
 
+# Context cap (manager-context-cap.js): a context over the cap is restarted fresh through manager-fresh.sh, only while the
+# manager is idle and at most twice a day. A manager it just restarted needs no nudge.
+if [ "$DRY" = 1 ]; then capOut=$(node "$SCRIPT_DIR/manager-context-cap.js" --dry-run 2>&1) || true
+else capOut=$(node "$SCRIPT_DIR/manager-context-cap.js" 2>&1) || true; fi
+[ -n "$capOut" ] && echo "$capOut"
+case "$capOut" in *"manager-context-cap: restarted "*) exit 0;; esac
+
 now=$(date +%s%3N)
 last=$(( turnAt > lastSendAt ? turnAt : lastSendAt ))
 wakeAt=$(lastWake); case "$wakeAt" in ''|*[!0-9]*) wakeAt=0;; esac   # never let a garbage wake time into the arithmetic

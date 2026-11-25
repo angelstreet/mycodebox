@@ -468,12 +468,28 @@ by kind, the same for the rule default). Switch: `manager.json` `wakeShadow` (de
 **Per-wake log.** The manager's Claude Code transcript is the only complete record of its wakes, so `manager-wakes.js`
 splits it into wakes (a wake starts at an owner prompt, a task-notification (Monitor event / expiry, background task,
 subagent done), a scheduled sweep or a cross-session message, and ends before the next) with trigger, tool counts,
-alerts / sends / workers / file writes, the first line of its final text, tokens and usd (same price table as the usage
-ledger). `node scripts/manager-wakes.js [--day YYYY-MM-DD] [--json]` prints the table and a daily summary (wakes and usd per
+alerts / sends / workers / file writes, the first line of its final text, tokens, `calls` (model calls), `ctxMax` (the
+largest context of one call: input + cache read + cache written) and usd (same price table as the usage ledger). `node scripts/manager-wakes.js [--day YYYY-MM-DD] [--json]` prints the table and a daily summary (wakes and usd per
 trigger, top 5 most expensive, share of wakes that did nothing) and rewrites `<state dir>/manager-wakes.jsonl` for that
 day. The transcript is found through the usage ledger: Claude session ids whose rows carry a label from `managerSessions`
 -> `~/.claude/projects/<project dir>/<id>.jsonl`. `GET /api/manager/wakes?day=` (UTC day, cached 60 s) feeds the "Wakes
 today" block of the AI manager panel.
+
+**Context cap (2026-11-25).** The nightly restart alone let the manager's context reach 887k in one day, and calls over
+400k were half of its cost. `scripts/manager-context-cap.js` (token-free, run by `scripts/manager-watch.sh` every 5 min
+after its own checks) reads the last model call of the manager's current transcript
+(`~/.claude/projects/*/<claudeSessionId>.jsonl`, the id from `/api/sessions`) and, over the cap, restarts the manager
+through the same path as the nightly restart: `scripts/manager-fresh.sh` (idle with no draft, `/exit`, relaunch, the kickoff
+that reads the open items from `manager-actions.jsonl` / `manager-asks.jsonl`, with the reason named in it). Rules: it
+fires only when the session is `done` / `idle` / `waiting` with no draft, never while it works (`manager-fresh.sh` checks
+again with one try, `MANAGER_FRESH_WAIT_TRIES=1`, and exits 3 with nothing touched when the manager got busy); at most 2
+per UTC day, a failed attempt counted (`<state>/manager-context-cap.json`); every firing, and the first refused third
+restart of a day, writes a decision line to `manager-actions.jsonl` (`kind: "decision"`, `by: "context-cap"`). A model
+call older than the last fresh restart of any kind (`<state>/manager-fresh.last`, stamped by `manager-fresh.sh`) never
+fires. Settings in `manager.json`: `contextCap` tokens (default 300000; `0` or `false` = off), `contextCapMaxPerDay`
+(default 2, never more). `--dry-run` prints the decision; `--session <tmux name> --cap <tokens>` with
+`MANAGER_FRESH_KICK` verifies the path on a throw-away session (its own state file, its own remote-control name), never
+on the manager. Tests: `test/manager-cost-cap.test.js`.
 
 **Manager failover (standby `mm-manager`).** `scripts/orchestrator-failover` (name kept) runs as `systemd/ghosty-manager-failover.service`
 (`Type=simple`, `Restart=on-failure`). The repo does not track the unit file because the integration lane refuses unit paths; create
@@ -577,6 +593,18 @@ the full report to `~/.local/state/ghosty/daily-reports/<date>.md` (kept `keepDa
 key via `daily-checks-state.json` (same text inside the window is not repeated; a key that clears is forgotten). Flags:
 `--dry-run` (report only, no event, no state), `--only <id>`. Keep repository names, term lists and customer names in the
 private config and check scripts, never in this repo.
+
+**Manager cost section of the daily report (2026-11-25).** Built into the runner (`manager-cost.js`, pure; it reads the
+manager's own wakes through `computeWakes`, no AI call): the last 24 h against the daily average of the 7 days before, for
+wakes, cost per wake (API-equivalent), median and p90 context, and idle share. A wake re-reads the whole conversation, so
+cost = wakes x context: the week this was written cache reads were 89 % of the manager's cost and cache misses under 1 %.
+One finding at most, `daily:manager-cost` (priority `default`, debounced like the others), when the last 24 h had at least
+`minWakes` 20 wakes and crossed a threshold: p90 context over `p90CtxMax` 400000, idle share over `idleShareMax` 0.7, cost
+per wake over `costPerWakeRatio` 1.5 x the 7-day average, wakes over `wakesRatio` 2 x the average. Switch and thresholds:
+`daily-checks.json` `"managerCost": false`, or an object with any of those keys. Idle (no alert, send, worker or file
+write) overstates waste: a wake that only answers the owner in text counts too. The section measures cost, not quality:
+quality becomes real only when the owner taps "wrong" on a bad manager action in the manager panel (regret), and the report
+says so. Tests: `test/manager-cost-cap.test.js`.
 
 **Harness health check (`scripts/harness-health-check.js`, owner asked 2026-10-21).** The owner only sees a harness
 regression when he asks for it, so this daily check measures the harness itself over the last 24 h and writes the numbers
@@ -1634,7 +1662,7 @@ that is deep in a long file.
 
 A session is closed only by the owner or by the agent that spawned it (`DELETE /api/sessions/<s>?confirm=<s>`); the manager closes one only
 when the owner asks for that session (owner, 2026-11-01). One rule text: [CONTRACT "Who may do what"](CONTRACT.md#who-may-do-what-one-rule-text).
-No ghosty tick sends `/exit` or `/quit` or kills a tmux session on its own. This replaces "Worker auto-close" (owner,
+No ghosty tick sends `/exit` or `/quit` or kills a tmux session on its own. (The manager's own fresh restart, nightly or by the context cap, is a restart of the same tmux session, not a close: `/exit` then relaunch, see "Context cap".) This replaces "Worker auto-close" (owner,
 2026-10-18, a done + idle + git-clean worker closed after `workerIdleMin`): `worker-auto-close.js` `shouldClose()` always
 returns `close:false`, `tick()` is a no-op, `server.js` does not start it and `manager.json` `workerAutoClose` is ignored
 (bug-9e811bf0: it typed `/exit` into a session the owner was following). `GET /api/worker-auto-close` stays and reports mode `off`.
@@ -2354,3 +2382,20 @@ Two sessions changing the same file cost hours on 2026-10-28 (script-naming, mig
 ## No workers by default (owner, 2026-11-13)
 
 A session started by the owner or the dashboard does all the work itself; it starts no workers (cbsession, other sessions, V2 tasks) and hands nothing to peers unless its brief or the owner says `workers: allowed`. The manager and the workers it starts for the owner are exempt. `scripts/cbsession` writes the rule into every prompt (`**No workers**`, or `**Workers**` with `-K`), exports `CBSESSION_PARENT=<name>` (and `CBSESSION_WORKERS_OK=1` with `-K`) in the launch file, and refuses (exit 2) a start whose caller has `CBSESSION_PARENT` without `CBSESSION_WORKERS_OK`; `-A` automation (lane, bug-drain, ci-watch) and callers outside cbsession sessions are not checked. Light enforcement: a session can still bypass it by editing its env, the rule text is the primary control.
+
+## Live truth of a deploy (owner, 2026-11-25)
+
+"Deployed" is not "live": a host deploy run with `--skip-leased` syncs a leased host's code and defers its vpt-host restart to a catch-up deploy, so that host
+runs old code until the lease ends (117 of 273 deploy runs 2026-11-24..25 ended `SKIPPED: RUNNING OLD CODE`). `deploy-live.js` (header has the rules):
+
+- **Record**: `deploy-runner.js` writes `<state>/deploys/<id>.skipped.json` (`{ env, ref, hosts, at }`) for the deploy and each request it closed, BEFORE `deploy finish`.
+- **Truth** (`liveTruth`, pure): a skipped host is waiting while an active (queued / running) catch-up deploy of the same env lists it (the registry's `old_code`), or for 90 s after the record
+  (the catch-up is queued just after the finish). No skipped host waiting = `live`; else `pending` with `{ host, holder, until, catchUp, running }` per host (holder = the catch-up's `blocking` lease, else a lease on the host or one of its
+  devices). No registry answer = `unknown`: a statement nobody acts on (an outage never blocks a session).
+- **Told**: `integration-notify.js` attaches the truth to a `deployed` request (not a ghosty self-deploy): the session line reads `... NOT live yet on vpt-pi1: restart deferred (lease X, until ~HH:MM UTC). Do not say "deployed" or "live"
+  yet: end on STATUS: waiting: integration <id>`; the feed title says "deployed, NOT live yet"; a pending request keeps its own-job watch (afterSend does not forget it).
+- **Read**: `GET /api/integration/requests/:id` adds `liveTruth`, `live`, `notLiveText`, `pendingHosts`; `GET /api/integration/live` lists the pending integrations; `scripts/manager-status-scan.sh` prints `deployed-not-live: ...`.
+- **Wake**: own-jobs: `STATUS: waiting: integration <id>` / `deploy <id>` stays `running` while pending and ends (wake text "now live on every host: the deferred restart of <hosts> ran") when the catch-up is gone.
+- **Done-check (P)**: a closing text that claims deployed / live / in prod (`claimsLive`, not a negation, not a `waiting: deploy|integration` line) for a session's pending integration gets one push per set of pending integrations
+  (`claimMessage`: "not live on <hosts> yet; end on STATUS: waiting: deploy <id>"). Dep `pendingLiveOf(session)`.
+- Limits: a catch-up that the runner never queued (cap of 3 reached, "not requested") leaves the host looking live here; the cap already raises its own manager item. Tests: `test/deploy-live.test.js`.

@@ -9,6 +9,7 @@
 //   POST /external-results/:id/ack    manager only: the result of an external-origin request was relayed (external-result.js)
 //   GET  /client-scripts                 { version, <name>.sha256 .. } of scripts/integrate + scripts/found-bug (any authorised client; `integrate self-update`)
 //   GET  /client-scripts/:name           the script itself (text/plain)
+//   GET  /live                          integrations deployed but NOT live (host restart deferred): { ok, pending: [{ id, deployId, branch, text, hosts }] } (deploy-live.js)
 //   GET  /repos                          configured repositories + queue depth                  -> { ok, repos: [...] }
 // `?format=kv` answers key=value lines (+ `---` and the output tail) for the POSIX-sh CLI, which has no JSON parser.
 import fs from 'node:fs';
@@ -16,6 +17,7 @@ import { join } from 'node:path';
 import { DEFAULT_CIDRS, parseCidrs, addrAllowed, readClients, clientOf, readBody } from './lease-routes.js';
 import { FINAL } from './integration-lane.js';
 import { integrationText, timeline } from './integration-notify.js';
+import { pendingText } from './deploy-live.js';
 import * as clientScripts from './client-scripts.js';
 
 export const PREFIX = '/api/integration';
@@ -36,7 +38,7 @@ export const summary = (r) => ({ id: r.id, repo: r.repo, branch: r.branch, targe
 const one = (v) => String(v ?? '').replace(/[\r\n]+/g, ' ');
 export const kv = (o, tail = '') => `${Object.entries(o).map(([k, v]) => `${k}=${one(v)}`).join('\n')}\n${tail ? `---\n${tail}\n` : ''}`;
 
-export function createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk, sessionCwd = async () => null, sessionKnown = async () => true, remoteResolve = () => null, externalResult = null, scriptsDir = undefined, cidrs = process.env.LEASE_ALLOW_CIDRS, peerSession = null } = {}) {
+export function createIntegrationRoutes({ deployLive = null, lane, stateDir, isLoopback, reporterOk, sessionCwd = async () => null, sessionKnown = async () => true, remoteResolve = () => null, externalResult = null, scriptsDir = undefined, cidrs = process.env.LEASE_ALLOW_CIDRS, peerSession = null } = {}) {
   const allow = parseCidrs([...DEFAULT_CIDRS, ...String(cidrs || '').split(',')].join(','));
   const clientsFile = join(stateDir, 'leases', 'clients.json');
   let cache = { key: '', clients: [] };
@@ -72,7 +74,7 @@ export function createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk
       if (!c.integrate) { send(res, 403, { ok: false, error: 'this client may not use the integration lane (lease-token.js add <name> --integrate)' }, fmt); return null; }
       return { by: `client:${c.name}`, client: c.name, manager: c.manager === true, loopback: isLoopback(addr) };
     }
-    const dashOp = (req.method === 'GET' && /^\/(requests|repos)/.test(sub)) || (req.method === 'POST' && /^\/requests\/[\w-]{1,64}\/cancel$/.test(sub));
+    const dashOp = (req.method === 'GET' && /^\/(requests|repos|live)/.test(sub)) || (req.method === 'POST' && /^\/requests\/[\w-]{1,64}\/cancel$/.test(sub));
     if (!req.headers['x-ghosty-reporter-token'] && dashOp) {
       const o = originOf(req);
       if (o === 'cross') { send(res, 403, { ok: false, error: 'cross-origin request refused' }, fmt); return null; }
@@ -170,7 +172,9 @@ export function createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk
           r = await lane.wait(m[1], t * 1000);
         } else r = lane.get(m[1]);
         if (!r) { fail('E_NOT_FOUND', 'no such request'); return true; }
-        send(res, 200, { ok: true, request: r, ...summary(r), flat: (({ times: _t, ...f }) => f)(summary(r)), tail: r.tail || '' }, fmt);
+        const lt = deployLive ? await deployLive.forRequest(r).catch(() => null) : null;   // live truth: a deferred host restart is not live
+        const live = lt ? { live: lt.state, ...(lt.state === 'pending' ? { notLiveText: pendingText(lt), pendingHosts: lt.hosts.map((h) => h.host).join(',') } : {}) } : {};
+        send(res, 200, { ok: true, request: r, ...(lt ? { liveTruth: lt } : {}), ...summary(r), ...live, flat: { ...(({ times: _t, ...f }) => f)(summary(r)), ...live }, tail: r.tail || '' }, fmt);
       } else if (req.method === 'POST' && (m = /^\/requests\/([\w-]{1,64})\/cancel$/.exec(sub))) {
         const r = lane.cancel(m[1], { by: who.by });
         send(res, 200, { ok: true, request: r, ...summary(r), flat: summary(r) }, fmt);
@@ -179,6 +183,9 @@ export function createIntegrationRoutes({ lane, stateDir, isLoopback, reporterOk
         const ok = externalResult ? externalResult.ack(m[1]) : false;
         if (!ok) { fail('E_NOT_FOUND', 'no such external result'); return true; }
         send(res, 200, { ok: true, flat: { id: m[1], acked: 1 } }, fmt);
+      } else if (req.method === 'GET' && sub === '/live') {
+        const pending = deployLive ? await deployLive.pendingOf(lane.list({ state: 'deployed', limit: 60 })).catch(() => []) : [];
+        send(res, 200, { ok: true, pending: pending.map((p) => ({ id: p.id, deployId: p.deployId, branch: p.branch, text: pendingText(p.truth), hosts: p.truth.hosts })), flat: { count: pending.length }, tail: pending.map((p) => `${p.id} ${pendingText(p.truth)}`).join('\n') }, fmt);
       } else if (req.method === 'GET' && sub === '/repos') {
         const repos = lane.repoKeys().map((key) => ({ key, queued: lane.list({ repo: key, state: 'queued', limit: 500 }).length, running: lane.list({ repo: key, state: 'running' }).length }));
         send(res, 200, { ok: true, repos }, fmt);

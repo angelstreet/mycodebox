@@ -49,7 +49,7 @@ The lease service and its client run on the registry host from copies, not from 
 4. Write `<LEASE_DIR>/inventory.json` ([format](../LEASE-INVENTORY.md)); start with the two web hosts as group `web`.
 5. Check: `vpt-lease inventory node1-vpt`, `vpt-lease claim node1-vpt --any web --agent codebox:check --kind host --ttl 1` then
    release it.
-6. Render the deploy skill: `node scripts/render-deploy-skill.js --in ~/.claude/skills/deploy/SKILL.md --out <tmp>` and move it
+6. Render the deploy skill: `node scripts/render-deploy-skill.js --in ~/.claude/skills/deploy/references/lease-rules.md --out <tmp>` and move it
    into place.
 
 Rollback: restore the two backups and kill the service pid again (cron restarts the old one). A journal written by the new

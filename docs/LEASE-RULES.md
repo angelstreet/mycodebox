@@ -1,7 +1,7 @@
 # Lease rules
 
-One rule text for every agent and session. The deploy skill gets this text rendered into its lease section
-(`scripts/render-deploy-skill.js`); do not keep a second copy. Design: [docs/v2/LEASES-CENTRAL.md](v2/LEASES-CENTRAL.md).
+One rule text for every agent and session. The deploy skill gets this text rendered into its reference file
+`~/.claude/skills/deploy/references/lease-rules.md` (`scripts/render-deploy-skill.js --in` that file, never the skill's SKILL.md); do not keep a second copy. Design: [docs/v2/LEASES-CENTRAL.md](v2/LEASES-CENTRAL.md).
 
 ## What to claim
 
@@ -25,6 +25,7 @@ or `mac:<name>`.
   A `--shared` hold of `server` (the CI lease guard: "do not restart it") does not conflict with a server-kind host or device lease,
   so a device run never turns CI red (bug-ad68f59e); a non-shared `server` claim (a deploy) still conflicts with both.
 - A routine restart of a vpt-* service on a lab host (`systemctl restart <unit>`) needs that host's lease (`--kind host`) only, never the server or an env-wide lease, and does not wait for the owner.
+- **Which services need a lease** (owner, 2026-11-25): `vpt-host` keeps the strict rule: its restart kills running scripts, so it never goes around a lease and there is no "no test running" bypass; a leased host is synced and its restart is deferred to the catch-up deploy, and the deploy is told as `NOT live yet` until that ran ([REFERENCE](REFERENCE.md#live-truth-of-a-deploy-owner-2026-11-25)). `vpt-stream` is lease-free like vpt-archiver, vpt-monitor-img, vpt-kpi, vpt-monitor-audio, vpt-monitor-subtitle, vpt-avq and vpt-heatmap: `update_core.sh --restart vpt-stream` needs no lease (about 2 s video gap, no script dies), names the lease holder of the host in the log (the registry has no notify command) and checks that every device's `hot/thumbnails/latest.jpg` is fresh (<5 s) afterwards.
 - A frontend change never needs a backend or device lease, and a run on one device never blocks another device.
 - Deploys go through the queue: `vpt-lease deploy request ...`, then `vpt-lease deploy wait ...`. Never run a deploy
   script by hand around the queue.

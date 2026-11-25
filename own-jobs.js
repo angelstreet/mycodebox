@@ -13,6 +13,7 @@ import { tmpdir, homedir } from 'node:os';
 import { sensitivePath } from './merge-policy.js';
 import { jobRefs, hasRef, waitsOnOwnJob, DETACHED_RE } from './job-refs.js';
 import { integrationText, isFinal, normRequest } from './integration-notify.js';
+import { pendingText } from './deploy-live.js';
 import { waitIds, runState } from './wait-ids.js';
 import { forbiddenMatch } from './stall.js';
 export { jobRefs, hasRef, waitsOnOwnJob };
@@ -117,7 +118,7 @@ export const grantText = (ticket, g, hhmmOf) => `harness: your claim ${ticket} w
 const QUEUE_KINDS = new Set(['integration', 'deploy', 'script', 'lease']);
 
 export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', table = async () => ({ children: new Map(), args: new Map() }), agentPid = async () => null,
-  deployState = () => null, integrationState = async () => null, startedAt = async () => new Map(), stillWaiting = () => true, canSend = () => true, scriptRun = async () => null, leaseState = async () => null, idleMs = () => null, staleMin = 20, nudgeGapMin = 30, maxRunMin = 120, send = async () => {}, record = async () => {}, log = () => {}, stableMin = 5, maxAgeH = 12, roots = () => [],
+  liveTruth = async () => null, deployState = () => null, integrationState = async () => null, startedAt = async () => new Map(), stillWaiting = () => true, canSend = () => true, scriptRun = async () => null, leaseState = async () => null, idleMs = () => null, staleMin = 20, nudgeGapMin = 30, maxRunMin = 120, send = async () => {}, record = async () => {}, log = () => {}, stableMin = 5, maxAgeH = 12, roots = () => [],
   // parked-session wake: leaseView: async () => lease view, bugState: async (id) => 'open'|'fixed'|...|null, busy: (session) => live background work,
   // sendParked: (session, text) => Promise (by: harness), parkMode: () => 'off'|'dry'|'live'
   leaseView = async () => null, bugState = async () => null, busy = () => false, sendParked = null, parkMode = () => 'off',
@@ -190,7 +191,10 @@ export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', tabl
       let r = null; try { r = await integrationState(j.id); } catch { /* the lane is unreachable: unknown, try again next tick */ }
       if (!r) return { state: 'unknown', summary: `integration ${j.id}: not found` };
       r = normRequest(r);   // lane fields -> session fields (deployScope -> deploy, endedAt -> finishedAt, ISO -> ms, live.tail -> tail while running)
-      if (isFinal(r.state)) return { state: 'ended', at: Number(r.finishedAt || r.updatedAt) || t, summary: `integration ${j.id} ${r.state}`, text: integrationText(r) };
+      // live truth (deploy-live.js): a deployed request whose host restart is deferred is still running for the waiting session; it ends, with the live line, when the catch-up ran
+      const lt = isFinal(r.state) && r.state === 'deployed' ? await liveTruth({ request: r }).catch(() => null) : null;
+      if (lt?.state === 'pending') return { state: 'running', summary: `integration ${j.id} deployed, ${pendingText(lt)}` };
+      if (isFinal(r.state)) return { state: 'ended', at: Number(r.finishedAt || r.updatedAt) || t, summary: `integration ${j.id} ${r.state}`, text: integrationText(lt ? { ...r, liveTruth: lt } : r) };
       return { state: 'running', summary: `integration ${j.id} is ${r.state}${r.step ? ` (${r.step})` : ''}` };
     }
     if (j.kind === 'script') {
@@ -210,7 +214,9 @@ export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', tabl
     if (j.kind === 'deploy') {
       const d = deployState(j.id);
       if (!d) return { state: 'unknown', summary: `deploy ${j.id}: not in the queue` };
-      if (['done', 'failed', 'cancelled', 'canceled', 'error'].includes(d.state)) return { state: 'ended', at: d.finished || t, summary: `deploy ${j.id} ${d.state}` };
+      const ltd = d.state === 'done' ? await liveTruth({ deployId: j.id }).catch(() => null) : null;
+      if (ltd?.state === 'pending') return { state: 'running', summary: `deploy ${j.id} done, ${pendingText(ltd)}` };
+      if (['done', 'failed', 'cancelled', 'canceled', 'error'].includes(d.state)) return { state: 'ended', at: d.finished || t, summary: `deploy ${j.id} ${d.state}`, ...(ltd?.state === 'live' && ltd.skipped?.length ? { text: `deploy ${j.id} is now live on every host: the deferred restart of ${ltd.skipped.join(', ')} ran, continue` } : {}) };
       return { state: 'running', summary: `deploy ${j.id} is ${d.state}` };
     }
     if (j.kind === 'pid' || j.kind === 'tree') {
@@ -239,7 +245,7 @@ export function createOwnJobs({ now = () => Date.now(), procRoot = '/proc', tabl
   async function depNow(d, session, ctx) {
     const t = now();
     try {
-      if (d.kind === 'integration') { const r0 = await integrationState(d.id); if (!r0) return { state: 'unknown' }; const r = normRequest(r0); return isFinal(r.state) ? { state: 'changed', change: `${d.label} ended (${r.state})` } : { state: 'open', v: r.state }; }
+      if (d.kind === 'integration') { const r0 = await integrationState(d.id); if (!r0) return { state: 'unknown' }; const r = normRequest(r0); if (r.state === 'deployed' && (await liveTruth({ request: r }).catch(() => null))?.state === 'pending') return { state: 'open', v: 'not live' }; return isFinal(r.state) ? { state: 'changed', change: `${d.label} ended (${r.state})` } : { state: 'open', v: r.state }; }
       if (d.kind === 'deploy') { const x = deployState(d.id); if (!x) return { state: 'unknown' }; return ['done', 'failed', 'cancelled', 'canceled', 'error'].includes(x.state) ? { state: 'changed', change: `${d.label} ended (${x.state})` } : { state: 'open', v: x.state }; }
       if (d.kind === 'script') { const r = runState(await scriptRun(d.id), { now: t, maxRunMin }); return r.state === 'ended' ? { state: 'changed', change: `${d.label} ended ${r.status}` } : { state: r.state === 'running' ? 'open' : 'unknown' }; }
       if (d.kind === 'bug') { const st = await bugState(d.id); if (!st) return { state: 'unknown' }; return st !== 'open' ? { state: 'changed', change: `${d.label} was resolved (${st})` } : { state: 'open', v: st }; }
