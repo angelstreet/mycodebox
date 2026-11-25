@@ -2899,6 +2899,13 @@ async function handleHttp(req, res) {
   if (req.method === 'GET' && p === '/api/parking') {
     try { return json(res, 200, await parkingView()); } catch (err) { return json(res, err.status || 500, { ok: false, error: err.message }); }
   }
+  if (req.method === 'POST' && /^\/api\/sessions\/[^/]+\/forget-parked$/.test(p)) {   // the X on a Parked row: drop the record, keep the conversation file
+    try {
+      const name = decodeURIComponent(p.split('/')[3]);
+      const rec = await parking.forget(name);
+      return json(res, rec ? 200 : 404, rec ? { ok: true, removed: name } : { ok: false, error: 'not parked' });
+    } catch (err) { return json(res, err.status || 500, { ok: false, error: err.message }); }
+  }
   {
     const m = req.method === 'POST' && /^\/api\/sessions\/([^/]+)\/(park|resume)$/.exec(p);
     if (m) {
