@@ -4,6 +4,7 @@
 // stamps ignored) and uncommitted tracked files. A mismatch gets one feed line and one message to the session (while it
 // is idle and the host is not busy), once per finding. Switch: manager.json `doneCheck` "live" (default) | "dry" | "off".
 // Journal: done-check.jsonl.
+import { proofGapOf, proofGapMessage } from './proof-risk.js';
 import { pushableItems } from './done-leftovers.js';
 import { computeStopState, doneWhileMessage } from './stop-state.js';
 import { doneButFailedOf, doneButFailedMessage, proofWithoutEvidenceOf, proofWithoutEvidenceMessage, blockedHonestyOf, blockedHonestyMessage, failedHonestyOf, failedHonestyMessage, doneWithOpenOf, doneWithOpenMessage, verificationOf, verificationMessage, timeBoxWakeMessage, unknownStatusWordOf, unknownStatusWordMessage, lastStatus as lastStatusOf } from './status-honesty.js';
@@ -247,6 +248,7 @@ export function createDoneCheck({
   goalGate = null,   // goal-check.js createGoalGate: (H) below
   goalEntryOf = () => null, listSessions = async () => [], timeBoxMode = () => 'dry', draftNow = async () => false,   // (K) Verification block per stored Done-when line; (L) time box wake (dry first)
   stopFacts = null, stateMode = () => 'dry',   // (J) a done line while the harness sees a running / waiting fact: not accepted as done (stop-state.js); dry until manager.json stopState is live
+  proofMode = () => 'live', proofStat,   // (P) proof by risk (proof-risk.js): headless e2e on the deployed URL for a UI fix / feature; manager.json proofRisk
   listBlocked = async () => [], blockedMode = () => 'dry',   // (I) blocked is not a wait: dry (journal only) until the owner switches manager.json blockedCheck to live
 } = {}) {
   const stFile = join(stateDir, 'done-check.json');
@@ -609,6 +611,31 @@ export function createDoneCheck({
         if (!quiet || nudged >= MAX_NUDGES_PER_TICK) continue;
         try { await send(s.name, evidenceGapMessage(g)); st.toldEvidence[s.name] = { sig }; nudged++; await note({ session: s.name, evidenceGap: g }); }
         catch (e) { log.error?.('[done-check] send evidence gap', s.name, e.message); }
+      }
+      // (P) proof by risk (proof-risk.js, owner 2026-11-25): a UI fix / feature needs a headless run on the deployed URL; cosmetic needs none. ONE push per
+      // done line; a second distinct miss goes to the manager, not to the session. Counts as evidenceOpen so the goal question waits.
+      st.toldProof ||= {};
+      for (const n of Object.keys(st.toldProof)) if (!live.has(n)) delete st.toldProof[n];
+      const pm = proofMode();
+      if (pm !== 'off') for (const s of sessions) {
+        if (!closingReviewOf(s.text) || closingReviewOf(s.text).missing || s.working || s.draft || touched.has(s.name) || stateWait.has(s.name) || verifyBounced.has(s.name) || openDone.has(s.name) || evidenceOpen.has(s.name) || findings.some((f) => f.name === s.name)) continue;
+        if (s.doneAt && now() - s.doneAt > REVIEW_MAX_AGE_MS) continue;
+        if (leftoverItemsOf(s.text).length || doneButFailedOf(s.text) || proofWithoutEvidenceOf(s.text)) continue;
+        let g = null;
+        try { g = proofGapOf(s.text, await integrationsOf(s.name), { goal: await goalOf(s.name).catch(() => ''), home, ...(proofStat ? { statMtime: proofStat } : {}) }); } catch (e) { log.error?.('[done-check] proof risk', s.name, e.message); }
+        if (!g) continue;
+        if (pm === 'live') evidenceOpen.add(s.name);
+        const sig = createHash('sha1').update(JSON.stringify([g.risk, g.missing])).digest('hex').slice(0, 12);
+        const told = st.toldProof[s.name];
+        if (told?.sig === sig) continue;
+        if (pm === 'dry') { await note({ dry: true, session: s.name, proofGap: g }); st.toldProof[s.name] = { sig, dry: true }; continue; }
+        if (told && !told.dry) {   // asked once already and the next line still misses: the manager hears it, the session is not pushed again
+          if (!told.reported) { told.reported = true; await note({ session: s.name, proofGap: g, manager: true }); await record({ key: `proof-risk:${s.name}`, title: `${s.name} says done on a UI ${g.risk} without a deployed-site browser check`, body: `still missing after one push: ${g.missing.join('; ')}`.slice(0, 300), url: '/', priority: 'default' }).catch(() => {}); }
+          continue;
+        }
+        if (!quiet || nudged >= MAX_NUDGES_PER_TICK) continue;
+        try { await send(s.name, proofGapMessage(g)); st.toldProof[s.name] = { sig }; nudged++; await note({ session: s.name, proofGap: g }); }
+        catch (e) { log.error?.('[done-check] send proof gap', s.name, e.message); }
       }
       const goalCheck = { asked: [], bounced: [], accepted: [], capped: [] };
       if (goalGate) {

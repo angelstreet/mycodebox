@@ -19,6 +19,7 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A UI fix or feature is no longer accepted as done without a headless browser check on the deployed site; cosmetic changes need none** — the done-check classifies the merged diff (`proof-risk.js`): wording, JSX text, styles, CSS and docs are cosmetic; any logic line or a backend route change under a UI change is a fix / feature and needs a headless run, a screenshot file newer than the deploy and a deployed-host URL in the closing text, asked once, then the manager hears the second miss. Switch: manager.json `proofRisk` live | dry | off · area: done-check
 - **Mockups are checked for readability before the owner sees them** — `POST /api/mockups` reads the page (`/files/<path>` or a loopback url) and refuses it (422, nothing in the feed) when a sentence has over 12 words, a text block over 140 characters, a string repeats, helper text sits on the page (hint / help / note / caption / description classes, "Note:", "This page"...), a table header has over 2 words or 18 characters, or the page has over 250 words; the posting session is sent up to 8 defect lines and re-posts. Tooltips are not counted. Switch `manager.json` `mockupLint` live (default) | dry | off (`mockup-lint.js`) · area: mockups
 
 

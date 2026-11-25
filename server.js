@@ -1246,6 +1246,7 @@ const doneCheck = createDoneCheck({
   goalOf: async (name) => { try { return goalOfPrompt(readFileSync(join(homedir(), 'handovers', `${String(name).replace(/[^\w.-]/g, '')}.prompt.md`), 'utf8')); } catch { return ''; } },
   goalGate,   // (H) goal check
   integrationsOf: (name) => integrationLane.mergedFor(name),   // (O) release note / bug record evidence
+  proofMode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).proofRisk; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },   // (P) proof by risk
   send: (name, text) => harnessSend(name, text),
   pressure: hostPressure,
   record: (e) => managerEvents.record(e),
