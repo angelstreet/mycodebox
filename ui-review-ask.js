@@ -114,7 +114,8 @@ export function createAskRunner({ lane, cfg, stateDir, run }) {
       for (const f of files) {
         const x = await run(`python3 ${sq(path.join(exported.home, 'scripts/review/ui_review.py'))} ${sq(f.file)} --kind ${f.kind} --model-advisory --out ${sq(path.join(dir, path.basename(f.file)))}`,
           { cwd: dir, timeoutMs: conf.timeoutMin * 60_000 });
-        const verdict = x.code === 0 ? 'pass' : x.code === 1 && /^ui-review: uir-/m.test(x.out) ? 'fail' : 'cannot';
+        const said = /^ui-review: uir-\S+ (pass-with-exceptions|pass|fail)\b/m.exec(x.out)?.[1];
+        const verdict = x.code === 0 && said?.startsWith('pass') ? 'pass' : x.code === 1 && said === 'fail' ? 'fail' : 'cannot';
         if (verdict === 'fail' || (verdict === 'cannot' && worst === 'pass')) worst = verdict;
         out.push(x.out.split('\n').filter((l) => /^## |\| FAIL \||^ui-review: /.test(l)).slice(0, 14).map((l) => l.slice(0, 400)).join('\n') || x.out.slice(-600));
       }

@@ -40,14 +40,17 @@ export function createUiReview({ stateDir, git, run, log = () => {} }) {
     fs.rmSync(home, { recursive: true, force: true });
     fs.mkdirSync(home, { recursive: true, mode: 0o700 });
     await git(['fetch', '--quiet', 'origin'], { cwd: cfg.from, timeoutMs: 120_000 });
-    const there = await git(['ls-tree', '--name-only', cfg.ref, '--', GATE, ...EXPORT], { cwd: cfg.from });
-    const names = there.out.split('\n').filter(Boolean);
-    if (!names.includes(GATE)) return { home, missing: true };
+    // one question per path: `ls-tree` given a folder and a file inside it lists the file only, and the folder was left out
+    const has = async (p) => (await git(['cat-file', '-e', `${cfg.ref}:${p}`], { cwd: cfg.from })).code === 0;
+    if ((await git(['rev-parse', '--verify', '--quiet', `${cfg.ref}^{commit}`], { cwd: cfg.from })).code !== 0) throw new Error(`no ${cfg.ref} in ${cfg.from}`);
+    if (!(await has(GATE))) return { home, missing: true };
+    const names = [];
+    for (const p of EXPORT) if (await has(p)) names.push(p);
     const tar = path.join(home, '.export.tar');
-    const a = await git(['archive', '-o', tar, cfg.ref, '--', ...EXPORT.filter((n) => names.includes(n))], { cwd: cfg.from, timeoutMs: 120_000 });
+    const a = await git(['archive', '-o', tar, cfg.ref, '--', ...names], { cwd: cfg.from, timeoutMs: 120_000 });
     if (a.code !== 0) throw new Error(`could not export the reviewer: ${a.err}`);
     const x = await run(`tar -x -f ${sq(tar)} -C ${sq(home)} && rm -f ${sq(tar)}`, { cwd: home, timeoutMs: 120_000 });
-    if (x.code !== 0) throw new Error(`could not unpack the reviewer: ${x.out.slice(-300)}`);
+    if (x.code !== 0 || !fs.existsSync(path.join(home, GATE))) throw new Error(`could not unpack the reviewer: ${x.out.slice(-300)}`);
     return { home };
   }
 
@@ -66,7 +69,9 @@ export function createUiReview({ stateDir, git, run, log = () => {} }) {
       const args = [mode, '--out', sq(dir), ...(mode === 'nightly' ? [] : ['--repo', cfg.repo, '--tree', sq(tree), '--base', sq(base), '--head', sq(head || 'HEAD')])];
       const x = await run(`python3 ${sq(path.join(home, GATE))} ${args.join(' ')}`, { cwd: dir, timeoutMs: cfg.timeoutMin * 60_000, onData });
       const last = /^ui-review-gate: (\w+) (?:uir-\S+ )?(.*)$/m.exec(x.out.split('\n').reverse().join('\n'));
-      const verdict = x.timedOut ? 'cannot' : x.code === 0 ? 'pass' : x.code === 1 && last ? 'fail' : x.code === 2 ? 'skip' : 'cannot';
+      // the exit code alone proves nothing (python exits 2 when it cannot open the script): the reviewer's own last line must agree
+      const said = { 0: 'pass', 1: 'fail', 2: 'skip' }[x.code];
+      const verdict = !x.timedOut && said && last?.[1] === said ? said : 'cannot';
       const summary = x.timedOut ? `no answer in ${cfg.timeoutMin} min` : (last?.[2] || x.out.trim().split('\n').at(-1) || `exit ${x.code}`).slice(0, 400);
       return { verdict, summary, table: readText(path.join(dir, 'table.md'), 6000), dir };
     } catch (e) {
