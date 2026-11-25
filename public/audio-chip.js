@@ -54,6 +54,44 @@ export async function wireAudioChip(root) {
   const speedBtns = [...root.querySelectorAll('.ac-speed')];
   const audio = root.querySelector('.ac-audio');
 
+  playBtn.addEventListener('click', async () => {
+    if (audio.paused) {
+      // QF-05: iOS Safari rejects play() with NotAllowedError when the user-gesture
+      // context is lost, or with NotSupportedError on a bad codec. Surface the
+      // real error instead of swallowing it so the user can see what went wrong.
+      try { await audio.play(); }
+      catch (err) {
+        console.error('[tts] play failed', err);
+        root.classList.add('ac-failed');
+        const orig = playBtn.getAttribute('aria-label') || 'Play audio';
+        playBtn.setAttribute('aria-label', `audio failed: ${err && err.message ? err.message : (err && err.name) || err}`);
+        setTimeout(() => { root.classList.remove('ac-failed'); playBtn.setAttribute('aria-label', orig); }, 2400);
+      }
+    } else { audio.pause(); }
+  });
+  audio.addEventListener('play', () => { playBtn.innerHTML = icon('pause', 14); playBtn.setAttribute('aria-label', 'Pause audio'); });
+  audio.addEventListener('pause', () => { playBtn.innerHTML = icon('play', 14); playBtn.setAttribute('aria-label', 'Play audio'); });
+  audio.addEventListener('ended', () => { playBtn.innerHTML = icon('play', 14); playBtn.setAttribute('aria-label', 'Play audio'); });
+  for (const b of speedBtns) {
+    b.addEventListener('click', () => {
+      const r = Number(b.dataset.rate);
+      audio.playbackRate = r;
+      for (const x of speedBtns) x.classList.toggle('on', x === b);
+    });
+  }
+
+  function onReady() {
+    loaderBtn.classList.add('hidden');
+    playBtn.disabled = false;
+    audio.src = url;
+    dlBtn.href = url;
+    dlBtn.classList.remove('hidden');
+    dlBtn.setAttribute('download', `${(root.dataset.hash || 'tts').slice(0, 12)}.wav`);
+    root.classList.add('ready');
+    audio.playbackRate = 1;
+  }
+
+  // The listeners above come first: every successful render path below returns early (play stayed dead that way).
   // kick off the render. errors here fail loudly: the chip stays disabled with the loader visible.
   let url;
   try {
@@ -87,43 +125,6 @@ export async function wireAudioChip(root) {
     loaderBtn.classList.remove('hidden');
     playBtn.disabled = true;
     return;
-  }
-
-  function onReady() {
-    loaderBtn.classList.add('hidden');
-    playBtn.disabled = false;
-    audio.src = url;
-    dlBtn.href = url;
-    dlBtn.classList.remove('hidden');
-    dlBtn.setAttribute('download', `${(root.dataset.hash || 'tts').slice(0, 12)}.wav`);
-    root.classList.add('ready');
-    audio.playbackRate = 1;
-  }
-
-  playBtn.addEventListener('click', async () => {
-    if (audio.paused) {
-      // QF-05: iOS Safari rejects play() with NotAllowedError when the user-gesture
-      // context is lost, or with NotSupportedError on a bad codec. Surface the
-      // real error instead of swallowing it so the user can see what went wrong.
-      try { await audio.play(); }
-      catch (err) {
-        console.error('[tts] play failed', err);
-        root.classList.add('ac-failed');
-        const orig = playBtn.getAttribute('aria-label') || 'Play audio';
-        playBtn.setAttribute('aria-label', `audio failed: ${err && err.message ? err.message : (err && err.name) || err}`);
-        setTimeout(() => { root.classList.remove('ac-failed'); playBtn.setAttribute('aria-label', orig); }, 2400);
-      }
-    } else { audio.pause(); }
-  });
-  audio.addEventListener('play', () => { playBtn.innerHTML = icon('pause', 14); playBtn.setAttribute('aria-label', 'Pause audio'); });
-  audio.addEventListener('pause', () => { playBtn.innerHTML = icon('play', 14); playBtn.setAttribute('aria-label', 'Play audio'); });
-  audio.addEventListener('ended', () => { playBtn.innerHTML = icon('play', 14); playBtn.setAttribute('aria-label', 'Play audio'); });
-  for (const b of speedBtns) {
-    b.addEventListener('click', () => {
-      const r = Number(b.dataset.rate);
-      audio.playbackRate = r;
-      for (const x of speedBtns) x.classList.toggle('on', x === b);
-    });
   }
 }
 
