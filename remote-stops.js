@@ -382,5 +382,13 @@ export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goa
     const hits = [...sessions.values()].filter((s) => s.client === clientName && s.name.startsWith(pre) && /^[A-Za-z0-9._]{1,6}(@.*)?$/.test(s.name.slice(pre.length)));
     return hits.length === 1 ? hits[0].name : null;
   }
-  return { handle, deliver, deliverKey, resolveFor, paneText, lastText, owns: (n) => String(n).startsWith(manager.REMOTE_PREFIX) && sessions.has(n), names, statusRows, config, _sessions: sessions };
+  // The owner removes a Mac session from the list (Park on a `mac:` row: it has no tmux pane to park): a stop it still holds is closed, the row is dropped
+  // here and in the manager; it comes back only if that Mac posts again.
+  function drop(name) {
+    const s = sessions.get(name);
+    if (s?.open) resolve(s.open, 'none', { reason: 'removed by owner' });
+    sessions.delete(name); manager.forget(name);
+    return !!s;
+  }
+  return { drop, handle, deliver, deliverKey, resolveFor, paneText, lastText, owns: (n) => String(n).startsWith(manager.REMOTE_PREFIX) && sessions.has(n), names, statusRows, config, _sessions: sessions };
 }

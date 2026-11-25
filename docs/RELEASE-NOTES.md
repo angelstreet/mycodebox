@@ -15,6 +15,8 @@ what changed and why it matters, ending with `· area: <area>`.
 ## Unreleased
 
 
+- **Park on a Mac session removes it from the list instead of failing (owner 2026-11-25)** — a `mac:` row has no tmux pane, so Park answered "invalid session name" and the row stayed; the route now drops the row (`drop` in `remote-stops.js`; it comes back only if that Mac posts again) and the dashboard also removes any row the server cannot park ("no such session" / "invalid session name") with a "removed from the list" toast · area: dashboard
+
 - **The top strip hides NEEDS YOU when nothing needs you** — on a wide screen the block with "none" is no longer shown (as for an idle DEPLOY); the blocks that remain share the row, LEASES taking what is left (`.alertrow` in `public/style.css`; phones unchanged) · area: ui
 
 - **A session that says `STATUS: done` is no longer green because of background tasks the reporter still counts** — the closing-line rule that already covered needs-owner / needs-manager / blocked / failed now covers `done` as well, so the reporter's background count and the state-derived `background_wait` stall no longer turn it back to working (owner 2026-11-24: lol-first-waves-opus, 3 counted tasks, green after its done line); real process signals (pane child, script) still show working · area: dashboard
