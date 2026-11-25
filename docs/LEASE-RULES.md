@@ -1,7 +1,7 @@
 # Lease rules
 
-One rule text for every agent and session. The deploy skill gets this text rendered into its lease section
-(`scripts/render-deploy-skill.js`); do not keep a second copy. Design: [docs/v2/LEASES-CENTRAL.md](v2/LEASES-CENTRAL.md).
+One rule text for every agent and session. The deploy skill gets this text rendered into its reference file
+`~/.claude/skills/deploy/references/lease-rules.md` (`scripts/render-deploy-skill.js --in` that file, never the skill's SKILL.md); do not keep a second copy. Design: [docs/v2/LEASES-CENTRAL.md](v2/LEASES-CENTRAL.md).
 
 ## What to claim
 

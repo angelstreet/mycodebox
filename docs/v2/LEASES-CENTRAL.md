@@ -224,7 +224,7 @@ There is exactly one implementation of these rules, in
 ## 7. One rule text
 
 The rules live once, in `docs/LEASE-RULES.md` (what to claim for each kind of work, modes, waiting, heartbeats, what never
-to do). `scripts/render-deploy-skill.js` renders that text into the lease section of the `deploy` skill; the owner side
+to do). `scripts/render-deploy-skill.js` renders that text into `references/lease-rules.md` of the `deploy` skill (SKILL.md keeps a hand-written digest); the owner side
 copies the rendered skill to both machines. The manager enforces the same rules: it never escalates a lease question,
 it answers it from the service, and it flags a session that holds an exclusive lease while its STATUS says it waits.
 This folds in round 9 item 6 ("frontend-only deploys need no backend lease; busy means wait and retry, never ask").
