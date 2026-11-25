@@ -34,3 +34,15 @@ test('wireAudioChip: nothing renders before a tap; the tap renders and plays; sp
     assert.equal(parts['.ac-audio'].playbackRate, 1.5);
   }
 });
+
+test('wireAudioChip: a chip that left the page during the render stays silent', async (t) => {
+  const realFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = realFetch; });
+  globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ ready: true, url: '/a.wav' }) });
+  const parts = Object.fromEntries(['.ac-play', '.ac-loader', '.ac-download', '.ac-audio'].map((k) => [k, el()]));
+  let played = 0;
+  parts['.ac-audio'].play = async () => { played++; };
+  wireAudioChip({ ...el(), isConnected: false, dataset: { text: 'gone' }, querySelector: (k) => parts[k], querySelectorAll: () => [] });
+  await parts['.ac-play'].on.click();
+  assert.equal(played, 0);
+});

@@ -58,7 +58,8 @@ export function wireAudioChip(root) {
   let url;
   playBtn.addEventListener('click', async () => {
     if (!url) {
-      if (await render()) await audio.play().catch(() => {});   // refused (tap too old): the next tap plays
+      // Not if the chip left the page during the render: its audio would start with no button to stop it.
+      if (await render() && root.isConnected !== false) await audio.play().catch(() => {});   // refused (tap too old): the next tap plays
       return;
     }
     if (audio.paused) {
