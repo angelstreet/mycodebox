@@ -16,6 +16,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A UI fix or feature is no longer accepted as done without a headless browser check on the deployed site; cosmetic changes need none** — the done-check classifies the merged diff (`proof-risk.js`): wording, JSX text, styles, CSS and docs are cosmetic; any logic line or a backend route change under a UI change is a fix / feature and needs a headless run, a screenshot file newer than the deploy and a deployed-host URL in the closing text, asked once, then the manager hears the second miss. Switch: manager.json `proofRisk` live | dry | off · area: done-check
+
 
 - **The scorecard no longer inflates the server on every refresh (cause of the slow reader opens, owner 2026-11-25)** — one scorecard load is ~2 s of CPU and adds 230 MB (7 days) to 660 MB (30 days) of heap on the server's one thread, and the Usage sheet and cards asked again every minute; the server grew to 2.6 GB resident over a few hours, and then every child process it starts (tmux, git) blocks the thread ~40 ms instead of ~6 ms. The result is now kept 5 min and served stale for up to 30 min while one background load refreshes it (`cachedScorecard`, `scorecard.js`); the first load of a window still waits · area: server
 - **A resumed session no longer shows under Parked (owner 2026-11-25: cockpit)** — the "over the limit" part of Parked lists LIVE sessions to park, and it listed up to 3 more than the number over the limit, including the pinned manager and a session resumed a minute ago; it now shows only the idlest ones (as many as are over the limit), none idle under 10 min and none pinned · area: dashboard

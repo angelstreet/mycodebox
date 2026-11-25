@@ -2266,6 +2266,15 @@ id, repo, branch, files of the merge, commit subjects; last 12 h) and sends a do
 - The rule text is one bullet, "Release note and bug record for shipped code", identical in AGENTS.md, the `scripts/cbsession` preamble, the
   [MAC-HOOK](MAC-HOOK.md) snippet and VirtualPyTest's AGENTS.md; `test/found-bugs-enforce.test.js` keeps the first three equal, `test/done-evidence.test.js` covers the check.
 
+### Proof by risk (owner, 2026-11-25)
+
+A `STATUS: done` after a UI fix or feature needs a real browser check on the deployed site; a cosmetic change needs none. `proof-risk.js`, wired into done-check as step (P) (after the release-note / bug-record check, before the goal question).
+
+- **Risk of the session's merged diff** (integration lane `mergedFor`: files, the `-U0` patch of the frontend files, `mergedAt`, `deployedAt`). Applies only when a web UI file changed (`.tsx/.ts/.jsx/.js/.css/.html` under `frontend/`, `public/`, `web/`, `ui/`, `client/`, tests excluded); backend-only or infra-only work is out of scope. `cosmetic`: the other files are docs / `*.md` / skills / release notes and every changed UI line is blank, a comment, CSS, a style key, a string, JSX text or a string prop. `fix` / `feature`: any other code changed, any logic line (arrow, `if`, hook, `.map`, `fetch`, `onX=`, `&&`, `${}`, an import ...), or no diff content. A `risk: cosmetic|fix|feature` in the closing text is read, but a cosmetic claim over a logic diff loses; `fix` / `feature` claimed on a cosmetic diff is honoured.
+- **Required in the closing text for fix / feature**: a headless run mention (`playwright` / `headless`), a screenshot path (`.png/.jpg/.webp`) that exists with an mtime after the integration's deploy (`times.deployedAt`, else `mergedAt`), and a URL that is not localhost / 127.x / a vite dev port 517x-518x (unless the task goal says it is a local worktree preview). Recipe: skill `vpt-headless-verify`.
+- **Push**: one per done line ("Run the e2e yourself on the deployed URL with vpt-headless-verify, quote the screenshot path and URL"). A second, different miss is not pushed: it becomes a manager event `proof-risk:<session>`. While a gap is open the goal question waits.
+- **Switch**: manager.json `proofRisk` `live` (default) | `dry` (journal `done-check.jsonl` only) | `off`. Tests: `test/proof-risk.test.js`. The goal check asks for evidence of any kind and never for a screenshot as such, so cosmetic work needs none.
+
 ### Done-check ignores long-lived branches (owner, 2026-10-28)
 
 `manager.json` `doneCheckIgnoreBranches` (default `["task44-ai-manager"]`; `[]` judges every branch) lists branches the done-check never counts as "not on main": a session sitting on one of them (or on a detached HEAD that belongs to it) is not judged on it, and a closing text that names one does not pull it in. The session's own branch and worktree are still checked.

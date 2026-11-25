@@ -1274,14 +1274,17 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
         if (r.session !== session || !r.mergeSha || !r.targetBase || (r.state !== 'merged' && r.state !== 'deployed')) continue;
         const at = Date.parse(r.times?.mergedAt || r.endedAt || '') || 0;
         if (now() - at > sinceMs) continue;
-        const c = repoCfg(r.repo); let files = [], subjects = [];
+        const c = repoCfg(r.repo); let files = [], subjects = [], patch = null;
         if (c) {
           const d = await git(['diff', '--name-only', r.targetBase, r.mergeSha], { cwd: c.clone });
           if (d.code === 0) files = d.out.split('\n').filter(Boolean);
+          // proof-risk.js: the content of the web UI part of the diff (-U0, capped), to tell a cosmetic change from a fix / feature
+          const ui = files.filter((f) => /(^|\/)(?:frontend|public|web|ui|client|webapp)\/.*\.(?:tsx|ts|jsx|js|mjs|vue|svelte|css|scss|html)$/i.test(f)).slice(0, 60);
+          if (ui.length) { const pd = await git(['diff', '-U0', r.targetBase, r.mergeSha, '--', ...ui], { cwd: c.clone }); if (pd.code === 0) patch = pd.out.slice(0, 400000); }
           const g = await git(['log', '--format=%s', '-n', '30', `${r.targetBase}..${r.mergeSha}`], { cwd: c.clone });
           if (g.code === 0) subjects = g.out.split('\n').filter(Boolean);
         }
-        out.push({ id: r.id, repo: r.repo, branch: r.branch, files, subjects });
+        out.push({ id: r.id, repo: r.repo, branch: r.branch, files, subjects, patch, mergedAt: r.times?.mergedAt || null, deployedAt: r.times?.deployedAt || r.times?.deployDoneAt || null });
       }
       return out;
     },
