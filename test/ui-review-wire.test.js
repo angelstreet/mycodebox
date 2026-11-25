@@ -39,8 +39,9 @@ cat >> ${got}
 `);
   chmodSync(join(bin, 'claude'), 0o755);
   execFileSync(tmuxBin, ['new-session', '-d', '-s', 'poster-session', '-x', '200', '-y', '50', join(bin, 'claude')]);
+  // tmux itself, not the wrapper: helpers-tmp removes the temp folder (and the wrapper) before this file's cleanup runs
+  cleanups.push(() => execFileSync('tmux', ['-L', socket, 'kill-server'], { stdio: 'ignore' }));
   cleanups.push(() => rmSync(join(process.env.TMUX_TMPDIR || '/tmp', `tmux-${process.getuid()}`, socket), { force: true }));
-  cleanups.unshift(() => execFileSync(tmuxBin, ['kill-server']));
   const port = await freePort();
   const env = { PATH: process.env.PATH, HOME: home, LANG: 'C.UTF-8', HOST: '127.0.0.1', PORT: String(port), GHOSTY_STATE_DIR: state, TMUX_BIN: tmuxBin, GHOSTY_NO_UI_REVIEW_NIGHTLY: '1',
     TLS_KEY: join(base, 'none.pem'), TLS_CERT: join(base, 'none.pem'), TICK_MS: '500' };
