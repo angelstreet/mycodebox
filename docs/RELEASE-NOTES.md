@@ -3,6 +3,8 @@
 The release note of this repo (owner 2026-11-13). Every merged code change (not docs-only) adds one entry at the top of
 `## Unreleased`; the done-check reads the merged diff for this file (REFERENCE "Closing review"). Entry form: one line,
 
+- **Read-aloud renders only when you tap play** — every reply the reader showed started a piper render (90 in 24 h) whether or not it was heard. The first tap now renders, then plays; on a browser that refuses the late start (iPhone), tap play again · area: voice
+
 - **The read-aloud play and speed buttons work** — since 2026-10-08 the chip returned right after a successful render, before attaching their click listeners, so play did nothing · area: voice
 
 - **Read-aloud no longer takes codebox to 100 % CPU** — piper ran with one pinned thread per core (373-470 % on 6 cores), several at once. A render is now niced (10), uses 2 onnxruntime threads and renders queue one at a time (8000 chars: 58 s, peak 199 %); the audio chip waits 10 min instead of 90 s, and a half-written WAV is no longer served as ready · area: voice

@@ -12,20 +12,24 @@ function el() {
     addEventListener(type, fn) { on[type] = fn; }, setAttribute() {}, getAttribute: () => '' };
 }
 
-test('wireAudioChip: play and speed are wired when the render succeeds', async (t) => {
+test('wireAudioChip: nothing renders before a tap; the tap renders and plays; speed is wired', async (t) => {
   const realFetch = globalThis.fetch;
   t.after(() => { globalThis.fetch = realFetch; });
   for (const replies of [[{ ready: true, url: '/a.wav' }], [{ ready: false }, { state: 'ready', url: '/a.wav' }]]) {
-    globalThis.fetch = async () => { const body = replies.shift(); return { ok: true, status: 200, json: async () => body }; };
+    let fetches = 0;
+    globalThis.fetch = async () => { fetches++; const body = replies.shift(); return { ok: true, status: 200, json: async () => body }; };
     const parts = Object.fromEntries(['.ac-play', '.ac-loader', '.ac-download', '.ac-audio'].map((k) => [k, el()]));
     const speed = el();
     speed.dataset.rate = '1.5';
     let played = 0;
     parts['.ac-audio'].play = async () => { played++; };
-    await wireAudioChip({ ...el(), dataset: { text: 'hello' }, querySelector: (k) => parts[k], querySelectorAll: () => [speed] });
-    assert.equal(parts['.ac-play'].disabled, false);
+    wireAudioChip({ ...el(), dataset: { text: 'hello' }, querySelector: (k) => parts[k], querySelectorAll: () => [speed] });
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(fetches, 0);
     await parts['.ac-play'].on.click();
     assert.equal(played, 1);
+    assert.equal(parts['.ac-play'].disabled, false);
+    assert.ok(fetches > 0);
     speed.on.click();
     assert.equal(parts['.ac-audio'].playbackRate, 1.5);
   }
