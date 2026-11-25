@@ -336,7 +336,8 @@ function openAccountSheet(name) {
       try {
         const r = await fetch(`/api/sessions/${encodeURIComponent(name)}/claude-account`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ account: b.dataset.acct }) });
         const j = await r.json().catch(() => ({}));
-        if (r.ok) { const n = killedNote(j); if (n) topToast(`${name} now on ${b.dataset.acct}${n}`, 9000); else toast(`${name} now on ${b.dataset.acct}`, 2400); close(); }
+        if (r.ok && j.removed) toast(`${name} removed from the list`, 2500);
+    else if (r.ok) { const n = killedNote(j); if (n) topToast(`${name} now on ${b.dataset.acct}${n}`, 9000); else toast(`${name} now on ${b.dataset.acct}`, 2400); close(); }
         else topToast(parkRefusal(name, j, r.status).replace("Can't park", "Can't move"), 9000);
       } catch (err) { topToast(`Can't move ${name}: ${err.message}`, 9000); }
     };
@@ -1435,7 +1436,7 @@ async function parkSession(name) {
     const j = await r.json().catch(() => ({}));
     // The session is gone from tmux once parked, but the status frame that removes it can lag over a slow link: drop it here at once, or it stays
     // listed and a second Park says "no such session" (owner 2026-11-23). "no such session" means the same: it is not running.
-    const gone = r.ok || r.status === 404 || /no such session/.test(String(j?.error || ''));
+    const gone = r.ok || r.status === 404 || /no such session|invalid session name/.test(String(j?.error || ''));   // a row the server cannot park at all is removed from the list too (owner 2026-11-25)
     if (gone && state.status[name]) { delete state.status[name]; onStatus(); }
     if (r.ok) { const n = killedNote(j); if (n) topToast(`${name} parked${n}`, 9000); else toast(`${name} parked`, 1800); }
     else if (gone) toast(`${name} is not running (already parked)`, 3000);

@@ -292,3 +292,12 @@ test('resolveFor: a Mac tmux name resolves to the one registered session of the 
   assert.equal(remote.resolveFor('mac:rf-twin', 'mac-b'), 'mac:rf-twin-cccccc');           // unique within mac-b's own registrations
   assert.equal(remote.resolveFor('mac:rf-none', 'mac-a'), null);
 });
+
+test('drop: Park on a mac: row removes it from the dashboard rows (it has no tmux pane to park), and an unknown name is a no-op', async () => {
+  const r = await post({ session_name: 'to-remove' });
+  const NM = r.body.session;
+  assert.ok(remote.statusRows()[NM] && remote.names().includes(NM));
+  assert.equal(remote.drop(NM), true);
+  assert.equal(remote.statusRows()[NM], undefined); assert.ok(!remote.names().includes(NM)); assert.equal(remote.owns(NM), false);
+  assert.equal(remote.drop(NM), false);
+});

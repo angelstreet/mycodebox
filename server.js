@@ -2906,6 +2906,7 @@ async function handleHttp(req, res) {
       try {
         // A resume starts a new agent and writes more to the disk: it is refused while the disk is low. Parking frees space.
         if (m[2] === 'resume') await diskGuard.assertStart('Resuming a session');
+        if (m[2] === 'park' && name.startsWith('mac:')) { const had = remote.drop(name); return json(res, 200, { ok: true, removed: true, remote: true, existed: had }); }   // a Mac session has no tmux pane: Park removes its row
         let force = false;
         if (m[2] === 'park') { const b = await readJsonBody(req).catch(() => ({})); force = b?.force === true; }   // the dashboard button sends force (owner-initiated)
         return json(res, 200, m[2] === 'park' ? await parkSession(name, { force }) : await resumeSession(name));
