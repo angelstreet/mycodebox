@@ -15,6 +15,8 @@ what changed and why it matters, ending with `· area: <area>`.
 ## Unreleased
 
 
+- **The X on a Parked row works** — the request went out without a JSON content-type and the server answered 400 (`content-type must be application/json`), found by probing the live route after the deploy; the button now sends `{}` as JSON · area: dashboard
+
 - **The Parked list is compact, searchable and shows when each session last spoke (owner 2026-11-25)** — every row shows the time since its last message (no more "idle" word), the Resume button replaces it only on mouse-over (always shown on a touch screen), and a search box above the list filters the parked and over-limit rows by name (shown once the list has more than 6 rows; typing keeps its focus through the 20 s refresh), an X on each parked row clears its entry (`POST /api/sessions/<name>/forget-parked`, `parking.forget`: only the record that Resume reads goes, the conversation file stays), the Notes section is no longer shown, and a sidebar group with 0 sessions (all pinned elsewhere, like `virtualpytest-internal 0`) has no header · area: dashboard
 
 - **Park on a Mac session removes it from the list instead of failing (owner 2026-11-25)** — a `mac:` row has no tmux pane, so Park answered "invalid session name" and the row stayed; the route now drops the row (`drop` in `remote-stops.js`; it comes back only if that Mac posts again) and the dashboard also removes any row the server cannot park ("no such session" / "invalid session name") with a "removed from the list" toast · area: dashboard

@@ -1450,7 +1450,7 @@ async function parkSession(name) {
 async function forgetParked(name, btn) {
   if (btn) btn.disabled = true;
   try {
-    const r = await fetch(`/api/sessions/${encodeURIComponent(name)}/forget-parked`, { method: 'POST' });
+    const r = await fetch(`/api/sessions/${encodeURIComponent(name)}/forget-parked`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
     toast(r.ok || r.status === 404 ? `${name} removed from Parked` : `could not remove ${name}: HTTP ${r.status}`, r.ok || r.status === 404 ? 1800 : 6000);
   } catch (err) { toast(`could not remove ${name}: ${err.message}`, 6000); }
   fetchParking();
