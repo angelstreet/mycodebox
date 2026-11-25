@@ -4,11 +4,12 @@
 //   - download (saves the rendered .wav to disk)
 //   - speed selector (1x / 1.25x / 1.5x, default 1x)
 //
-// Lifecycle on first interaction:
+// Nothing renders until the first tap on play (owner 2026-11-25). Lifecycle of that tap:
 //   1. compute SHA-256 hash of the brief text (32 hex chars, tts.js-compatible)
-//   2. POST /api/tts/<hash> with {text}; CSS pulse + disabled controls while pending
+//   2. POST /api/tts/<hash> with {text}; spinner + disabled play while pending
 //   3. poll GET /api/tts/<hash>/status until state=='ready'
-//   4. on ready, swap disabled off, point the <audio> element at /api/tts/<hash>.wav
+//   4. on ready, point the <audio> element at /api/tts/<hash>.wav and play (if the browser refuses
+//      because the tap is too old, as iOS does, the next tap plays)
 //
 // Repeat plays use the browser HTTP cache (Cache-Control: public, max-age=86400 on the .wav
 // route) and never re-render server-side (the hash is the cache key).
@@ -30,7 +31,7 @@ const POLL_MAX_MS = 10 * 60e3; // renders are niced, 2 threads and one at a time
 export function audioChipHtml({ text, label = 'audio' } = {}) {
   const safe = String(text || '').replace(/[<>&"']/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' }[c]));
   return `<span class="audio-chip" data-text="${safe}" aria-label="${label}">
-    <button class="ac-play" type="button" aria-label="Play audio" title="Play audio" disabled>${icon('play', 14)}</button>
+    <button class="ac-play" type="button" aria-label="Play audio" title="Play audio">${icon('play', 14)}</button>
     <button class="ac-loader hidden" type="button" aria-label="Loading audio" tabindex="-1">${icon('loader', 14)}</button>
     <a class="ac-download hidden" href="#" download aria-label="Download audio" title="Download audio">${icon('download', 14)}</a>
     <span class="ac-speeds" role="group" aria-label="Playback speed">
@@ -42,9 +43,9 @@ export function audioChipHtml({ text, label = 'audio' } = {}) {
   </span>`;
 }
 
-// Wire one chip: POST the text to /api/tts/<hash>, poll /status, attach the .wav to <audio>.
+// Wire one chip: attach the listeners only. The first play tap renders (POST /api/tts/<hash>, poll /status).
 // Idempotent: a chip wired twice is a no-op (data-wired flag).
-export async function wireAudioChip(root) {
+export function wireAudioChip(root) {
   if (!root || root.dataset.wired) return;
   root.dataset.wired = '1';
   const text = root.dataset.text || '';
@@ -54,53 +55,12 @@ export async function wireAudioChip(root) {
   const speedBtns = [...root.querySelectorAll('.ac-speed')];
   const audio = root.querySelector('.ac-audio');
 
-  // kick off the render. errors here fail loudly: the chip stays disabled with the loader visible.
   let url;
-  try {
-    const hash = await hashText(text);
-    root.dataset.hash = hash;
-    const post = await fetch(`/api/tts/${hash}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ text }),
-    });
-    if (!post.ok && post.status !== 202) throw new Error(`tts post ${post.status}`);
-    const body = await post.json();
-    if (body.ready) {
-      url = body.url;
-      onReady();
+  playBtn.addEventListener('click', async () => {
+    if (!url) {
+      if (await render()) await audio.play().catch(() => {});   // refused (tap too old): the next tap plays
       return;
     }
-    // poll until ready (or fail)
-    const startedAt = Date.now();
-    while (Date.now() - startedAt < POLL_MAX_MS) {
-      await new Promise((r) => setTimeout(r, POLL_MS));
-      const st = await fetch(`/api/tts/${hash}/status`).then((r) => r.json()).catch(() => ({ state: 'pending' }));
-      if (st.state === 'ready') { url = st.url; onReady(); return; }
-      if (st.state === 'failed') throw new Error(st.error || 'render failed');
-    }
-    throw new Error('tts render timed out');
-  } catch (err) {
-    console.error('[tts]', err.message);
-    // disable the chip forever; show the loader (no play)
-    root.classList.add('failed');
-    loaderBtn.classList.remove('hidden');
-    playBtn.disabled = true;
-    return;
-  }
-
-  function onReady() {
-    loaderBtn.classList.add('hidden');
-    playBtn.disabled = false;
-    audio.src = url;
-    dlBtn.href = url;
-    dlBtn.classList.remove('hidden');
-    dlBtn.setAttribute('download', `${(root.dataset.hash || 'tts').slice(0, 12)}.wav`);
-    root.classList.add('ready');
-    audio.playbackRate = 1;
-  }
-
-  playBtn.addEventListener('click', async () => {
     if (audio.paused) {
       // QF-05: iOS Safari rejects play() with NotAllowedError when the user-gesture
       // context is lost, or with NotSupportedError on a bad codec. Surface the
@@ -124,6 +84,52 @@ export async function wireAudioChip(root) {
       audio.playbackRate = r;
       for (const x of speedBtns) x.classList.toggle('on', x === b);
     });
+  }
+
+  function onReady() {
+    loaderBtn.classList.add('hidden');
+    root.classList.remove('loading');
+    playBtn.disabled = false;
+    audio.src = url;
+    dlBtn.href = url;
+    dlBtn.classList.remove('hidden');
+    dlBtn.setAttribute('download', `${(root.dataset.hash || 'tts').slice(0, 12)}.wav`);
+    root.classList.add('ready');
+    audio.playbackRate = 1;
+  }
+
+  // Errors fail loudly: the chip stays disabled with the loader visible. Resolves true when the audio is ready.
+  async function render() {
+    playBtn.disabled = true;   // also stops a second tap while pending
+    loaderBtn.classList.remove('hidden');
+    root.classList.add('loading');
+    try {
+      const hash = await hashText(text);
+      root.dataset.hash = hash;
+      const post = await fetch(`/api/tts/${hash}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      if (!post.ok && post.status !== 202) throw new Error(`tts post ${post.status}`);
+      const body = await post.json();
+      if (body.ready) { url = body.url; onReady(); return true; }
+      // poll until ready (or fail)
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < POLL_MAX_MS) {
+        await new Promise((r) => setTimeout(r, POLL_MS));
+        const st = await fetch(`/api/tts/${hash}/status`).then((r) => r.json()).catch(() => ({ state: 'pending' }));
+        if (st.state === 'ready') { url = st.url; onReady(); return true; }
+        if (st.state === 'failed') throw new Error(st.error || 'render failed');
+      }
+      throw new Error('tts render timed out');
+    } catch (err) {
+      console.error('[tts]', err.message);
+      // disable the chip forever; show the loader (no play)
+      root.classList.remove('loading');
+      root.classList.add('failed');
+      return false;
+    }
   }
 }
 
