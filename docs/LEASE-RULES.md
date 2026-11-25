@@ -216,6 +216,11 @@ A missed scheduled run (stream wall, nightly, daily phone run) is acceptable; a 
   P0..P2 ticket but also to a **queued deploy** that it blocks (a deploy counts as P0). From the first `yield` event the lease **ends itself 2 minutes later**
   (`reason: yield-grace`, config `scheduledYieldGraceMs`), whether or not the job noticed the refused renew. So a dev claim or deploy waits at most
   2 min on a scheduled job (before: up to the lease TTL, 10 min, because the guard only stops renewing). P2 leases keep the old rule (refused renew, not cut).
+- **Only a deploy that really waits on the lease** makes it yield or hold-caps it (bug-4c604fc3, 2026-11-25): the runner starts a host deploy with
+  `skip_leased`, so a host deploy syncs past device leases and defers the vpt-host restart to a catch-up; it no longer ends a P3 device run (before,
+  every integration deploy did: 8+ yields a night on vpt-pi1 / vpt-mf1 and no nightly STB campaign completed 11-22..11-24). A whole-host P3 lease still
+  yields. **Nightly window** (`scheduledSpareWindowUtc`, default `[21, 3]` UTC): a catch-up (the deferred restart) waits for a P3 run instead of ending
+  it and gates no claim while it waits; it starts once the run releases the device. Outside the window a strict catch-up still ends a P3 run.
 - A new P3 claim never queues ahead of a dev ticket (`E_HELD`, `queued`): the scheduler skips that run, it does not retry in a loop.
 - The scheduler's own run-skip rules (a recurring run skipped when another agent holds the device, a platform lease waited for within the trigger window) stay in
   VirtualPyTest `deployment_scheduler.py` / `lease_guard.py`.

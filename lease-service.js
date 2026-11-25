@@ -153,6 +153,9 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     // Scheduled jobs (owner 2026-11-16): a P3 lease also yields to a queued deploy, and ends `scheduledYieldGraceMs` after the yield was signalled
     // (a missed scheduled run is acceptable, a dev claim or deploy waiting on one is not).
     scheduledPriority: 'P3', scheduledYieldGraceMs: 2 * MIN,
+    // Nightly window (UTC hours, [from, to) across midnight; bug-4c604fc3): inside it a catch-up deploy (a deferred vpt-host restart, the code is already
+    // synced) waits for a scheduled (P3) run instead of ending it, and never gates claims while it waits. Null = no window.
+    scheduledSpareWindowUtc: [21, 3],
     // Hard cap (owner 2026-10-27): no claim or renewal of a non-system lease gets more than `maxClaimMin`, and while anyone waits the continuous hold
     // (since the claim began) may not pass it either. System leases (deploy runner, `exempt`) keep their own limits.
     maxClaimMin: 60, overCapGraceMs: 10 * MIN, keepFinished: 50, deployTtlMin: 360, maxEvents: 5000, readonly: false, io: defaultIo,
@@ -494,6 +497,7 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
     const starving = t - from >= cfg.deployStarveMs;                              // waited 30 min: it must eventually win (below)
     if (!starving && waitingTickets(d.env).some((tk) => t - tk.created >= cfg.catchUpYieldMs && deployTouches(d, tk))) return null;
     const bl = deployBlockers(d, { skipLeased: true }).blockers;
+    if (bl.some((l) => sparesScheduled(d, l))) return null;                       // waits for a nightly scheduled run: gates nothing meanwhile
     const blockedAll = bl.some((l) => hostsOfRes(l.resources) === null);
     const blockedHosts = new Set(); for (const l of bl) for (const h of hostsOfRes(l.resources) || []) blockedHosts.add(h);
     const rh = hostsOfRes(req.resources);
@@ -613,15 +617,29 @@ export function createLeaseService({ dir, now: nowIn = Date.now, sessions, onEve
   function yieldWaiters(l) {
     if (!l || l.mode !== 'exclusive' || !isLow(l)) return [];
     const ws = waitingTickets(l.env).filter((tk) => tk.agent !== l.agent && prioRank(prioOf(tk)) < prioRank(prioOf(l)) && leasesConflict(tk, l));
-    // a queued deploy counts as P0: it makes a scheduled (P3) lease yield too
-    if (prioOf(l) === cfg.scheduledPriority) for (const d of S.deploys) if (d.env === l.env && (d.state === 'queued' || d.state === 'awaiting-approval') && deployBlockers(d).blockers.some((b) => b.id === l.id)) ws.push({ id: `deploy-${d.id}`, agent: `deploy ${d.id}`, priority: 'P0' });
+    // a queued deploy counts as P0: it makes a scheduled (P3) lease yield too, but only a deploy that really waits on it
+    if (prioOf(l) === cfg.scheduledPriority) for (const d of S.deploys) if (deployWaitsOn(d, l)) ws.push({ id: `deploy-${d.id}`, agent: `deploy ${d.id}`, priority: 'P0' });
     return ws;
   }
   const isScheduled = (l) => isLow(l) && prioOf(l) === cfg.scheduledPriority;
+  const inSpareWindow = (t) => {
+    const w = cfg.scheduledSpareWindowUtc; if (!Array.isArray(w) || w.length !== 2) return false;
+    const h = new Date(t).getUTCHours(); return w[0] <= w[1] ? h >= w[0] && h < w[1] : h >= w[0] || h < w[1];
+  };
+  // a catch-up (deferred vpt-host restart) leaves a scheduled run alone during the nightly window (bug-4c604fc3)
+  const sparesScheduled = (d, l) => isCatchUp(d) && isScheduled(l) && inSpareWindow(now());
+  // A queued deploy waits on a lease only where `deploy start` refuses to run because of it: the runner starts with skip_leased, so a
+  // host deploy syncs past device leases and defers the restart to a catch-up. Counting the full blocker set made every nightly STB run
+  // yield to deploys that never waited on it (bug-4c604fc3, 11-22..11-24: 8+ yields a night on vpt-pi1 / vpt-mf1, no run completed).
+  function deployWaitsOn(d, l) {
+    if (d.env !== l.env || !(d.state === 'queued' || d.state === 'awaiting-approval')) return false;
+    if (!deployBlockers(d, { skipLeased: true }).blockers.some((b) => b.id === l.id)) return false;
+    return !sparesScheduled(d, l);
+  }
   // Anyone waiting on this lease: a ticket (any priority) or a queued deploy that it blocks. Drives the continuous-hold limit.
   function holdWaiters(l) {
     const w = waitingTickets(l.env).filter((tk) => tk.agent !== l.agent && leasesConflict(tk, l)).map((tk) => tk.agent);
-    for (const d of S.deploys) if (d.env === l.env && (d.state === 'queued' || d.state === 'awaiting-approval') && deployBlockers(d).blockers.some((b) => b.id === l.id)) w.push(`deploy ${d.id}`);
+    for (const d of S.deploys) if (deployWaitsOn(d, l)) w.push(`deploy ${d.id}`);
     return w;
   }
   const yieldFail = (l, ws) => fail('E_YIELD_REQUIRED', `yield_required: a ${prioOf(ws[0])} claim (${ws.map((w) => w.agent).slice(0, 3).join(', ')}) waits on ${l.env}/${l.resources.join(',')} and this ${prioOf(l)} lease may not be extended: stop at the next turn boundary and release (vpt-lease release ${l.id})`,
