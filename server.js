@@ -883,6 +883,7 @@ const { alert, queueDigest, resetDebounce, digestTick } = createAlerts({ push, n
 const reporter = createReporter({ stateDir: STATE_DIR });   // events from the ghosty-reporter Claude Code plugin (claude-plugin/)
 const mockups = createMockups({
   file: join(STATE_DIR, 'mockups.jsonl'), push, tokenOk: (t) => reporter.tokenOk(t), windowMin: () => managerConfig().mockupWindowMin,
+  lintMode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).mockupLint; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } }, log: (m) => console.log(m),
   send: async (session, text, by) => { await assertAgentPane(session, by); await sendKeys(session, text, true); logSend(session, by, { keys: text }); noteAnswerer(session, by, 'mockup'); },   // the same guarded send as every other owner send
 });
 // Found bugs (found-bugs.js, owner 2026-10-28): a session files a bug outside its scope; owner feed (counter) + manager feed kind `bug`.
