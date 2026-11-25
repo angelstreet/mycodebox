@@ -23,7 +23,8 @@ if bad in text:
     print('ui-review-gate: fail uir-1 1 of 1 page(s) got worse: incidents'); sys.exit(1)
 print('ui-review-gate: pass uir-1 1 page(s) no worse'); sys.exit(0)
 `;
-const world = () => makeWorld({ base: { 'src.js': 'a\n', 'VERSION.txt': '1\n', 'scripts/review/ui_review_gate.py': GATE, 'frontend/src/App.tsx': 'ok\n' } });
+// like the product: several exported folders beside the reviewer (a too small tree hid a broken export)
+const world = (gate = GATE) => makeWorld({ base: { 'src.js': 'a\n', 'VERSION.txt': '1\n', 'scripts/review/ui_review_gate.py': gate, 'scripts/review/ui_pages.jsonl': '', 'scripts/agent/token.sh': '', 'docs/a.md': 'a\n', 'README.md': 'r\n', 'frontend/src/i18n/en.json': '{}\n', 'frontend/src/App.tsx': 'ok\n' } });
 const uiCfg = (w, extra = {}) => ({ paths: ['^frontend/src/'], from: w.lane, ...extra });
 const mk = (w, o = {}) => {
   const stateDir = tmp('lane-state-');
@@ -79,6 +80,15 @@ test('a review that cannot run is not a pass', async () => {
   const w = world(); w.branch('feat', { 'frontend/src/Page.tsx': 'CANNOT\n' });
   const r = await go(mk(w), { branch: 'feat', session: 's1' });
   assert.equal(r.state, 'returned'); assert.match(r.reason, /could not run, so nothing was merged/);
+});
+
+test('an exit code without the reviewer saying so is never a skip or a pass', async () => {
+  for (const gate of ['import sys; sys.exit(2)\n', 'print("hello")\n', 'import sys; print("ui-review-gate: pass uir-1 ok"); sys.exit(2)\n']) {
+    const w = world(gate); w.branch('feat', { 'frontend/src/Page.tsx': 'fine\n' });
+    const r = await go(mk(w), { branch: 'feat', session: 's1' });
+    assert.equal(r.state, 'returned', `${gate}: ${JSON.stringify(r.uiReview)}`);
+    assert.equal(r.uiReview.verdict, 'cannot');
+  }
 });
 
 test('the branch under review cannot rewrite the reviewer', async () => {
