@@ -101,15 +101,17 @@ export function createNightlyUiReview({ stateDir, config, review, event, now = (
     try { if (fs.readFileSync(stamp, 'utf8').trim() === day) return null; } catch { /* never ran */ }
     busy = true;
     try {
-      fs.mkdirSync(path.dirname(stamp), { recursive: true, mode: 0o700 });
-      fs.writeFileSync(stamp, day);   // one try a day, whatever happens
       const u = await review(cfg, { id: `nightly-${day}`, mode: 'nightly' });
       if (u.verdict === 'fail' || u.verdict === 'cannot') {
         await event({ key: `ui-review:nightly:${day}`, title: u.verdict === 'fail' ? `Nightly UI review: new problems on key pages` : 'Nightly UI review could not run',
           body: uiReviewLines(u).slice(0, 1500), url: '/?integration=1', priority: 'default' });
       }
       return u;
-    } catch (e) { log('nightly ui review', e.message); return null; } finally { busy = false; }
+    } catch (e) { log('nightly ui review', e.message); return null; } finally {
+      // stamped once it ended, however it ended: one try a day, but a run that a restart killed is run again, not lost
+      try { fs.mkdirSync(path.dirname(stamp), { recursive: true, mode: 0o700 }); fs.writeFileSync(stamp, day); } catch (e) { log('nightly stamp', e.message); }
+      busy = false;
+    }
   }
   return { tick, start() { timer = setInterval(() => { tick().catch((e) => log('nightly ui review', e.message)); }, everyMs); timer.unref?.(); }, stop() { clearInterval(timer); } };
 }

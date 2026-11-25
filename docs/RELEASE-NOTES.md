@@ -29,6 +29,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A restart no longer loses the day's nightly UI review** — the day is stamped when the run ends, not when it starts · area: harness
+
 - **A restart no longer blocks the review after a deploy** — a ghosty restart during `ui-review-live` left its worktree, and the resumed request answered "could not run" on its own leftover · area: harness
 
 - **A session with a background shell after its turn reads green again** — Claude's footer `1 shell · ↓ to manage` / `1 shell still running` was not recognised as background work, so such a session showed the blue done dot · area: sessions
