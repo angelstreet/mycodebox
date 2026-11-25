@@ -1359,8 +1359,10 @@ function renderParking() {
   const pk = state.parking || { parked: [], over: 0, manual: [], live: 0, cap: 0, candidates: [], ramSavedMb: 0 };
   const hid = state.layout.hidden.filter((n) => state.sessions.some((s) => s.name === n));
   syncHiddenMenu();
-  if (!pk.parked.length && !pk.over && !(pk.manual && pk.manual.length)) { box.classList.add('hidden'); box.innerHTML = ''; return; }
-  const idleText = (m) => (m == null ? '?' : m >= 2880 ? `${Math.round(m / 1440)}d` : m >= 120 ? `${Math.round(m / 60)}h` : `${m}m`);
+  if (!pk.parked.length && !pk.over) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+  const q = String(state.parkQ || '').trim().toLowerCase(), hit = (n) => !q || String(n).toLowerCase().includes(q);
+  const had = document.activeElement?.id === 'parkQ', caret = had ? document.activeElement.selectionStart : 0;
+  const idleText = (m) => (m == null ? '?' : m < 1 ? '<1m' : m >= 2880 ? `${Math.round(m / 1440)}d` : m >= 120 ? `${Math.round(m / 60)}h` : `${m}m`);
   // Two separate folds: Parked (the session cap + what ghosty closed to free RAM, with Resume) and Notes (sessions parked by hand).
   let h = '';
   if (pk.parked.length || pk.over) {
@@ -1369,27 +1371,28 @@ function renderParking() {
     if (pk.parked.length) bits.push(`${Math.round(pk.ramSavedMb / 100) / 10} GB saved`);
     h += `<button class="ph pfold${pk.over ? ' over' : ''}" data-pfold="parkedClosed" aria-expanded="${po}" title="${bits.join(' \u00b7 ')}"><span class="uch${po ? ' on' : ''}"></span>Parked (${pk.parked.length})</button>`;
     if (po) {
+      // search: a long parked list is found by name (owner 2026-11-25); the time on a row is the time since its last message, Resume shows on hover
+      if (pk.parked.length + (pk.candidates || []).length > 6 || q) h += `<input id="parkQ" class="parkq" type="search" placeholder="find a session" autocomplete="off" spellcheck="false" value="${escapeHtml(state.parkQ || '')}">`;
       if (pk.over) {
         h += `<div class="pnote">${pk.over} over the limit. Park the idlest to free memory:</div>`;
-        for (const c of pk.candidates) h += `<div class="prow"><span class="pn">${escapeHtml(c.name)}</span><span class="pm">idle ${idleText(c.idleMin)}</span></div>`;
+        for (const c of pk.candidates) if (hit(c.name)) h += `<div class="prow"><span class="pn">${escapeHtml(c.name)}</span><span class="pm">${idleText(c.idleMin)}</span></div>`;
       }
-      for (const p of pk.parked) h += `<div class="prow"><span class="pn" title="${escapeHtml(p.cwd)} · ${p.rssMb || '?'} MB">${escapeHtml(p.session)}</span><button class="sbtn" data-resume="${escapeHtml(p.session)}">Resume</button></div>`;
+      const ago = (p) => { const t = p.lastActivity || p.parkedAt; return t ? idleText(Math.max(0, Math.round((Date.now() - t) / 60000))) : '?'; };
+      for (const p of pk.parked) if (hit(p.session)) h += `<div class="prow park"><span class="pn" title="${escapeHtml(p.cwd)} · ${p.rssMb || '?'} MB">${escapeHtml(p.session)}</span><span class="pm">${ago(p)}</span><button class="sbtn" data-resume="${escapeHtml(p.session)}" title="Resume ${escapeHtml(p.session)}">Resume</button><button class="pclr" data-forget="${escapeHtml(p.session)}" aria-label="Remove ${escapeHtml(p.session)} from Parked" title="Remove from Parked (the conversation file stays)">${icon('x', 12)}</button></div>`;
     }
   }
-  if (pk.manual && pk.manual.length) {
-    const mo = state.manualClosed !== true;
-    h += `<button class="ph pfold" data-pfold="manualClosed" aria-expanded="${mo}"><span class="uch${mo ? ' on' : ''}"></span>Notes (${pk.manual.length})</button>`;
-    if (mo) for (const m of pk.manual) {
-      const note = [m.how, m.resume ? `resume: ${m.resume}` : '', m.parkedAt ? `parked ${new Date(m.parkedAt).toLocaleString()}` : ''].filter(Boolean).join('\n');
-      const on = state.noteOpen === m.session;
-      h += `<div class="prow note" data-note="${escapeHtml(m.session)}" title="${escapeHtml(note)}"><span class="pn">${escapeHtml(m.session)}</span><span class="pman${on ? ' on' : ''}" aria-label="Show note">${icon('note', 14)}</span></div>${on ? `<div class="pnotebody">${escapeHtml(note) || 'no note'}</div>` : ''}`;
-    }
-  }
+  // the Notes section (sessions parked by hand) is not shown: the owner does not use it (2026-11-25)
   box.innerHTML = h;
   box.classList.remove('hidden');
+  const qi = box.querySelector('#parkQ');
+  if (qi) {
+    qi.oninput = () => { state.parkQ = qi.value; renderParking(); };
+    if (had) { qi.focus(); try { qi.setSelectionRange(caret, caret); } catch { /* search inputs may refuse a range */ } }
+  }
   box.querySelectorAll('[data-pfold]').forEach((b) => { b.onclick = () => { state[b.dataset.pfold] = state[b.dataset.pfold] !== true; renderParking(); }; });
   box.querySelectorAll('[data-note]').forEach((r) => { r.onclick = () => { state.noteOpen = state.noteOpen === r.dataset.note ? '' : r.dataset.note; renderParking(); }; });
   box.querySelectorAll('[data-resume]').forEach((b) => { b.onclick = () => resumeParked(b.dataset.resume, b); });
+  box.querySelectorAll('[data-forget]').forEach((b) => { b.onclick = () => forgetParked(b.dataset.forget, b); });
 }
 // "Hidden sessions" lives in the ⋮ menu (nothing about them shows in the sidebar); the entry appears only when something is hidden
 function syncHiddenMenu() {
@@ -1442,6 +1445,14 @@ async function parkSession(name) {
     else if (gone) toast(`${name} is not running (already parked)`, 3000);
     else topToast(parkRefusal(name, j, r.status), 9000);
   } catch (err) { topToast(`Can't park ${name}: ${err.message}`, 9000); }
+  fetchParking();
+}
+async function forgetParked(name, btn) {
+  if (btn) btn.disabled = true;
+  try {
+    const r = await fetch(`/api/sessions/${encodeURIComponent(name)}/forget-parked`, { method: 'POST' });
+    toast(r.ok || r.status === 404 ? `${name} removed from Parked` : `could not remove ${name}: HTTP ${r.status}`, r.ok || r.status === 404 ? 1800 : 6000);
+  } catch (err) { toast(`could not remove ${name}: ${err.message}`, 6000); }
   fetchParking();
 }
 async function resumeParked(name, btn) {
@@ -1977,7 +1988,7 @@ function layoutSide() {
   for (const sec of (withHeaders ? sections : [{ key: 'other' }])) {
     const members = names.filter((n) => secOfName(n) === sec.key && matchesFilter(n));
     const total = names.filter((n) => secOfName(n) === sec.key).length;
-    if (withHeaders && !(sec.key === 'other' && !total) && !(anyFilter() && !members.length)) plan.push({ hdr: sec, count: members.length === total ? String(total) : `${members.length}/${total}` });
+    if (withHeaders && !(sec.key === 'other' && !total) && !(sec.key.startsWith('g:') && !total && L.groupBy === 'project')   /* grouped by project: a project with no sessions here (all pinned, or none) has no header */ && !(anyFilter() && !members.length)) plan.push({ hdr: sec, count: members.length === total ? String(total) : `${members.length}/${total}` });
     const closed = L.collapsed.includes(sec.key);
     for (const n of members) plan.push({ name: n, sec: sec.key, closed });
   }

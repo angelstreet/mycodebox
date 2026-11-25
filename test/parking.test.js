@@ -563,3 +563,13 @@ test('ownChildTree on a real process tree: a fake claude bash with a sleep child
     process.kill(other.pid, 0);   // the unrelated sleep is still alive
   } finally { try { process.kill(other.pid, 'SIGKILL'); } catch {} try { fake.kill('SIGKILL'); } catch {} }
 });
+
+test('forget: the X on a Parked row drops only the record; an unknown name is null, a bad name 400', async () => {
+  const h = harness();
+  await h.p.park('S', h.facts, { claudeAlive: h.isAlive });
+  assert.equal((await h.p.list()).length, 1);
+  assert.equal((await h.p.forget('S')).sessionId, 'sid');
+  assert.equal((await h.p.list()).length, 0);
+  assert.equal(await h.p.forget('S'), null);
+  await assert.rejects(() => h.p.forget('../x'), /invalid session name/);
+});

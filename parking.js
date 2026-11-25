@@ -328,6 +328,17 @@ export function createParking({ file, tmux, exitWaitMs = 30000, pollMs = 500, sl
   const err = (status, message, reasons) => Object.assign(new Error(message), { status, reasons });
   return {
     async list() { await load(); return Object.values(data.parked).sort((a, b) => b.parkedAt - a.parkedAt); },
+    // The owner clears a parked entry from the list (the X on a Parked row): only the record that lets Resume find the conversation goes, the
+    // conversation file and the worktree are untouched. Returns the removed record, or null when there was none.
+    async forget(name) {
+      await load();
+      if (typeof name !== 'string' || !/^[A-Za-z0-9_.-]{1,40}$/.test(name)) throw err(400, 'invalid session name');
+      if (!Object.hasOwn(data.parked, name)) return null;
+      const rec = data.parked[name];
+      delete data.parked[name];
+      await save();
+      return rec;
+    },
     async get(name) { await load(); return Object.hasOwn(data.parked, name) ? data.parked[name] : null; },
     // facts = { claude: {pid, info, args}|null, minimax: {pid, cwd, args}|null, codex: {pid, cwd, args, sessionId}|null, state, attached, reporterWaiting, backgroundWork, busy[], leases[]|null, rssMb, priority }
     // Exactly one of facts.claude / facts.minimax / facts.codex is set; either way, the same idle / busy / lease checks apply. Returns the list of reasons

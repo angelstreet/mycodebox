@@ -2996,3 +2996,16 @@ body.fv-page{ margin:0; background:var(--bg); }
   .alertrow .leasebar{ flex:1 1 0; }
   .alertrow .attention.none{ display:none; }
 }
+
+/* owner 2026-11-25: compact Parked list - time since the last message on every row, Resume only on hover (always shown where there is no hover), a search box */
+.parkbox .parkq{ width:100%; box-sizing:border-box; margin:2px 0 4px; padding:3px 8px; height:26px; background:var(--bg-3); color:var(--ink); border:1px solid var(--line-2); border-radius:7px; font:inherit; font-size:12px; }
+.parkbox .prow .pm{ color:var(--ink-3); font-size:11px; font-variant-numeric:tabular-nums; white-space:nowrap; flex-shrink:0; }
+.parkbox .prow.park{ position:relative; min-height:22px; }
+.parkbox .prow.park .sbtn{ display:none; height:20px; padding:0 8px; font-size:11px; border-radius:6px; flex-shrink:0; }
+.parkbox .prow.park:hover .pm{ display:none; }
+.parkbox .prow.park:hover .sbtn, .parkbox .prow.park:focus-within .sbtn{ display:inline-flex; align-items:center; }
+@media (hover:none){ .parkbox .prow.park .pm{ display:none; } .parkbox .prow.park .sbtn{ display:inline-flex; align-items:center; } }
+.parkbox .prow .pclr{ display:none; background:none; border:0; color:var(--ink-3); padding:2px; cursor:pointer; line-height:0; border-radius:5px; flex-shrink:0; }
+.parkbox .prow .pclr:hover{ color:var(--waiting); }
+.parkbox .prow.park:hover .pclr, .parkbox .prow.park:focus-within .pclr{ display:inline-flex; }
+@media (hover:none){ .parkbox .prow.park .pclr{ display:inline-flex; } }
