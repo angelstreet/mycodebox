@@ -61,6 +61,8 @@ const EVIDENCE = [
   ['screenshot', /\S+\.(?:png|jpe?g|webp|gif|mp4|webm|wav|mp3)\b|\b(?:screenshot|frame|capture)\s+\S+/i],
   ['KPI number', /\b\d+(?:[.,]\d+)?\s?(?:ms|s|sec|seconds|min|%|fps|kbps|mbps|MB|GB)\b|\b\d+\s*\/\s*\d+\s+(?:tests?|pass(?:ed)?|green|ok|runs?|checks?)\b|\b(?:tests?|pass(?:ed)?)\s*[:=]?\s*\d+\s*\/\s*\d+\b/i],
 ];
+// Pure. Drops uploaded-file paths (@/..., /home/...), bare file paths and URLs from a goal before its words are counted.
+export const stripAttachments = (s) => String(s || '').replace(/@?(?:~|\/)[^\s]*|\bhttps?:\/\/\S+|\S+\.(?:png|jpe?g|webp|gif|pdf|mp4|webm|html?)\b/gi, ' ');
 export function evidenceOf(text) { const t = String(text || ''); return EVIDENCE.filter(([, re]) => re.test(t)).map(([k]) => k); }
 
 // Pure. The task's numbered parts ("1. ...", "2) ...") from the first prompt: the first list of 2..8 consecutive items starting at 1 that is
@@ -112,13 +114,17 @@ const NOT_REACHED = /\b(?:not (?:yet )?(?:achieved|reached|met|done|built|fixed|
 // parts: the task's numbered parts (taskPartsOf); each needs its own line with evidence.
 export function goalReplyOf(text, goal = '', parts = []) {
   const t = unmark(text);
-  const gw = words(goal), tw = words(t);
+  // an attached file or a link is not words to restate: "@/home/.../uploads/...-Screenshot_....png" alone made every reply fail
+  // ("names 0 of the goal's words, 3 needed", 4 sessions looped 3-4 times, 2026-11-24/25). A goal that is only attachments
+  // and links is restated by any reply that gives evidence.
+  const goalText = stripAttachments(goal), onlyAttachments = !words(goalText).size && words(goal).size > 0;
+  const gw = words(goalText), tw = words(t);
   let hit = 0; for (const w of gw) if (tw.has(w)) hit++;
   const need = Math.min(3, Math.max(2, Math.ceil(gw.size / 2)));   // was up to 6: "names 5 of the goal words, 6 needed" rejected a good reply (2026-11-11)
   const evidence = evidenceOf(t);
   const noPart = evidence.length ? partsWithoutEvidence(text, parts) : [];
   // with parts, the reply is judged on evidence per part: a reply that gives one per part restates the goal by doing so
-  const restated = (parts.length && evidence.length && !noPart.length) || /\bgoal(?: as given)?\s*[:=]\s*(?!achieved\b)\S+(?:\s+\S+){2,}/i.test(t) || (gw.size ? hit >= need : false);
+  const restated = (onlyAttachments && evidence.length > 0) || (parts.length && evidence.length && !noPart.length) || /\bgoal(?: as given)?\s*[:=]\s*(?!achieved\b)\S+(?:\s+\S+){2,}/i.test(t) || (gw.size ? hit >= need : false);
   const notReached = NOT_REACHED.exec(t.replace(/\bgoal not achieved\b(?=[^.]*\bif not\b)/i, ''));
   const missing = [];
   if (!restated) missing.push(gw.size ? `a restatement of the goal (it names ${hit} of the goal's words, ${need} needed)` : 'a restatement of the goal ("Goal: ...")');

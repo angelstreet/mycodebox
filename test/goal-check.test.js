@@ -219,3 +219,13 @@ test('goal reply: a "Goal:" line whose first word is short still restates the go
   assert.equal(r.ok, true);
   assert.equal(goalReplyOf('STATUS: done · goal: achieved · evidence: public/app.js:1', '').restated, false, '"goal: achieved" is not a restatement');
 });
+
+test('a goal that is only an uploaded screenshot is restated by any reply with evidence (2026-11-25)', () => {
+  const goal = '@/home/jndoye/.ghosty/uploads/1795591337138-34375f-Screenshot_2026-11-25_at_08.22.10.png';
+  const r = goalReplyOf('Key 1 and mute now match key 2 height. Evidence: /tmp/shots/ble-panel-after.png, int-1a2147ed25cab35f7', goal);
+  assert.equal(r.restated, true);
+  assert.equal(r.ok, true);
+  assert.equal(goalReplyOf('Fixed it.', goal).ok, false, 'still needs evidence');
+  const mixed = goalReplyOf('Done. Evidence: /tmp/x.png', '@/home/u/up/a.png reduce height of key mute and key zero');
+  assert.equal(mixed.restated, false, 'a goal with words beside the screenshot still needs them restated');
+});
