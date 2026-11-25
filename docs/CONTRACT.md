@@ -74,7 +74,7 @@ committed"). Verify UI yourself with headless Playwright. Every turn ends with a
 | Restart `ghosty-sessions` | The lane after a server deploy; anyone else only through `scripts/safe-restart.sh` (it refuses during a deploy) | `systemctl restart ghosty-sessions` or `kill` on the service |
 | Restart a lab `vpt-*` unit | The session holding the host (or `<host>/<device>`) lease, allowlisted units only (owner 2026-10-27, widened 2026-10-31; [REFERENCE](REFERENCE.md#autonomy-by-default-push-deploy-and-recommended-options-owner-2026-10-14)) | `stop`, `enable`, `disable`, `mask`, `daemon-reload`, unit files, non-allowlisted units, production hosts |
 | Close a session (`DELETE /api/sessions/<s>?confirm=<s>`) | The owner; the agent that started the session (`startedBy`) for its own child; the manager only when the owner asks for that session (owner 2026-11-01) | Any automatic close: no tick sends `/exit` or kills a session (owner 2026-10-30). The delete guard refuses a session with an open ask, a lease or unmerged work unless `by=owner` or the spawner (2026-11-11) |
-| Park or rotate a session | Explicit park, `autoParkArchived`, or account rotation on a usage limit (owner 2026-11-06): not a close | — |
+| Park or rotate a session | Explicit park, `autoParkArchived` (the owner archived it in the Claude app: API `status: archived` or the 4090 line; a `mac:` row is removed; owner 2026-11-25), or account rotation on a usage limit (owner 2026-11-06): not a close | — |
 | Kill a process | Your own only (`kill <pid>`, `pkill -P <your pid>`, a pattern naming your worktree) | `killall`, broad `pkill -f` patterns |
 
 ### Hard floor

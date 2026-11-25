@@ -177,3 +177,15 @@ test('the payload carries the sha256 of the hook script', { skip }, async () => 
   const payload = JSON.parse((await run(['--dry-run'], s)).out.trim().split('\n')[0]);
   assert.match(payload.hook_sha, /^[0-9a-f]{64}$/);
 });
+
+test('the payload carries the last Remote Control URL from the transcript (archive-sync matches the archive by its id)', { skip }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mac-hook-rc-'));
+  const tp = path.join(dir, 't.jsonl');
+  const rc = (id) => `{"type":"system","subtype":"bridge_status","content":"/remote-control is active · Continue here, on your phone, or at https://claude.ai/code/session_${id}","url":"https://claude.ai/code/session_${id}","isMeta":false}\n`;
+  fs.writeFileSync(tp, rc('01AAAAAAAAAAAAAAAAAAAAAAAA') + fs.readFileSync(FIXTURE, 'utf8') + rc('01BBBBBBBBBBBBBBBBBBBBBBBB'));
+  const payload = JSON.parse((await run(['--dry-run'], setup({ url: 'http://127.0.0.1:1', transcript: tp }))).out.trim().split('\n')[0]);
+  assert.equal(payload.remote_control_url, 'https://claude.ai/code/session_01BBBBBBBBBBBBBBBBBBBBBBBB');
+  assert.equal(validateStop(payload).v.remote_control_url, payload.remote_control_url);
+  const none = JSON.parse((await run(['--dry-run'], setup({ url: 'http://127.0.0.1:1' }))).out.trim().split('\n')[0]);
+  assert.equal(none.remote_control_url, undefined, 'no bridge line: no URL');
+});

@@ -84,6 +84,8 @@ PROMPT_AT=""; NAME=""; FIRST=""
 if [ -n "$TP" ] && [ -r "$TP" ]; then
   PROMPT_AT=$(grep -E '"type": *"user"' "$TP" | grep -E '"content": *"' | grep -v '"tool_use_id"' | tail -n 1 | sed -n 's/.*"timestamp": *"\([0-9TZ:.+-]*\)".*/\1/p' | head -n 1)
   NAME=$(grep '"customTitle"' "$TP" | tail -n 1 | sed -nE 's/.*"customTitle": *"(([^"\\]|\\.)*)".*/\1/p' | head -n 1)
+  # the Remote Control URL (last "/remote-control is active" line): the dashboard matches an archive in the Claude app by this id (archive-sync.js)
+  [ -n "${MYCODEBOX_RC_URL:-}" ] || MYCODEBOX_RC_URL=$(grep -o '"subtype": *"bridge_status"[^}]*"url": *"https://claude\.ai/code/session_[A-Za-z0-9]*"' "$TP" | tail -n 1 | sed -nE 's/.*"url": *"(https:[^"]*)".*/\1/p')
   # the first prompt (still JSON-escaped, first 2000 chars): the goal the server's goal check quotes back (goal-check.js)
   # the real first prompt: the first user line whose text is a string OR a content list with a text block (a desktop session starts with a list),
   # skipping injected blocks (<task-notification>, <system-reminder>, <command-...>, "Caveat:") and tool results (harness-done-honest 2026-11-11)

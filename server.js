@@ -20,7 +20,7 @@
 //   POST /api/sessions          → {name, agent, cwd, priority?, model?, prompt?} create a tmux session + start the agent
 //   DELETE /api/sessions/:name?confirm=<name> → kill session
 //   POST /api/sessions/:name/park   → record the conversation (Claude id / Codex id / MiniMax cwd), quit the agent (/exit, /quit), kill the tmux session (refuses when not idle / lease held / job running)
-//   (auto) a Claude session archived in the Claude app (Remote Control code 4090 in its transcript, no bridge) is parked every 30 s when done and lease-free; manager.json autoParkArchived:false turns it off
+//   (auto) a Claude session archived in the Claude app (Claude sessions API status archived, polled every 60 s, or Remote Control code 4090 in its transcript) is parked every 30 s when done and lease-free; manager.json autoParkArchived:false turns it off; an archived `mac:` row is removed (archiveSync:false turns the API poll off)
 //   GET  /api/claude-accounts   → Claude account rotation: {auto, autoSwapSessions, active, accounts:[{id,label,configDir,active,exhausted,reset,why,windows}]}
 //   POST /api/claude-accounts   → {id, label, configDir?} add an account (creates its config dir, links ~/.claude's shared parts)
 //   POST /api/claude-accounts/settings → {active?, auto?, autoSwapSessions?, order?, clearMark?}
@@ -115,6 +115,7 @@ import { equivalenceReader, applyEquivalence } from './lease-equivalence.js';
 import { createLeaseService } from './lease-service.js';
 import { createLeaseRoutes, PREFIX as LEASE_API } from './lease-routes.js';
 import { createRemoteStops, PREFIX as REMOTE_API } from './remote-stops.js';
+import { fetchAll as fetchCloudSessions, archivedIds, macRowsToDrop, cseOf } from './archive-sync.js';
 import * as managerApi from './manager.js';
 import { createReadyStore } from './ready-window.js';
 import { noteKey as leaseNoteKey, normAuthority, createLeaseSource, createSessionTracker, summarize as leaseSummary, createLiveness, pinOverrideNote, requestIdentity, eventRecord, eventNote, eventSession, isNoteEvent, noteAllowed, activeHolds, renewalIdleMin } from './lease-source.js';
@@ -2104,6 +2105,24 @@ async function parkSession(name, { limitStop = false, force = false, killGraceMs
   return { ok: true, parked, ...(force ? { killed, leases: leasesHeld } : {}) };
 }
 
+// Archived in the Claude app, from the Claude sessions API (archive-sync.js, owner 2026-11-25): every 60 s the accounts' Remote Control
+// sessions are listed; `archived` ids feed autoParkTick (codebox panes) and remove the matching `mac:` rows (they have no pane to park).
+// Only status `archived` acts. manager.json archiveSync:false turns the poll off (the 4090 transcript path below stays).
+let cloudArchived = new Set();
+const archiveSyncEnabled = () => { try { return JSON.parse(readFileSync(managerConfigFile, 'utf8')).archiveSync !== false; } catch { return true; } };
+async function archiveSyncTick() {
+  if (!archiveSyncEnabled()) { cloudArchived = new Set(); return; }
+  const { list, errors } = await fetchCloudSessions({ accounts: claudeAccounts.config().accounts });
+  if (errors.length) console.error('[archive-sync]', errors.join('; '));
+  if (!list.length) return;   // nothing read (no token, API down): keep the last set, act on nothing new
+  cloudArchived = archivedIds(list);
+  for (const d of macRowsToDrop(remote.archiveRows(), list)) {
+    if (!remote.drop(d.name)) continue;
+    appendFile(join(STATE_DIR, 'archive-sync.jsonl'), `${JSON.stringify({ at: new Date().toISOString(), session: d.name, id: d.id, by: d.by, action: 'removed' })}\n`, () => {});
+    push.record({ title: `Archived in Claude, removed: ${d.name}`, body: 'The Claude app archived this Mac session; it comes back at its next stop.', url: '/', tag: 'auto-park' });
+  }
+}
+
 // Archived in the Claude app (Remote Control ended, code 4090) -> park it when it is done and holds no lease. manager.json autoParkArchived (default on).
 const autoParkSeen = new Map();
 const autoParkEnabled = () => { try { return JSON.parse(readFileSync(managerConfigFile, 'utf8')).autoParkArchived !== false; } catch { return true; } };
@@ -2112,7 +2131,7 @@ async function autoParkTick() {
   const panes = await listPanes();
   const table = await processTable();
   const idx = await claudeIndex.get();
-  const rows = [...panes].map(([name, p]) => ({ name, claude: claudeOfPane(p.pid, table, idx) })).filter((r) => r.claude && !r.claude.info.bridgeSessionId);
+  const rows = [...panes].map(([name, p]) => ({ name, claude: claudeOfPane(p.pid, table, idx) })).filter((r) => r.claude && (!r.claude.info.bridgeSessionId || cloudArchived.has(cseOf(r.claude.info.bridgeSessionId))));
   const readTail = async (info) => {
     const h = await openFile(transcriptFile(claudeProjectsDir, info.cwd, info.sessionId));
     try { const { size } = await h.stat(); const len = Math.min(size, 262144); const b = Buffer.alloc(len); await h.read(b, 0, len, size - len); return b.toString('utf8'); } finally { await h.close(); }
@@ -2120,7 +2139,7 @@ async function autoParkTick() {
   const managers = new Set(loadManagerSessions());
   await autoParkArchived({
     panes: rows, tailOf: readTail, factsOf: parkFacts, checks: (f) => parking.checks(f), seen: autoParkSeen, skip: (n) => managers.has(n),
-    park: (n) => parkSession(n),
+    park: (n) => parkSession(n), cloudArchived: (info) => cloudArchived.has(cseOf(info.bridgeSessionId)),
     notice: async ({ session, parked, reasons }) => push.record({ title: parked ? `Archived in Claude, parked: ${session}` : `Archived in Claude, not parked yet: ${session}`, body: parked ? 'Done and no lease: parked (Resume brings it back).' : reasons.join('; ').slice(0, 300), url: `/?s=${encodeURIComponent(session)}`, tag: 'auto-park' }),
   });
 }
@@ -3634,6 +3653,7 @@ server.listen(PORT, HOST, async () => {
   leaseTick();
   setInterval(leaseTick, 15000);
   setInterval(() => autoParkTick().catch((e) => console.error('[auto-park]', e.message)), 30000).unref?.();
+  setInterval(() => archiveSyncTick().catch((e) => console.error('[archive-sync]', e.message)), 60000).unref?.();
   setInterval(() => leaseService.tick().catch((e) => console.error('[lease-service] tick', e.message)), 5000).unref?.();
   setInterval(() => askGuard.sweep().catch((e) => console.error('[ask-guard] sweep', e.message)), 30000).unref?.();
   setInterval(digestTick, 60000);   // digest tier: one push per 30 min while the owner is awake
