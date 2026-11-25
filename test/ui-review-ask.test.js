@@ -67,3 +67,16 @@ test('the alert path: only needs-owner is taken over, and a second poll while re
     assert.equal(a.take('s1', ask(file), () => assert.fail('pushed twice')), true);
   });
 });
+
+test('a screenshot cited as evidence is not reviewed as the deliverable; a mockup shown only as a picture needs its source', async () => {
+  const seen = [], dir = tmp('ask-');
+  writeFileSync(join(dir, 'frame.png'), 'x');
+  const a = createAskReview({ stateDir: dir, send: async () => {}, branchOf: async () => ({ cwd: dir, base: 'x', files: ['frontend/src/pages/X.tsx'] }),
+    review: async (x) => { seen.push(x); return { verdict: 'pass', summary: 's', table: '' }; } });
+  await a.handle('s1', `Evidence ${join(dir, 'frame.png')}\nSTATUS: needs-owner: look at the page?`);
+  assert.equal(seen[0].tree, dir); assert.equal(seen[0].files, undefined);
+  const sent = [];
+  const b = createAskReview({ stateDir: tmp('ask-'), send: async (s, t) => sent.push(t), branchOf: async () => null, review: async () => assert.fail('nothing to run') });
+  await b.handle('s2', `Mockup: ${join(dir, 'frame.png')}\nSTATUS: needs-owner: mockup ok?`);
+  assert.match(sent[0], /HTML file behind it/);
+});

@@ -27,6 +27,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A cited screenshot no longer fails a needs-owner ask** — the hold reviews the HTML / SVG file or the branch, never the evidence frames a session names · area: harness
+
 - **The UI review gate no longer skips in silence** — the first run through the deployed lane exported the reviewer without its script (`git ls-tree` given a folder and a file inside it lists the file only), and python's exit 2 for "cannot open" read as "not a visual change". The export now asks per path and refuses to run without the script, and a skip or pass counts only when the reviewer's own last line says it · area: harness
 
 - **Graphical work is reviewed by ghosty before you are asked to look at it** — sessions delivered screens nobody had opened, and the owner was the first reviewer. A repo with a `uiReview` block now has the lane preview every visual change before the merge and return it with a table when a page got worse (nothing merges, deploys or asks), review the live pages after a frontend deploy (`returned_after_deploy`), and review the key pages every night; a `needs-owner` stop on something visual is held, reviewed and sent back up to 2 rounds before the owner is pushed with the verdict. The reviewer is taken from the product's main branch, so a session cannot skip, edit or grade it · area: harness
