@@ -10,7 +10,8 @@ import { createDoneCheck } from '../done-check.js';
 import { createFinalAccept } from '../final-accept.js';
 import { isReflectionAsk, reflectionQuestion, ASK_WORDS } from '../reflection.js';
 import { createSuggestions, suggestionsIn, saysNoSuggestions, answersOf, isOwnerTyped, createTypedLog } from '../suggestions.js';
-import { createGoalStore, approvedRound } from '../goal-check.js';
+import { createGoalStore, approvedRound, worthAGoal } from '../goal-check.js';
+import { MAX_ASKS_PER_TICK, ASK_MAX_LOAD_PER_CORE } from '../done-check.js';
 import { displayState } from '../public/state.js';
 import { isOwnersTurn } from '../public/ask-model.js';
 import { deriveButtons, needsOwner } from '../public/buttons.js';
@@ -30,6 +31,7 @@ const ANSWER = [
   '2. add a test for two catch-ups at once', 'Smaller:', '3. shorter journal rows', 'Recommendation: 1 and 2. Should I do them?', '',
   `STATUS: needs-owner: ${ASK_WORDS} — should I do 1 and 2?`,
 ].join('\n');
+const STATUS_ONLY = 'STATUS: needs-owner: improvement suggestions above, nothing built — should I do 6?';
 const day0 = Date.parse('2026-11-26T09:00:00Z');
 
 function rig({ parts = [], goal = GOAL, ...over } = {}) {
@@ -261,10 +263,14 @@ test('record: held from the done line until `no suggestions`; with items until e
   assert.deepEqual(w.ledger.ownerMessage('a', 'yes 1', { via: 'dashboard' }).open, 2);
   assert.equal(w.hold(dodge).state, 'open');
   const end = w.ledger.ownerMessage('a', 'no to the rest', { via: 'typed' });
-  assert.deepEqual([end.open, end.approved.map((i) => i.n)], [0, [1]]);
-  assert.equal(w.hold(dodge), null);
+  assert.deepEqual([end.open, end.approved.map((i) => i.n)], [0, []], 'a no starts nothing new');
+  assert.deepEqual(w.hold(dodge), { state: 'pending' }, 'approved work is not finished: not clear yet');
   assert.deepEqual(w.ledger.get('a').items.map((i) => [i.n, i.answer, i.by, i.via]), [[1, 'yes', 'owner', 'dashboard'], [2, 'no', 'owner', 'typed'], [3, 'no', 'owner', 'typed']]);
-  assert.deepEqual(w.resolved, [['a', 'answered']]);
+  assert.deepEqual(w.resolved, []);
+  const only = rig({ parts: PARTS });
+  only.turn(ANSWER); only.read(ANSWER); only.ledger.ownerMessage('a', 'no all');
+  assert.equal(only.hold(dodge), null, 'all no: it can end done');
+  assert.deepEqual(only.resolved, [['a', 'answered']]);
   // the same list shown again is not reopened; the record survives a restart
   w.turn('Built 1.\n' + ANSWER); w.read('Built 1.\n' + ANSWER);
   assert.equal(w.ledger.openOf('a').length, 0);
@@ -308,6 +314,57 @@ test('the dashboard: open suggestions read as the owner\'s turn, a pending refle
   assert.equal(displayState({ ...open, state: 'idle' }), 'waiting');
   assert.equal(displayState({ ...open, state: 'working' }), 'working');
   assert.equal(isOwnersTurn(row({ suggestions: { state: 'pending' } })), false);
+});
+
+test('each yes starts its work at once, keeps the unfinished approvals in the new task, and drops them once that work is asked about', () => {
+  const r = rig();
+  r.turn(ANSWER); r.read(ANSWER);
+  const first = r.ledger.ownerMessage('a', 'yes 2');
+  assert.deepEqual([first.open, first.approved.map((i) => i.n)], [2, [2]], 'two items still open, and the approved one starts');
+  assert.deepEqual(r.ledger.ownerMessage('a', 'yes 1').approved.map((i) => i.n).sort(), [1, 2]);
+  r.ledger.asked('a', DONE);   // the approved work's done was accepted
+  assert.deepEqual(r.ledger.ownerMessage('a', 'yes 3').approved.map((i) => i.n), [3]);
+});
+
+test('a command that printed a list is not the session speaking: only what follows the last tool call is read', () => {
+  const pane = [
+    'Bash(cd repo && node -e "print(suggestionsIn(list))" )', '  ⎿  Suggestions:', "     1. [ 6, 'worth', 'Ask the question sooner' ]", '     … +16 lines (ctrl+o to expand)',
+    'The list parses as intended.', STATUS_ONLY,
+  ].join('\n');
+  assert.deepEqual(suggestionsIn(pane), []);
+  assert.deepEqual(suggestionsIn('…) ⎿  Suggestions:\n      1. printed by a command\nDone.\n' + STATUS_ONLY), []);
+  assert.equal(suggestionsIn(pane.replace('The list parses as intended.', 'Suggestions:\n1. a real one')).length, 1);
+});
+
+test('the questions go out sooner: they pass at a load that holds back other pushes, with their own cap; bounces keep the old limits', async () => {
+  const r = rig({ parts: PARTS });
+  const six = ['a', 'b', 'c', 'd', 'e', 'f'].map((name) => ({ name, cwd: '/w/a', text: VERIFIED }));
+  const loaded = r.check({ pressure: () => ({ loadPerCore: 2.2, ramAvailPct: 60 }), listDone: async () => six.map((s) => ({ ...s, doneAt: r.now() + 1000 })), goalEntryOf: () => ({ goal: GOAL, parts: PARTS }) });
+  r.advance(60e3);
+  const t = await loaded.tick();
+  assert.equal(t.goalCheck.reflected.length, MAX_ASKS_PER_TICK);
+  const busy = r.check({ pressure: () => ({ loadPerCore: ASK_MAX_LOAD_PER_CORE + 1, ramAvailPct: 60 }) });
+  r.turn(VERIFIED, 'z');
+  assert.equal((await busy.tick()).goalCheck.reflected.length, 0, 'a really busy host still waits');
+  assert.equal(typeof loaded.soon, 'function');
+});
+
+test('soon(): one early tick, however many sessions finish together', async () => {
+  let ticks = 0;
+  const dc = createDoneCheck({ stateDir: tmp('soon-'), git: async () => '', listDone: async () => { ticks++; return []; }, send: async () => {}, log: { error() {} } });
+  dc.soon(20); dc.soon(20); dc.soon(20);
+  await new Promise((res) => setTimeout(res, 120));
+  assert.equal(ticks, 1);
+  dc.stop();
+});
+
+test('a session without a goal takes the first real task the owner types: not a command, a yes or a word of steering', () => {
+  for (const t of ['continue', 'yes all', 'yes 1 3, no 2', '/compact the conversation now please', 'ok do it now', 'Stop hook feedback: do the thing again now', 'no to the rest of them please']) assert.equal(worthAGoal(t), false, t);
+  assert.equal(worthAGoal('show the model and effort in the dock for every Claude session'), true);
+  const goals = createGoalStore({ stateDir: tmp('first-goal-') });
+  const g = goals.capture('ghosty', 'review the menu and tell me what we can remove:\n1. rules\n2. usage', 'first-owner-prompt', { goalOnly: true });
+  assert.match(g.goal, /^review the menu/);
+  assert.deepEqual([g.parts, g.timeBoxMs], [[], null], 'a prompt typed mid-session is not a brief');
 });
 
 test('popup, notification and voice buttons say what they approve: no generic "Yes, continue" while suggestions are open', () => {

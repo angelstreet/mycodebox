@@ -36,7 +36,7 @@ Rules the server enforces on this channel:
   A goal-check reply always arrives with `stop_hook_active: true`, so the hook posts `takes_reflect: true`, and when the server answers the
   POST with `reflect: true` the hook waits for that one answer. It is sent once per task, so it cannot loop. A hook copy without
   `takes_reflect` is never answered there: the manager gets the question (`reflection-relay:<session>`) and sends it with `SendMessage`.
-  **Update the Mac copy:** `cp scripts/mac-stop-hook.sh ~/bin/mycodebox-stop-hook.sh`.
+  **Update the Mac copy:** `integrate self-update` (twice the first time, see "Mac / cloud sessions" below).
 - The hook also sends `last_prompt` (the last typed prompt, only when 400 characters or shorter): your yes / no on a session's improvement
   suggestions is read from it. With an older copy, answer from the dashboard.
 - A stop that arrives with `stop_hook_active: true` (Claude is already continuing because of a hook) is journalled and
@@ -112,6 +112,9 @@ installs them atomically into `~/.local/bin` (`$MYCODEBOX_BIN_DIR` overrides) an
 says "current". `found-bug --self-update` does the same. `integrate request` and `found-bug` print one line ("client scripts are
 old: run integrate self-update") when the server's `CLIENT_SCRIPTS_VERSION` is newer, and `integrate request` prints a hint when
 `found-bug` is not installed. Never blocking. Any session on the Mac can run it; nobody has to copy files by hand again.
+Since version 9 (2026-11-26) it also updates the **Stop hook** (`~/bin/mycodebox-stop-hook.sh`, `$MYCODEBOX_HOOK_PATH` overrides), only
+where one is installed, with a `.bak` copy. A copy older than version 9 does not know the hook: **run `integrate self-update` twice** the
+first time (the first run installs the new updater, the second the hook).
 
 **First install** (once, from a checkout that has this change, e.g. a fresh `git pull` of main; later updates need no checkout):
 
