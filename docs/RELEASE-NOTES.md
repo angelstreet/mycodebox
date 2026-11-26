@@ -35,6 +35,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A picture an agent saved in /tmp opens from the reader** — the link to `/tmp/vpt-shots/…jpg` answered 403 (only the home folder and the Claude scratchpads were served); media files this user owns under `/tmp` are served too, never through a hidden folder or a non-media type · area: reader
+
 - **A new Claude session no longer loses its first turn's report** — the reporter plugin's first send can take over 800 ms on a cold start, which it read as "ghosty is down" and stayed silent for 30 s, dropping the first prompt and turn end. A send that answers late now ends the silence. Also documented: on Team / Enterprise accounts Claude Code's `cc-plugin-sec-default` skips every `classic.*` plugin hook (organisation policy, not changed here); the done check works there from `turn.end` (`test/team-account-reporter.test.js`), what is missing and the one admin setting are in REFERENCE "Session reporter" · area: reporter
 
 - **Two branches adding a release note no longer bounce each other** — the integration lane merges clashing new entries of `docs/RELEASE-NOTES.md` itself, keeping each once (needs `unionFiles` for mycodebox in `integration.json`); any other change to the list is still returned · area: integration
