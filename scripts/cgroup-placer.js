@@ -4,7 +4,7 @@
 // dev stacks plus 3-4 parallel `npm test` runs hit the cap, thread creation failed and claude died with "Aborted".
 //   core     (CGROUP_CORE, default manager,mycodebox-v2,mm-manager)  codebox-core.slice      no cap, CPU first
 //   sessions (every other tmux session, one scope each)               codebox-sessions.slice  6144 tasks
-//   tests    (npm test/ci, node --test, pytest, vitest, jest, ...)   codebox-tests.slice     1024 tasks, CPU last
+//   tests    (npm test/ci, node --test, pytest, vitest, jest, ...)   codebox-tests.slice     2048 tasks, CPU last, 400% cap
 // A process whose parent died (ppid 1) goes to cb-orphans.scope in the sessions slice: it still counts, and
 // `systemd-cgtop` names it. Scopes are created by systemd (StartTransientUnit), later pids join through cgroup.procs.
 //   scripts/cgroup-placer.js            (systemd/ghosty-cgroup-placer.service, as root, polls every 2 s)

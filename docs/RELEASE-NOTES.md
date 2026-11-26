@@ -3,6 +3,8 @@
 The release note of this repo (owner 2026-11-13). Every merged code change (not docs-only) adds one entry at the top of
 `## Unreleased`; the done-check reads the merged diff for this file (REFERENCE "Closing review"). Entry form: one line,
 
+- **The daily checks now say when an installed systemd unit lags its repo template** — a merged `CPUWeight=20` for health-watch sat uninstalled for 2 days and the CPU slice templates still said 300 % after the host moved to 400 %. `installed-copies-check.js` compares each `systemd/` template (comments dropped, `<user>`/`<uid>` filled) with `/etc/systemd/system/<unit>` plus its drop-ins and reports every template line missing on the host; host-only lines and local `Environment=` values are fine, a unit not installed is listed, not a finding. Report only: installing stays a root step. The tests slice and placer templates now match the reviewed host settings (400 %, 2048 tasks) · area: health
+
 - **A deploy's server-restart warning no longer wakes the manager** — each queued server deploy raised it twice ("waiting up to 10 min", "restarting now") with nothing to do; it is still in the event file and the owner views, and a failed deploy still wakes urgently · area: manager
 
 - **Open tabs pick up the play-on-tap change, and a late render stays silent** — a tab reloads only when `sw.js` changes, so tabs opened earlier kept rendering every reply; the shell cache version is bumped. Audio no longer starts if you left the reply while it rendered · area: voice
