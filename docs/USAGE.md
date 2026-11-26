@@ -53,6 +53,14 @@ Browser and OS support varies; accepting a certificate warning is not a reliable
 
 An image or file that will not attach: open `/upload-debug.html` on the device that fails (the Mac browser or the phone app). It shows the browser's network facts, uploads a test image or the real file with its timing, and lists what the server and the browsers logged (refused type such as HEIC, too big, the connection dropped, offline). "copy for the agent" puts that log on the clipboard. Slow uploads from a Mac are usually the network path: `tailscale status` on the codebox shows `relay` instead of a direct address for that Mac; pictures over 250 KB are shrunk before sending for that reason.
 
+## The More menu
+
+- **Rules**: AGENTS.md, the STATUS table and the contract, read-only (`GET /api/rules`).
+- **Session log**: the selected session's stats, your prompts, its STATUS lines and the manager's events in time order (`GET /api/timeline/<session>`; the prompts and STATUS lines come from a Claude session's own file).
+- **Usage & cost**: tokens and API-equivalent cost per agent, project, model, day and session; "classic view" opens the compact sheet.
+- **Notifications**: turns the phone / browser alert on; the bell shows the feed.
+- **Legacy & rarely used**: V2 tasks, Install app, and the older pages a new page replaced.
+
 ## Optional panels
 
 The More menu also has **Preview new pages**, which opens a separate tab with sample-data designs for AI manager,
