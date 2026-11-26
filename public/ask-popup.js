@@ -100,8 +100,9 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
   function view(item) {
     const st = state.status[item.name];
     if (!st) return null;
-    const d = deriveButtons({ state: st.state, stall: st.stall, triage: st.triage });
-    const ai = st.triage?.ai || null;
+    const owed = st.suggestions?.state === 'open';   // open suggestions: no AI pick, the answer is the owner's own
+    const d = deriveButtons({ state: st.state, stall: st.stall, triage: owed ? null : st.triage, suggestions: st.suggestions });
+    const ai = owed ? null : st.triage?.ai || null;
     let aiId = ai?.proposed_reply ? mapAiToButton(d.buttons, d.kind, ai.proposed_reply) : null;
     const btns = d.buttons.map((b) => (b.id === aiId && ai?.forbidden ? { ...b, confirm: true } : b));   // a forbidden AI pick needs the second tap
     if (!btns.some((b) => b.reply)) btns.push({ id: 'reply', label: '\u270e reply\u2026', reply: true });   // a live menu has no Reply button of its own

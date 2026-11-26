@@ -1534,7 +1534,7 @@ const minimaxToldShare = new Map();   // session -> ms of its last share alert (
 function voiceItemOf(session, kind, stateHint = null) {
   try {
     const state = stateHint ?? latest?.status?.[session]?.state ?? (kind === 'waiting' ? 'waiting' : 'done');
-    return voiceStopItem(session, { state, stall: stallOf(session), triage: triageOf(session), auto: autoOf(session), lastActivitySec: 0 }, { mgrs: new Set(loadOwnerHiddenSessions()), isPaused: (n) => sessionMeta.isPaused(n) });
+    return voiceStopItem(session, { state, stall: stallOf(session), triage: triageOf(session), auto: autoOf(session), lastActivitySec: 0, suggestions: suggestions.hold(session, '') }, { mgrs: new Set(loadOwnerHiddenSessions()), isPaused: (n) => sessionMeta.isPaused(n) });
   } catch { return null; }
 }
 // Debounced per session and kind, so a "done" never swallows a "needs you" that follows it.

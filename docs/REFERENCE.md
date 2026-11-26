@@ -2212,6 +2212,8 @@ reflection reply.
   when nothing is left to answer. A list under another status line is pushed to the owner at once, and a done turn with open items is told
   once to end `needs-owner`. A reply that answers neither way is asked once more. The manager's own sessions are not held; an accepted-final
   result is not held as pending, but its open items still are.
+- **Buttons** (answer popup, notification actions, voice): while items are open they are `Yes to all N` (sends `yes all`) and `No to all N`
+  (`no all`), with the items listed; no AI pick and no generic `Yes, continue`, which would have approved everything without saying so.
 - **The owner's answer** (`answersOf`, per item): `yes 1 3, no 2`, `1 yes, 2 no`, `do 1 and 3`, `no 2-3`, `only 1`, `do 1, no to the rest`,
   `yes` / `no` / `no all` for every open item. A message with other words (a task, a question), a bare number or a bare `ok` records nothing,
   and unmentioned items stay open. It counts when it comes from the dashboard, phone or desktop app (a browser request with no `by`), a voice
