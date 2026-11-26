@@ -31,6 +31,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A parked note also arrives during a long turn** — a Claude session working for an hour gets no new prompt, so an overlap warning could land after its commit; the reporter plugin now also attaches waiting notes after a tool call (at most one check a minute) · area: harness
+
 - **The CPU placer finds the tmux server's unit itself, also caps the lane's test runs, and health-watch tells you when it is blind** — `cgroup-placer.js` read a fixed unit (`mm-manager-session.service`) while every pane lived in `ghosty-base-session.service`, so the codebox slices stayed empty for 5 days and tests ran uncapped (load 13-20 on 6 cores). It now reads the source from the tmux server's cgroup, warns when none of the panes are in it, moves the lane's test-shaped processes (the dashboard server stays) into `cb-lane.scope` (weight 400), counts `tsc` and `tesseract` as test work, and puts `ghosty` in the core slice. `scripts/test-run.js` runs 3 test files at once (Node's default was 5). `health-watch` raises `cpuslices` when CPU pressure avg300 is over 50 % and the slices are empty. Needs the root steps in `~/CODEBOX_TROUBLESHOOTING.md` (R1-R4) to take effect · area: codebox cpu
 
 - **No more wakes just to answer `STATUS: acknowledged`** — a changed AGENTS.md, the overlap and shared-checkout guards and the lease pin notes are no longer typed into a session: each is a note delivered once with its next real turn (Claude: hidden context from the reporter plugin; other agents: added to the next message ghosty sends). A finished session was woken 3 times in 30 min, re-reading its whole context each time · area: harness

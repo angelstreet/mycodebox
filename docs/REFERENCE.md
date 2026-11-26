@@ -1142,7 +1142,7 @@ event) plus the Claude session id and cwd; a session outside tmux is ignored.
 | `prompt` (`prompt.submit`) | the submitted text (exact, 8 KB cap), `synthetic` for engine-raised prompts such as a finished background task | the owner's reply in the stall `outcome` (`via: "reporter"`); a prompt after a stall also counts as the session moving on |
 | `turn.end` (`turn.complete`) | the final answer (exact), reason, usage; subagent turns carry `agentId` and are ignored as the session's turn | closing text of the stall classifier |
 | `stop` (`classic.Stop`) | `last_assistant_message`, `backgroundWork` = background tasks in flight | `background_wait` when > 0 and the turn does not end on a hand-over STATUS line (below); artifact live-update monitors are not counted |
-| `notes.take` / `notes.ack` (`prompt.submit`) | the ids delivered | answers the parked [session notes](#session-notes-owner-2026-11-26); this is the one place the plugin is not a pure observer (it adds `context` to the prompt) |
+| `notes.take` / `notes.ack` (`prompt.submit`, `classic.PostToolUse(Failure)`) | the ids delivered | answers the parked [session notes](#session-notes-owner-2026-11-26); this is the one place the plugin is not a pure observer (it adds `context` to the prompt or tool result) |
 | `waiting` (`classic.PermissionRequest`, `classic.Notification` except idle / auth) | message | marks the session `waiting` even when the pane regex missed it, while the pane stays still |
 | `agents` (`agent.spawn`, `classic.SubagentStart/Stop`, `classic.TeammateIdle`, after `turn.complete`) | `$.agent.list()`: id, type, status, description, sent only when it changed | subagent count + statuses in the ⚡ tooltip |
 
@@ -1842,6 +1842,9 @@ next real turn:
   `context` beside the prompt (any prompt: the owner's, a harness message, a task notification) and sends `notes.ack` once the
   prompt entered. Ghosty down or a dropped prompt: the note waits. Slash commands and headless children (`claude -p` in the same
   pane) take nothing.
+- **Claude, during a long turn:** no new prompt comes, so the plugin also asks after a tool call (`classic.PostToolUse` and
+  `PostToolUseFailure`, at most once per 60 s) and attaches the note as `additionalContext`, then acks it. An overlap or
+  shared-checkout note thus arrives before the commit. Subagent tool calls take nothing. Still no turn is started.
 - **No hook** (Codex, MiniMax, OpenCode, a Claude process whose plugin never asked): the note is appended to the end of the next real
   message ghosty types (`sendKeys`): at least 12 characters with a space, not a `/` / `!` / `#` command, no menu on screen. Appended,
   so the prompt's sender is still matched on its start. A prompt typed straight into such a terminal does not carry it.
