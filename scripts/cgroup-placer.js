@@ -128,14 +128,22 @@ function panes() {
 }
 const tmuxServers = () => { try { return new Set(execFileSync('pgrep', ['-x', 'tmux: server'], { encoding: 'utf8' }).split('\n').filter(Boolean).map(Number)); } catch { return new Set(); } };
 const MGR = ['org.freedesktop.systemd1', '/org/freedesktop/systemd1', 'org.freedesktop.systemd1.Manager'];
+export const isStaleScopeError = (e) => /already loaded|fragment file/i.test(String(e?.stderr || e?.message || e));
 // New scope: systemd creates it (no per-scope cap, the slice's TasksMax governs). Existing scope: write the pid into its
 // cgroup.procs; AttachProcessesToUnit would need Delegate=yes, which a transient scope cannot gain later.
 function move(scope, slice, pids) {
   const dir = `${CG}/codebox.slice/${slice}/${scope}`;
   if (existsSync(dir)) { for (const pid of pids) writeFileSync(`${dir}/cgroup.procs`, String(pid)); return; }
   const weight = scope === LANE_SCOPE ? ['CPUWeight', 't', String(LANE_WEIGHT)] : [];
-  execFileSync('busctl', ['call', ...MGR, 'StartTransientUnit', 'ssa(sv)a(sa(sv))', scope, 'fail', String(3 + (weight.length ? 1 : 0)),
+  const start = () => execFileSync('busctl', ['call', ...MGR, 'StartTransientUnit', 'ssa(sv)a(sa(sv))', scope, 'fail', String(3 + (weight.length ? 1 : 0)),
     'PIDs', 'au', String(pids.length), ...pids.map(String), 'Slice', 's', slice, 'TasksMax', 't', '18446744073709551615', ...weight, '0'], { stdio: 'pipe' });
+  try { start(); } catch (e) {
+    // a scope created with a pid that had already exited ends `failed` and stays loaded: every later start answers "already loaded" and nothing of that class is placed
+    // (2026-11-26: cb-tests.scope and cb-lane.scope stayed failed for an hour, so the test cap did nothing). Clear it and start once more.
+    if (!isStaleScopeError(e)) throw e;
+    execFileSync('systemctl', ['reset-failed', scope], { stdio: 'pipe' });
+    start();
+  }
 }
 // True when tmux has panes but none of their processes sits in the source cgroup or a placed scope: the placer is looking at the wrong unit.
 export function blind(paneMap, procs) { if (!paneMap.size) return false; for (const pid of paneMap.keys()) if (procs.has(pid)) return false; return true; }

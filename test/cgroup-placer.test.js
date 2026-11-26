@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isTest, isLaneHeavy, plan, scopeName, SLICES, sourceOf, blind, LANE_SCOPE, DEFAULT_SOURCE } from '../scripts/cgroup-placer.js';
+import { isTest, isLaneHeavy, isStaleScopeError, plan, scopeName, SLICES, sourceOf, blind, LANE_SCOPE, DEFAULT_SOURCE } from '../scripts/cgroup-placer.js';
 
 test('isTest judges argv shape, not prompt text', () => {
   for (const c of ['npm test', '/usr/bin/node /usr/local/bin/npm test', 'npm ci --no-audit', 'npm run test',
@@ -81,4 +81,9 @@ test('plan: the lane\'s UI review (vite, esbuild, headless chrome) goes to cb-la
   const got = Object.fromEntries(plan(procs, new Map(), new Set()).map((m) => [m.pid, `${m.slice}/${m.scope}`]));
   assert.deepEqual(got, { 1001: `${SLICES.tests}/${LANE_SCOPE}`, 1002: `${SLICES.tests}/${LANE_SCOPE}`, 1003: `${SLICES.tests}/${LANE_SCOPE}` });
   assert.equal(isLaneHeavy('node server.js'), false); assert.equal(isLaneHeavy('claude --dangerously-skip-permissions'), false);
+});
+
+test('isStaleScopeError: the failed-scope answer is recognised, other errors are not', () => {
+  assert.equal(isStaleScopeError({ stderr: 'Call failed: Unit cb-tests.scope was already loaded or has a fragment file.' }), true);
+  assert.equal(isStaleScopeError(new Error('Access denied')), false);
 });
