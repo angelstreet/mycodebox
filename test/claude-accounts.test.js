@@ -199,3 +199,30 @@ test('resumeCommand: a model override replaces the recorded --model (fable swap 
   assert.match(resumeCommand({ ...a, model: 'opus' }), /--model opus/);
   assert.doesNotMatch(resumeCommand({ ...a, model: 'opus' }), /fable/);
 });
+
+test('false stop: a limit stop seen in a pane does not exhaust an account whose own windows have room; a stale mark is cleared', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'cacct-f-'));
+  const state = join(home, 'state');
+  let now = NOW;
+  try {
+    await mkdir(state, { recursive: true });
+    const m = createClaudeAccounts({ file: join(state, 'claude-accounts.json'), stateDir: state, home, now: () => now });
+    await m.add({ id: 'team1', label: 'Team 1' });
+    await writeFile(rateFile(state, 'default'), JSON.stringify(rl(97, 40)));
+    await writeFile(rateFile(state, 'team1'), JSON.stringify(rl(27, 21)));
+    await m.refresh();
+    assert.equal(m.active().id, 'team1');
+    await m.markExhausted('team1', { reason: 'usage limit stop in s1' });
+    assert.equal(m.view().accounts.find((a) => a.id === 'team1').exhausted, false);
+    assert.equal(m.active().id, 'team1');
+    // a mark set while the reading was missing is dropped once a newer reading shows headroom
+    await rm(rateFile(state, 'team1'));
+    await m.refresh();
+    await m.markExhausted('team1', { reason: 'stop' });
+    assert.equal(m.view().accounts.find((a) => a.id === 'team1').exhausted, true);
+    now = NOW + 60e3;
+    await writeFile(rateFile(state, 'team1'), JSON.stringify({ ...rl(27, 21), at: now }));
+    await m.refresh();
+    assert.equal(m.view().accounts.find((a) => a.id === 'team1').exhausted, false);
+  } finally { await rm(home, { recursive: true, force: true }); }
+});
