@@ -45,6 +45,8 @@
 # 2026-11-15 (bug-2279681a, the manager's list of wakes it did nothing on): time-box alerts (`time-box:*`) and a no-progress of a non-Claude session are deferred even though
 # no-progress is urgent; a disk / quota alert under 95% never closes the batch window (policy urgent applies from 95%); the manager's own undelivered integration result
 # (`int-*:*:manager:undelivered`) and the stops of the `cmtest-*` probe sessions are dropped. test/manager-event-filter.test.js pins each.
+# 2026-11-26: the deploy runner's server-restart warning (`deploy` state=warning, priority high: "waiting up to 10 min", then "restarting now") is dropped: the runner
+# waits and restarts by itself and there is nothing to do (3 wakes in 11 min). It stays in manager-events.jsonl and the owner views; a failed deploy still wakes urgently.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STATE_DIR="${GHOSTY_STATE_DIR:-$HOME/.local/state/ghosty}"
 POLICY_DEFAULT="$HERE/manager-event-policy.json"
@@ -89,6 +91,7 @@ jq -c --unbuffered --argjson policy "$POLICY" '
   def selfappr: (((.kind//"")|tostring)|test("^self-approval:"));
   def routine:
     ((.kind=="deploy") and (.state=="start" or .state=="done") and ((.blockedBy//[])|length)==0)
+    or ((.kind=="deploy") and (.state=="warning"))
     or ((.jev.pick=="ignore") and ((.jev.confidence//0) >= 0.9) and (.kind=="deploy") and (.state!="failed") and (.state!="orphan"))
     or ((.jev.pick=="ignore") and ((.jev.confidence//0) >= 0.9) and (.kind=="lease") and (.state=="released"))
     or ((.kind=="lease") and (.state=="released") and (((.title//"")|test("\\((agent )?manager:deploy\\)")) or ((.body//"")|test("by manager:deploy \\(deploy-finished\\)"))))

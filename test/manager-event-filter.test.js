@@ -311,3 +311,16 @@ test('quota under 95% and a refused self-approval are deferred (d), never urgent
     + ev({ key: 'int-1:sa', kind: 'self-approval:int-1', title: 'x passed --approved-by on b', priority: 'high', body: 'only a manager may' })));
   assert.deepEqual(r.map((x) => [x.l.key, !!x.d, !!x.u]), [['quota:a', true, false], ['quota:b', false, true], ['int-1:sa', true, false]]);
 });
+
+// 2026-11-26: the runner's server-restart warning woke the manager twice per deploy with nothing to do.
+test('deploy restart warnings open no wake (either phase); a failed deploy still wakes urgently', () => {
+  const warn = (phase) => ev({ key: 'deploy:259a6e01:warning', kind: 'deploy', state: 'warning', priority: 'high', deployId: '259a6e01',
+    title: 'deploy lab server: server restart will lose 1 running task(s): r1 (codebox:fake on lab-host/host, progressing)', body: `holders: codebox:fake — ${phase}`,
+    jev: { skipped: 'no credit', ruleDefault: 'rules_handle' } });
+  const failed = ev({ key: 'deploy:259a6e01:failed', kind: 'deploy', state: 'failed', priority: 'high', body: 'rc=1' });
+  const env = { ...process.env, GHOSTY_STATE_DIR: tmp('ghosty-filt-') };
+  const r = run(env, warn('waiting up to 10 min for them to end') + warn('restarting now') + failed);
+  assert.equal(r.status, 0, r.stderr);
+  const out = r.stdout.split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  assert.deepEqual(out.map((o) => [o.l.state, o.u, o.d]), [['failed', true, false]]);
+});

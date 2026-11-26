@@ -3,6 +3,8 @@
 The release note of this repo (owner 2026-11-13). Every merged code change (not docs-only) adds one entry at the top of
 `## Unreleased`; the done-check reads the merged diff for this file (REFERENCE "Closing review"). Entry form: one line,
 
+- **A deploy's server-restart warning no longer wakes the manager** — each queued server deploy raised it twice ("waiting up to 10 min", "restarting now") with nothing to do; it is still in the event file and the owner views, and a failed deploy still wakes urgently · area: manager
+
 - **Open tabs pick up the play-on-tap change, and a late render stays silent** — a tab reloads only when `sw.js` changes, so tabs opened earlier kept rendering every reply; the shell cache version is bumped. Audio no longer starts if you left the reply while it rendered · area: voice
 
 - **Read-aloud renders only when you tap play** — every reply the reader showed started a piper render (90 in 24 h) whether or not it was heard. The first tap now renders, then plays; on a browser that refuses the late start (iPhone), tap play again · area: voice
