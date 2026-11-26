@@ -31,6 +31,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The UI review runs again, and a new import in the reviewer can no longer break it** — the lane copied a fixed list of folders; once VirtualPyTest's reviewer imported a script outside it, graphical requests came back on `ModuleNotFoundError`. The export now also follows the reviewer's imports, transitively, on the product's target branch (`scripts/ui-review-closure.py`) · area: integration
+
 - **A session that ends on `needs-owner` stays red** — Claude lists its artifact live-update monitors as background work, which made such a stop a "background wait" (green, no ask, no push). Those monitors are no longer counted, a closing hand-over STATUS outranks any background count, and the row keeps its verdict after a bare keypress or a server restart · area: manager
 
 - **A browser with no saved choice opens cards as the reader** — the default was the reader on a phone only, so a desktop browser that had lost its site data (or a new one) showed the raw terminal until `Aa` was tapped; the reader is now the default everywhere, `>_` still switches to the terminal and is remembered · area: reader

@@ -1622,7 +1622,11 @@ Optional `"fixWindow": {"from": 1, "to": 6, "tz": "Europe/Zurich"}` (owner, 2026
 The reviewer itself is in the product repo (`scripts/review/ui_review*.py`, page map `ui_pages.jsonl`, rules and measured
 false positives in `docs/agent/platform/UI_REVIEW.md`). ghosty only starts it and acts on the verdict. It is exported from
 the product's **main** branch (`ui-review-lane.js`), never from the branch under review. Until it is on main the gate stays
-out of the way (`absent`).
+out of the way (`absent`). The export is a short fixed list (`EXPORT`: data and tools it reads) plus every product file that
+`scripts/review/*.py` imports, transitively and lazy imports included, with the data files beside those modules
+(`scripts/ui-review-closure.py` parses them at the same ref), so a new import needs no ghosty change. Not followed:
+`importlib` / subprocess by path (such a file must be under `EXPORT`). Third-party packages come from the service's
+`python3`. `test/ui-review-closure.test.js` also imports the real exported reviewer where a product clone exists.
 
 | Where | What | A fail |
 |---|---|---|

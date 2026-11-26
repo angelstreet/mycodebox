@@ -3,14 +3,17 @@
 // from the merged tree and reviewed; a fail returns the request (nothing merges, deploys or asks anybody). After a frontend deploy the
 // live pages are reviewed again, and once a night the key pages. The reviewer lives in the product repo (scripts/review/ui_review_gate.py)
 // and is exported from ITS target branch, never from the branch under review: a session cannot skip, edit or grade it.
+// The export is EXPORT plus every product file scripts/review/*.py imports, transitively (scripts/ui-review-closure.py).
 // A repo opts in with, in <state>/integration.json:
 //   "uiReview": { "paths": ["^frontend/src/"], "from": "/abs/lane/clone/of/the/product", "ref": "origin/main", "repo": "virtualpytest",
 //                 "liveScopes": ["frontend", "full"], "timeoutMin": 15 }
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export const EXPORT = ['scripts/review', 'scripts/agent', 'docs', 'frontend/src/i18n', 'scripts/promo/concepts', 'README.md'];
 export const GATE = 'scripts/review/ui_review_gate.py';
+const CLOSURE = fileURLToPath(new URL('./scripts/ui-review-closure.py', import.meta.url));
 const sq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 
 // -> the validated block, null when absent, or { error }.
@@ -46,6 +49,12 @@ export function createUiReview({ stateDir, git, run, log = () => {} }) {
     if (!(await has(GATE))) return { home, missing: true };
     const names = [];
     for (const p of EXPORT) if (await has(p)) names.push(p);
+    const listed = path.join(home, '.imports');
+    const c = await run(`python3 -I -W ignore ${sq(CLOSURE)} ${sq(cfg.from)} ${sq(cfg.ref)} ${sq(listed)}`, { cwd: home, timeoutMs: 300_000 });
+    if (c.code !== 0 || !fs.existsSync(listed)) throw new Error(`could not follow the reviewer's imports: ${c.out.slice(-300)}`);
+    const covered = (f) => names.some((n) => f === n || f.startsWith(`${n}/`));
+    names.push(...fs.readFileSync(listed, 'utf8').split('\0').filter((f) => f && !covered(f)));
+    fs.rmSync(listed);
     const tar = path.join(home, '.export.tar');
     const a = await git(['archive', '-o', tar, cfg.ref, '--', ...names], { cwd: cfg.from, timeoutMs: 120_000 });
     if (a.code !== 0) throw new Error(`could not export the reviewer: ${a.err}`);
