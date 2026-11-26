@@ -1336,7 +1336,11 @@ const LS_FTASK = 'ghosty.fTask';   // '1' / '0'; absent = use the viewport defau
 const PROJECT_ALIAS = { 'virtualpytest-internal': 'virtualpytest' };
 const FALLBACK_PROJECT = 'virtualpytest';
 function projectOf(n) { const st = state.status[n]; const p = st?.project || st?.repo || (st ? FALLBACK_PROJECT : ''); return PROJECT_ALIAS[p] || p; }
-function matchesFilter(n) {
+function isTaskSession(n) { return /^TASK[-_]/i.test(displayName(n)); }
+function taskFilterActive() {
+  return state.fTask && state.sessions.some(({ name }) => !state.layout.hidden.includes(name) && isTaskSession(name));
+}
+function matchesFilter(n, tasksOnly) {
   if (state.layout.hidden.includes(n)) return false;   // hidden by the owner (sidebar eye button); listed under Hidden in the sidebar footer
   // A session shown as 'deploy' (waiting on a deploy) matches the 'deploy' filter,
   // not its raw working/done/idle state.
@@ -1344,14 +1348,15 @@ function matchesFilter(n) {
   if (state.filter.length && !state.filter.includes(filterStateOf(n))) return false;
   if (state.fProject.length && !state.fProject.some((v) => projectOf(n) === (v === '-' ? '' : v))) return false;
   if (state.fAgent.length && !state.fAgent.some((v) => agentOf(n) === v)) return false;
-  if (state.fTask && !/^TASK[-_]/i.test(displayName(n))) return false;   // Q-task filter: TASK-prefix only
+  if (tasksOnly && !isTaskSession(n)) return false;
   return true;
 }
-function anyFilter() { return !!(state.filter.length || state.fProject.length || state.fAgent.length || state.fTask); }
+function anyFilter(tasksOnly = taskFilterActive()) { return !!(state.filter.length || state.fProject.length || state.fAgent.length || tasksOnly); }
 const toggleIn = (arr, v) => (arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v]);   // click an active value to unselect it
 function visibleSessions() {
-  if (!anyFilter() && !state.layout.hidden.length) return state.sessions;
-  return state.sessions.filter((s) => matchesFilter(s.name));
+  const tasksOnly = taskFilterActive();
+  if (!anyFilter(tasksOnly) && !state.layout.hidden.length) return state.sessions;
+  return state.sessions.filter((s) => matchesFilter(s.name, tasksOnly));
 }
 
 // ---------- data ----------
@@ -1736,6 +1741,7 @@ function clearAllFilters() {
   saveFilters();
   renderAll();
 }
+for (const button of $$('[data-clear-session-filters]')) button.onclick = clearAllFilters;
 function setFilter(f) {
   state.filter = f == null ? [] : [].concat(f);
   saveFilters();
@@ -1781,7 +1787,7 @@ function renderActiveFilters() {
   if (!host) return;
   // the same look as in the panel: status = coloured dot + label, agent = its coloured badge, project = plain name
   const items = [
-    ...(state.fTask ? [['fTask', '1', '<span class="task-tag">tasks</span>']] : []),
+    ...(taskFilterActive() ? [['fTask', '1', '<span class="task-tag">tasks</span>']] : []),
     ...state.filter.map((v) => ['filter', v, `<i class="dot ${escapeHtml(v)}"></i>${escapeHtml(STATE_LABEL[v] || v)}`]),
     ...state.fProject.map((v) => ['fProject', v, escapeHtml(v === '-' ? 'no repo' : v)]),
     ...state.fAgent.map((v) => ['fAgent', v, `<span class="agent ${escapeHtml(v)}">${escapeHtml(AGENT_LABEL[v] || v)}</span>`]),
@@ -1855,7 +1861,7 @@ function renderFilterBar() {
   // fTask is a single boolean, not a multi-select group; render its own chip with data-g='fTask' and no data-v.
   // QF-10 — only render the tasks chip when at least one session matches /^TASK[-_]/i;
   // a "tasks 0" chip is dead UI and the user reported it as clutter.
-  const taskCount = count((n) => /^TASK[-_]/i.test(displayName(n)));
+  const taskCount = count((n) => !state.layout.hidden.includes(n) && isTaskSession(n));
   const taskChip = taskCount > 0
     ? `<button class="fchip fchip-task${state.fTask ? ' on' : ''}" data-g="fTask" title="Show only TASK-prefixed sessions (mm-manager / ghosty / manager/owner are hidden)">tasks<span class="n">${taskCount}</span></button>`
     : '';
@@ -2007,23 +2013,21 @@ function layoutSide() {
   const rows = new Map([...list.children].filter((li) => li.dataset.session).map((li) => [li.dataset.session, li]));
   const hdrs = state.sideHdr || (state.sideHdr = {});
   const names = state.sessions.map((s) => s.name);            // already pinned-first, then the saved order, then alphabetical
+  const visible = new Set(visibleSessions().map((s) => s.name));
+  const filtered = anyFilter();
+  $('#sideFilterEmpty').classList.toggle('hidden', !names.length || visible.size > 0 || !filtered);
   const manual = new Set([...(L.groupNames || []), ...Object.values(L.groups)]);
   const groupNames = [...new Set([...manual, ...(L.groupBy === 'project' ? names.map(autoGroupOf) : [])])].sort((x, y) => x.localeCompare(y, undefined, { numeric: true }));
   const sections = [];
   if (L.pins.length) sections.push({ key: 'pin', title: 'Pinned' });
   for (const g of groupNames) sections.push({ key: `g:${g}`, title: g, group: manual.has(g) ? g : '' });
-  // QF-13 — the side list no longer prepends a "Filter on: X/Y [clear]" row. The X/Y
-  // count and the clear button now live in the top active-filters bar (#activeFilters);
-  // rendering the same info in two places was confusing (chat-raised 2026-10-09 19:29,
-  // screenshots 1791574151829 / 1791574194602). Layout-side still keeps `anyFilter()`
-  // awareness via the section counts below (members/total per group).
   const withHeaders = sections.length > 0;
   if (withHeaders) sections.push({ key: 'other', title: 'Other' });
   const plan = [];
   for (const sec of (withHeaders ? sections : [{ key: 'other' }])) {
-    const members = names.filter((n) => secOfName(n) === sec.key && matchesFilter(n));
+    const members = names.filter((n) => secOfName(n) === sec.key && visible.has(n));
     const total = names.filter((n) => secOfName(n) === sec.key).length;
-    if (withHeaders && !(sec.key === 'other' && !total) && !(sec.key.startsWith('g:') && !total && L.groupBy === 'project')   /* grouped by project: a project with no sessions here (all pinned, or none) has no header */ && !(anyFilter() && !members.length)) plan.push({ hdr: sec, count: members.length === total ? String(total) : `${members.length}/${total}` });
+    if (withHeaders && !(sec.key === 'other' && !total) && !(sec.key.startsWith('g:') && !total && L.groupBy === 'project')   /* grouped by project: a project with no sessions here (all pinned, or none) has no header */ && !(filtered && !members.length)) plan.push({ hdr: sec, count: members.length === total ? String(total) : `${members.length}/${total}` });
     const closed = L.collapsed.includes(sec.key);
     for (const n of members) plan.push({ name: n, sec: sec.key, closed });
   }
@@ -3072,6 +3076,7 @@ function renderCard() {
 function renderGrid() {
   els.gridPane.className = `grid-pane size-${state.gridSize}`;
   const all = visibleSessions();
+  $('#gridFilterEmpty').classList.toggle('hidden', !state.sessions.length || all.length > 0 || !anyFilter());
   const limit = state.gridSize;
   // Keep the active session on screen when the grid is limited.
   let targets = all.slice(0, limit);
@@ -3373,6 +3378,7 @@ function applyDock() {
   document.body.classList.toggle('side-dockable', dockMQ.matches);
   if (on) { state.side = false; els.side.classList.add('on'); document.querySelector('.side-back')?.classList.remove('on'); fetchLeases(); }
   else if (!state.side) els.side.classList.remove('on');
+  els.side.inert = !els.side.classList.contains('on');
   setTimeout(() => { for (const n of state.terms.keys()) relayoutTerm(n); }, 220);
 }
 function setDock(on) { state.sideDock = on; lsSet('ghosty.sideDock', on ? '1' : '0'); applyDock(); }
@@ -3382,6 +3388,7 @@ function openSide() {
   if (state.side) return;
   state.side = true;
   els.side.classList.add('on');
+  els.side.inert = false;
   let back = document.querySelector('.side-back');
   if (!back) {
     back = document.createElement('div');
@@ -3396,6 +3403,7 @@ function closeSide() {
   if (!state.side) return;
   state.side = false;
   els.side.classList.remove('on');
+  els.side.inert = true;
   const back = document.querySelector('.side-back');
   if (back) back.classList.remove('on');
 }

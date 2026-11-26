@@ -159,6 +159,9 @@
   <main id="main" class="main view-card">
     <section class="card-pane" id="cardPane"></section>
     <section class="grid-pane" id="gridPane"></section>
+    <div class="empty grid-filter-empty hidden" id="gridFilterEmpty">
+      <div>No sessions match your filters.<br><button class="clear-f" type="button" data-clear-session-filters>Clear filters</button></div>
+    </div>
     <section class="list-pane" id="listPane"></section>
   </main>
 
@@ -220,7 +223,7 @@
     <i data-icon="chevron-up" data-size="14"></i><span class="ap-pill-n">0</span> need you
   </button>
 
-  <aside id="side" class="side" aria-hidden="true">
+  <aside id="side" class="side" inert>
     <div class="side-head">
       <span class="ttl">Sessions</span>
       <span class="count" id="sessionCount">0</span>
@@ -239,6 +242,9 @@
       <button class="icon-btn" id="refreshBtn" aria-label="Refresh">
         <i data-icon="refresh" data-size="17"></i>
       </button>
+    </div>
+    <div class="empty hidden" id="sideFilterEmpty">
+      No sessions match your filters.<br><button class="clear-f" type="button" data-clear-session-filters>Clear filters</button>
     </div>
     <ul id="sessionList" class="session-list"></ul>
     <div id="parkBox" class="parkbox hidden"></div>
