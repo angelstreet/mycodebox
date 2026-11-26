@@ -35,6 +35,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A manager-started session's startup prompt no longer reaches you** — the server learned who started a session only once its agent was up, so a confirmation prompt in those seconds was queued in your digest; `cbsession` now records a manager start before the tmux session exists · area: manager harness
+
 - **"do 1 and 2" answers a second round of suggestions by the numbers the session showed** — ghosty listed two new suggestions as "1." and "2."; the ledger keeps one numbering per session, so they were items 5 and 6, and the owner's "ok do 1 and 2" read as items 1 and 2 (1 already answered) and recorded nothing: the finished session stayed red. The ledger now remembers the numbers of the latest list: a reply that reads only one way takes it, one that reads both ways differently records nothing and asks the owner in the feed · area: suggestions
 
 - **A session the manager started never asks you** (owner 2026-11-26) — its questions and suggestion lists go to the manager (event `needs-manager`, no push, not in NEEDS YOU), the manager answers its suggestions (listed in "Decided for you"), and what only you may decide arrives as the manager's own question naming the session. The same holds for sessions those sessions start (their starter was never recorded before). The manager gets `ready-to-close` once when one is really done; nothing closes by itself. Sessions you start are unchanged · area: manager harness
