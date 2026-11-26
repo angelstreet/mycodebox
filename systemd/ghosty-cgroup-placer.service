@@ -2,7 +2,7 @@
 # your checkout path (see docs/INSTALL.md). Runs as root: moving processes between units needs it.
 [Unit]
 Description=Ghosty: place tmux sessions and test runs into the codebox core/sessions/tests slices
-After=mm-manager-session.service
+After=mm-manager-session.service ghosty-base-session.service
 
 [Service]
 User=root
