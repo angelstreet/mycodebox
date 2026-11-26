@@ -2465,6 +2465,7 @@ const managerRotation = createManagerRotation({
   }),
 });
 const claudeLimitSeen = new Map();
+const claudeLimitRetryAt = new Map();   // a failed switch is tried again after 5 min (not every tick: each failure alerts)
 async function claudeLimitTick(status) {
   const managers = new Set(loadManagerSessions());
   const several = claudeAccounts.config().accounts.length > 1;
@@ -2474,9 +2475,10 @@ async function claudeLimitTick(status) {
     const limitStop = !!st && st.agent === 'claude' && scanClaudeLimit(st.lines);
     if (managers.has(name)) { await managerRotation.tick(name, v, { limitStop, paused: sessionMeta.isPaused(name) }); continue; }
     if (!several) continue;
-    if (!limitStop) { claudeLimitSeen.delete(name); continue; }
+    if (!limitStop) { claudeLimitSeen.delete(name); claudeLimitRetryAt.delete(name); continue; }
     const acct = v.claudeAccount || CLAUDE_DEFAULT_ACCOUNT;
-    if (claudeLimitSeen.get(name) === acct) continue;
+    if (claudeLimitSeen.get(name) === acct && !(claudeLimitRetryAt.has(name) && Date.now() >= claudeLimitRetryAt.get(name))) continue;
+    claudeLimitRetryAt.delete(name);
     claudeLimitSeen.set(name, acct);
     await claudeAccounts.markExhausted(acct, { reason: `usage limit stop in ${name}` });
     await claudeAccountsRefresh();
@@ -2490,7 +2492,7 @@ async function claudeLimitTick(status) {
       await swapClaudeAccount(name, next, 'claude-accounts', { limitStop: true });
       await managerEvents.record({ key: `health:claude-account-swap:${name}`, kind: 'health', title: `session moved to ${label(next)}: ${name}`, body: `${label(acct)} hit its usage limit; same conversation resumed on ${label(next)}` });
     } catch (e) {
-      claudeLimitSeen.delete(name);   // a failed switch is retried at the next tick, not forgotten
+      claudeLimitRetryAt.set(name, Date.now() + 5 * 60e3);   // a failed switch is retried in 5 min, not forgotten
       push.record({ title: `${name} hit the ${label(acct)} limit, switch failed`, body: `to ${label(next)}: ${String(e.message).slice(0, 250)}`, url, tag: 'claude-account' });
     }
   }
