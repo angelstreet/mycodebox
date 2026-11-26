@@ -54,13 +54,11 @@ test('done-check: a working session and dry mode are not pushed', async (t) => {
   await d.w.tick(); assert.equal(d.sent.length, 0);
 });
 
-test('rules-watch: the notice is tagged, asks for no reply and never invites a question; it carries the bugs rule', () => {
+test('rules-watch: the notice is tagged, asks for no reply and never invites a question', () => {
   const m = rulesMessage({ hash: 'a'.repeat(40), at: 1e12, subject: 's' });
   assert.ok(m.startsWith(TAG));
-  assert.match(m, /Do not answer this message and do not ask anything/);
-  assert.match(m, /STATUS: acknowledged/);
-  assert.match(m, /found-bug/);
-  assert.doesNotMatch(m, /\?/);
+  assert.match(m, /Do not reply to this note/);
+  assert.doesNotMatch(m, /\?|STATUS/);
 });
 
 test('isRulesAck: the acknowledgement of a re-read is not a wake; a real question or a blocked stop is', () => {

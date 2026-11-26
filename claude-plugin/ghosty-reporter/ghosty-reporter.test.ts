@@ -14,7 +14,7 @@ const settle = () => new Promise<void>((r) => setTimeout(r, 30))
 type Sent = { url: string; headers: Record<string, string>; body: any }
 
 // The world beneath the plugin: env, clock, tmux, token file, ghosty. Returns what ghosty received.
-function world(on: any, opts: { down?: boolean; env?: Record<string, string>; noToken?: boolean; tmux?: string; receiveOk?: (e: any) => any } = {}) {
+function world(on: any, opts: { down?: boolean; env?: Record<string, string>; noToken?: boolean; notes?: { id: string; text: string }[]; tmux?: string; receiveOk?: (e: any) => any } = {}) {
   const sent: Sent[] & { attempts?: number } = []
   sent.attempts = 0
   mock.env(on, { ...ENV, ...(opts.env ?? {}) })
@@ -23,7 +23,7 @@ function world(on: any, opts: { down?: boolean; env?: Record<string, string>; no
   on('fs.read', async () => { if (opts.noToken) throw new Error('ENOENT'); return { value: 'tok-123\n' } })
   // the engine's own bottoms: what each event answers when nobody above changes it
   on('turn.complete', async (_$: any, e: any) => ({ text: e.answer }))
-  on('prompt.submit', async (_$: any, e: any) => ({ text: e.text }))
+  on('prompt.submit', async (_$: any, e: any) => ({ text: e.text, ...(e.context ? { context: e.context } : {}) }))
   on('session.start', async () => ({}))
   on('session.end', async (_$: any, e: any) => ({ sessionId: e.sessionId }))
   on('session.send', async () => ({ isDelivered: true }))
@@ -34,7 +34,8 @@ function world(on: any, opts: { down?: boolean; env?: Record<string, string>; no
     sent.attempts = (sent.attempts ?? 0) + 1
     if (opts.down) throw new Error('ECONNREFUSED')
     sent.push({ url: e.url, headers: e.init?.headers ?? {}, body: JSON.parse(e.init?.body) })
-    return { value: { status: 200, ok: true, headers: {}, text: '{"ok":true}' } }
+    const take = JSON.parse(e.init?.body).event === 'notes.take'
+    return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ ok: true, ...(take ? { notes: opts.notes ?? [] } : {}) }) } }
   })
   on('agent.list', async () => ({ value: [{ id: 'a1', type: 'Explore', status: 'running', description: 'look around', extra: 'x' }] }))
   return sent
@@ -66,11 +67,27 @@ test('the token is sent as a header, to the configured url', async ($, on) => {
   const sent = world(on)
   await $.prompt.submit({ text: 'hello there', wait: false } as any)
   await settle()
-  expect(sent.length).toBeGreaterThan(0)
-  expect(sent[0]!.headers['x-ghosty-reporter-token']).toBe('tok-123')
-  expect(sent[0]!.url).toBe(ENV.GHOSTY_REPORTER_URL)
-  expect(sent[0]!.body.event).toBe('prompt')
-  expect(sent[0]!.body.text).toBe('hello there')
+  const ev = sent.find(s => s.body.event === 'prompt')!
+  expect(ev.headers['x-ghosty-reporter-token']).toBe('tok-123')
+  expect(ev.url).toBe(ENV.GHOSTY_REPORTER_URL)
+  expect(ev.body.text).toBe('hello there')
+})
+
+test('a parked note rides along with the next real prompt as context, and is acked', async ($, on) => {
+  const sent = world(on, { notes: [{ id: 'n1', text: 'AGENTS.md changed' }] })
+  const r = await $.prompt.submit({ text: 'please continue', wait: false } as any)
+  await settle()
+  expect(r.text).toBe('please continue')
+  expect(r.context).toEqual(['AGENTS.md changed'])
+  expect(sent.find(s => s.body.event === 'notes.ack')!.body.ids).toEqual(['n1'])
+})
+
+test('no note: the prompt passes unchanged and nothing is acked; ghosty down changes nothing', async ($, on) => {
+  const sent = world(on)
+  const r = await $.prompt.submit({ text: 'hi', wait: false } as any)
+  await settle()
+  expect(r.context).toBeUndefined()
+  expect(sent.some(s => s.body.event === 'notes.ack')).toBe(false)
 })
 
 test('a task notification waking the session is marked synthetic, the owner prompt is not', async ($, on) => {

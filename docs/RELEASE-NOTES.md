@@ -31,6 +31,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **No more wakes just to answer `STATUS: acknowledged`** — a changed AGENTS.md, the overlap and shared-checkout guards and the lease pin notes are no longer typed into a session: each is a note delivered once with its next real turn (Claude: hidden context from the reporter plugin; other agents: added to the next message ghosty sends). A finished session was woken 3 times in 30 min, re-reading its whole context each time · area: harness
+
 - **A session that writes its own task document gets the MD button** — the button was only for sessions named `taskNN`; the server now also lists the `docs/tasks/*.md` files a session wrote (read from its session file), whatever its name · area: task document
 
 - **A UI review that does not run no longer blames your branch** — the returned request says whether the reviewer broke or could not review, and the manager is woken the first time, also for a live-page review, which used to fail silently · area: integration

@@ -3,16 +3,16 @@
 // down the session behaves exactly as without this plugin (after one failed try, nothing is sent for
 // 30 s). Nothing is printed to the transcript.
 import type { Register } from 'claude-code'
-import { agentRows, cap, isSynthetic, leaseReleaseArgv, NOT_WAITING, payload, shouldRequireStatus, STATUS_REASON, taskRows } from './report.ts'
-import type { Identity } from './report.ts'
+import { agentRows, cap, isSynthetic, leaseReleaseArgv, NOT_WAITING, payload, shouldRequireStatus, STATUS_REASON, taskRows, notesOf } from './report.ts'
+import type { Identity, Note } from './report.ts'
 
 const SEND_MS = 800        // longest a hook waits for ghosty
 const SEND_END_MS = 300    // session.end shares a short wall-clock bound
 const LEASE_MS = 2500      // longest session.end waits for the lease release (ssh to proxmox)
 const DOWN_MS = 30_000     // after a failed send, stay quiet this long
 
-type State = { ident: Identity | null; tmuxTried: number; downUntil: number; lastAgents: string; url: string }
-const state: State = { ident: null, tmuxTried: 0, downUntil: 0, lastAgents: '', url: '' }
+type State = { ident: Identity | null; tmuxTried: number; downUntil: number; lastAgents: string; url: string; headless: boolean }
+const state: State = { ident: null, tmuxTried: 0, downUntil: 0, lastAgents: '', url: '', headless: false }
 
 async function identity($: any): Promise<Identity> {
   if (state.ident && (state.ident.session || state.tmuxTried >= 3)) return state.ident
@@ -37,11 +37,11 @@ async function identity($: any): Promise<Identity> {
   return state.ident
 }
 
-async function send($: any, body: unknown): Promise<void> {
+async function send($: any, body: unknown): Promise<string> {
   const base = (await $.env.get('GHOSTY_STATE_DIR')) || `${(await $.env.get('HOME')) ?? ''}/.local/state/ghosty`
   const tokenFile = (await $.env.get('GHOSTY_REPORTER_TOKEN_FILE')) || `${base}/reporter.token`
   const token = String(await $.fs.read(tokenFile)).trim()
-  if (!token) return
+  if (!token) return ''
   const url = (await $.env.get('GHOSTY_REPORTER_URL')) || state.url
   const r = await $.http.fetch(url, {
     method: 'POST',
@@ -49,20 +49,31 @@ async function send($: any, body: unknown): Promise<void> {
     body: JSON.stringify(body),
   })
   if (!r.ok) throw new Error(`ghosty answered ${r.status}`)
+  return String(r.text ?? '')
 }
 
-// Fire and forget with a bound: never throws, never waits longer than `ms`.
-async function report($: any, event: string, data: Record<string, unknown> = {}, agentId?: string, ms: number = SEND_MS): Promise<void> {
+// One bounded exchange with ghosty: never throws, never waits longer than `ms`. -> its answer, or null when nothing came back.
+async function report($: any, event: string, data: Record<string, unknown> = {}, agentId?: string, ms: number = SEND_MS): Promise<string | null> {
   try {
     const now = await $.clock.now()
-    if (now < state.downUntil) return
+    if (now < state.downUntil) return null
     const id = await identity($)
     const body = payload(event, id, now, data, agentId)
-    const sent = send($, body).then(() => true, () => false)
+    const sent = send($, body).then(text => ({ text }), () => null)
     const timeout = $.clock.sleep(ms).then(() => null, () => null)
     const ok = await Promise.race([sent, timeout])
-    if (ok !== true) state.downUntil = now + DOWN_MS
-  } catch { /* silent */ }
+    if (!ok) state.downUntil = now + DOWN_MS
+    return ok ? ok.text : null
+  } catch { return null }
+}
+
+// Notes ghosty parked for this session (a rules change, an overlap: things that must not start a turn of their own).
+// A headless child in the same tmux pane (`claude -p` run by a script) must not take the session's notes.
+async function takeNotes($: any): Promise<Note[]> {
+  try {
+    if (state.headless || !(await identity($)).session) return []
+    return notesOf(await report($, 'notes.take'))
+  } catch { return [] }
 }
 
 // Fail open: no tmux, no ssh, no proxmox, a slow answer: the lease then simply stays (ghosty releases it later when the session is gone).
@@ -90,6 +101,7 @@ export const register: Register = (on, options) => {
   state.url = String(options.url || 'http://127.0.0.1:7777/api/reporter/event')
   on('session.start', async ($, e, next) => {
     const out = await next(e)
+    state.headless = e.isInteractive === false
     void report($, 'session.start', { surface: e.surface, interactive: e.isInteractive })
     return out
   })
@@ -102,7 +114,10 @@ export const register: Register = (on, options) => {
   })
 
   on('prompt.submit', async ($, e, next) => {
-    const out = await next(e)
+    // Parked notes ride along with this real prompt, as context only the model reads. Acked once it entered: else they wait.
+    const notes = e.command ? [] : await takeNotes($)
+    const out = await next(notes.length ? { ...e, context: [...(e.context ?? []), ...notes.map(n => n.text)] } : e)
+    if (notes.length && out.drop === undefined) void report($, 'notes.ack', { ids: notes.map(n => n.id) })
     void report($, 'prompt', { text: cap(e.text), midTurn: e.turnId !== undefined, synthetic: isSynthetic(e.text) })
     return out
   })
