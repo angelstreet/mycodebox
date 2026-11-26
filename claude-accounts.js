@@ -70,7 +70,7 @@ export function normalize(raw, home = homedir()) {
   }
   if (!seen.has(DEFAULT_ID)) accounts.unshift({ id: DEFAULT_ID, label: 'Default (~/.claude)', configDir: null });
   const marks = {};
-  for (const [id, m] of Object.entries(cfg.marks || {})) if (seen.has(id) || id === DEFAULT_ID) if (Number.isFinite(m?.until)) marks[id] = { until: m.until, reason: String(m.reason || '').slice(0, 200) };
+  for (const [id, m] of Object.entries(cfg.marks || {})) if (seen.has(id) || id === DEFAULT_ID) if (Number.isFinite(m?.until)) marks[id] = { until: m.until, reason: String(m.reason || '').slice(0, 200), ...(Number.isFinite(m.at) ? { at: m.at } : {}) };
   const ids = new Set(accounts.map((a) => a.id));
   return {
     auto: cfg.auto !== false,
@@ -96,6 +96,13 @@ export function windowsOf(j, now) {
 }
 
 // Is this account usable now? { exhausted, reset (ms | null), why }. No reading at all = usable (a fresh seat).
+// A fresh reading of the account's own windows with room in all of them: proof it is not at its limit.
+export const READING_FRESH_MS = 15 * 60e3;
+export function hasHeadroom(reading, now) {
+  const ws = (reading?.windows || []).filter((w) => !w.expired);
+  return !!reading?.at && now - reading.at < READING_FRESH_MS && ws.length > 0 && ws.every((w) => Number.isFinite(w.usedPercent) && w.usedPercent < LIMIT_PCT);
+}
+
 export function accountState({ windows = [], mark = null, now }) {
   const full = windows.filter((w) => !w.expired && Number.isFinite(w.usedPercent) && w.usedPercent >= LIMIT_PCT);
   const resets = full.map((w) => (w.resetsAt ? w.resetsAt * 1000 : null)).filter(Number.isFinite);
@@ -200,7 +207,9 @@ export function createClaudeAccounts({ file, stateDir, home = homedir(), now = D
       readings[a.id] = { windows: j ? windowsOf(j, t) : [], at };
     }
     let dirty = false;
-    for (const [id, m] of Object.entries(c.marks)) if (m.until <= t) { delete c.marks[id]; dirty = true; }
+    // A mark goes when it ran out, or when the account's own reading, taken after the mark, shows headroom (the stop text
+    // was another account's pane, or the limit moved): the account's own windows decide.
+    for (const [id, m] of Object.entries(c.marks)) if (m.until <= t || (readings[id].at > (m.at || 0) && hasHeadroom(readings[id], t))) { delete c.marks[id]; dirty = true; }
     states = Object.fromEntries(c.accounts.map((a) => [a.id, accountState({ windows: readings[a.id].windows, mark: c.marks[a.id], now: t })]));
     const from = c.active, to = pickAccount(c, states);
     if (to && to !== from) { c.active = to; dirty = true; }
@@ -220,8 +229,12 @@ export function createClaudeAccounts({ file, stateDir, home = homedir(), now = D
     async markExhausted(id, { until = null, reason = 'usage limit reached' } = {}) {
       const c = load(), t = now();
       if (!byId(id)) return null;
+      if (hasHeadroom(readings[id], t)) {   // its own windows have room: the stop on screen is not this account's
+        if (c.marks[id]) { delete c.marks[id]; await save(); }
+        return refresh();
+      }
       const reset = accountState({ windows: readings[id]?.windows || [], now: t }).reset;
-      c.marks[id] = { until: until || reset || t + MARK_DEFAULT_MS, reason };
+      c.marks[id] = { until: until || reset || t + MARK_DEFAULT_MS, reason, at: t };
       await save();
       return refresh();
     },
