@@ -123,7 +123,7 @@ import { noteKey as leaseNoteKey, normAuthority, createLeaseSource, createSessio
 import { idleHoldEvent } from './lease-ask.js';
 import { createCiWatch } from './ci-watch.js';
 import { createRulesWatch } from './rules-watch.js';
-import { createSessionNotes, carriesNotes, withNotes } from './session-notes.js';
+import { createSessionNotes, carryNotes, hookDelivers } from './session-notes.js';
 import { createOverlapGuard, DEFAULT_IGNORE } from './overlap-guard.js';
 import { createProgressWatch } from './progress-watch.js';
 import { createSharedCheckoutGuard, expandHome } from './shared-checkout-guard.js';
@@ -447,16 +447,18 @@ async function sendKey(session, key) {
 
 const typedByServer = createTypedLog();   // everything this server types, whoever asked for it (suggestions.js: the rest is the owner's)
 async function sendKeys(session, keys, enter = true) {
+  // parked notes go along with a real message when the session's agent has no hook that takes them (session-notes.js)
+  const st = latest?.status?.[session];
+  const carry = enter && !st?.stall?.options?.length && !hookDelivers(reporter.takesNotes(session), st?.agent);
+  return carryNotes(sessionNotes, session, String(keys || ''), carry, (text) => typeKeys(session, text, enter, String(keys || '')));
+}
+// `keys` is what the caller asked to send; `text` is what is typed (the same, plus any carried notes).
+async function typeKeys(session, text, enter, keys) {
   // Always go through a tmux paste-buffer (QF-06). `send-keys -l` needs an
   // attached client on some tmux versions and the user hit "no current
   // client" with single-line text on codeboxv2. `paste-buffer` works without
   // one. Bracketed-paste mode (`-p`) keeps it as one chunk so Claude Code's
   // paste-detection still fires on multi-line prompts.
-  let text = String(keys || '');
-  // parked notes go along with a real message when the session's agent has no hook that takes them (session-notes.js)
-  const menu = latest?.status?.[session]?.stall?.options?.length;
-  const notes = enter && !menu && !reporter.takesNotes(session) && carriesNotes(text) ? sessionNotes.peek(session) : [];
-  if (notes.length) text = withNotes(text, notes);
   typedByServer.note(session, text);
   if (text.length > 1_000_000) throw httpError(400, 'text too large (max 1MB)');
   const lines = text.split('\n');
@@ -466,7 +468,6 @@ async function sendKeys(session, keys, enter = true) {
     await exec(TMUX, ['set-buffer', '-b', buf, '--', pasteTextOf(text)]);   // a trailing @path gets a space: else the Enter only picks the file suggestion
     await exec(TMUX, ['paste-buffer', '-p', '-d', '-b', buf, '-t', tgt(session)]);
   }
-  if (notes.length) sessionNotes.ack(session, notes.map((n) => n.id));
   let submitted;
   if (enter) {
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -488,7 +489,7 @@ async function sendKeys(session, keys, enter = true) {
     }
   }
   lastSendAt.set(session, Date.now()); paneShared.invalidate(session); transcriptShared.invalidate(session);
-  lastSendText.set(session, String(keys || ''));
+  lastSendText.set(session, keys);
   if (submitted === false) { logEvent({ type: 'send-unsubmitted', session }); return { ok: true, sent: true, submitted: false }; }
   return submitted === true ? { ok: true, sent: lines.length, submitted: true } : { ok: true, sent: lines.length };
 }
@@ -3611,6 +3612,8 @@ const integrationNotify = createIntegrationNotify({
   log: (r) => logEvent(r),
 });
 pendingWakes.restore();   // wakes kept before a restart are armed again
+// a wake kept for a session that is already stopped is delivered within seconds: the turn-end event is the fast path, this sweep covers one that was lost (restart, hook failure)
+setInterval(() => { if (!pendingWakes.size()) return; poll().then(() => pendingWakes.sweep()).catch((e) => console.error('[pending-wake] sweep', e.message)); }, 20000).unref?.();
 // Progress watch (progress-watch.js): a looping or no-progress working session -> one `no-progress` manager event per 2 h; never types.
 // manager.json `progressWatch`: "live" (default) | "dry" | "off". `GET /api/progress-watch` shows the last tick.
 const progressWatch = createProgressWatch({

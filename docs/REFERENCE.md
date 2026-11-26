@@ -688,7 +688,8 @@ shell whenever it is unsure. Same six points as the router (`wake`, `builder`, `
 or on stdin (`--facts -`). Env: `JEV_URL` + `JEV_API_KEY` + `VPT_TEAM_ID` (process.env, else
 `<repoRoot>/.env` parsed by the script itself; the key is never printed). It POSTs one
 `/server/ai/decide` (20 s timeout, `log:true`) and prints exactly one JSON line on stdout:
-`{point, pick, confidence, source, ruleDefault, allowed, decision_id}` (`source` is `forced` | `jev` | `rule`).
+`{point, pick, confidence, source, ruleDefault, allowed, decision_id}` (`source` is `forced` | `jev` | `rule` | `error`; a `stop`
+Jev did not decide also says to [ask Opus](#in-doubt-ask-opus-owner-2026-11-26)).
 Take Jev's pick only at `confidence >= 0.7` (the default threshold); below that, the script falls
 back to the point's `ruleDefault` and continues when the network is down. Exit 0 on every printed
 pick (forced, Jev, or rule), exit 2 on bad usage. The `stop` point's floors: `forbidden_topic` or
@@ -701,6 +702,30 @@ node scripts/jev-ask.js stop \
   --facts '{"session":"s1","agent":"claude","case":"owner_decision","proposed_reply":"Migrate /v1 first."}'
 # -> {"point":"stop","pick":"escalate","confidence":0.83,"source":"rule","ruleDefault":"escalate","allowed":["answer","escalate"],"decision_id":"..."}
 ```
+
+### In doubt, ask Opus (owner, 2026-11-26)
+
+| Where doubt shows | What it says (`doubt.js`) |
+|---|---|
+| `jev-ask.js stop` with `source` `rule` (Jev below 0.7, off or down) or `error` | `in_doubt`: "in doubt: ask Opus to answer ..." and `ask_opus`: the ready command with the same facts. `manager-asks.jsonl` gets `in_doubt: true`. `pick` is unchanged: it is the rule default, not a verdict |
+| A session's question in the manager feed (`<session>:asks`, `<session>:needs-manager`, a lease / deploy `manager-item`) | `askOpus` on the event line, with the command. The manager uses it when it is not sure how to answer |
+| Owner floor: a forced stop floor (`touches`, `permission`, `owner_action`, `waiting_deploy`, `forbidden_topic`) or owner / hard-floor wording in the ask (`ownerFloorMatch` / `hardMatch`, as `ops-ask.js`) | No Opus hint; a `jev-ask` `rule` / `error` line says `owner_only` with the reason |
+
+`jev-ask` with `source` `jev` or `forced`, and its other points, are unchanged. One example call (one `claude -p --model opus`
+run on plan usage, no tools, empty working directory, 180 s timeout):
+
+```bash
+~/ghosty-sessions/scripts/ask-opus.js --session demo \
+  --question 'Should the new device filter be tabs or a dropdown? Other pages use tabs; the session recommends tabs; reversible.'
+# -> {"session":"demo","verdict":"answer","text":"Use tabs to match the other pages. ...","model":"opus","source":"opus"}
+```
+
+It also takes the `stop` facts (`--facts <json>` / `--facts-file` / `--facts -`). `verdict`: `answer` (send `text`'s first line
+as the reply), `owner` (file the owner ask), `error` (exit 1: Opus did not answer; do not treat it as an answer). An
+owner-floor question is not sent (`source: floor`, `model: null`), and an `ANSWER` whose first line takes an owner-floor
+action is turned into `owner`. The record that Opus answered is the `{point:"opus", at, session, verdict, text, model, source}`
+line in `<state dir>/manager-asks.jsonl`. The floor check reads words, so it can send a harmless question to the owner; it
+never replaces the manager's own reading of the hard floor.
 
 **Answer popup (TASK-44 phase 11).** One bottom-right popup shows every session that needs you
 (the same set the NEEDS YOU strip does, `isOwnersTurn`: `waiting`, a `done` stop on `STATUS: needs-owner`, or another `done` question with a non-pending triage). Each item: the
@@ -1142,7 +1167,7 @@ event) plus the Claude session id and cwd; a session outside tmux is ignored.
 | `prompt` (`prompt.submit`) | the submitted text (exact, 8 KB cap), `synthetic` for engine-raised prompts such as a finished background task | the owner's reply in the stall `outcome` (`via: "reporter"`); a prompt after a stall also counts as the session moving on |
 | `turn.end` (`turn.complete`) | the final answer (exact), reason, usage; subagent turns carry `agentId` and are ignored as the session's turn | closing text of the stall classifier |
 | `stop` (`classic.Stop`) | `last_assistant_message`, `backgroundWork` = background tasks in flight | `background_wait` when > 0 and the turn does not end on a hand-over STATUS line (below); artifact live-update monitors are not counted |
-| `notes.take` / `notes.ack` (`prompt.submit`) | the ids delivered | answers the parked [session notes](#session-notes-owner-2026-11-26); this is the one place the plugin is not a pure observer (it adds `context` to the prompt) |
+| `notes.take` / `notes.ack` (`prompt.submit`, `classic.PostToolUse(Failure)`) | the ids delivered | answers the parked [session notes](#session-notes-owner-2026-11-26); this is the one place the plugin is not a pure observer (it adds `context` to the prompt or tool result) |
 | `waiting` (`classic.PermissionRequest`, `classic.Notification` except idle / auth) | message | marks the session `waiting` even when the pane regex missed it, while the pane stays still |
 | `agents` (`agent.spawn`, `classic.SubagentStart/Stop`, `classic.TeammateIdle`, after `turn.complete`) | `$.agent.list()`: id, type, status, description, sent only when it changed | subagent count + statuses in the ⚡ tooltip |
 
@@ -1842,9 +1867,14 @@ next real turn:
   `context` beside the prompt (any prompt: the owner's, a harness message, a task notification) and sends `notes.ack` once the
   prompt entered. Ghosty down or a dropped prompt: the note waits. Slash commands and headless children (`claude -p` in the same
   pane) take nothing.
+- **Claude, during a long turn:** no new prompt comes, so the plugin also asks after a tool call (`classic.PostToolUse` and
+  `PostToolUseFailure`, at most once per 60 s) and attaches the note as `additionalContext`, then acks it. An overlap or
+  shared-checkout note thus arrives before the commit. Subagent tool calls take nothing. Still no turn is started.
 - **No hook** (Codex, MiniMax, OpenCode, a Claude process whose plugin never asked): the note is appended to the end of the next real
   message ghosty types (`sendKeys`): at least 12 characters with a space, not a `/` / `!` / `#` command, no menu on screen. Appended,
-  so the prompt's sender is still matched on its start. A prompt typed straight into such a terminal does not carry it.
+  so the prompt's sender is still matched on its start. A prompt typed straight into such a terminal does not carry it. The notes
+  are claimed before typing and put back if the send fails or stays unsubmitted. A "has the hook" flag counts only while the pane
+  runs Claude.
 
 | Harness message | Starts a turn? | Why |
 |---|---|---|

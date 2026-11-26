@@ -106,3 +106,14 @@ test('lease ticket grant: kept while the session is busy, typed at its stop, onc
   w.pw.markDone('granted:t-10');
   assert.equal(w.pw.seen('granted:t-10'), true, 'a note sent directly is never queued afterwards');
 });
+
+test('sweep: a kept wake for an already stopped session is delivered without a turn-end event; a busy one waits', async () => {
+  const w = world();
+  w.pw.add({ session: 's1', key: 'integration:int-9:deployed', text: 'Integration int-9: deployed' });
+  w.pw.add({ session: 's2', key: 'integration:int-9:deployed:s2', text: 'Integration int-9: deployed (s2)' });
+  assert.equal(await w.pw.sweep(), 0, 'both busy');
+  w.stopped = true;
+  assert.equal(await w.pw.sweep(), 2, 'stopped: both delivered');
+  assert.equal(await w.pw.sweep(), 0, 'exactly once');
+  assert.deepEqual(w.sent.map((x) => x.s).sort(), ['s1', 's2']);
+});

@@ -1,4 +1,5 @@
-// ghosty-reporter: a pure observer. Every hook below calls next(e) and returns its result untouched;
+// ghosty-reporter: an observer. Every hook below calls next(e) and returns its result untouched (one exception:
+// parked session notes are added to a prompt or a tool result as context);
 // reporting is fire-and-forget after that (never awaited by the hook, except session.end), bounded by a short timeout, and swallows every error. If ghosty is
 // down the session behaves exactly as without this plugin (after one failed try, nothing is sent for
 // 30 s). Nothing is printed to the transcript.
@@ -10,9 +11,10 @@ const SEND_MS = 800        // longest a hook waits for ghosty
 const SEND_END_MS = 300    // session.end shares a short wall-clock bound
 const LEASE_MS = 2500      // longest session.end waits for the lease release (ssh to proxmox)
 const DOWN_MS = 30_000     // after a failed send, stay quiet this long
+const NOTES_EVERY_MS = 60_000   // after a tool call, ask for parked notes at most this often (ghosty's guards run once a minute)
 
-type State = { ident: Identity | null; tmuxTried: number; downUntil: number; lastAgents: string; url: string; headless: boolean }
-const state: State = { ident: null, tmuxTried: 0, downUntil: 0, lastAgents: '', url: '', headless: false }
+type State = { ident: Identity | null; tmuxTried: number; downUntil: number; lastAgents: string; url: string; headless: boolean; notesAt: number }
+const state: State = { ident: null, tmuxTried: 0, downUntil: 0, lastAgents: '', url: '', headless: false, notesAt: 0 }
 
 async function identity($: any): Promise<Identity> {
   if (state.ident && (state.ident.session || state.tmuxTried >= 3)) return state.ident
@@ -72,8 +74,23 @@ async function report($: any, event: string, data: Record<string, unknown> = {},
 async function takeNotes($: any): Promise<Note[]> {
   try {
     if (state.headless || !(await identity($)).session) return []
+    state.notesAt = await $.clock.now()
     return notesOf(await report($, 'notes.take'))
   } catch { return [] }
+}
+
+// A long turn gets no new prompt: a note parked meanwhile (an overlap before the commit) goes in after a tool call.
+async function notesAfterTool<R extends { additionalContext?: string[] }>($: any, out: R, agentId: unknown): Promise<R> {
+  try {
+    if (agentId) return out   // the note is for the session, not for a subagent that may never act on it
+    const now = await $.clock.now()
+    if (now - state.notesAt < NOTES_EVERY_MS) return out
+    state.notesAt = now       // claimed before any wait: parallel tool calls must not attach the same note twice
+    const notes = await takeNotes($)
+    if (!notes.length) return out
+    void report($, 'notes.ack', { ids: notes.map(n => n.id) })
+    return { ...out, additionalContext: [...(out.additionalContext ?? []), ...notes.map(n => n.text)] }
+  } catch { return out }
 }
 
 // Fail open: no tmux, no ssh, no proxmox, a slow answer: the lease then simply stays (ghosty releases it later when the session is gone).
@@ -121,6 +138,9 @@ export const register: Register = (on, options) => {
     void report($, 'prompt', { text: cap(e.text), midTurn: e.turnId !== undefined, synthetic: isSynthetic(e.text) })
     return out
   })
+
+  on('classic.PostToolUse', async ($, e, next) => notesAfterTool($, await next(e), e.agent_id))
+  on('classic.PostToolUseFailure', async ($, e, next) => notesAfterTool($, await next(e), e.agent_id))
 
   // The model's turn ended: the exact final answer, why, and what it cost. A subagent's turn is tagged
   // with its agentId and is not the session's turn.

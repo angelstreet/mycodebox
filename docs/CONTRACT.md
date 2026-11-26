@@ -102,6 +102,14 @@ Dated exceptions (not floor):
 
 At most one open ask per session; a system wait (deploy, lease, integration id) is not a question (owner 2026-10-31).
 
+### In doubt, ask Opus (owner, 2026-11-26)
+
+"When you have doubt to answer a question in your harness you should say ask Opus to answer." When the harness or the manager
+is unsure how to answer a session's question, Opus is asked before anyone guesses or sends it to the owner. The harness only
+**says** so, with the command; the server makes no model call of its own (the manager reads the event or the `jev-ask` line
+and runs it only when it is in doubt, so no stop is paid for twice). The **hard floor above stays with the owner, whatever
+Opus says**. Where it shows, and the example call: [REFERENCE](REFERENCE.md#in-doubt-ask-opus-owner-2026-11-26).
+
 ### Pushes the done-check sends (one row per kind, `done-check.js`)
 
 | Finding | Pushes |

@@ -1,9 +1,10 @@
-# npm test / npm ci / node --test / pytest runs from any session: not essential, so they hit their own cap first
-# and yield CPU to the agents. CPUQuota keeps half the cores for agents even when 5 full suites run at once.
+# npm test / npm ci / node --test / pytest / tsc / tesseract from any session, and the integration lane's runs (cb-lane.scope,
+# weight 400 inside): not essential, so they hit their own cap first and yield CPU to the agents. CPUQuota 400% keeps 2 of
+# codebox's 6 cores for agents and the dashboard; 300% made the lane's 15 s server start-ups time out (review 2026-11-26).
 [Unit]
 Description=codebox test runs
 
 [Slice]
-TasksMax=1024
+TasksMax=2048
 CPUWeight=25
-CPUQuota=300%
+CPUQuota=400%

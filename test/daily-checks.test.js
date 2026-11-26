@@ -47,6 +47,7 @@ test('shouldWake: new, unchanged inside the window, changed text, window elapsed
 test('run: end-to-end — healthy writes a report and no event; a finding writes one event, then debounces, then re-wakes after clearing', async () => {
   const home = tmp('daily-');
   const dir = join(home, '.local/state/ghosty'); mkdirSync(dir, { recursive: true });
+  process.env.GHOSTY_SYSTEMD_DIR = tmp('daily-units-');   // the built-in installed-copies check must not read this host's /etc units
   const script = join(home, 'chk.js');
   writeFileSync(script, `const fs=require('fs'); const bad=fs.existsSync(process.env.HOME+'/bad'); console.log(JSON.stringify({summary:'s',report:'body',findings:bad?[{key:'leak:b',title:'Leak',body:'x'}]:[]}))`);
   writeFileSync(join(dir, 'daily-checks.json'), JSON.stringify({ checks: [{ id: 'x', title: 'X', command: [process.execPath, script], timeoutSec: 20 }] }));

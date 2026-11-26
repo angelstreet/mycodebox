@@ -29,6 +29,7 @@
 
 import { join } from 'node:path';
 import { mkdir, stat, rename, appendFile, readFile, open } from 'node:fs/promises';
+import { eventDoubt } from './doubt.js';
 
 export const DEFAULT_MAX_BYTES = 5 * 1024 * 1024;
 export const FILE_NAME = 'manager-events.jsonl';
@@ -145,6 +146,9 @@ export function createManagerEvents({ stateDir, managerSessions = () => [], fs: 
     rec.url = typeof event.url === 'string' ? event.url : '/';
     rec.priority = typeof event.priority === 'string' ? event.priority : 'default';
     if (event.turn && typeof event.turn === 'object') rec.turn = event.turn;   // the stopped turn: { elapsedMs, tokens, status, info, line, source }
+    // a session's question: the manager reads "in doubt: ask Opus" with the command (doubt.js); absent on owner-floor asks
+    const ask = eventDoubt({ key: event.key, session: cls.session && !event.key.startsWith('mac:') ? cls.session : event.session || event.key.replace(/:[^:]+$/, ''), title: rec.title, body: String(event.body || '') });
+    if (ask) rec.askOpus = ask;
     return { rec, cls };
   }
   // Re-fired stops (a re-wrap, a restart) repeat the same session + kind + text minutes apart: skip them for 6 h.
