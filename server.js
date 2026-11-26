@@ -1771,7 +1771,7 @@ async function pollOnce() {
   for (const k of [...crashResumeStates.keys()]) if (!status[k]) crashResumeStates.delete(k);
   for (const k of [...lastSendText.keys()]) if (!status[k]) lastSendText.delete(k);
   pruneManager(new Set([...Object.keys(status), ...remote.names()]));   // Mac sessions (mac:<name>) have no tmux pane: they are not pruned with the tmux list
-  reporter.prune(new Set(Object.keys(status)));
+  if (listOk) reporter.prune(new Set(Object.keys(status)));   // a failed tmux listing must not wipe the saved facts
   turnMeter.prune(new Set(Object.keys(status)));
   sessionMeta.sync(Object.keys(status));
   if (listOk) leaseTracker.observe(new Map(sessions.map((x) => [x.name, x.created]))).catch((e) => console.error('[lease] sessionGone', e.message));   // central: a vanished tmux session loses its leases
@@ -3619,6 +3619,9 @@ async function leaseTick() {
 // Boot
 // ---------------------------------------------------------------------------
 
+// Before listening: the saved reporter facts are restored first, so no plugin event can arrive ahead of them.
+try { console.log(`[ghosty] reporter token: ${await reporter.init()}`); } catch (e) { console.error('[ghosty] reporter token', e.message); }
+
 server.listen(PORT, HOST, async () => {
   console.log(`[ghosty] listening on http://${HOST}:${PORT}`);
   // TTS prune (Q95=1): 14-day keep matching daily-checks.json. Runs once at boot; the cache is
@@ -3628,7 +3631,6 @@ server.listen(PORT, HOST, async () => {
     const r = await tts.prune();
     if (r.removed) console.log(`[tts] pruned ${r.removed} stale mp3 file${r.removed === 1 ? '' : 's'} from ${TTS_CACHE_DIR}`);
   } catch (e) { console.error('[tts] prune', e.message); }
-  try { console.log(`[ghosty] reporter token: ${await reporter.init()}`); } catch (e) { console.error('[ghosty] reporter token', e.message); }
   // The manager agent's own auto-answers and resumes are never the owner, so gate every
   // typed send with assertAgentPane first. A bash / sleep shell with old MiniMax JSON in
   // its scrollback would otherwise be mistaken for an agent (see agentFromText) — this
@@ -3818,6 +3820,7 @@ for (const s of ['SIGINT', 'SIGTERM']) {
   process.on(s, async () => {
     console.log(`[ghosty] ${s}, shutting down`);
     wss.clients.forEach((c) => c.close());
+    await reporter.flush();
     // V2 on: stop scheduling and release the V2 controller lease first (bounded), so a restart takes over at once.
     if (v2) await v2.stop({ timeoutMs: 5000 }).catch((e) => console.error(`[v2] stop: ${e?.code || e?.message}`));
     server.close(() => process.exit(0));

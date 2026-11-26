@@ -1163,6 +1163,15 @@ The status payload carries a small `reporter` object per live Claude session (`s
 `waiting`, `agents {count, by}`, `agentList`); the session cards show a ⚡ (not the left list rows, owner 2026-11-20) (with the subagent count) whose tooltip lists them.
 `GET /api/reporter/:session` returns everything held for one session (latest turn, prompt, waiting, agents).
 
+**Saved across restarts** (2026-11-26): the last turn (with its background tasks and wakeups), turn meter, last prompt, session id, cwd and
+seen time are written to `<state>/reporter-sessions.json` (0600, written 500 ms after an event and on shutdown) and restored before the server
+listens. Pending permission prompts and the subagent list are not restored. A saved session unseen for 24 h, or whose tmux session is gone, is
+dropped; a damaged file starts empty. An event sent while the server is down is still lost.
+
+**Background count for readers:** `reporter.activityOf()` returns `backgroundWork` (own-jobs parked wake, stop facts), and it is 0 for a turn
+that ended on a hand-over STATUS line, so it cannot overrule that line. `summary()` keeps the raw count (the lease reaper's live-job check and
+the status payload).
+
 Develop / test the plugin: `claude plugin validate claude-plugin/ghosty-reporter` and
 `claude plugin test claude-plugin/ghosty-reporter` (tests in `ghosty-reporter.test.ts`); ghosty side: `npm test`.
 

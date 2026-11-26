@@ -31,6 +31,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The harness sees real background tasks, also after a restart** — the parked wake and the stop facts asked the reporter for a count it never returned, and a server restart forgot every session's background tasks and scheduled wakeups. Both are fixed; the count never overrules a turn that ended on `done`, `needs-owner`, `blocked` or another hand-over line · area: manager
+
 - **An accepted done is no longer woken by its time box** — a finished session that answered a notice with `STATUS: acknowledged` was told its time box had run out, because only the latest STATUS word was read. A done that passed the checks now closes that task's box, on codebox and Mac sessions · area: harness
 
 - **The UI review runs again, and a new import in the reviewer can no longer break it** — the lane copied a fixed list of folders; once VirtualPyTest's reviewer imported a script outside it, graphical requests came back on `ModuleNotFoundError`. The export now also follows the reviewer's imports, transitively, on the product's target branch (`scripts/ui-review-closure.py`) · area: integration
