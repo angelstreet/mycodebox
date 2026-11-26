@@ -108,7 +108,7 @@ PROJECT=$(basename "${TOP:-${WD:-unknown}}")
 [ -n "$NAME" ] || NAME="${PROJECT}-$(printf '%s' "$SESSION_ID" | cut -c1-6)"
 NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-PAYLOAD="{\"machine\":\"$(esc "$MACHINE")\",\"project\":\"$(esc "$PROJECT")\",\"session_id\":\"$(esc "$SESSION_ID")\",\"session_name\":\"$(printf '%s' "$NAME" | sed 's/[^A-Za-z0-9 ._@:+-]/-/g' | cut -c1-80)\",\"cwd\":\"$(esc "$WD")\",\"text\":\"$TEXT\",\"stop_hook_active\":$ACTIVE,\"at\":\"$NOW\""
+PAYLOAD="{\"machine\":\"$(esc "$MACHINE")\",\"project\":\"$(esc "$PROJECT")\",\"session_id\":\"$(esc "$SESSION_ID")\",\"session_name\":\"$(printf '%s' "$NAME" | sed 's/[^A-Za-z0-9 ._@:+-]/-/g' | cut -c1-80)\",\"cwd\":\"$(esc "$WD")\",\"text\":\"$TEXT\",\"stop_hook_active\":$ACTIVE,\"takes_reflect\":true,\"at\":\"$NOW\""
 [ -n "$PROMPT_AT" ] && PAYLOAD="$PAYLOAD,\"prompt_at\":\"$PROMPT_AT\""
 [ -n "${FIRST:-}" ] && PAYLOAD="$PAYLOAD,\"first_prompt\":\"$FIRST\""
 # sha256 of this script: the dashboard's daily check reports a Mac copy that differs from the repo (installed-copies-check.js)
@@ -131,7 +131,8 @@ printf 'authorization: Bearer %s\ncontent-type: application/json\n' "$TOKEN" > "
 RESP=$(printf '%s' "$PAYLOAD" | curl -sS --max-time 10 -H "@$HDR" --data-binary @- "$URL/api/remote/v1/stops" 2>/dev/null) || exit 0
 ID=$(printf '%s' "$RESP" | sed -n 's/.*"id":"\([0-9a-f-]\{36\}\)".*/\1/p')
 [ -n "$ID" ] || exit 0
-[ "$ACTIVE" = true ] && exit 0                                   # loop guard: the stop is journalled, never answered
+# loop guard: the stop is journalled, never answered. One exception: the reflection question after an accepted done (sent once per task, so it cannot loop)
+if [ "$ACTIVE" = true ]; then printf '%s' "$RESP" | grep -q '"reflect":true' || exit 0; fi
 printf '%s' "$RESP" | grep -q '"answerable":false' && exit 0
 MAXW=$(printf '%s' "$RESP" | sed -n 's/.*"wait_max_s":\([0-9]*\).*/\1/p'); case "$MAXW" in ''|*[!0-9]*) MAXW=$WAIT ;; esac
 [ "$MAXW" -lt "$WAIT" ] && WAIT=$MAXW

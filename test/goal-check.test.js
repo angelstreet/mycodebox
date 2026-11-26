@@ -82,6 +82,8 @@ STATUS: done — catch-up fixed · goal: achieved · evidence: int-1a1cbfa071dec
   const ok = await g.evaluate({ name: 'lease-fix', text: good, doneAt: t });
   assert.equal(ok.kind, 'accepted');
   assert.ok(ok.evidence.includes('file') && ok.evidence.includes('run id'));
+  assert.equal(ok.reflect, true, 'goal met: the reflection question rides on the acceptance (reflection.test.js)');
+  await g.sent('lease-fix', ok);
   assert.equal(await g.evaluate({ name: 'lease-fix', text: good, doneAt: t }), null, 'accepted: quiet');
   // bug-724947cb: the server re-stamps doneAt of the same finished turn; the same text is not asked again
   assert.equal(await g.evaluate({ name: 'lease-fix', text: good, doneAt: t + 10 * 60e3 }), null, 'same text, later doneAt: quiet');

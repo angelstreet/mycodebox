@@ -66,6 +66,7 @@ export function validateStop(b, now = Date.now()) {
   if (typeof b.first_prompt === 'string' && b.first_prompt.trim()) out.first_prompt = clean(b.first_prompt).slice(0, 4000);
   if (typeof b.hook_sha === 'string' && /^[0-9a-f]{64}$/.test(b.hook_sha)) out.hook_sha = b.hook_sha;   // sha256 of the Mac hook script (installed-copies-check.js)
   out.stop_hook_active = b.stop_hook_active === true;
+  out.takes_reflect = b.takes_reflect === true;   // hook copies from 2026-11-26 wait for a flagged reflection answer under the loop guard
   const at = b.at ? tms(b.at) : null;
   out.at = at != null && Math.abs(at - now) < 10 * 60e3 ? at : now;   // the Mac's clock is only believed when close to ours
   const pa = b.prompt_at ? tms(b.prompt_at) : null;
@@ -240,8 +241,13 @@ export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goa
         }
       } catch (e) { console.error('[remote] verification', e.message); }
     }
+    // every row passes: the goal question is skipped, only the reflection can follow, and only for a line nothing else refuses
+    let allRows = false;
+    try { allRows = !!verificationOf(stopText(v), goals?.get(name)?.parts || [])?.ok; } catch { /* no goal store */ }
+    const lacksGoal = allRows && !v.stop_hook_active && !!doneWithoutGoalOf(stopText(v));
     let gate = null;
-    if (goalGate && !refusal && !stateWaiting && !verified && checksOn(name)) { try { gate = await goalGate.evaluate({ name, text: stopText(v), doneAt: t, remote: true, canAnswer: !v.stop_hook_active }); } catch (e) { console.error('[remote] goal gate', e.message); } }
+    // canReflect: the one answer a loop-guarded stop may get (asked once per task, so it cannot loop), when the hook says it waits for it
+    if (goalGate && !refusal && !stateWaiting && !(verified && !allRows) && !lacksGoal && checksOn(name)) { try { gate = await goalGate.evaluate({ name, text: stopText(v), doneAt: t, remote: true, canAnswer: !v.stop_hook_active, canReflect: v.takes_reflect, verified: allRows }); } catch (e) { console.error('[remote] goal gate', e.message); } }
     // the goal check had nothing to say (not wired, or this done turn was already handled): a done line without `goal: achieved` + evidence is still refused, once per line
     if (!refusal && !gate && !v.stop_hook_active && checksOn(name)) {
       const stx = stopText(v), g = doneWithoutGoalOf(stx), sig = createHash('sha1').update(lastStatus(stx)?.line || '').digest('hex').slice(0, 12);
@@ -272,7 +278,7 @@ export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goa
       s.lastSendAt = t; s.lastSendText = refusal.message.slice(0, 300);
     }
     if (gate?.message && !gate.dry && stop.state === 'pending') {   // the goal check answers this stop itself, the manager does not
-      stop.noAnswer = true; stop.goalCheck = gate.kind;
+      stop.noAnswer = true; stop.goalCheck = gate.kind; stop.reflect = !!gate.reflect;
       resolve(stop, 'answered', { answer: gate.message.slice(0, 2000) });
       s.lastSendAt = t; s.lastSendText = gate.message.slice(0, 300);
       goalGate.sent(name, gate).catch((e) => console.error('[remote] goal gate sent', e.message));
@@ -283,7 +289,7 @@ export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goa
     const mid = manager.pendingIdOf(name);   // the manager's id for this stop, set synchronously by observe
     if (mid && mid !== prevMid) { stop.managerId = mid; byMid.set(mid, stop); }
     if (stop.noAnswer && stop.state === 'pending') stop.why = 'stop_hook_active: never answered automatically';
-    return { id, name, answerable: stop.state === 'answered' || !stop.noAnswer, wait_max_s: config().waitS };
+    return { id, name, answerable: stop.state === 'answered' || !stop.noAnswer, reflect: !!stop.reflect, wait_max_s: config().waitS };
   }
 
   // ---- dashboard rows (no tmux) ----
@@ -347,7 +353,7 @@ export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goa
       if (!v.ok) { send(res, 400, { ok: false, code: 'E_INVALID', error: v.error }); return true; }
       let r;
       try { r = await ingest(v.v, client); } catch (e) { console.error('[remote] ingest', who, e.message); send(res, 500, { ok: false, code: 'E_UNAVAILABLE', error: 'could not process the stop' }); return true; }
-      send(res, 200, { ok: true, id: r.id, session: r.name, wait_max_s: r.wait_max_s, answerable: r.answerable });
+      send(res, 200, { ok: true, id: r.id, session: r.name, wait_max_s: r.wait_max_s, answerable: r.answerable, ...(r.reflect ? { reflect: true } : {}) });
       return true;
     }
     const m = /^\/stops\/([0-9a-f-]{36})\/answer$/.exec(sub);

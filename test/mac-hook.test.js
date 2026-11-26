@@ -26,10 +26,10 @@ async function fake(mode) {
       const send = (o) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(o)); };
       if (req.method === 'POST') {
         seen.posts.push(JSON.parse(b));
-        return send({ ok: true, id: '11111111-2222-3333-4444-555555555555', session: 'mac:cache-work', wait_max_s: 8, answerable: mode !== 'noanswer' });
+        return send({ ok: true, id: '11111111-2222-3333-4444-555555555555', session: 'mac:cache-work', wait_max_s: 8, answerable: mode !== 'noanswer', ...(mode === 'reflect' ? { reflect: true } : {}) });
       }
       seen.polls += 1;
-      if (mode === 'answer') return send({ ok: true, state: 'answered', answer: 'Go with option 1 "in memory".\nThanks' });
+      if (mode === 'answer' || mode === 'reflect') return send({ ok: true, state: 'answered', answer: 'Go with option 1 "in memory".\nThanks' });
       if (mode === 'pending-then-answer' && seen.polls === 1) return send({ ok: true, state: 'pending' });
       if (mode === 'pending-then-answer') return send({ ok: true, state: 'answered', answer: 'second poll' });
       return send({ ok: true, state: 'none', reason: 'escalated to the owner' });
@@ -120,6 +120,17 @@ test('loop guard: with stop_hook_active the stop is posted but the hook never wa
     assert.equal(r.code, 0); assert.equal(r.out, '');
     assert.equal(f.seen.posts[0].stop_hook_active, true);
     assert.equal(f.seen.polls, 0);
+  } finally { await f.close(); }
+});
+
+test('loop guard exception: the reflection question (flagged by the server, once per task) is waited for and printed', { skip }, async () => {
+  const f = await fake('reflect');
+  try {
+    const r = await run([], setup({ url: f.url, extraIn: { stop_hook_active: true } }));
+    assert.equal(f.seen.posts[0].takes_reflect, true, 'this hook says it waits for it');
+    assert.equal(validateStop({ ...f.seen.posts[0] }).v.takes_reflect, true);
+    assert.equal(f.seen.polls, 1);
+    assert.equal(JSON.parse(r.out.trim()).decision, 'block');
   } finally { await f.close(); }
 });
 

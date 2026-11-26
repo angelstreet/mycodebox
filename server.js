@@ -129,6 +129,7 @@ import { createSharedCheckoutGuard, expandHome } from './shared-checkout-guard.j
 import { createFoundBugs, sessionOfRequest, unreportedBugOf, sendBackOf, sendBackText, sweepGroups, equivalentFreeOf } from './found-bugs.js';
 import { goalOf as goalOfPrompt, blockedOrUnknownStatus } from './status-honesty.js';
 import { createGoalGate, createGoalStore } from './goal-check.js';
+import { audienceFor } from './reflection.js';
 import { createFinalAccept, isTaskActor, isTaskMessage } from './final-accept.js';
 import { createDoneCheck, closingTextOf, DEFAULT_IGNORE_BRANCHES, shipOfferOf, unconfirmedStatusOf, waitingOnLeaseStatus } from './done-check.js';
 import { createLeftovers, pushableItems } from './done-leftovers.js';
@@ -1213,6 +1214,9 @@ const goalGate = createGoalGate({
   },
   record: (e) => managerEvents.record(e),
   mode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).goalCheck; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
+  // the reflection question after an accepted done (reflection.js): who picks among the suggestions; manager.json `reflection` live | dry | off
+  audienceOf: async (name) => audienceFor(name, sessionMeta.startedBy(name)),
+  reflectMode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).reflection; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
 });
 
 // Done check (done-check.js): an idle session whose last STATUS is done is checked against git (commits not on main,
@@ -1224,6 +1228,7 @@ const deployLive = createDeployLive({ dir: join(STATE_DIR, 'deploys'), deploys: 
   leases: async () => (await leaseSource.view(false))?.leases || [] });
 const doneCheck = createDoneCheck({
   finalAccepted,
+  liveNames: async () => [...(await listPanes()).keys()],   // the goal gate keeps the state of every pane that exists, busy ones too
   stopFacts: (n, o) => stopFactsImpl(n, o), stateMode: stopStateMode,
   draftNow: async (n) => { try { return !!inputBox((await capturePane(n, 30)).split('\n')).draft; } catch { return true; } },
   goalEntryOf: (n) => goals.get(n), timeBoxMode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).timeBox; return m === 'live' || m === 'off' ? m : 'dry'; } catch { return 'dry'; } },
@@ -2029,7 +2034,7 @@ async function createSession({ name, agent, cwd, priority, model, prompt, handov
   }
   await historyLog({ kind: 'session.started', name: real, provider: agent, model: model ?? null, cwd: dir, started_by: 'dashboard', prompt_ref: promptFile ?? prompt ?? null, handover_ref: handover ?? null, tmux_created: await tmuxCreated(real) });
   reopenFinal(real, 'dashboard', 'a new session took the name');
-  goals.forget(real); if (prompt || handover) captureGoal(real, prompt || handover, 'dashboard');   // goal check: the goal as given at start
+  goalGate.drop(real).catch(() => {}); goals.forget(real); if (prompt || handover) captureGoal(real, prompt || handover, 'dashboard');   // goal check: the goal as given at start
   sessionMeta.reset(real);
   sessionMeta.sync([real]);   // a new session starts at P2 (or the chosen priority), not paused
   if (priority) sessionMeta.set(real, { priority });
@@ -2637,7 +2642,7 @@ async function handleHttp(req, res) {
       // records 'owner' itself; cbsession is the default when the caller forgot both (legacy cbsession, manual run).
       const sb = typeof b.started_by === 'string' && b.started_by ? b.started_by : 'cbsession';
       const r = await history.append({ ...b, kind: 'session.started', started_by: sb, tmux_created: typeof b.name === 'string' ? await tmuxCreated(b.name) : null });
-      if (typeof b.name === 'string' && b.name) { reopenFinal(b.name, sb, 'a new session took the name'); goals.forget(b.name); captureGoal(b.name, b.prompt_ref || b.handover_ref, 'cbsession'); }   // goal check: the goal as given at start
+      if (typeof b.name === 'string' && b.name) { reopenFinal(b.name, sb, 'a new session took the name'); goalGate.drop(b.name).catch(() => {}); goals.forget(b.name); captureGoal(b.name, b.prompt_ref || b.handover_ref, 'cbsession'); }   // goal check: the goal as given at start
       if (typeof b.name === 'string' && b.name) {
         try { sessionMeta.setStartedBy(b.name, sb); } catch (e) { console.error('[history] setStartedBy', e.message); }
       }

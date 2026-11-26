@@ -4,28 +4,15 @@ import { pushOf, replyFor, optionsOf, floorOf } from '../owner-push.js';
 
 // Closing texts below are the owner-pushed stops of 2026-10-27, host and account names replaced by fakes.
 
-test('suggestions: done with its own proposal fires; the reply asks to implement and list what was skipped', () => {
-  const t = [
-    'My "about 4 players" ceiling therefore rests on one noisy run. To pin it down properly, I\'d add players one at a time and hold each for 60 s.',
-    'It needs a lab-host-a lease and about 8 minutes, and I haven\'t started it.',
-    'STATUS: done — load jump between 4 and 5 players is unexplained; a controlled 60 s-per-player run with memory and swap sampling would settle it',
-  ].join('\n');
-  const p = pushOf(t);
-  assert.equal(p.kind, 'suggestions');
-  assert.match(p.items[0], /I'd add players one at a time/);
-  assert.match(replyFor(p), /^Implement your own proposals now: .*list what you skip and why/);
-  const v = pushOf('**Suite rules at fault:**\n- The walk assumes BACK returns to the list.\nThe page also has these as proposals.\nSTATUS: done — verdict page published; fixes proposed on the page');
-  assert.equal(v.kind, 'suggestions');
+// The `suggestions` push ("Implement your own proposals now") is gone since 2026-11-26: nothing is built unasked (reflection.js).
+test('a done with its own proposals is never pushed to build them', () => {
+  assert.equal(pushOf("I'd add a cache. I'd also add a retry.\nSTATUS: done — x"), null);
+  assert.equal(pushOf('Suggestions: add a retry on the walk\nSTATUS: done — walk fixed'), null);
 });
 
-test('suggestions: a clean done, a listed "Left to do" (done-leftovers.js) and owner-only proposals do not fire', () => {
-  assert.equal(pushOf('All 12 tests pass.\nSTATUS: done — merged and deployed'), null);
-  assert.equal(pushOf('Left to do:\n1. web node builds\nI\'d add a cache later.\nSTATUS: done — open: web node builds'), null);
-  // the team chip needs a key only the owner has: not a push
-  assert.equal(pushOf('If you want, I can show the team chip once you put the admin api key in .env.\nSTATUS: done — chip live'), null);
-  const mixed = pushOf("I'd add a retry on the walk. I'd also add a step that deletes the old recordings.\nSTATUS: done — walk fixed");
-  assert.deepEqual(mixed.items, ["I'd add a retry on the walk."]);
-  assert.match(mixed.skipped[0], /deletes.*\(owner: deletes\)/);
+test('the reflection ask is never answered by a push, whatever its words match', () => {
+  const t = 'Worth doing:\n1. bring lab-web to main with a host deploy\nSTATUS: needs-manager: improvement suggestions above, nothing built — should I do 1? [1 yes (recommended) / 2 no]';
+  assert.equal(pushOf(t), null);
 });
 
 test('routine-ask: needs-manager menus answer the "yes" or recommended option unless it is on the floor', () => {
@@ -106,7 +93,7 @@ const classify = (text) => {
 test('watcher: a push stop emits one `<session>:push` event with pushKind and reply; leftovers keep their key', async () => {
   const events = [];
   const rows = [
-    { name: 'a', text: "I'd add a retry on the walk. I'd also add a step that logs each retry.\nSTATUS: done — walk fixed", idleMs: IDLE_MS + 1 },
+    { name: 'a', text: 'STATUS: needs-owner: may I apply the additive migration (CREATE TABLE ai_usage)?', idleMs: IDLE_MS + 1 },
     { name: 'b', text: 'Left to do:\n- wire the retry counter\nSTATUS: done — merged', idleMs: IDLE_MS + 1 },
     { name: 'c', text: 'STATUS: needs-owner: password for the shop account', idleMs: IDLE_MS + 1 },
     { name: 'd', text: "I'd add a retry.\nSTATUS: done — x", idleMs: IDLE_MS + 1, draft: true },
@@ -114,11 +101,11 @@ test('watcher: a push stop emits one `<session>:push` event with pushKind and re
   const w = createLeftovers({ listIdle: async () => rows, record: async (e) => { events.push(e); }, classify, log: { error() {} } });
   await w.tick(); await w.tick();
   assert.deepEqual(events.map((e) => e.key), ['a:push', 'b:leftovers']);
-  assert.equal(events[0].pushKind, 'suggestions');
-  assert.match(events[0].reply, /^Implement your own proposals now/);
-  assert.equal(events[0].title, 'a: push (suggestions)');
+  assert.equal(events[0].pushKind, 'routine-ask');
+  assert.match(events[0].reply, /^Yes, do it/);
+  assert.equal(events[0].title, 'a: push (routine-ask)');
   assert.equal(events[1].title, 'b: done with leftovers');
-  assert.deepEqual(w.snapshot().found.map((f) => [f.name, f.kind, f.pushKind]), [['a', 'push', 'suggestions'], ['b', 'leftovers', undefined]].map(([n, k, p]) => [n, k, p]));
+  assert.deepEqual(w.snapshot().found.map((f) => [f.name, f.kind, f.pushKind]), [['a', 'push', 'routine-ask'], ['b', 'leftovers', undefined]]);
 });
 
 test('feed: push events pass with items, pushKind and reply', async () => {
@@ -127,31 +114,4 @@ test('feed: push events pass with items, pushKind and reply', async () => {
   assert.equal(await ev.record({ key: 'ft:push', title: 'ft: push (routine-ask)', body: 'x', items: ['x'], pushKind: 'routine-ask', reply: 'Yes, option 1: x.' }), true);
   const r = JSON.parse(readFileSync(join(dir, FILE_NAME), 'utf8').trim());
   assert.deepEqual([r.kind, r.session, r.pushKind, r.reply, r.items], ['push', 'ft', 'routine-ask', 'Yes, option 1: x.', ['x']]);
-});
-
-// bug-1f0455fc (2026-10-28): the two acknowledgements of the owner's script-rename freeze, sanitised. The detector filed
-// push(suggestions) from "proposal, final names wait for the owner" and told the sessions to "Implement your own proposals now".
-test('suggestions: a freeze acknowledgement never fires (deferred proposal, answers the freeze, no list)', () => {
-  const a = [
-    'Acknowledged: the script-rename freeze is in effect. I made no renames. My tree-naming table stays a proposal, final names wait for the owner.',
-    'STATUS: done — freeze acknowledged; proposal, final names wait for the owner.',
-  ].join('\n');
-  const b = [
-    'Stop message received. Nothing is renamed and nothing will be until the owner validates the convention; the review notes below are a proposal only.',
-    'STATUS: done — holding all renames; proposal, final names wait for the owner.',
-  ].join('\n');
-  assert.equal(pushOf(a), null);
-  assert.equal(pushOf(b), null);
-});
-
-test('suggestions: each guard alone holds, and real proposals still fire', () => {
-  // deferred only: the single proposal is negated
-  assert.equal(pushOf("I'd add the names table, but not until the owner has validated the convention.\nSTATUS: done — table drafted"), null);
-  // freeze wording alone, even with two proposal sentences
-  assert.equal(pushOf("The freeze is acknowledged. I'd add a cache. I'd also add a retry.\nSTATUS: done — x"), null);
-  // one stray proposal phrase is not a list
-  assert.equal(pushOf("I'd add a cache later.\nSTATUS: done — merged"), null);
-  // a Suggestions heading is a list even with one item; two proposal sentences are a list
-  assert.equal(pushOf('Suggestions: add a retry on the walk\nSTATUS: done — walk fixed').kind, 'suggestions');
-  assert.equal(pushOf("I'd add a cache. I'd also add a retry.\nSTATUS: done — x").kind, 'suggestions');
 });

@@ -98,7 +98,7 @@ test('Mac: a done line needs a Verification block per stored Done-when line (ans
   const ok = await post('Verification:\n1. pass — int-1a1cbfa071\n2. pass — run 1a2b3c4d5e6f\n' + DONE.replace('menu fixed', 'menu fixed again'));
   assert.equal(ok.status, 200);
   const b = await call('GET', `/stops/${ok.body.id}/answer?wait=1`);
-  assert.ok(!/Verification/.test(b.body.answer || ''), 'verified: no verification refusal and no goal question');
+  assert.match(b.body.answer, /^Reflection \(your done is accepted/, 'verified: no verification refusal and no goal question, only the reflection');
   assert.match(fs.readFileSync(path.join(stateDir, 'verification.jsonl'), 'utf8'), /"passed":2,"total":2/);
 });
 
@@ -115,3 +115,76 @@ test('Mac: a done line with leftovers or an unverified list is refused once (don
   const w = await call('GET', `/stops/${r.body.id}/answer?wait=2`);
   assert.match(JSON.stringify(w.body), /done is only for a task with nothing open/);
 });
+
+// Reflection after an accepted done (owner 2026-11-26, reflection.js) on the Mac path: asked once through the hook, also on the loop-guarded reply
+// that passed the goal check; a hook copy without the exception gets it relayed by the manager; a done that is refused or final gets none.
+const ROWS = 'Verification:\n1. pass — int-1a1cbfa071\n2. pass — test/menu.test.js:12\n';
+const PROMPT2 = 'Fix the menu edge.\nDone when:\n1. the edge passes\n2. a test covers it';
+const GOOD_REPLY = 'Goal: fix the Apple TV menu edge on appletv-orchtnet so goto home passes three runs in a row.\nReached: menu.js:10, run run-1a2b3c4d 3/3 runs pass.\n' + CLEAN;
+const answerOf = async (r) => (await call('GET', `/stops/${r.body.id}/answer?wait=2`)).body;
+const poster = (id, name, extra = {}) => (text, more = {}) => call('POST', '/stops', { machine: 'mac-test', project: 'demo', session_id: id, session_name: name, text, takes_reflect: true, ...extra, ...more });
+
+test('Mac: question, accepted reply (loop-guarded) gets the reflection once; its reply gets nothing more', async () => {
+  const post = poster('sid-refl-4dddd', 'refl', { first_prompt: 'Fix the Apple TV menu edge on appletv-orchtnet so goto home passes three runs in a row.' });
+  assert.match((await answerOf(await post(CLEAN))).answer, /^Goal check: Goal as given/);
+  const r = await post(GOOD_REPLY, { stop_hook_active: true });
+  assert.equal(r.body.answerable, true);
+  assert.equal(r.body.reflect, true, 'the hook waits for this one although it is loop-guarded');
+  const a = await answerOf(r);
+  assert.match(a.answer, /^Reflection \(your done is accepted/);
+  assert.match(a.answer, /STATUS: needs-owner: improvement suggestions above, nothing built/);
+  assert.match(a.answer, /bugs field\.$/, 'not cut by the answer limit');
+  await new Promise((res) => setTimeout(res, 100));
+  const done = await post('no suggestions\n' + CLEAN, { stop_hook_active: true });
+  assert.equal(done.body.reflect, undefined);
+  assert.equal(done.body.answerable, false);
+  const later = await post(CLEAN.replace('menu edge fixed', 'menu edge fixed again'));
+  const l = await answerOf(later);
+  assert.doesNotMatch(String(l.answer || ''), /^(?:Reflection|Goal check)/);
+});
+
+test('Mac: an older hook (no takes_reflect) cannot be answered under the loop guard: the manager relays the question, once', async () => {
+  const post = poster('sid-refl-5eeee', 'oldhook', { first_prompt: 'Fix the Apple TV menu edge on appletv-orchtnet so goto home passes three runs in a row.', takes_reflect: undefined });
+  await answerOf(await post(CLEAN));
+  const before = records.length;
+  const r = await post(GOOD_REPLY, { stop_hook_active: true });
+  assert.equal(r.body.reflect, undefined);
+  assert.equal(r.body.answerable, false);
+  await post(GOOD_REPLY + ' ', { stop_hook_active: true });
+  const mine = records.slice(before).filter((e) => e.key.startsWith('reflection-relay:'));
+  assert.equal(mine.length, 1);
+  assert.match(mine[0].body, /^Reflection \(/);
+});
+
+test('Mac: every Verification row passes -> the reflection at once, no goal question', async () => {
+  const post = poster('sid-refl-6ffff', 'rows', { first_prompt: PROMPT2 });
+  const r = await post(ROWS + CLEAN);
+  assert.equal(r.body.reflect, true);
+  assert.match((await answerOf(r)).answer, /^Reflection \(/);
+});
+
+test('Mac: failed, blocked, waiting, partial, a bounced done and an accepted-final result get no reflection', async () => {
+  const lines = [
+    'STATUS: failed — goal not achieved: x · tried: y · cause: z · plan: w', 'STATUS: blocked: x · tried: y · need: z', 'STATUS: waiting: integration int-1a1cbfa071', 'STATUS: partial — half',
+    ROWS + 'STATUS: done — menu edge fixed · closing review: docs none needed · leftovers none · unverified none · bugs: none',   // lacks goal: achieved
+    ROWS + CLEAN.replace('leftovers none', 'leftovers bug-827764ef'),
+    ROWS.replace('2. pass', '2. fail') + CLEAN,
+  ];
+  for (const [i, text] of lines.entries()) {
+    const r = await poster(`sid-refl-7g${i}gg`, `none${i}`, { first_prompt: PROMPT2 })(text);
+    assert.equal(r.body.reflect, undefined, text);
+    const a = await answerOf(r);
+    assert.doesNotMatch(String(a.answer || ''), /^Reflection/, text);
+  }
+  const accepted = createRemoteStops({ manager, dir: leasesDir, stateDir, goalGate, goals, finalAccepted: () => true });
+  const s2 = http.createServer((req, res) => { accepted.handle(req, res); });
+  await new Promise((res) => s2.listen(0, '127.0.0.1', res));
+  try {
+    const r = await fetch(`http://127.0.0.1:${s2.address().port}${PREFIX}/stops`, { method: 'POST', headers: { authorization: `Bearer ${REMOTE}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ machine: 'mac-test', project: 'demo', session_id: 'sid-refl-8hhhh', session_name: 'final', text: ROWS + CLEAN, first_prompt: PROMPT2, takes_reflect: true }) });
+    assert.equal((await r.json()).reflect, undefined);
+  } finally { await new Promise((res) => s2.close(res)); }
+});
+
+// the manager's countdowns and journal writes (delayMs 250) land before helpers-tmp.js removes the state dir
+test('Mac: settle', () => new Promise((res) => setTimeout(res, 600)));

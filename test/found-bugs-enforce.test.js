@@ -110,7 +110,7 @@ test('AGENTS.md carries the rule, the field and the command', () => {
 });
 
 test('the canonical fix-first sentence is in AGENTS.md, the cbsession preamble and the MAC-HOOK snippet', () => {
-  const RULE = 'A bug you find (owner, 2026-11-25): inside your goal or task, never file it: fix it, or explain in one line why you cannot (owner floor, another host); file with `found-bug` only a bug unrelated to your goal or task (another area, a live session\'s task), and fix a small unrelated one yourself in its own worktree when you have the repro; ideas are done or explained, never filed; never end a turn with "I filed X so someone will fix it".';
+  const RULE = 'A bug you find (owner, 2026-11-25): inside your goal or task, never file it: fix it, or explain in one line why you cannot (owner floor, another host); file with `found-bug` only a bug unrelated to your goal or task (another area, a live session\'s task), and fix a small unrelated one yourself in its own worktree when you have the repro; ideas are never filed and never built unasked (they go in your reflection answer); never end a turn with "I filed X so someone will fix it".';
   const norm = (x) => x.replace(/\\047/g, "'").replace(/\s+/g, ' ');
   for (const f of ['AGENTS.md', 'scripts/cbsession', 'docs/MAC-HOOK.md', 'docs/REFERENCE.md']) assert.ok(norm(fs.readFileSync(path.join(ROOT, f), 'utf8')).includes(RULE), f);
   assert.match(fs.readFileSync(path.join(ROOT, 'AGENTS.md'), 'utf8'), /I filed X so someone will fix it/);

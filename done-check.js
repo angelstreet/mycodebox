@@ -102,7 +102,7 @@ export function closingReviewMessage({ bugsMissing = false } = {}) {
   return 'Done check: your STATUS: done line has no closing review. Before we close this session: any leftover, suggestion of improvement, or doc / skill to update? Do it now, then rewrite the done line. '
     + '(1) Docs: list every doc your change makes stale (task doc, REFERENCE / MAP / INDEX, user guide, skill, API inventory, release note) and update it now, in the repo, not as a draft in a scratchpad. '
     + '(2) Leftovers: fix each one now, or file it with `found-bug --title ... --blocking no`. '
-    + '(3) Suggestions for improvement: file each as a `found-bug` record (title starts with "idea:"), not prose. '
+    + '(3) Suggestions for improvement (beyond the goal) are not leftovers: build and file none now; you are asked for them once your done is accepted. '
     + '(4) List what you did NOT verify. '
     + 'Then end with `STATUS: done — <what> · closing review: docs <updated list|none needed> · leftovers <none|filed ids> · unverified <none|list>'
     + (bugsMissing ? ' · bugs: none | fixed <what> | reported <id>`.' : '` (keep the bugs: field).');
@@ -248,7 +248,7 @@ export function createDoneCheck({
   pendingLiveOf = async () => [],   // (P) the session's deployed integrations that are not live yet: [{ id, deployId, truth }] (deploy-live.js)
   integrationsOf = async () => [],   // (O) the session's merged lane requests: [{ id, repo, branch, files, subjects }]
   goalGate = null,   // goal-check.js createGoalGate: (H) below
-  goalEntryOf = () => null, listSessions: listSessionsAll = async () => [], timeBoxMode = () => 'dry', draftNow = async () => false,   // (K) Verification block per stored Done-when line; (L) time box wake (dry first)
+  goalEntryOf = () => null, listSessions: listSessionsAll = async () => [], liveNames = async () => (await listSessionsAll()).map((s) => s.name), timeBoxMode = () => 'dry', draftNow = async () => false,   // (K) Verification block per stored Done-when line; (L) time box wake (dry first)
   stopFacts = null, stateMode = () => 'dry',   // (J) a done line while the harness sees a running / waiting fact: not accepted as done (stop-state.js); dry until manager.json stopState is live
   finalAccepted = () => false,   // (final-accept.js) the manager / owner accepted this session's result as final: no check sends or records anything for it
   proofMode = () => 'live', proofStat,   // (P) proof by risk (proof-risk.js): headless e2e on the deployed URL for a UI fix / feature; manager.json proofRisk
@@ -659,23 +659,26 @@ export function createDoneCheck({
         try { await send(s.name, proofGapMessage(g)); st.toldProof[s.name] = { sig }; nudged++; await note({ session: s.name, proofGap: g }); }
         catch (e) { log.error?.('[done-check] send proof gap', s.name, e.message); }
       }
-      const goalCheck = { asked: [], bounced: [], accepted: [], capped: [] };
+      const goalCheck = { asked: [], bounced: [], accepted: [], capped: [], reflected: [] };
       if (goalGate) {
-        await goalGate.forget(live).catch(() => {});
+        // forget only sessions that are gone: `live` holds the done ones, and a session busy writing its reply lost its state and was asked again
+        let panes = null; try { panes = await liveNames(); } catch {}
+        if (panes) await goalGate.forget(new Set([...live, ...panes])).catch(() => {});
         for (const s of sessions) {
           if (s.working || s.draft || touched.has(s.name) || stateWait.has(s.name) || verifyBounced.has(s.name) || openDone.has(s.name) || evidenceOpen.has(s.name) || findings.some((f) => f.name === s.name)) continue;
-          if (verified.has(s.name)) { goalCheck.accepted.push(s.name); continue; }   // every Done-when row passes with its evidence: the Verification block is the owner's question answered
+          const rowsPass = verified.has(s.name);   // every Done-when row passes with its evidence: the Verification block is the owner's question answered
+          if (rowsPass) goalCheck.accepted.push(s.name);
           if (s.doneAt && now() - s.doneAt > REVIEW_MAX_AGE_MS) continue;   // an old done turn is not reopened by the rollout
           if (leftoverItemsOf(s.text).length || closingReviewOf(s.text)?.missing || doneButFailedOf(s.text) || proofWithoutEvidenceOf(s.text)) continue;   // (B)/(C)/(F)/(G) first
           if (m === 'dry') continue;
           if (!quiet || nudged >= MAX_NUDGES_PER_TICK) continue;   // nothing is recorded until it is sent: a later tick asks
           let d = null;
-          try { d = await goalGate.evaluate(s); } catch (e) { log.error?.('[done-check] goal gate', s.name, e.message); }
+          try { d = await goalGate.evaluate(rowsPass ? { ...s, verified: true } : s); } catch (e) { log.error?.('[done-check] goal gate', s.name, e.message); }
           if (!d) continue;
-          if (d.kind === 'accepted') { goalCheck.accepted.push(s.name); continue; }
+          if (d.kind === 'accepted') goalCheck.accepted.push(s.name);
           if (d.kind === 'capped') { goalCheck.capped.push(s.name); continue; }
-          if (!d.message) continue;
-          try { await send(s.name, d.message); await goalGate.sent(s.name, d); nudged++; (d.bounce ? goalCheck.bounced : goalCheck.asked).push(s.name); }
+          if (!d.message || d.dry) continue;
+          try { await send(s.name, d.message); await goalGate.sent(s.name, d); nudged++; (d.reflect ? goalCheck.reflected : d.bounce ? goalCheck.bounced : goalCheck.asked).push(s.name); }
           catch (e) { log.error?.('[done-check] send goal check', s.name, e.message); }
         }
       }
