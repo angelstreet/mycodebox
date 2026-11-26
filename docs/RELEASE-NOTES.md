@@ -35,6 +35,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **Two branches adding a release note no longer bounce each other** — the integration lane merges clashing new entries of `docs/RELEASE-NOTES.md` itself, keeping each once (needs `unionFiles` for mycodebox in `integration.json`); any other change to the list is still returned · area: integration
+
 - **The manager moves to another Claude account by itself, and the owner is warned before the accounts run out** — it was excluded from rotation (a push only), so everything stalled with its account. Now a usage-limit stop, or being idle on an account at 95 %, restarts it fresh on the next account with headroom (`manager-rotation.js` + `manager-fresh.sh`); with none free the owner gets the next reset time and it restarts once one frees up. One early alert fires when all accounts together hold no more than one fresh account's week · area: manager
 
 - **The manager starts on the active Claude account** — `scripts/manager-fresh.sh` (nightly, watchdog relaunch, context cap, manager-resume) always started it on the default account, so it stalled when that account ran out; `manager-command.js` now adds `CLAUDE_CONFIG_DIR` + `GHOSTY_CLAUDE_ACCOUNT` like cbsession, and the folder is trusted in that account's own `.claude.json` · area: manager

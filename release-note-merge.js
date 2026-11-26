@@ -4,6 +4,8 @@
 // "release note: ## build N differs from what tag carries" returns of 2026-11-10). Here the target's file is kept as is
 // and only the entries the branch added under "## Unreleased" are re-applied, by section and by entry id.
 // -> { ok: true, text, added } | { ok: false, error }   (null when a stage has no "## Unreleased": the caller falls back)
+// { flat: true } (docs/RELEASE-NOTES.md of mycodebox, owner 2026-11-26): one list under Unreleased, entries cite the same TASK ids, so
+// they are matched by their full text only, and anything but whole new entries from the branch is an error.
 
 const UNRELEASED = /^##\s+Unreleased\s*$/i;
 const isH2 = (l) => /^##\s/.test(l) && !/^###/.test(l);
@@ -37,9 +39,35 @@ function sections(un) {
 const ids = (e) => [...new Set(e.lines[0].match(/\b(?:BUG|TASK)-\d+\b/g) || [])].sort();
 const allIds = (lines) => new Set(lines.join('\n').match(/\b(?:BUG|TASK)-\d+\b/g) || []);
 
-export function mergeReleaseNote(base, ours, theirs) {
+// what is left of the branch's block once its new entries are taken out must be the base's, blank lines aside
+const solid = (lines) => lines.filter((l) => l.trim()).join('\n');
+
+function mergeFlat(B, O, T) {
+  const no = (why) => ({ ok: false, error: `${why}; merge the target yourself` });
+  if (T.head.join('\n') !== B.head.join('\n') && T.head.join('\n') !== O.head.join('\n')) return no('the branch edits the release-note text above "## Unreleased"');
+  const texts = (s) => new Set(sections(s.un).flatMap((x) => x.entries.map((e) => e.text)));
+  const base = texts(B), have = texts(O);
+  const mine = sections(T.un).flatMap((x) => x.entries).filter((e) => !base.has(e.text));
+  const left = [...T.un];
+  for (const e of mine) {
+    const at = left.findIndex((_, i) => e.lines.every((l, j) => left[i + j] === l));
+    if (at >= 0) left.splice(at, e.lines.length);
+  }
+  if (solid(left) !== solid(B.un)) {
+    const bad = left.find((l) => l.trim() && !B.un.includes(l)) || B.un.find((l) => l.trim() && !left.includes(l)) || '';
+    return no(`the branch does more than add entries under "## Unreleased" (it edits, removes or moves lines, e.g. ${JSON.stringify(bad.slice(0, 90))})`);
+  }
+  const add = [...new Map(mine.filter((e) => !have.has(e.text)).map((e) => [e.text, e])).values()];
+  let at = 1;
+  while (at < O.un.length && !O.un[at].trim()) at++;
+  const un = [O.un[0], '', ...add.flatMap((e) => [...e.lines, '']), ...O.un.slice(at)];
+  if (un.at(-1) !== '') un.push('');
+  return { ok: true, text: [...O.head, ...(add.length ? un : O.un), ...O.rest].join('\n'), added: add.length };
+}
+
+export function mergeReleaseNote(base, ours, theirs, { flat = false } = {}) {
   const B = split(base), O = split(ours), T = split(theirs);
-  if (!B || !O || !T) return null;
+  if (!B || !O || !T) return flat ? { ok: false, error: 'a side of the release note has no "## Unreleased" heading; merge the target yourself' } : null;
   // the branch may not edit a shipped section (anything below Unreleased) nor the head: main's are kept byte for byte
   const rb = B.rest.join('\n'), rt = T.rest.join('\n'), ro = O.rest.join('\n');
   if (rt !== rb && rt !== ro) {
@@ -47,6 +75,7 @@ export function mergeReleaseNote(base, ours, theirs) {
     const changed = [...new Set(T.rest.filter((l) => !had.has(l)))].filter((l) => l.trim()).slice(0, 3).map((l) => l.slice(0, 90));
     return { ok: false, error: `the branch edits a shipped release-note section (below "## Unreleased"): ${changed.map((l) => JSON.stringify(l)).join('; ') || 'lines removed'}; keep main's shipped sections` };
   }
+  if (flat) return mergeFlat(B, O, T);
   const baseTexts = new Set(sections(B.un).flatMap((s) => s.entries.map((e) => e.text)));
   const shipped = allIds(O.rest);
   const oursSec = sections(O.un);
