@@ -45,6 +45,9 @@ to restate it, and the manager is told ([REFERENCE](docs/REFERENCE.md#status-voc
 Goal check (owner 2026-11-11): before a done is accepted the harness asks once "Goal as given: <your first task line>. Did you reach it? Quote
 the evidence for each part"; reply by restating the goal with evidence per part (file, run / integration id, screenshot, KPI number) or keep
 working. A done listing 2+ filed leftovers in your own area is sent back: fix the small ones ([REFERENCE](docs/REFERENCE.md#goal-check-owner-2026-11-11)).
+Accepted final (2026-11-26): when the manager accepts a partial / failed / blocked result as final, it sends that decision with
+`"accept_final": true` (or records it with `POST /api/manager/accept-final/<session>`), so the harness stops pushing the session
+([REFERENCE](docs/REFERENCE.md#accepted-final-result-2026-11-26)).
 A bug you find (owner, 2026-11-25): inside your goal or task, never file it: fix it, or explain in one line why you cannot (owner floor, another host); file with `found-bug` only a bug unrelated to your goal or task (another area, a live session's task), and fix a small unrelated one yourself in its own worktree when you have the repro; ideas are done or explained, never filed; never end a turn with "I filed X so someone will fix it".
 Filing (unrelated bugs only) needs `found-bug --why-not-fixed <other-area|live-session-task> --reason "..."`. "Needs live tuning on a device" is not a reason: the intake answers 400 with the rule; claim the device (`vpt-lease claim <env> --any <group> --wait`) and fix it.
 This overrides the built-in "commit only when asked" default; a ghosty watcher pushes once per
