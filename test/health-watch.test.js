@@ -1,7 +1,7 @@
 // Pure parts of scripts/health-watch.js: thresholds, owner resolution, scratch eligibility, worktree class, debounce, event shape.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { TMP_PREFIXES, cleanTmp, readInodes, DEFAULT_CONFIG, evalLoad, evaluate, findRunaways, resolveOwner, ownerLabel, scratchEligible, classifyWorktree, shouldWake, buildEvent, isStuckNodeTest, parsePs, scanWorktrees, worktreeIsLive, worktreeReport, runOptionalFixes, stripDeletedSuffix, readProcCwds, readProcFds, mergeTarget, parseWorktreePorcelain, configRepos, configRoots } from '../scripts/health-watch.js';
+import { TMP_PREFIXES, cleanTmp, readInodes, DEFAULT_CONFIG, evalLoad, evaluate, findRunaways, resolveOwner, ownerLabel, scratchEligible, classifyWorktree, shouldWake, buildEvent, isStuckNodeTest, parsePs, scanWorktrees, worktreeIsLive, worktreeReport, runOptionalFixes, stripDeletedSuffix, readProcCwds, readProcFds, mergeTarget, parseWorktreePorcelain, configRepos, configRoots, readCpuPressure300 } from '../scripts/health-watch.js';
 
 const cfg = DEFAULT_CONFIG;
 const base = { diskPct: 50, diskFreeGB: 30, load1: 0.5, load5: 0.5, cores: 6, ramAvailPct: 50, runaways: [], stuck: [], defunct: 0 };
@@ -498,4 +498,17 @@ test('investigateDecision: unchanged issue is skipped for 30 min, worse / new / 
   assert.equal(d({ now: t0 + 6 * 3600000, last: { at: t0 + 6 * 3600000 - 5 * min, issues: { disk: 85 } } }).investigate, true, 'manager wake due (6 h debounce)');
   assert.equal(d({ issues: [{ type: 'load', key: 'load', severity: 11 }], last: { at: t0, issues: { load: 10 } }, state: { issues: { 'health:load': { at: t0 } } } }).investigate, false, '10 % rule for load');
   assert.deepEqual(NICE_PREFIX, ['nice', '-n', '19', 'ionice', '-c3']);
+});
+
+test('evaluate: CPU pressure with empty codebox slices is an issue; pressure alone, or working slices, is not', () => {
+  const hot = { ...base, cpuPressure300: 62, codeboxSlicesActive: false };
+  const got = evaluate(hot, cfg, false);
+  assert.equal(got.length, 1); assert.equal(got[0].key, 'cpuslices'); assert.match(got[0].what, /placer/);
+  assert.deepEqual(evaluate({ ...hot, codeboxSlicesActive: true }, cfg, false), []);
+  assert.deepEqual(evaluate({ ...hot, codeboxSlicesActive: null }, cfg, false), [], 'no slices on this host: not an issue');
+  assert.deepEqual(evaluate({ ...hot, cpuPressure300: 20 }, cfg, false), []);
+});
+test('readCpuPressure300 reads the some line', () => {
+  assert.equal(readCpuPressure300('some avg10=67.55 avg60=59.94 avg300=60.69 total=1\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n'), 60.69);
+  assert.equal(readCpuPressure300('garbage'), null);
 });
