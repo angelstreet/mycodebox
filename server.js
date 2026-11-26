@@ -135,7 +135,7 @@ import { createLeftovers, pushableItems } from './done-leftovers.js';
 import { scanTaskDocs, withHomeDirs, computeUnfinished, docLeftoversFor, createUnfinished, taskRe } from './unfinished.js';
 import { pushOf, replyFor } from './owner-push.js';
 import { createWorkerAutoClose, shouldClose as shouldCloseWorker, politeClose, LEFTOVERS_WINDOW_MS } from './worker-auto-close.js';
-import { statusLine, inputBox } from './stall.js';
+import { statusLine, inputBox, endsHandedOver } from './stall.js';
 import { verifyDelivered, confirmDelivered, waitSettled, settleBudgetMs, pasteTextOf } from './send-verify.js';
 import { machinesOf, holdingsOf, deployWaitOf, agentSession, agentSessionCandidates, holderSession } from './public/platforms.js';
 import { createHash, randomBytes } from 'node:crypto';
@@ -1675,6 +1675,9 @@ async function pollOnce() {
       const recent = now - lastAct < DONE_IDLE_MS;
       const after = !sentAt || t.lastWorkAt >= sentAt;
       if (recent && after && hasTurnMarker(plain, end)) { state = 'done'; t.doneGuess = clockMs ?? lastAct; }
+      // A pane that still ends on a hand-over STATUS line stays a finished turn: old, restarted or after a keypress that started nothing,
+      // it keeps its stall and verdict (owner 2026-11-26: a bare Enter turned a needs-owner row idle and empty).
+      else if (endsHandedOver(plain)) { state = 'done'; t.doneGuess = clockMs ?? lastAct; }
     }
     if (state === 'done') {
       if (t.prevState !== 'done' && (t.realWork || !t.doneAt)) {

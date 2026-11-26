@@ -28,7 +28,9 @@ const saidDone = (stall) => !!stall && stall.case === 'done' && stall.source ===
 // A closing "STATUS: done / needs-owner / needs-manager / blocked / failed" line hands the turn to someone else: a background task the reporter still counts
 // does not make it "working" (owner 2026-11-23: task250-small-model asked the owner a question and stayed green). Process signals still count.
 const STOP_STATUS = new Set(['done', 'needs-owner', 'needs-manager', 'blocked', 'failed']);   // 'done' too (owner 2026-11-24: lol-first-waves-opus said STATUS: done, the reporter still counted 3 background tasks, the dot stayed green)
-const saidStop = (status) => STOP_STATUS.has(status.lastTurn?.status) && status.lastTurn?.source === 'reporter';
+// The manager's own reading of the closing line counts too: after a ghosty restart no reporter report is left, only the pane's STATUS line.
+const saidStop = (status) => (STOP_STATUS.has(status.lastTurn?.status) && status.lastTurn?.source === 'reporter')
+  || (STOP_STATUS.has(status.stall?.status) && status.stall.no_status === false);
 
 export function isLoopWaiting(status) {
   if (!status) return false;

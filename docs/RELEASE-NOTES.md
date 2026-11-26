@@ -31,6 +31,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A session that ends on `needs-owner` stays red** — Claude lists its artifact live-update monitors as background work, which made such a stop a "background wait" (green, no ask, no push). Those monitors are no longer counted, a closing hand-over STATUS outranks any background count, and the row keeps its verdict after a bare keypress or a server restart · area: manager
+
 - **A browser with no saved choice opens cards as the reader** — the default was the reader on a phone only, so a desktop browser that had lost its site data (or a new one) showed the raw terminal until `Aa` was tapped; the reader is now the default everywhere, `>_` still switches to the terminal and is remembered · area: reader
 
 - **A result the manager accepted as final is left alone** — after the manager accepted a partial review, the harness still sent a time-box wake and a "blocked lacks tried/need" check and woke the manager with new `asks` events. The manager now records the acceptance (`accept_final: true` on the decision message, or `POST /api/manager/accept-final/<session>`); the done-check, time box, stop handling and asks stay quiet until a new owner or manager task message. No failed row becomes a pass · area: harness

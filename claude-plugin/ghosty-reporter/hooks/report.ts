@@ -78,7 +78,8 @@ export const STATUS_REASON =
 export function shouldRequireStatus(e: { stop_hook_active?: boolean; last_assistant_message?: string; background_tasks?: unknown[]; agent_id?: string }, session: string | null): boolean {
   if (e.stop_hook_active || e.agent_id) return false
   if (!session || /^manager(?:$|[-_])/.test(session)) return false
-  if ((e.background_tasks ?? []).length > 0) return false
+  // Artifact live-update monitors never end: they are not work in flight (same rule as reporter.js).
+  if (((e.background_tasks ?? []) as BackgroundTask[]).some(t => !(t?.type === 'monitor' && /^live updates for artifact /.test(t.description ?? '')))) return false
   const text = e.last_assistant_message
   if (typeof text !== 'string' || !text.trim()) return false
   return !hasStatusLine(text)

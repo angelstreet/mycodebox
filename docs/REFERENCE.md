@@ -1151,6 +1151,13 @@ of the pane excerpt (`textSource: "reporter"`, else `"pane"`, in `stalls.jsonl`;
 decision source). A reported turn with background work in flight is logged as `case: "background_wait"` and is never
 escalated or answered. The pane is still read for the owner's unsent draft and for waiting menus / permission dialogs.
 
+**A hand-over line outranks every background count** (owner 2026-11-26): a turn that ends on `STATUS: done`, `needs-owner`, `needs-manager`,
+`blocked`, `failed` or `handoff` is classed by that line, never as `background_wait`. `running` / `waiting` with background work stay `background_wait`.
+Claude Code's artifact monitors (`type: monitor`, `live updates for artifact ...`) are not counted at all (`reporter.js`, and the plugin's
+STATUS-line check). A pane that still ends on a hand-over line keeps the row at state `done` (with `stall` and `lastTurn`) however old it is, after
+a ghosty-sessions restart, or after a keypress that started no turn (`stall.js` `endsHandedOver`). A `needs-owner` line is the owner's turn
+(`public/ask-model.js` `isOwnersTurn`, the dashboard, the phone app and the desktop app) without waiting for the AI reviewer, unless it is a merge or system wait.
+
 The status payload carries a small `reporter` object per live Claude session (`seenAt`, `turnAt`, `backgroundWork`,
 `waiting`, `agents {count, by}`, `agentList`); the session cards show a ⚡ (not the left list rows, owner 2026-11-20) (with the subagent count) whose tooltip lists them.
 `GET /api/reporter/:session` returns everything held for one session (latest turn, prompt, waiting, agents).

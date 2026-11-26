@@ -19,6 +19,10 @@ const PEER_DEDUPE_MS = 120_000;       // a recv that repeats a send within 2 min
 const LIVE_MS = 10 * 60 * 1000;       // a reporter that was silent this long is not "live" (turns can be long: any event refreshes it)
 const MERGE_MS = 15000;               // turn.end (turn.complete) and stop (Stop hook) of the same turn arrive within this
 
+// Claude Code lists its own artifact live-update monitors as background tasks. They never end and nobody waits on them, so they are not
+// work (owner 2026-11-26: six of them kept a needs-owner session green).
+const isPassiveTask = (t) => t?.type === 'monitor' && /^live updates for artifact /.test(String(t.description || ''));
+
 export const isLoopback = (addr) => /^(?:127\.\d+\.\d+\.\d+|::1|::ffff:127\.\d+\.\d+\.\d+)$/.test(String(addr || ''));
 
 export function createReporter({ stateDir, now = () => Date.now() } = {}) {
@@ -107,9 +111,10 @@ export function createReporter({ stateDir, now = () => Date.now() } = {}) {
         if (ev.agentId) break;
         const prev = s.lastTurn;
         const merge = prev && !prev.stopAt && t - prev.at < MERGE_MS;
-        const n = Number.isFinite(ev.backgroundWork) ? Math.max(0, Math.floor(ev.backgroundWork)) : 0;
+        const tasks = Array.isArray(ev.background) ? ev.background : [];
+        const n = Math.max(0, (Number.isFinite(ev.backgroundWork) ? Math.floor(ev.backgroundWork) : 0) - tasks.filter(isPassiveTask).length);
         s.lastTurn = { ...(merge ? prev : { reason: null, usage: null }), text: str(ev.text) || (merge ? prev.text : ''), at: merge ? prev.at : t, backgroundWork: n, stopAt: t,
-          background: Array.isArray(ev.background) ? ev.background.slice(0, 20) : [], crons: Number(ev.crons) || 0 };
+          background: tasks.filter((x) => !isPassiveTask(x)).slice(0, 20), crons: Number(ev.crons) || 0 };
         s.waiting = null;
         break;
       }
