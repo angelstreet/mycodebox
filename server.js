@@ -130,7 +130,7 @@ import { createSharedCheckoutGuard, expandHome } from './shared-checkout-guard.j
 import { createFoundBugs, sessionOfRequest, unreportedBugOf, sendBackOf, sendBackText, sweepGroups, equivalentFreeOf } from './found-bugs.js';
 import { goalOf as goalOfPrompt, blockedOrUnknownStatus, lastStatus } from './status-honesty.js';
 import { createGoalGate, createGoalStore, approvedRound, worthAGoal } from './goal-check.js';
-import { createSuggestions, createTypedLog, isOwnerTyped, answersOf } from './suggestions.js';
+import { createSuggestions, createTypedLog, isOwnerTyped, answersOf, ambiguousAnswer } from './suggestions.js';
 import { createFinalAccept, isTaskActor, isTaskMessage } from './final-accept.js';
 import { createDoneCheck, closingTextOf, DEFAULT_IGNORE_BRANCHES, shipOfferOf, unconfirmedStatusOf, waitingOnLeaseStatus } from './done-check.js';
 import { createLeftovers, pushableItems } from './done-leftovers.js';
@@ -1273,6 +1273,13 @@ function noteSuggestions(name, text, doneAt = null) {
 }
 // The owner said yes / no (dashboard, or typed into the session). Approved items become a new task with its own goal.
 function ownerAnswered(name, text, via) {
+  const open = suggestions.openOf(name).map((i) => i.n), amb = ambiguousAnswer(text, open);
+  if (amb) {   // "do the 4" of 4 items: all four or only item 4? Nothing is recorded; the owner is asked, in the feed
+    logEvent({ type: 'suggestions-ambiguous', session: name, via, text: String(text).slice(0, 80), open });
+    alert(`${name}:suggestions-ambiguous`, { title: `${name}: all ${amb} suggestions, or only item ${amb}?`, priority: 'high', ntfyTags: 'question',
+      body: `Your reply "${String(text).trim().slice(0, 60)}" can mean all ${amb} items or only item ${amb}. Nothing was recorded. Reply "yes ${open.join(' ')}" for all, or "yes ${amb}, no ${open.filter((n) => n !== amb).join(' ')}" for item ${amb} only.`, url: `/?s=${encodeURIComponent(name)}`, tag: `ghosty-${name}` });
+    return;
+  }
   const r = suggestions.ownerMessage(name, text, { via });
   if (!r) return;
   logEvent({ type: 'suggestions-answered', session: name, via, answered: r.answered.map((i) => `${i.n}:${i.answer}`), open: r.open });
