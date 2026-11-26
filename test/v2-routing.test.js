@@ -17,7 +17,7 @@ test('registry: shipped models.json validates; PLACEHOLDER and missing price row
   const by = Object.fromEntries(r.entries().map((e) => [e.id, e]));
   assert.deepEqual(by['claude:claude-sonnet-5-5'].price, { input: 2, output: 10 });
   assert.equal(by['minimax:MiniMax-M3'].price, null);        // PLACEHOLDER row
-  assert.equal(by['codex:gpt-6-luna'].price, null);          // PLACEHOLDER row
+  assert.equal(by['codex:gpt-6.2-sol'].price, null);          // PLACEHOLDER row
   assert.equal(by['opencode:opencode-default'].price, null); // no row
   assert.equal(priceStatus(by['minimax:MiniMax-M3'], { now: NOW }), 'unknown');
 });
@@ -25,18 +25,18 @@ test('registry: shipped models.json validates; PLACEHOLDER and missing price row
 test('registry: validation rejects unsupported effort per runtime, unknown capability, duplicates', () => {
   const m = (o) => ({ runtime: 'codex', provider: 'p', model: 'm', tier: 'standard', capabilities: ['code'], efforts: ['low'], ...o });
   assert.equal(validateRegistryDoc({ version: 1, models: [m()] }).ok, true);
-  assert.match(validateRegistryDoc({ version: 1, models: [m({ efforts: ['max'] })] }).errors[0].message, /not supported by runtime codex/);
+  assert.match(validateRegistryDoc({ version: 1, models: [m({ efforts: ['ultra'] })] }).errors[0].message, /not supported by runtime codex/);
   assert.match(validateRegistryDoc({ version: 1, models: [m({ capabilities: ['telepathy'] })] }).errors[0].message, /unknown capability/);
   assert.match(validateRegistryDoc({ version: 1, models: [m(), m()] }).errors[0].message, /duplicate/);
   assert.match(validateRegistryDoc({ version: 1, models: [m({ runtime: 'nope' })] }).errors[0].message, /unknown runtime/);
-  assert.throws(() => createRegistry({ version: 1, models: [m({ efforts: ['max'] })] }), (e) => e.code === 'E_REGISTRY_INVALID');
+  assert.throws(() => createRegistry({ version: 1, models: [m({ efforts: ['ultra'] })] }), (e) => e.code === 'E_REGISTRY_INVALID');
 });
 
 test('registry: effort is rejected, never translated', () => {
   const e = reg().get('claude:claude-haiku-4-5');
   assert.equal(checkEffort(e, 'medium').ok, true);
   assert.match(checkEffort(e, 'xhigh').reason, /unsupported by claude:claude-haiku-4-5/);
-  assert.match(checkEffort(reg().get('codex:gpt-6-astra'), 'max').reason, /not a codex effort value/);
+  assert.equal(checkEffort(reg().get('codex:gpt-6.2-astra'), 'max').ok, true);
   assert.equal(checkEffort(e, null).ok, true);
 });
 
@@ -46,20 +46,20 @@ test('registry probe: unavailable runtime is not routable; probe narrows efforts
     claude: { available: true, models: ['claude-sonnet-5-5', 'claude-opus-5-5'], efforts: ['low', 'high'], features: { vision: false } },
     minimax: { available: 'unknown', features: { vision: true } },
   });
-  assert.equal(r.get('codex:gpt-6-astra').routable, false);
-  assert.match(r.get('codex:gpt-6-astra').unroutable_reason, /unavailable/);
+  assert.equal(r.get('codex:gpt-6.2-astra').routable, false);
+  assert.match(r.get('codex:gpt-6.2-astra').unroutable_reason, /unavailable/);
   assert.equal(r.get('claude:claude-haiku-4-5').routable, false);                      // not in probe models
   assert.deepEqual(r.get('claude:claude-sonnet-5-5').efforts, ['low', 'high']);
   assert.equal(r.get('claude:claude-sonnet-5-5').capabilities.includes('vision'), false);
   assert.equal(r.get('minimax:MiniMax-M3').capabilities.includes('vision'), true);       // discovered
   assert.equal(r.get('minimax:MiniMax-M3').availability, 'unknown');
-  assert.equal(reg().get('codex:gpt-6-astra').routable, true);                          // original untouched
+  assert.equal(reg().get('codex:gpt-6.2-astra').routable, true);                          // original untouched
 });
 
 test('T11: capability absent (vision) -> rejected with reason, compatible fallback offered', () => {
   const r = R(task({ required_capabilities: ['vision'] }));
   const rej = rejectedIds(r);
-  assert.match(rej['codex:gpt-6-astra'], /missing capability: vision/);
+  assert.match(rej['codex:gpt-6.2-astra'], /missing capability: vision/);
   assert.match(rej['minimax:MiniMax-M3'], /missing capability: vision/);
   assert.ok(ids(r).every((i) => i.startsWith('claude:')));
   assert.ok(r.choice.startsWith('claude:'));
@@ -70,8 +70,8 @@ test('T11: effort xhigh unsupported -> those entries rejected with reason; suppo
   const r = R(task({ effort: 'xhigh' }));
   assert.match(rejectedIds(r)['claude:claude-haiku-4-5'], /effort "xhigh" unsupported/);
   assert.match(rejectedIds(r)['minimax:MiniMax-M3'], /effort "xhigh"/);
-  assert.match(rejectedIds(r)['codex:gpt-6-luna'], /unsupported/);
-  assert.ok(ids(r).includes('claude:claude-opus-5-5') && ids(r).includes('codex:gpt-6-astra'));
+  assert.ok(ids(r).includes('codex:gpt-6.2-sol'));
+  assert.ok(ids(r).includes('claude:claude-opus-5-5') && ids(r).includes('codex:gpt-6.2-astra'));
   assert.ok(r.fallback.length > 0);
 });
 
@@ -90,7 +90,7 @@ test('allowlists: runtime, provider/privacy and model allowlists are hard floors
   const r = R(task({ runtime_allowlist: ['claude', 'codex'] }), { policy: { provider_allowlist: ['anthropic'] } });
   assert.ok(ids(r).every((i) => i.startsWith('claude:')));
   assert.match(rejectedIds(r)['minimax:MiniMax-M3'], /runtime minimax not in runtime allowlist/);
-  assert.match(rejectedIds(r)['codex:gpt-6-astra'], /provider openai not in provider\/privacy allowlist/);
+  assert.match(rejectedIds(r)['codex:gpt-6.2-astra'], /provider openai not in provider\/privacy allowlist/);
   const r2 = R(task({ privacy_class: 'private' }), { policy: { privacy_class_providers: { private: ['anthropic'] } } });
   assert.ok(ids(r2).every((i) => i.startsWith('claude:')));
   const r3 = R(task({ model_allowlist: ['MiniMax-M3'] }));
@@ -225,15 +225,15 @@ test('T22: stale price (older than the max age) is treated as unknown for rankin
 
 test('ranking: history (verified rate, cost per verified completion) beats priors; thin history is ignored', () => {
   const history = {
-    'codex:gpt-6-astra': { attempts: 20, verified: 19, errors: 0, total_usd: 20, latency_ms: 1000, },
+    'codex:gpt-6.2-astra': { attempts: 20, verified: 19, errors: 0, total_usd: 20, latency_ms: 1000, },
     'claude:claude-opus-5-5': { attempts: 20, verified: 4, errors: 8, total_usd: 80, latency_ms: 1000 },
     'claude:claude-sonnet-5-5': { attempts: 2, verified: 2, errors: 0, total_usd: 0.1 },   // too thin
   };
   const r = R(task(), { history });
-  assert.equal(r.choice, 'codex:gpt-6-astra');
+  assert.equal(r.choice, 'codex:gpt-6.2-astra');
   const so = r.candidates.find((c) => c.id === 'claude:claude-sonnet-5-5');
   assert.equal(so.history, false);
-  assert.equal(r.candidates.find((c) => c.id === 'codex:gpt-6-astra').cost_basis, 'history');
+  assert.equal(r.candidates.find((c) => c.id === 'codex:gpt-6.2-astra').cost_basis, 'history');
   assert.match(r.rationale.join(' '), /No meaningful history/);
 });
 
@@ -244,7 +244,7 @@ test('weights/priority are configurable', () => {
   assert.equal(R(task({ runtime_allowlist: ['claude', 'codex'] }), { weights: { quality: 0, cost: 1, latency: 0, reliability: 0 } }).choice, 'claude:claude-haiku-4-5');
   assert.ok(cheap.candidates.slice(-3).every((c) => c.cost_est_usd == null || c.cost_est_usd > 0));
   const q = R(task({ priority: 'quality' }));
-  assert.ok(['claude:claude-opus-5-5', 'codex:gpt-6-astra'].includes(q.choice));
+  assert.ok(['claude:claude-opus-5-5', 'codex:gpt-6.2-astra'].includes(q.choice));
 });
 
 test('classification: types, unknown needs discovery with capped confidence', () => {

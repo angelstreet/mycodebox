@@ -41,6 +41,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **Codex uses the verified GPT-6.2 models** — New sessions default to `gpt-6.2-sol` and offer `gpt-6.2-astra` even when the local model cache is stale. V2 routing registers both models, and unknown ChatGPT-account prices remain unknown. Both model IDs passed a local `codex exec` check (2026-11-26) · area: Codex
+
 - **An in-task fix is recorded in words, not as a filed bug** — the done check sent every fix without a `bug-<id>` back with "file the bug you fixed", while `found-bug` refuses a bug inside the session's own task (owner 2026-11-25): sessions were pushed into filings the rules forbid. `bugs: fixed — <what was broken>` now passes; a filed bug is still named by its id. The rule bullet in AGENTS.md, the cbsession preamble and MAC-HOOK says so, and AGENTS.md tells a fresh worktree to run `npm ci` before `npm test` (manager 2026-11-26) · area: done check
 
 - **A session with open suggestions is told first, and nothing else** — the push that makes a session with unanswered suggestions end on `STATUS: needs-owner: improvement suggestions ...` sat behind the proof, closing-review and load gates of the done check and reached ghosty 7 min late. It now runs first, without the load gate, and while items are open no other done check types into the session (owner 2026-11-26: "if there is suggestion open we cannot be on done") · area: done check

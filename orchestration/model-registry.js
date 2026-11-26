@@ -14,7 +14,7 @@ export const CAPABILITIES = ['text', 'code', 'vision', 'tools', 'long_context', 
 // Effort values are per runtime and never translated: an unsupported value is rejected, not mapped to a neighbour.
 export const RUNTIME_EFFORTS = {
   claude: ['low', 'medium', 'high', 'xhigh', 'max'],
-  codex: ['minimal', 'low', 'medium', 'high', 'xhigh'],
+  codex: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
   opencode: ['low', 'medium', 'high'],
   minimax: ['low', 'medium', 'high', 'xhigh', 'max'],   // mcode exec --effort (per model: MiniMax-M3 has none)
   fake: ['low', 'medium', 'high', 'xhigh'],
