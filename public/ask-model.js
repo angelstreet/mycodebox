@@ -30,7 +30,11 @@ export function isOwnersTurn(st) {
   if (isManagerOperationalStop(st)) return false;
   if (st.stall?.escalatedTo === 'manager') return false;   // a lease or deploy stop is the manager's, never the owner's (ops-ask.js)
   if (st.state === 'waiting') return true;
-  return st.state === 'done' && needsOwner(st) && !!st.triage && st.triage.state !== 'pending';
+  if (st.state !== 'done' || !needsOwner(st)) return false;
+  // "STATUS: needs-owner" is the agent's own word: no AI reviewer has to confirm it (there is none after a restart, or with triage off).
+  // A needs-owner line that is really a merge or system wait stays with the manager's rules above.
+  if (st.stall?.status === 'needs-owner' && st.stall.case !== 'merge_wait' && !st.stall.systemWait) return true;
+  return !!st.triage && st.triage.state !== 'pending';
 }
 
 // The id that ties status flickers together. stall.id (the manager's stop id) wins, then triage.id.

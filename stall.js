@@ -980,6 +980,10 @@ export function statusLine(lines) {
   }
   return null;
 }
+// Verdicts that hand the turn to someone else: nothing of the session's own is running, whatever the harness counts in the background.
+export const HANDOVER_STATUSES = new Set(['done', 'needs-owner', 'needs-manager', 'blocked', 'failed', 'handoff']);
+// Does the pane still end on such a verdict? (the owner's next prompt below it ends the closing lines)
+export const endsHandedOver = (plain) => HANDOVER_STATUSES.has(statusLine(closingLines(plain, 16))?.kind);
 // "STATUS: done — branch x pushed": the text after the verdict loses its leading separator (— – - : ·). A hyphen only
 // counts when a space follows ("--server" and "-> x" are text, not separators).
 export function stripSeparator(text) {

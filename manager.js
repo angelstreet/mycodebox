@@ -23,7 +23,7 @@ import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { POLICY_DEFAULTS } from './public/policy.js';
-import { classifyStall, applyJev, wouldSend, outcomeKind, setForbiddenExtra, forbiddenMatch, hardMatch, mergeMatch, pushMatch, deployMatch, topicSplit, deployHint, approvedAction, askHardOf, ownerFloorMatch } from './stall.js';
+import { classifyStall, applyJev, wouldSend, outcomeKind, setForbiddenExtra, forbiddenMatch, hardMatch, mergeMatch, pushMatch, deployMatch, topicSplit, deployHint, approvedAction, askHardOf, ownerFloorMatch, HANDOVER_STATUSES } from './stall.js';
 import { parkGate } from './own-jobs.js';
 import { MERGE_DEFAULTS, evaluateMerge, journalRecord, composeReply, repoToplevel } from './merge-policy.js';
 import { DECIDE_DEFAULTS, evaluatePush, evaluateDeploy, decisionRecord, menuRecord, parsePushAsk } from './decide-policy.js';
@@ -1460,7 +1460,7 @@ export function observe(s) {
     w.cls = classifyStall({ plain: useReport ? turn.text.split('\n') : s.plain, raw: s.raw, state: s.state, fromReport: useReport, scriptBusy: s.scriptBusy });
     w.cls.textSource = useReport ? 'reporter' : 'pane';
     if (useReport) w.cls.fullText = turn.text;   // the whole reported turn: the menu decision reads every line of it
-    if (bgWait) Object.assign(w.cls, { case: 'background_wait', answer: null, autoCase: undefined, forbidden: null, no_status: false, source: 'rule', backgroundWork: turn.backgroundWork });
+    if (bgWait && !HANDOVER_STATUSES.has(w.cls.status)) Object.assign(w.cls, { case: 'background_wait', answer: null, autoCase: undefined, forbidden: null, no_status: false, source: 'rule', backgroundWork: turn.backgroundWork });
     w.clsKey = key;
   }
   const stall = w.cls;
@@ -1614,7 +1614,7 @@ export function stallOf(name) {
   const w = watch.get(name);
   if (!w || !w.stall) return null;
   const st = w.stall;
-  return { case: st.case, no_status: !!st.no_status, source: st.source, would: st.would || null, question: st.question, excerpt: st.excerpt || st.question || null, closing: st.closing && st.closing !== st.excerpt ? st.closing : null,
+  return { case: st.case, status: st.status || null, systemWait: st.systemWait || null, no_status: !!st.no_status, source: st.source, would: st.would || null, question: st.question, excerpt: st.excerpt || st.question || null, closing: st.closing && st.closing !== st.excerpt ? st.closing : null,
     id: w.pending && w.pending.key === stopKey(st.excerpt) ? w.pending.id : null,   // the previous stop's id never rides on a new stop's content
     options: st.options || null, suggestion: st.suggestion || null, suggestionForbidden: st.suggestion ? forbiddenMatch(st.suggestion) : null,
     forbidden: st.forbidden || w.cls?.forbidden || null, escalated: escalatedStops.has(w.pending && w.pending.key === stopKey(st.excerpt) ? w.pending.id : null), escalatedTo: escalatedTargetOf(w.pending && w.pending.key === stopKey(st.excerpt) ? w.pending.id : null), queued: st.queued === true, draft: !!(w.cls?.draft), jev: st.jev || null };
