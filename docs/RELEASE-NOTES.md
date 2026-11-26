@@ -31,6 +31,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **No more wakes just to answer `STATUS: acknowledged`** — a changed AGENTS.md, the overlap and shared-checkout guards and the lease pin notes are no longer typed into a session: each is a note delivered once with its next real turn (Claude: hidden context from the reporter plugin; other agents: added to the next message ghosty sends). A finished session was woken 3 times in 30 min, re-reading its whole context each time · area: harness
+
 - **Suggestion follow-ups** — the reflection question goes out soon after a session finishes (not only every 5 minutes, and not held back by a moderately busy host); each `yes` starts that work at once; a session started without a prompt takes its goal from your first task; `integrate self-update` now updates the Mac Stop hook too (run it twice the first time); output of a command is no longer read as a suggestion · area: harness
 - **More menu: Rules, Session log, one Usage entry** — `Rules` shows AGENTS.md, the STATUS table and the contract (read-only); `Session log` shows the selected session's stats, your prompts, its STATUS lines and the manager's events in time order; `Usage & cost` is now one entry (the compact sheet is its "classic view" button); `Alerts` is renamed `Notifications` (the bell still shows the feed); V2 tasks and Install moved under "Legacy & rarely used" · area: menu
 

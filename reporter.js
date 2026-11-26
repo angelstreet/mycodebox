@@ -22,7 +22,7 @@ const PEER_DEDUPE_MS = 120_000;       // a recv that repeats a send within 2 min
 const LIVE_MS = 10 * 60 * 1000;       // a reporter that was silent this long is not "live" (turns can be long: any event refreshes it)
 const SAVE_MS = 500;                  // events come in bursts (turn.end + stop + agents): one write per burst
 const RESTORE_MAX_MS = 24 * 3600 * 1000;   // an older saved session is dropped: its tmux name may belong to something else by now
-const SAVED = ['sessionId', 'cwd', 'reporterSeenAt', 'live', 'lastTurn', 'meter', 'lastPrompt'];
+const SAVED = ['sessionId', 'cwd', 'reporterSeenAt', 'live', 'lastTurn', 'meter', 'lastPrompt', 'takesNotes'];
 const MERGE_MS = 15000;               // turn.end (turn.complete) and stop (Stop hook) of the same turn arrive within this
 
 // Claude Code lists its own artifact live-update monitors as background tasks. They never end and nobody waits on them, so they are not
@@ -115,7 +115,9 @@ export function createReporter({ stateDir, now = () => Date.now(), saveMs = SAVE
     s.live = ev.event !== 'session.end';
     switch (ev.event) {
       case 'session.start': s.waiting = null; if (s.lastTurn) { s.lastTurn.crons = 0; s.lastTurn.backgroundWork = 0; } break;   // a fresh start: old crons / tasks died with the old process
-      case 'session.end': s.live = false; s.waiting = null; break;
+      case 'session.end': s.live = false; s.waiting = null; s.takesNotes = false; break;
+      case 'notes.take': s.takesNotes = true; break;   // this plugin's prompt hook delivers parked notes (session-notes.js)
+      case 'notes.ack': break;
       case 'prompt':
         // A turn is metered from the prompt that starts it; a prompt typed mid-turn joins the running one.
         if (ev.midTurn !== true || !s.meter || s.meter.endAt) s.meter = { startAt: t, endAt: null, tokens: null, durationMs: null };
@@ -263,5 +265,8 @@ export function createReporter({ stateDir, now = () => Date.now(), saveMs = SAVE
 
   const prune = (liveNames) => { for (const k of [...sessions.keys()]) if (!liveNames.has(k)) { sessions.delete(k); save(); } };
 
-  return { init, flush, tokenOk, ingest, summary, detail, meterOf, turnForStop, waitingNow, promptSince, activityOf, prune, lastActivity, liveOf: (n) => liveOf(sessions.get(n)), tokenFile };
+  // true = the agent's own hook delivers parked notes, so ghosty never appends them to a message
+  const takesNotes = (name) => !!sessions.get(name)?.takesNotes;
+
+  return { init, flush, tokenOk, ingest, takesNotes, summary, detail, meterOf, turnForStop, waitingNow, promptSince, activityOf, prune, lastActivity, liveOf: (n) => liveOf(sessions.get(n)), tokenFile };
 }

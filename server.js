@@ -119,10 +119,11 @@ import { createRemoteStops, PREFIX as REMOTE_API } from './remote-stops.js';
 import { fetchAll as fetchCloudSessions, archivedIds, macRowsToDrop, cseOf } from './archive-sync.js';
 import * as managerApi from './manager.js';
 import { createReadyStore } from './ready-window.js';
-import { noteKey as leaseNoteKey, normAuthority, createLeaseSource, createSessionTracker, summarize as leaseSummary, createLiveness, pinOverrideNote, requestIdentity, eventRecord, eventNote, eventSession, isNoteEvent, noteAllowed, activeHolds, renewalIdleMin } from './lease-source.js';
+import { noteKey as leaseNoteKey, normAuthority, createLeaseSource, createSessionTracker, summarize as leaseSummary, createLiveness, pinOverrideNote, requestIdentity, eventRecord, eventNote, eventSession, isNoteEvent, noteAllowed, activeHolds, renewalIdleMin, informsOnly } from './lease-source.js';
 import { idleHoldEvent } from './lease-ask.js';
 import { createCiWatch } from './ci-watch.js';
 import { createRulesWatch } from './rules-watch.js';
+import { createSessionNotes, carriesNotes, withNotes } from './session-notes.js';
 import { createOverlapGuard, DEFAULT_IGNORE } from './overlap-guard.js';
 import { createProgressWatch } from './progress-watch.js';
 import { createSharedCheckoutGuard, expandHome } from './shared-checkout-guard.js';
@@ -451,7 +452,11 @@ async function sendKeys(session, keys, enter = true) {
   // client" with single-line text on codeboxv2. `paste-buffer` works without
   // one. Bracketed-paste mode (`-p`) keeps it as one chunk so Claude Code's
   // paste-detection still fires on multi-line prompts.
-  const text = String(keys || '');
+  let text = String(keys || '');
+  // parked notes go along with a real message when the session's agent has no hook that takes them (session-notes.js)
+  const menu = latest?.status?.[session]?.stall?.options?.length;
+  const notes = enter && !menu && !reporter.takesNotes(session) && carriesNotes(text) ? sessionNotes.peek(session) : [];
+  if (notes.length) text = withNotes(text, notes);
   typedByServer.note(session, text);
   if (text.length > 1_000_000) throw httpError(400, 'text too large (max 1MB)');
   const lines = text.split('\n');
@@ -461,6 +466,7 @@ async function sendKeys(session, keys, enter = true) {
     await exec(TMUX, ['set-buffer', '-b', buf, '--', pasteTextOf(text)]);   // a trailing @path gets a space: else the Enter only picks the file suggestion
     await exec(TMUX, ['paste-buffer', '-p', '-d', '-b', buf, '-t', tgt(session)]);
   }
+  if (notes.length) sessionNotes.ack(session, notes.map((n) => n.id));
   let submitted;
   if (enter) {
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -921,6 +927,7 @@ const { alert, queueDigest, resetDebounce, digestTick } = createAlerts({ push, n
   } });
 
 const reporter = createReporter({ stateDir: STATE_DIR });   // events from the ghosty-reporter Claude Code plugin (claude-plugin/)
+const sessionNotes = createSessionNotes({ stateDir: STATE_DIR });   // messages that only inform: they go with the next real turn, never typed alone
 const mockups = createMockups({
   file: join(STATE_DIR, 'mockups.jsonl'), push, tokenOk: (t) => reporter.tokenOk(t), windowMin: () => managerConfig().mockupWindowMin,
   lintMode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).mockupLint; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } }, log: (m) => console.log(m),
@@ -1146,6 +1153,7 @@ async function onLeaseEvent(ev) {
   const session = eventSession(ev, (a) => agentSession(a, names, MACHINES));
   const note = eventNote(ev);
   if (!session || !note) return;
+  if (informsOnly(ev)) return sessionNotes.put(session, `lease:${ev.kind || ev.event}:${ev.id || ev.lease || ''}`, `[lease-service: no reply needed] ${note}`);
   const nk = String(ev.kind || ev.event) === 'granted' ? leaseNoteKey(ev) : null;   // a ticket grant is told once and kept for the next stop
   if (nk && pendingWakes.seen(nk)) return;
   if (!noteAllowed(latest?.status?.[session])) { if (nk) pendingWakes.add({ session, key: nk, text: note, by: 'lease-service' }); return; }
@@ -1501,23 +1509,19 @@ async function rulesWatchTargets() {
     const pid = agentPidFromTree(p.pid, table);
     if (!pid || !age.has(pid)) continue;
     out.push({ name, cwd: p.cwd, startedAt: Date.now() - age.get(pid) * 1000,
-      working: !!(reporter.activityOf(name)?.working || latest?.status?.[name]?.state === 'working'),
-      // scriptBusy: a script is driving a claude -p / mcode exec / sleep under bash in the pane, AND there is
-      // no interactive agent TUI in the same tree; skip so the long rules-change message doesn't land in the
-      // terminal input and get read by bash as commands. An interactive REPL that launched its own background
-      // helpers (mcode exec workers, sleep) stays messageable.
-      scriptBusy: scriptBusyOf(p.pid, table) && !interactiveAgentOf(p.pid, table) });
+      working: !!(reporter.activityOf(name)?.working || latest?.status?.[name]?.state === 'working') });
   }
   return out;
 }
 
-// Rules watch (rules-watch.js): a session started before AGENTS.md last changed on its repo's origin/main is told once,
-// while idle, to re-read it. manager.json key `rulesWatch`: "live" (default) | "dry" | "off".
+// Rules watch (rules-watch.js): a session started before AGENTS.md last changed on its repo's origin/main gets one note
+// with its next real turn to re-read it (session-notes.js). manager.json key `rulesWatch`: "live" (default) | "dry" | "off".
 const rulesWatch = createRulesWatch({
   stateDir: STATE_DIR,
   git: async (cwd, args) => (await exec('git', ['-C', cwd, ...args], { timeout: 60000 })).stdout,
-  listTargets: async () => (await rulesWatchTargets()).filter((t) => !finalAccepted(t.name)),
-  send: (name, text) => harnessSend(name, text),
+  listTargets: () => rulesWatchTargets(),   // an accepted final too: a note starts no turn, and a reopened session needs the rules
+  park: (name, key, text) => sessionNotes.put(name, key, text),
+  unpark: (name, key) => sessionNotes.drop(name, key),
   pressure: hostPressure,
   record: (e) => managerEvents.record(e),
   mode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).rulesWatch; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
@@ -1528,7 +1532,8 @@ const overlapGuard = createOverlapGuard({
   stateDir: STATE_DIR,
   git: async (cwd, args) => (await exec('git', ['-C', cwd, ...args], { timeout: 30000 })).stdout,
   listTargets: async () => (await rulesWatchTargets()).filter((t) => !finalAccepted(t.name)),
-  send: (name, text) => harnessSend(name, text),
+  park: (name, key, text) => sessionNotes.put(name, key, text),
+  unpark: (name, key) => sessionNotes.drop(name, key),
   pressure: hostPressure,
   record: (e) => managerEvents.record(e),
   mode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).overlapGuard; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
@@ -1542,7 +1547,8 @@ const sharedCheckoutGuard = createSharedCheckoutGuard({
   git: async (cwd, args) => (await exec('git', ['-C', cwd, ...args], { timeout: 30000 })).stdout,
   listCheckouts: async () => { let l; try { l = JSON.parse(readFileSync(managerConfigFile, 'utf8')).sharedCheckouts; } catch {} return (Array.isArray(l) ? l.map(String) : ['~/ghosty-sessions', '~/virtualpytest']).map((p) => expandHome(p, HOME)); },
   listTargets: () => rulesWatchTargets(),
-  send: (name, text) => harnessSend(name, text),
+  park: (name, key, text) => sessionNotes.put(name, key, text),
+  unpark: (key) => sessionNotes.dropKey(key),
   pressure: hostPressure,
   record: (e) => managerEvents.record(e),
   mode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).sharedCheckoutGuard; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
@@ -1877,7 +1883,7 @@ async function pollOnce() {
   for (const k of [...crashResumeStates.keys()]) if (!status[k]) crashResumeStates.delete(k);
   for (const k of [...lastSendText.keys()]) if (!status[k]) lastSendText.delete(k);
   pruneManager(new Set([...Object.keys(status), ...remote.names()]));   // Mac sessions (mac:<name>) have no tmux pane: they are not pruned with the tmux list
-  if (listOk) reporter.prune(new Set(Object.keys(status)));   // a failed tmux listing must not wipe the saved facts
+  if (listOk) { reporter.prune(new Set(Object.keys(status))); sessionNotes.prune(new Set(Object.keys(status))); }   // a failed tmux listing must not wipe the saved facts
   turnMeter.prune(new Set(Object.keys(status)));
   sessionMeta.sync(Object.keys(status));
   if (listOk) leaseTracker.observe(new Map(sessions.map((x) => [x.name, x.created]))).catch((e) => console.error('[lease] sessionGone', e.message));   // central: a vanished tmux session loses its leases
@@ -2640,6 +2646,9 @@ async function handleHttp(req, res) {
     try {
       const body = await readJsonBody(req);
       const r = reporter.ingest(body);
+      // the plugin's prompt hook takes the parked notes and acks them once the prompt entered
+      if (body?.event === 'notes.take') return json(res, 200, { ok: true, notes: sessionNotes.peek(String(body.session || '')) });
+      if (body?.event === 'notes.ack') { sessionNotes.ack(String(body.session || ''), body.ids); return json(res, 200, { ok: true }); }
       if (r?.ok !== false && body?.event === 'prompt' && body.synthetic !== true && typeof body.text === 'string'
         && isOwnerTyped(body.text, [...typedByServer.of(body.session), ...promptSenders.of(body.session)])) {
         if (suggestions.openOf(body.session).length) ownerAnswered(body.session, body.text, 'typed');

@@ -3,7 +3,7 @@
 // other than main checked out, or commits on HEAD that origin/main does not have. Any of them means someone works in the shared
 // checkout instead of a worktree. Surface: GET /api/shared-checkouts, a manager event `<checkout>:shared-checkout-dirty` once
 // per change set (paths + mtimes + the sessions whose launch cwd is that checkout and that started before the newest mtime),
-// and each such session told once per change set (silent form, like overlap-guard). Read-only: it never cleans, resets,
+// and each such session gets one note per change set with its next real turn (session-notes.js, never typed). Read-only: it never cleans, resets,
 // stashes or switches the checkout. A change set must be seen on two consecutive ticks first, so the lane's own short
 // ff-merge or a deploy snapshot does not raise it. Switch: manager.json `sharedCheckoutGuard` "live" (default) | "dry" | "off".
 // State shared-checkout-guard.json, journal shared-checkout-guard.jsonl in the state dir.
@@ -35,12 +35,12 @@ export function message({ checkout, reasons, paths }) {
   return [
     `${TAG} The shared checkout ${checkout} is not clean: ${reasons.join('; ')}${list ? ` (${list})` : ''}. You started there and may be the cause.`,
     'Rule: one agent = one worktree. First command: `git worktree list`; create or reuse your worktree; work only there. Move any change of yours out of the shared checkout into your worktree (do not reset or clean it for others).',
-    'Do not stop your work for this. If you have unfinished work that does not depend on a job, continue it. Only if everything left depends on a named job, repeat your STATUS line unchanged. If you were idle with nothing pending, write only `STATUS: acknowledged`.',
+    'Do not reply to this note: do what the message it came with asks.',
   ].join(' ');
 }
 
-// git(cwd, args) -> stdout. listCheckouts(): [path]. listTargets(): [{ name, cwd, startedAt, working, scriptBusy }].
-export function createSharedCheckoutGuard({ stateDir, git, listCheckouts, listTargets, send, record = async () => {}, mode = () => 'live', pressure = () => ({ loadPerCore: 0, ramAvailPct: 100 }), mtimeOf = async (p) => { try { return (await lstat(p)).mtimeMs; } catch { return 0; } }, now = Date.now, pollMs = POLL_MS, log = console } = {}) {
+// git(cwd, args) -> stdout. listCheckouts(): [path]. listTargets(): [{ name, cwd, startedAt }]. park(name, key, text) / unpark(key).
+export function createSharedCheckoutGuard({ stateDir, git, listCheckouts, listTargets, park, unpark = () => {}, record = async () => {}, mode = () => 'live', pressure = () => ({ loadPerCore: 0, ramAvailPct: 100 }), mtimeOf = async (p) => { try { return (await lstat(p)).mtimeMs; } catch { return 0; } }, now = Date.now, pollMs = POLL_MS, log = console } = {}) {
   const stFile = join(stateDir, 'shared-checkout-guard.json');
   const journal = join(stateDir, 'shared-checkout-guard.jsonl');
   let last = { at: 0, mode: 'off', checkouts: [] };
@@ -78,7 +78,7 @@ export function createSharedCheckoutGuard({ stateDir, git, listCheckouts, listTa
         if (!f) continue;
         const reasons = problemsOf(f);
         const key = basename(dir);
-        if (!reasons.length) { delete st.pending[dir]; delete st.raised[dir]; out.push({ checkout: dir, clean: true }); continue; }
+        if (!reasons.length) { if (st.raised[dir]) await unpark(`shared-checkout:${dir}`); delete st.pending[dir]; delete st.raised[dir]; out.push({ checkout: dir, clean: true }); continue; }
         const sig = signatureOf(f);
         const newest = Math.max(0, ...f.files.map((x) => x.mtime));
         const cands = targets.filter((t) => t.cwd === dir && (!newest || (t.startedAt || 0) <= newest)).map((t) => t.name);
@@ -97,9 +97,9 @@ export function createSharedCheckoutGuard({ stateDir, git, listCheckouts, listTa
         const byName = new Map(targets.map((t) => [t.name, t]));
         for (const me of cands) {
           const tk = `${dir}|${sig}|${me}`, t = byName.get(me);
-          if (st.told[tk] || !t || t.working || t.scriptBusy) continue;
-          try { await send(me, message({ checkout: dir, reasons, paths: f.files.map((x) => x.path) })); st.told[tk] = true; await note({ told: me, checkout: dir, sig }); }
-          catch (e) { log.error?.('[shared-checkout-guard] send', me, e.message); }
+          if (st.told[tk] || !t) continue;
+          try { await park(me, `shared-checkout:${dir}`, message({ checkout: dir, reasons, paths: f.files.map((x) => x.path) })); st.told[tk] = true; await note({ told: me, checkout: dir, sig }); }
+          catch (e) { log.error?.('[shared-checkout-guard] note', me, e.message); }
         }
       }
       for (const d of Object.keys(st.pending)) if (!dirs.includes(d)) delete st.pending[d];

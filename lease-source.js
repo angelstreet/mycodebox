@@ -285,6 +285,8 @@ export function pinOverrideNote(ev, view) {
 const EVENT_KIND = /^(downgraded|pin[-_]?overlap|yield)$/i;
 // a ticket grant wakes the waiter with the result; a plain claim granted at once (no ticket) is not an event for anyone
 export const isNoteEvent = (ev) => EVENT_KIND.test(String(ev?.kind || ev?.event || '')) || (String(ev?.kind || ev?.event || '') === 'granted' && !!ev.ticket);
+// a pin downgrade / overlap only informs: it goes with the session's next real turn (session-notes.js). A grant and a yield need action now.
+export const informsOnly = (ev) => /^(downgraded|pin[-_]?overlap)$/i.test(String(ev?.kind || ev?.event || ''));
 // once per ticket: the key under which a note was sent; `done.has(key)` before sending, `done.add(key)` after a send that went out
 export const noteKey = (ev) => `${String(ev?.kind || ev?.event || '')}:${ev?.ticket || ev?.id || ''}`;
 const where = (ev) => `${ev.env ? `${ev.env}/` : ''}${asList(ev.resources ?? ev.resource).join(',') || '*'}`;

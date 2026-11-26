@@ -50,7 +50,7 @@ function harness(over = {}) {
     stateDir: dir, now: () => Date.parse('2026-10-28T10:00:00Z'), log: { error() {} },
     git: async (cwd, a) => a[0] === 'rev-parse' ? (a.includes('--show-toplevel') ? cwd : '/r/.git') : a[0] === 'status' ? (diffs[cwd] || '') : '',
     listTargets: async () => [{ name: 'a', cwd: '/w/a', startedAt: 1 }, { name: 'b', cwd: '/w/b', startedAt: 2 }, { name: 'c', cwd: '/w/c', startedAt: 3 }],
-    send: async (n, t) => sent.push([n, t]), record: async (e) => events.push(e), ...over,
+    park: async (n, key, t) => sent.push([n, t, key]), unpark: async (n, key) => sent.push(['unpark', n, key]), record: async (e) => events.push(e), ...over,
   });
   return { g, dir, sent, events };
 }
@@ -69,12 +69,20 @@ test('tick: tells both sessions once, one manager event per pair per day, snapsh
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('tick: dry mode tells nobody; a busy session is told later; no-overlap case is quiet', async () => {
+test('tick: dry mode tells nobody; a busy session gets its note at once (nothing is typed); no-overlap case is quiet', async () => {
   let h = harness({ mode: () => 'dry' });
   try { const r = await h.g.tick(); assert.equal(r.overlaps.length, 1); assert.equal(h.sent.length, 0); assert.equal(h.events.length, 0); } finally { rmSync(h.dir, { recursive: true, force: true }); }
-  let busy = true;
-  h = harness({ listTargets: async () => [{ name: 'a', cwd: '/w/a', startedAt: 1, working: busy }, { name: 'b', cwd: '/w/b', startedAt: 2 }] });
-  try { await h.g.tick(); assert.deepEqual(h.sent.map((s) => s[0]), ['b']); busy = false; await h.g.tick(); assert.deepEqual(h.sent.map((s) => s[0]), ['b', 'a']); } finally { rmSync(h.dir, { recursive: true, force: true }); }
+  h = harness({ listTargets: async () => [{ name: 'a', cwd: '/w/a', startedAt: 1, working: true }, { name: 'b', cwd: '/w/b', startedAt: 2 }] });
+  try { await h.g.tick(); assert.deepEqual(h.sent.map((s) => s[0]), ['a', 'b']); assert.doesNotMatch(h.sent[0][1], /STATUS/); } finally { rmSync(h.dir, { recursive: true, force: true }); }
   h = harness({ listTargets: async () => [{ name: 'a', cwd: '/w/a', startedAt: 1 }, { name: 'c', cwd: '/w/c', startedAt: 3 }] });
   try { const r = await h.g.tick(); assert.deepEqual(r.overlaps, []); assert.equal(h.sent.length + h.events.length, 0); } finally { rmSync(h.dir, { recursive: true, force: true }); }
+});
+
+test('tick: a resolved overlap drops the notes nobody read yet', async () => {
+  let both = true;
+  const h = harness({ listTargets: async () => [{ name: 'a', cwd: '/w/a', startedAt: 1 }, ...(both ? [{ name: 'b', cwd: '/w/b', startedAt: 2 }] : [])] });
+  try {
+    await h.g.tick(); both = false; await h.g.tick();
+    assert.deepEqual(h.sent.filter((s) => s[0] === 'unpark'), [['unpark', 'a', 'overlap:a+b'], ['unpark', 'b', 'overlap:a+b']]);
+  } finally { rmSync(h.dir, { recursive: true, force: true }); }
 });

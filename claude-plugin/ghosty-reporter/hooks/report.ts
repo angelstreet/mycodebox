@@ -55,12 +55,21 @@ export function taskRows(tasks: readonly BackgroundTask[] | undefined) {
 // Notification types that are not "the session is blocked on you": idle reminders and auth confirmations.
 export const NOT_WAITING = new Set(['idle_prompt', 'auth_success'])
 
+export type Note = { id: string; text: string }
+// ghosty's answer to `notes.take`; anything else (an older server, a cut body) is no notes.
+export function notesOf(body: string | null): Note[] {
+  try {
+    const list = JSON.parse(body ?? '').notes
+    return Array.isArray(list) ? list.filter(n => typeof n?.id === 'string' && typeof n?.text === 'string') : []
+  } catch { return [] }
+}
+
 // Prompts the engine raises itself (a finished background task waking the session, a system reminder) are
 // not something the owner typed: they are reported, marked, and ghosty never reads them as the owner's reply.
 export const isSynthetic = (text: string): boolean => /^\s*<(?:task-notification|system-reminder|local-command|command-name|command-message)\b/.test(text)
 
 // The last-line verdict a session ends its turn with: "STATUS: done | needs-owner: ... | needs-manager: ... | blocked: ... | handoff: ... | waiting: ...",
-// or `acknowledged`, the line the rules-watch notice asks an idle session for (bug-19f86c8c: the hook used to send it back).
+// or `acknowledged`, which older sessions still end on (bug-19f86c8c: the hook used to send it back).
 // Same shape ghosty's stall.js reads. Looked for in the last 3 non-empty lines.
 export const STATUS_RE = /^\s*[*_`]*STATUS:[*_`]*\s*(?:done|needs-owner|needs-manager|blocked|handoff|waiting|acknowledged)\b/i
 export const hasStatusLine = (text: unknown): boolean =>

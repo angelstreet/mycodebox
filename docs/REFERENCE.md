@@ -1110,7 +1110,7 @@ Agents cannot measure their own tokens or time, so ghosty does and shows one lin
 ## Session reporter (TASK-44 phase 8)
 
 `claude-plugin/ghosty-reporter/` is a Claude Code plugin (function hooks, Claude Code >= 2.1.288) that every
-Claude session on the box loads. It is a **pure observer**: every hook awaits `next(e)` and returns its result
+Claude session on the box loads. It is an **observer** (one exception: [session notes](#session-notes-owner-2026-11-26)): every hook awaits `next(e)` and returns its result
 untouched, reports after that with an 800 ms bound, swallows every error and prints nothing. If ghosty is
 down the session behaves as without the plugin (one failed try, then 30 s of silence).
 
@@ -1142,6 +1142,7 @@ event) plus the Claude session id and cwd; a session outside tmux is ignored.
 | `prompt` (`prompt.submit`) | the submitted text (exact, 8 KB cap), `synthetic` for engine-raised prompts such as a finished background task | the owner's reply in the stall `outcome` (`via: "reporter"`); a prompt after a stall also counts as the session moving on |
 | `turn.end` (`turn.complete`) | the final answer (exact), reason, usage; subagent turns carry `agentId` and are ignored as the session's turn | closing text of the stall classifier |
 | `stop` (`classic.Stop`) | `last_assistant_message`, `backgroundWork` = background tasks in flight | `background_wait` when > 0 and the turn does not end on a hand-over STATUS line (below); artifact live-update monitors are not counted |
+| `notes.take` / `notes.ack` (`prompt.submit`) | the ids delivered | answers the parked [session notes](#session-notes-owner-2026-11-26); this is the one place the plugin is not a pure observer (it adds `context` to the prompt) |
 | `waiting` (`classic.PermissionRequest`, `classic.Notification` except idle / auth) | message | marks the session `waiting` even when the pane regex missed it, while the pane stays still |
 | `agents` (`agent.spawn`, `classic.SubagentStart/Stop`, `classic.TeammateIdle`, after `turn.complete`) | `$.agent.list()`: id, type, status, description, sent only when it changed | subagent count + statuses in the ⚡ tooltip |
 
@@ -1706,7 +1707,7 @@ guesses it from message text: "accepted as final" written in a message or in a S
   the `time-box:` / `done-check*` manager events; the Mac Stop hook's refusals;
 - a stop is still logged in `stalls.jsonl` (`final_accepted_quiet`), but there is no auto answer, no own-job wake or park, no
   `asks` / `waiting` / `needs-manager` event and no owner push; an armed countdown or wake is dropped;
-- no `leftovers` / `push` / `bug-unreported` event, no rules-watch or overlap message.
+- no `leftovers` / `push` / `bug-unreported` event, no overlap note (the rules note is parked and starts nothing).
 
 Not covered: results of requests the session itself made (integration lane, lease grants and nudges about a lease it holds).
 
@@ -1820,12 +1821,44 @@ Tests: `test/routine-restart.test.js`, `test/system-wait.test.js`, `test/ask-fol
 ## Rules watch (owner, 2026-10-15)
 
 A session reads AGENTS.md once, at start. `rules-watch.js` checks every 10 min (first check 3 min after start): for each
-live agent session (not the manager's, not paused), the last commit that touched AGENTS.md on its repo's `origin/main`
-(fetched each check). If that commit is newer than the session's agent process, the session gets one message while it
-is idle: the commit, the precedence rule (AGENTS.md beats older task docs and briefs, never hand the owner commands) and
-`git show origin/main:AGENTS.md`. At most 2 sessions per check, and none while the host is busy (load above 1.5 per core or under 20% RAM available): a message can wake an idle session into work, and 6 per check swapped codebox on 2026-10-15. An idle session is told to start nothing new. Each session is told once per AGENTS.md commit (`rules-watch.json`),
-with a feed line `rules-watch:told` per check and a journal `rules-watch.jsonl`. `manager.json` `rulesWatch`: `"dry"`
-(journal only) or `"off"`; default live. `GET /api/rules-watch` shows the stale sessions and who was told.
+live agent session (not the manager's, not paused; accepted finals included), the last commit that touched AGENTS.md on its
+repo's `origin/main` (fetched each check). If that commit is newer than the session's agent process, a note is parked for the
+session ([Session notes](#session-notes-owner-2026-11-26)): the commit, the precedence rule (AGENTS.md beats older task docs and
+briefs) and `git show origin/main:AGENTS.md`. **Nothing is typed and no reply is asked** (2026-11-26: until then the note was a
+message to an idle session, which woke it, re-read its whole context and answered `STATUS: acknowledged`; one finished session was
+woken 3 times in 30 min). Busy, idle, done, waiting and needs-* sessions are treated alike; there is no per-check cap. No check
+while the host is busy (load above 1.5 per core or under 20% RAM available). One note per session and AGENTS.md commit
+(`rules-watch.json`); a newer commit replaces an unread note, and a session whose agent restarted after the change loses it.
+Feed line `rules-watch:told` per check, journal `rules-watch.jsonl` (`parked: true`). `manager.json` `rulesWatch`: `"dry"`
+(journal only) or `"off"`; default live. `GET /api/rules-watch` shows the sessions noted by the last check.
+
+## Session notes (owner, 2026-11-26)
+
+A harness message that only informs must not start a turn. `session-notes.js` parks it per session (`session-notes.json` in the
+state dir; one per key, a newer one replaces it; pruned when the tmux session is gone) and delivers it **once**, with the session's
+next real turn:
+
+- **Claude:** the ghosty-reporter `prompt.submit` hook asks `notes.take` (`POST /api/reporter/event`), attaches each note as hidden
+  `context` beside the prompt (any prompt: the owner's, a harness message, a task notification) and sends `notes.ack` once the
+  prompt entered. Ghosty down or a dropped prompt: the note waits. Slash commands and headless children (`claude -p` in the same
+  pane) take nothing.
+- **No hook** (Codex, MiniMax, OpenCode, a Claude process whose plugin never asked): the note is appended to the end of the next real
+  message ghosty types (`sendKeys`): at least 12 characters with a space, not a `/` / `!` / `#` command, no menu on screen. Appended,
+  so the prompt's sender is still matched on its start. A prompt typed straight into such a terminal does not carry it.
+
+| Harness message | Starts a turn? | Why |
+|---|---|---|
+| rules watch (`[rules-watch: no reply needed]`) | **no: note** | informs |
+| overlap guard (`[overlap-guard: no reply needed]`) | **no: note**; dropped if the overlap ends first | informs (applies at the next commit) |
+| shared-checkout guard (`[shared-checkout-guard: no reply needed]`) | **no: note**; dropped once the checkout is clean | informs (applies at the next change) |
+| lease service: exclusive lease became a pin, pin overlapped | **no: note** | informs (claim again when you next drive) |
+| lease service: ticket granted, `yield` | yes | the grant lapses in about a minute; a yield must release now |
+| lease watchdog (idle lease), lease nudge | yes | asks for a release others wait on |
+| done check, goal check, reflection, status / push checks, UI review ask | yes | a reply or more work is required |
+| integration result, own-job wake, pending wakes, CI red on main, account swap `continue` | yes | the session continues work on it |
+| manager and owner messages, queued sends | yes | a real turn (they carry parked notes where there is no hook) |
+
+Tests: `test/session-notes.test.js`, `test/rules-watch.test.js`, `claude-plugin/ghosty-reporter/ghosty-reporter.test.ts`.
 
 ## Lease binding (TASK-58 C1)
 
@@ -2420,7 +2453,7 @@ carries it; the send-back text asks the filer to claim). `CLIENT_SCRIPTS_VERSION
 
 - **`bugs:` field.** A literal `STATUS: done` line ends with `bugs: none | fixed <what> | reported <id>`. `done-check.js` (`bugsFieldOf`) sends one automatic push to an idle done session without it (`bugsMessage`: add the field; if you saw anything outside your scope, run `found-bug`), at most once per session per 12 h; `acknowledged` / `ok` aliases are not checked. The result lists `missingBugsField`.
 - **Reach.** `scripts/cbsession` puts the rule and the field into the prompt of every provider (claude, codex, minimax, opencode) and every prompt source (`-H`, `-f`, `-t`); AGENTS.md of this repo and of VirtualPyTest carries the paragraph and the field in the STATUS-line section; V2 developer and reviewer prompts (`orchestration/roles.js` `BUG_NOTE`, shared by all adapters) carry the note. `found-bug` must be on PATH: `ln -s ~/ghosty-sessions/scripts/found-bug ~/.local/bin/found-bug` (codebox; `cbsession` launchers prepend `~/.local/bin` to PATH, so a bare service environment still finds it). Since 2026-11-10 it is POSIX sh + curl and works from a Mac or cloud session: `GHOSTY_URL` / `url` in `~/.config/mycodebox/config` / loopback, bearer token of an `integrate` client (`/api/bugs` accepts `POST` and `GET` from a tailnet address with that token; `resolve`, `fixed` and `remove` stay loopback), unreachable manager = record appended to `<state>/found-bug-queue.jsonl`, exit 5, posted by the next call or `found-bug --flush`. Install on a Mac next to `integrate`: [MAC-HOOK](MAC-HOOK.md#mac--cloud-sessions-integrate-and-found-bug). `installed-copies-check.js` watches the codebox copy for drift.
-- **No noise from re-read notices.** The rules-watch message starts with `[rules-watch: no reply needed]` and asks for no answer (`STATUS: acknowledged` when idle, the existing STATUS line unchanged when waiting). `manager-events.js` `isRulesAck` also drops an `asks` / `waiting` event whose short text (no question, not needs-owner / needs-manager / blocked) only acknowledges the AGENTS.md re-read.
+- **No noise from re-read notices.** The rules-watch note starts with `[rules-watch: no reply needed]`, asks for no answer and starts no turn ([Session notes](#session-notes-owner-2026-11-26)). `manager-events.js` `isRulesAck` also drops an `asks` / `waiting` event whose short text (no question, not needs-owner / needs-manager / blocked) only acknowledges the AGENTS.md re-read.
 
 ### Closing review (owner, 2026-11-10)
 
@@ -2477,7 +2510,7 @@ A `STATUS: done` after a UI fix or feature needs a real browser check on the dep
 
 - **Confirmation.** A change set (branch, ahead count, paths) must be seen on two consecutive ticks, so the lane's own short ff-merge or a deploy snapshot does not raise it.
 - **Surface.** `GET /api/shared-checkouts` (`checkouts: [{checkout, clean, reasons, branch, ahead, sig, files:[{path,status,mtime}], sessions, confirmed}]`); a manager event `<checkout>:shared-checkout-dirty` (kind `shared-checkout-dirty`, `items` the paths, `sharedCheckout` object) once per change set; `scripts/manager-status-scan.sh` prints `<checkout>: shared-checkout-dirty: <paths>`.
-- **Who.** `sessions` are the live agent sessions whose launch cwd is that checkout and that started before the newest changed-file mtime. Each is told once per change set, while idle, in silent form (`[shared-checkout-guard: no reply needed]`): use a worktree, move your change there, do not clean the checkout for others.
+- **Who.** `sessions` are the live agent sessions whose launch cwd is that checkout and that started before the newest changed-file mtime. Each gets one [session note](#session-notes-owner-2026-11-26) per change set (`[shared-checkout-guard: no reply needed]`, never typed): use a worktree, move your change there, do not clean the checkout for others.
 - **Switch.** `manager.json` `sharedCheckoutGuard`: `"live"` (default) | `"dry"` | `"off"`. State `shared-checkout-guard.json`, journal `shared-checkout-guard.jsonl`.
 - **Wording.** `scripts/cbsession` prompts (handover, `-f`, `-t`) and every V2 worker brief (`WORKTREE_NOTE` in `orchestration/roles.js`) start with "first command: `git worktree list`; create or reuse your worktree; work only there".
 - **Manager.** TASK-44 manual: on `shared-checkout-dirty` identify the session from `sessions`, tell it, verify the checkout is clean afterwards.
@@ -2507,10 +2540,10 @@ Two sessions changing the same file cost hours on 2026-10-28 (script-naming, mig
 
 - **Ignored paths.** `DEFAULT_IGNORE`: `VERSION.txt`, `docs/REFERENCE.md`, `package-lock.json`, release-note files, `generated/` dirs, `*.min.js`, `__pycache__`. `manager.json` `overlapIgnore` (list of globs, `*` within a segment, `**` across) replaces it.
 - **Surface.** `GET /api/overlaps` (`overlaps: [{key, pair:[older,newer], paths:[{path, by:{session: M|A|D}, destructive}], firstSeen}]`); a manager event `<older>+<newer>:overlap` (kind `overlap`, `items` the paths, `overlap` object) once per pair per UTC day; `scripts/manager-status-scan.sh` prints `<a>+<b>: overlap: <paths>`.
-- **Tell the sessions.** Each session of the pair gets one silent-form message per day (`[overlap-guard: no reply needed]`): "<other> also changes <paths>; coordinate with it (one message) before your next commit; the one that started later waits or takes a different slice". Only an idle, messageable pane is told (a working or script-busy pane is retried next minute) and nothing is told while the host is busy. It never blocks, pauses or kills.
+- **Tell the sessions.** Each session of the pair gets one [session note](#session-notes-owner-2026-11-26) per day (`[overlap-guard: no reply needed]`): "<other> also changes <paths>; coordinate with it (one message) before your next commit; the one that started later waits or takes a different slice". Nothing is typed, so busy and idle sessions are treated alike; an overlap that ends drops the unread note. Nothing is checked while the host is busy. It never blocks, pauses or kills.
 - **Switch.** `manager.json` `overlapGuard`: `"live"` (default) | `"dry"` (detect and journal only) | `"off"`. State `overlap-guard.json`, journal `overlap-guard.jsonl` in the state dir.
 - **Manager.** TASK-44 manual §3 `overlap`: the manager picks the area owner (older / wider task), tells the other session in one message to hand over its slice, and records `areaOwner` in `manager-actions.jsonl`.
-- **Tests.** `test/overlap-guard.test.js`: the real pair (script-naming vs migration-virtual on `vod_radio_offline_check.py`, delete vs edit), a no-overlap case, ignored files, other repo, same checkout, once-per-day, dry mode, busy session retried.
+- **Tests.** `test/overlap-guard.test.js`: the real pair (script-naming vs migration-virtual on `vod_radio_offline_check.py`, delete vs edit), a no-overlap case, ignored files, other repo, same checkout, once-per-day, dry mode, resolved overlap.
 
 ### Push suggestions (removed 2026-11-26)
 

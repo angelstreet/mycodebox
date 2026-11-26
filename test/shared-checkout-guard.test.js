@@ -32,7 +32,7 @@ function setup(facts, over = {}) {
   };
   const g = createSharedCheckoutGuard({ stateDir: dir, git, listCheckouts: async () => ['/fake/shared'], mtimeOf: async () => 5000,
     listTargets: async () => [{ name: 'old', cwd: '/fake/shared', startedAt: 1000, working: false }, { name: 'new', cwd: '/fake/shared', startedAt: 9000 }, { name: 'elsewhere', cwd: '/other', startedAt: 1 }],
-    send: async (n, t) => sent.push([n, t]), record: async (e) => events.push(e), ...over });
+    park: async (n, key, t) => sent.push([n, t, key]), unpark: async (key) => sent.push(['unpark', key]), record: async (e) => events.push(e), ...over });
   return { g, events, sent, done: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
@@ -46,7 +46,8 @@ test('guard: confirms on the second tick, raises once per change set, tells only
     assert.equal(s.events[0].key, 'shared:shared-checkout-dirty');
     assert.deepEqual(s.events[0].items, ['docs/a.md', 'b.txt']);
     assert.deepEqual(s.events[0].sharedCheckout.sessions, ['old']);
-    assert.deepEqual(s.sent.map((x) => x[0]), ['old']);
+    assert.deepEqual(s.sent.map((x) => [x[0], x[2]]), [['old', 'shared-checkout:/fake/shared']]);
+    assert.doesNotMatch(s.sent[0][1], /STATUS/);
     assert.equal(snap.checkouts[0].clean, false);
     await s.g.tick();
     assert.equal(s.events.length, 1);                       // same change set: no repeat

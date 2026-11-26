@@ -3,7 +3,7 @@
 // Every minute: for each live session's checkout, the paths it changes vs origin/main (committed branch diff + uncommitted
 // status, names only, no content reads). A path changed by 2+ sessions of the same repo is an overlap; a delete or rename
 // in one and an edit in another counts too. Surface: GET /api/overlaps, a manager event `<a>+<b>:overlap` once per pair per
-// UTC day, and each session of the pair told once per day (silent form, like rules-watch). Never blocks, never kills.
+// UTC day, and each session of the pair gets one note per day with its next real turn (session-notes.js, never typed). Never blocks, never kills.
 // Switch: manager.json `overlapGuard` "live" (default) | "dry" (detect + journal, tell nobody) | "off".
 // `overlapIgnore` (list of globs, `*` within a segment, `**` across) replaces DEFAULT_IGNORE. Journal: overlap-guard.jsonl.
 import { readFile, writeFile, appendFile, mkdir } from 'node:fs/promises';
@@ -82,14 +82,14 @@ export function message({ other, paths, newer }) {
     `${TAG} Session ${other} also changes ${list}.${rename}`,
     'Coordinate with it (one message) before your next commit; the one that started later waits or takes a different slice.',
     `${newer ? 'You started later than it: wait for its integration or take another slice.' : 'It started later than you: it should wait or move; keep your slice unless it asks.'}`,
-    'Do not stop your work for this. If you have unfinished work that does not depend on a job, continue it. Only if everything left depends on a named job, repeat your STATUS line unchanged. If you were idle with nothing pending, write only `STATUS: acknowledged`.',
+    'Do not reply to this note: do what the message it came with asks.',
   ].join(' ');
 }
 
 const day = (t) => new Date(t).toISOString().slice(0, 10);
 
-// listTargets(): [{ name, cwd, startedAt, working, scriptBusy }]. git(cwd, args) -> stdout.
-export function createOverlapGuard({ stateDir, git, listTargets, send, record = async () => {}, mode = () => 'live', ignoreList = () => DEFAULT_IGNORE, pressure = () => ({ loadPerCore: 0, ramAvailPct: 100 }), now = Date.now, pollMs = POLL_MS, log = console } = {}) {
+// listTargets(): [{ name, cwd, startedAt }]. git(cwd, args) -> stdout. park(name, key, text) / unpark(name, key): session-notes.js.
+export function createOverlapGuard({ stateDir, git, listTargets, park, unpark = () => {}, record = async () => {}, mode = () => 'live', ignoreList = () => DEFAULT_IGNORE, pressure = () => ({ loadPerCore: 0, ramAvailPct: 100 }), now = Date.now, pollMs = POLL_MS, log = console } = {}) {
   const stFile = join(stateDir, 'overlap-guard.json');
   const journal = join(stateDir, 'overlap-guard.jsonl');
   let last = { at: 0, mode: 'off', overlaps: [], sessions: 0 };
@@ -128,7 +128,11 @@ export function createOverlapGuard({ stateDir, git, listTargets, send, record = 
       const found = findOverlaps(sessions, ignorer(ignoreList()));
       const st = await load();
       const t0 = now(), today = day(t0);
-      for (const k of Object.keys(st.seen)) if (!found.some((o) => o.key === k)) delete st.seen[k];   // a resolved overlap forgets its first-seen
+      for (const k of Object.keys(st.seen)) {
+        if (found.some((o) => o.key === k)) continue;
+        delete st.seen[k];   // a resolved overlap forgets its first-seen, and a note nobody read yet is no longer true
+        for (const n of k.split('+')) await unpark(n, `overlap:${k}`);
+      }
       for (const k of Object.keys(st.told)) if (!k.startsWith(today)) delete st.told[k];
       for (const k of Object.keys(st.eventDay)) if (st.eventDay[k] !== today) delete st.eventDay[k];
       const byName = new Map(targets.map((t) => [t.name, t]));
@@ -147,9 +151,9 @@ export function createOverlapGuard({ stateDir, git, listTargets, send, record = 
         }
         for (const [me, other] of [[o.pair[0], o.pair[1]], [o.pair[1], o.pair[0]]]) {
           const tk = `${today}|${o.key}|${me}`, t = byName.get(me);
-          if (st.told[tk] || !t || t.working || t.scriptBusy) continue;   // an idle, messageable pane only; tried again next minute
-          try { await send(me, message({ other, paths: o.paths, newer: me === o.pair[1] })); st.told[tk] = true; await note({ told: me, pair: o.key }); }
-          catch (e) { log.error?.('[overlap-guard] send', me, e.message); }
+          if (st.told[tk] || !t) continue;
+          try { await park(me, `overlap:${o.key}`, message({ other, paths: o.paths, newer: me === o.pair[1] })); st.told[tk] = true; await note({ told: me, pair: o.key }); }
+          catch (e) { log.error?.('[overlap-guard] note', me, e.message); }
         }
       }
       await save(st);
