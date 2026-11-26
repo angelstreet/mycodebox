@@ -89,7 +89,7 @@ test('NEEDS YOU skips manager items (isOwnersTurn / buildQueue)', () => {
   assert.equal(isOwnersTurn(st(null, 'done')), true);
   assert.deepEqual(buildQueue({ a: st('manager'), b: st('owner') }, {}, [{ name: 'a' }, { name: 'b' }]).map((x) => x.name), ['b']);
   const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
-  assert.match(app, /escalatedTo !== 'manager' && \(stateOf/);   // the strip itself filters the same way
+  assert.match(app, /const waiting = state\.sessions\.filter\(\(s\) => isOwnersTurn\(/);   // the strip filters with the same predicate
 });
 
 // ---- round 13 (2026-10-18, owner rule): the five representative cases ------------------------

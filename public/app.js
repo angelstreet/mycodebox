@@ -6,7 +6,6 @@
 import { icon, hydrateIcons } from '/icons.js';
 import { byPriority, PRIORITIES, DEFAULT_PRIORITY } from '/prio.js';
 import { limitStopNote } from '/policy.js';
-import { needsOwner } from '/buttons.js';
 import { diskBannerView, diskDetailNote } from '/disk-banner.js';
 import { platformsBlocks, hiddenTestEnvs, envLabel, hostLabel } from '/platforms-view.js';
 import { stripSentEcho } from '/sent-echo.js';
@@ -31,7 +30,7 @@ import { displayStateOf, STATE_RANK, STATE_LABEL, isRoutineAlert } from '/state.
 import { fmtTok, fmtUsd, sessionRows, topEntries, dayBars, summaryFresh, managerBlockHtml } from '/usage.js';
 import '/tip.js';
 import { mountAskPopup } from '/ask-popup.js';
-import { isOwnersTurn, isManagerOperationalStop, unattachedAsks } from '/ask-model.js';
+import { isOwnersTurn, unattachedAsks } from '/ask-model.js';
 import { askSummary, askLine } from '/manager-ask.js';
 import { reloadGuard } from '/sw-update.js';
 import { listHtml, detailHtml, newFormHtml, scorecardHtml } from '/tasks-view.js';
@@ -215,7 +214,7 @@ function stateOf(name) {
 const prioOf = (n) => state.status[n]?.priority || DEFAULT_PRIORITY;
 const pausedOf = (n) => !!state.status[n]?.paused;
 // for the filters a paused session is simply 'paused' (not also working / idle / done), so the status chips split the sessions cleanly
-const filterStateOf = (n) => (pausedOf(n) ? 'paused' : displayStateOf(n, state.status));
+const filterStateOf = (n) => (pausedOf(n) ? 'paused' : listStateOf(n));   // counts and filters agree with the red rows
 const heldOf = (n) => (state.status[n]?.paused ? null : state.status[n]?.held || null);   // the manager's quota hold
 // Pill text for the owner's pause or the manager's hold, '' when neither.
 const holdPill = (n) => (pausedOf(n) ? 'paused' : limitStopNote(state.status[n]?.stall) || (heldOf(n) ? `held: ${String(heldOf(n).reason || 'quota').slice(0, 48)}` : ''));   // the reason is on the pill, so a stopped session says why
@@ -1597,9 +1596,8 @@ function markAttentionOverflow() {
 document.addEventListener('pointerdown', (e) => { if (!e.target.closest('#attnPop, .anmore')) document.getElementById('attnPop')?.remove(); });
 if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => markAttentionOverflow()).observe(els.attention);
 function renderAttention() {
-  // waiting sessions, plus finished ones whose closing question the AI reviewer sent to the owner
-  const aiAsk = (n) => { const st = state.status[n]; return st && st.state === 'done' && needsOwner(st) && st.triage && st.triage.state !== 'pending'; };
-  const waiting = state.sessions.filter((s) => !state.status[s.name]?.hidden && !isManagerOperationalStop(state.status[s.name]) && state.status[s.name]?.stall?.escalatedTo !== 'manager' && (stateOf(s.name) === 'waiting' || aiAsk(s.name)))   // a lease or deploy stop, or the manager's own routine stop, is never the owner's item
+  // the same predicate as the answer popup and the red rows (ask-model.js)
+  const waiting = state.sessions.filter((s) => isOwnersTurn(state.status[s.name]))
     .sort((a, b) => byPriority(prioOf(a.name), prioOf(b.name)));
   // the manager's open questions (ledger), grouped by the session they are about
   const groups = new Map();
