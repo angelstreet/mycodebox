@@ -297,10 +297,10 @@ test('a reply that answers neither way is asked once more and stays not done', a
   assert.deepEqual(r.hold(silent), { state: 'pending' });
 });
 
-test('the dashboard never shows a held done as done: pending reads as working, open as the owner\'s turn, workers too', () => {
+test('the dashboard: open suggestions read as the owner\'s turn, a pending reflection question still reads done (not green), workers too', () => {
   const row = (extra) => ({ state: 'done', stall: { case: 'done', source: 'rule', status: 'done', no_status: false }, ...extra });
   assert.equal(displayState(row()), 'done');
-  assert.equal(displayState(row({ suggestions: { state: 'pending' } })), 'working');
+  assert.equal(displayState(row({ suggestions: { state: 'pending' } })), 'done', 'not asked yet: the led stays done, it turns green only when the question really runs');
   const open = row({ suggestions: { state: 'open', open: 2 } });
   assert.equal(displayState(open), 'waiting');
   assert.equal(isOwnersTurn(open), true);
