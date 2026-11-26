@@ -3,6 +3,8 @@
 The release note of this repo (owner 2026-11-13). Every merged code change (not docs-only) adds one entry at the top of
 `## Unreleased`; the done-check reads the merged diff for this file (REFERENCE "Closing review"). Entry form: one line,
 
+- **A lease reservation keeper holds several resources for one agent for a fixed time** — `scripts/lease-reserve-keeper.js` claims one exclusive multi-resource lease for a named agent, heartbeats it, renews it, re-claims at once at the 60-min hold cap or after a loss, and releases + runs an on-end command at the end time or on `stop` (2026-11-26, owner order: all STBs reserved for `userinterface-audit` for 24 h); tests in `test/lease-reserve-keeper.test.js`.
+
 - **A session that hit "You hit your weekly limit" is now moved to another Claude account** — the stop scan required "You've", so artifact never swapped (2026-11-26); it also reads "You're out of usage credits", retries a failed swap, and resumes a Fable session on opus. Tests: `test/claude-accounts.test.js`.
 
 - **The daily checks now say when an installed systemd unit lags its repo template** — a merged `CPUWeight=20` for health-watch sat uninstalled for 2 days and the CPU slice templates still said 300 % after the host moved to 400 %. `installed-copies-check.js` compares each `systemd/` template (comments dropped, `<user>`/`<uid>` filled) with `/etc/systemd/system/<unit>` plus its drop-ins and reports every template line missing on the host; host-only lines and local `Environment=` values are fine, a unit not installed is listed, not a finding. Report only: installing stays a root step. The tests slice and placer templates now match the reviewed host settings (400 %, 2048 tasks) · area: health
