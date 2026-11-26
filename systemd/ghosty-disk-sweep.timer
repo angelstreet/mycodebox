@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the Ghosty disk sweep hourly (it exits at once while / is at or below 85 %)
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+AccuracySec=2min
+RandomizedDelaySec=3min
+
+[Install]
+WantedBy=timers.target

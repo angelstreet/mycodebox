@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { runCleanup, planCleanup, isLive, truncateLog, protector, report } from '../scripts/disk-cleanup.js';
+import { runCleanup, planCleanup, isLive, truncateLog, protector, report, journalText, diskUsedPct } from '../scripts/disk-cleanup.js';
 
 const OLDISO = new Date(Date.now() - 96 * 36e5).toISOString();
 const ENV = { ...process.env, GIT_COMMITTER_DATE: OLDISO, GIT_AUTHOR_DATE: OLDISO };
@@ -115,4 +115,37 @@ test('truncateLog keeps a whole-line tail and is a no-op under the cap', () => {
   assert.equal(truncateLog(file, 1000), 0);
   assert.ok(truncateLog(file, 8) > 0);
   assert.equal(fs.readFileSync(file, 'utf8'), 'cccc\n');
+});
+
+test('sweep: min-age-h 2 removes a 3 h idle merged worktree the 24 h default keeps; worktrees only', async () => {
+  const f = fixture();
+  const a = f.wt('wt-s', 'feat/s');
+  fs.mkdirSync(path.join(a, 'node_modules')); fs.writeFileSync(path.join(a, 'node_modules', 'x'), 'x');
+  const T = (Date.now() - 3 * 36e5) / 1e3;
+  for (const e of [...fs.readdirSync(a).filter((n) => n !== '.git').map((n) => path.join(a, n)), a]) fs.utimesSync(e, T, T);
+  fs.writeFileSync(path.join(f.state, 'big.log'), 'line\n'.repeat(400000));
+  const keep = await planCleanup(opts(f));
+  assert.equal(keep.items.filter((i) => i.step === 'worktree').length, 0, '24 h default keeps it');
+  const P = await planCleanup(opts(f, { minAgeH: 2, worktreesOnly: true }));
+  assert.deepEqual(P.items.map((i) => i.step), ['worktree'], 'no log / cache / lane item in sweep mode');
+});
+
+test('sweep live: removes idle merged worktree without force, spares dirty and in-use ones, journal text lists it', async () => {
+  const f = fixture();
+  const ok = f.wt('wt-ok', 'feat/ok'), dirty = f.wt('wt-dirty', 'feat/dirty'), live = f.wt('wt-live', 'feat/live');
+  fs.writeFileSync(path.join(dirty, 'wip.txt'), 'wip');
+  const T = (Date.now() - 3 * 36e5) / 1e3;
+  for (const d of [ok, dirty, live]) for (const e of [...fs.readdirSync(d).filter((n) => n !== '.git').map((n) => path.join(d, n)), d]) fs.utimesSync(e, T, T);
+  const res = await runCleanup({ live: true, ...opts(f, { minAgeH: 2, worktreesOnly: true, cwds: new Set([live]) }) });
+  assert.ok(!fs.existsSync(ok), 'idle merged clean one is removed');
+  assert.ok(fs.existsSync(dirty), 'dirty one stays');
+  assert.ok(fs.existsSync(live), 'one with a live cwd stays');
+  const j = journalText({ res, before: 88, after: 79 });
+  assert.match(j, /before: 88% after: 79%/);
+  assert.ok(j.includes(`removed ${path.basename(ok)}`) || j.split('\n').some((l) => l.startsWith('removed ') && l.endsWith('wt-ok')), j);
+});
+
+test('diskUsedPct: percent in use, null when unreadable', () => {
+  assert.equal(diskUsedPct('/', () => ({ blocks: 100, bavail: 12 })), 88);
+  assert.equal(diskUsedPct('/', () => { throw new Error('x'); }), null);
 });
