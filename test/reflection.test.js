@@ -458,3 +458,30 @@ test('record: a bare "1" to "should I do 1 and 2?" clears the hold', async () =>
   assert.equal(led.openOf('s').length, 0);
   assert.deepEqual(r.approved.map((i) => i.n), [1]);
 });
+
+test('a second round\'s "1. 2." are read as the session showed them; a reply that reads both ways is asked back (2026-11-26 ghosty: "do 1 and 2" recorded nothing)', () => {
+  const led = createSuggestions({ stateDir: tmp('sugg-shown-'), active: () => true });
+  const end = '\nSTATUS: needs-owner: improvement suggestions above, nothing built — should I do 1 and 2?';
+  led.observe('g', 'Suggestions:\n1. one\n2. two\n3. three\n4. four' + end);
+  assert.deepEqual(led.ownerMessage('g', 'yes 1').answered.map((i) => i.n), [1]);
+  led.observe('g', 'Suggestions:\n1. five\n2. six' + end + ' (new)');
+  assert.deepEqual(led.openOf('g').map((i) => i.n), [2, 3, 4, 5, 6]);
+  // item 1 is answered: only the session's numbering reads
+  const r = led.ownerMessage('g', 'ok do 1 and 2');
+  assert.deepEqual(r.answered.map((i) => `${i.n}:${i.answer}`), ['5:yes', '6:yes']);
+  assert.deepEqual(r.approved.map((i) => i.n).sort(), [1, 5, 6], 'with the earlier yes not built yet');
+  // 2 and 3 are open items, and the session's latest list has no 3: item numbers
+  assert.deepEqual(led.ownerMessage('g', 'no 2 3').answered.map((i) => `${i.n}:${i.answer}`), ['2:no', '3:no']);
+});
+
+test('a reply that reads as item numbers and as the session\'s numbers, differently, records nothing', () => {
+  const led = createSuggestions({ stateDir: tmp('sugg-shown2-'), active: () => true });
+  const end = '\nSTATUS: needs-owner: improvement suggestions above, nothing built — should I do them?';
+  led.observe('g', 'Suggestions:\n1. one\n2. two\n3. three' + end);
+  led.observe('g', 'Suggestions:\n1. five\n2. six' + end + ' (new)');
+  const r = led.ownerMessage('g', 'yes 2');
+  assert.deepEqual(r.numbering, { items: { 2: 'yes' }, shown: { 5: 'yes' } });
+  assert.equal(led.openOf('g').length, 5, 'nothing recorded');
+  assert.deepEqual(led.ownerMessage('g', 'yes 5').answered.map((i) => i.n), [5], 'a number only the items have');
+  assert.deepEqual(led.ownerMessage('g', 'no all').answered.map((i) => i.n), [1, 2, 3, 4], 'no number: no ambiguity (round 2 is items 4 and 5)');
+});

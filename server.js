@@ -1307,6 +1307,13 @@ function ownerAnswered(name, text, via, by = 'owner') {
   }
   const r = suggestions.ownerMessage(name, text, { via, by, question });
   if (!r) return;
+  if (r.numbering) {   // "do 1 and 2": items 1 and 2, or the session's own 1. and 2. of its latest list? Nothing is recorded; the owner is asked, in the feed
+    const fmt = (m) => Object.entries(m).map(([n, a]) => `${a} ${n}`).join(', ');
+    logEvent({ type: 'suggestions-ambiguous', session: name, via, by, text: String(text).slice(0, 80), open, numbering: r.numbering });
+    alert(`${name}:suggestions-numbering`, { title: `${name}: which numbers did you mean?`, priority: 'high', tier: 'interrupt', ntfyTags: 'question',
+      body: `${by === 'owner' ? 'Your' : `The ${by}'s`} reply "${String(text).trim().slice(0, 60)}" reads as "${fmt(r.numbering.items)}" with the dashboard's item numbers, and as "${fmt(r.numbering.shown)}" with the numbers of the session's latest list. Nothing was recorded. Reply with the item numbers (open: ${open.join(', ')}).`, url: `/?s=${encodeURIComponent(name)}`, tag: `ghosty-${name}` });
+    return;
+  }
   logEvent({ type: 'suggestions-answered', session: name, via, by, answered: r.answered.map((i) => `${i.n}:${i.answer}`), open: r.open });
   // the manager's yes / no is shown to the owner in "Decided for you"
   if (by === 'manager') {

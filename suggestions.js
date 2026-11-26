@@ -192,19 +192,22 @@ export function createSuggestions({ stateDir, now = Date.now, active = () => tru
     seen.set(name, key);
     const listed = suggestionsIn(text);
     const prev = rec(name);
-    const known = new Set((prev?.items || []).map((i) => keyOf(i.text)));
-    const added = [];
+    const known = new Map((prev?.items || []).map((i) => [keyOf(i.text), i.n]));
+    const added = [], shown = {};
     for (const it of listed) {
       const k = keyOf(it.text);
-      if (known.has(k)) continue;
-      known.add(k);
+      if (known.has(k)) { if (it.num) shown[it.num] = known.get(k); continue; }
       const r = ensure(name), used = new Set(r.items.map((i) => i.n));
       let n = it.num && !used.has(it.num) ? it.num : 1;
       while (used.has(n)) n++;
+      known.set(k, n);
+      if (it.num) shown[it.num] = n;
       const item = { n, tier: it.tier, text: it.text, at: now() };
       r.items.push(item); added.push(item);
       delete r.clear;
     }
+    // the numbers the session showed in its latest list -> item numbers: a second round's "1. 2." are items 5 and 6 here (2026-11-26: "do 1 and 2" recorded nothing)
+    if (Object.keys(shown).length) { const r = ensure(name); if (JSON.stringify(r.shown) !== JSON.stringify(shown)) { r.shown = shown; if (!added.length) save(); } }
     const r = rec(name);
     if (added.length) delete r.closeTold;   // a new list: not ready to close again until it is answered
     if (added.length) { note({ session: name, listed: added.map((i) => ({ n: i.n, tier: i.tier, text: i.text.slice(0, 120) })), status: ls.kind }); save(); return { added }; }
@@ -246,10 +249,19 @@ export function createSuggestions({ stateDir, now = Date.now, active = () => tru
   }
   // A message that reached the session and was typed by the owner: records it when it reads as an answer. -> answer() result or null
   // opts.question: the session's closing question; bare numbers count as an answer only when it is not a numbered menu
+  // The numbers can be the item numbers (the dashboard lists those) or the ones the session showed in its latest list: a reply that reads only one way
+  // takes that one; one that reads both ways, differently, records nothing and comes back as { numbering: { items, shown } } so the owner is asked.
   function ownerMessage(name, text, opts = {}) {
-    const open = openOf(rec(name)).map((i) => i.n);
-    const a = answersOf(unpasted(text), open, { bare: bareNumbersOk(opts.question) });
-    return a ? answer(name, a, opts) : null;
+    const r = rec(name), open = openOf(r).map((i) => i.n), t = unpasted(text), bare = bareNumbersOk(opts.question);
+    const a = answersOf(t, open, { bare });
+    const map = r?.shown || {}, back = Object.fromEntries(Object.entries(map).map(([k, v]) => [v, Number(k)]));
+    const shownOpen = open.filter((n) => back[n] != null).map((n) => back[n]);
+    const sa = shownOpen.length ? answersOf(t, shownOpen, { bare }) : null;
+    const b = sa && Object.fromEntries(Object.entries(sa).map(([k, v]) => [map[k], v]));
+    const same = (x, y) => JSON.stringify(Object.entries(x).sort()) === JSON.stringify(Object.entries(y).sort());
+    if (a && b && !same(a, b) && /\d/.test(t)) return { answered: [], open: open.length, approved: [], numbering: { items: a, shown: b } };
+    const pick = a || b;
+    return pick ? answer(name, pick, opts) : null;
   }
   // -> null (nothing holds it) | { state: 'open', open: n, items } | { state: 'pending' } for a session whose latest turn is `text`
   function hold(name, text, { at = null } = {}) {
