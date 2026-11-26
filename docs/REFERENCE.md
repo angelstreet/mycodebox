@@ -2320,6 +2320,11 @@ bug-2f32e7a7, bug-8fc8fc0d, bug-03ccc6a7, bug-80bdcdc1 · unverified: none · bu
   one manager item `time-box:<session>` when it keeps going; never kills or closes. `manager.json` `timeBox`: `dry` (default: journal `timeBox: reached`), `live`,
   `off`; a Mac session is told at its next stop. Replay: `node scripts/goal-box-replay.js [day] [--list]`. Not done: the same failing command repeated 3 times in
   the transcript as the same stop (needs transcript parsing; filed as an idea).
+  **An accepted done closes the box (2026-11-26)**: a done that passed the checks (every Done-when row `pass`, or the goal gate accepted it) ends that task's time box:
+  no later wake and no manager item, whatever the next STATUS word is (`acknowledged` to a notice, the reflection answer). Before this only the latest word was read, so a
+  notice reply reopened the box. The record is tied to the stored goal's `at` (a new session under the name has its own box): `toldBox.<s>.accepted` in done-check.json
+  (journal `timeBox: closed-by-accepted-done`); Mac stops use `<state>/remote-box-closed.json`, and a done stop is never answered with the time box. A follow-up task given
+  to the same session has no box of its own until a new goal is stored.
 - Switch `manager.json` `goalCheck`: `live` (default) | `dry` (journal only) | `off`. Journal `goal-check.jsonl`, state `goal-check.json`.
   `GET /api/goal-check` -> bounced dones per session today; `scripts/manager-status-scan.sh` prints `<session>: done-bounced: N today by the goal
   check` (codebox and Mac). Tests: `test/goal-check.test.js` (replays the example line: it bounces), `test/goal-check-remote.test.js`.
