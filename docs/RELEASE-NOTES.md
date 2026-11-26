@@ -31,6 +31,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The UI review runs again, and a new import in the reviewer can no longer break it** — the lane copied a fixed list of folders; once VirtualPyTest's reviewer imported a script outside it, graphical requests came back on `ModuleNotFoundError`. The export now also follows the reviewer's imports, transitively, on the product's target branch (`scripts/ui-review-closure.py`) · area: integration
+
 - **A session that ends on `needs-owner` stays red** — Claude lists its artifact live-update monitors as background work, which made such a stop a "background wait" (green, no ask, no push). Those monitors are no longer counted, a closing hand-over STATUS outranks any background count, and the row keeps its verdict after a bare keypress or a server restart · area: manager
 
 - **A finished task now ends with a reflection** — once a done is accepted with the goal met, the harness asks once for the task's leftovers (fix now) and for improvement suggestions (a ranked list with a recommendation, none built unasked); suggestions worth doing show as `needs-owner` (or `needs-manager` for a worker), nothing answers them automatically, and the old "implement your own proposals" push is gone. Also fixed: a session writing its goal-check reply was asked the same question again. Mac: copy the new Stop hook · area: harness
