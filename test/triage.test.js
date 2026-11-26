@@ -209,6 +209,18 @@ test('aiTriage off: no call, nothing logged, the stop still reaches the owner', 
 
 const AUTO = (extra = {}) => m.setManagerConfig({ aiTriage: 'auto', autoSend: true, autoCases: [], aiMinConfidence: 0.85, delayMs: 120, maxPerSessionPerHour: 4, aiDailyCalls: 300, aiDailyUsd: 1, aiAutoCases: ['owner_decision', 'continue', 'stopped_short', 'menu_recommended'], ...extra });
 
+// reflection.js (owner 2026-11-26): the asked one picks among the suggestions. The live config lets the reviewer answer owner_decision stops.
+test('auto: the choice of suggestions after the reflection question is never answered, however confident the reviewer or the menu', async () => {
+  reset(); await AUTO();
+  reviewer = { content: ans({ proposed_reply: 'Yes, do 1.' }) };
+  const body = 'Leftovers: none\n\nSuggestions:\nWorth doing:\n1. add a retry on the walk (recommended)\n2. shorter journal rows\nRecommendation: 1. Should I do them?\n';
+  await stall('rf1', pane(`${body}STATUS: needs-owner: improvement suggestions above, nothing built — should I do 1?`));
+  await sleep(300);
+  assert.equal(m.autoOf('rf1'), null, 'no countdown');
+  assert.deepEqual(sent('rf1'), []);
+  assert.ok(pushes.some((p) => p.s === 'rf1' && p.case === 'owner_decision'), 'it reaches the owner');
+});
+
 test('auto: a confident owner-free proposal goes through the countdown and is typed, logged as source ai', async () => {
   reset(); await AUTO();
   await stall('au1', pane(EITHER));

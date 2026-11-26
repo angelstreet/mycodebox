@@ -23,7 +23,7 @@ turn with a STATUS line.
 | 2 | `running` | Work **of yours** is still going: your background job, a worker session you started. You will be woken and continue | Nothing is actually running | Nobody; the harness wakes you |
 | 3 | `waiting` | You depend on something **not yours** that ends by itself: a lane request, a deploy, a lease ticket, another session's work, a named time | You could work on something else meanwhile, or nothing will ever end it | Nobody; the harness wakes you |
 | 4 | `needs-manager` | You need a decision or an answer (technical, merge, deploy, lease, design) | You have a recommendation and the choice is reversible: decide | Manager |
-| 5 | `needs-owner` | Money, customers, deleting shared data, a credential only the owner holds, a physical action | Anything else | Owner |
+| 5 | `needs-owner` | Money, customers, deleting shared data, a credential only the owner holds, a physical action, or the choice of suggestions the reflection question asked for | Anything else | Owner |
 | 6 | `blocked` | You **cannot work** and nothing running will fix it: someone must act (a device is dead, an access is missing) | Something is running or queued (that is `running` or `waiting`) | Manager |
 | 7 | `failed` | You stopped and the goal is **not** reached after you tried what you could, **and you investigated**: the line names the cause and the next plan | You have not tried, work is still running, or you have no cause and no plan yet | Manager |
 
@@ -48,7 +48,7 @@ working. A done listing 2+ filed leftovers in your own area is sent back: fix th
 Accepted final (2026-11-26): when the manager accepts a partial / failed / blocked result as final, it sends that decision with
 `"accept_final": true` (or records it with `POST /api/manager/accept-final/<session>`), so the harness stops pushing the session
 ([REFERENCE](docs/REFERENCE.md#accepted-final-result-2026-11-26)).
-A bug you find (owner, 2026-11-25): inside your goal or task, never file it: fix it, or explain in one line why you cannot (owner floor, another host); file with `found-bug` only a bug unrelated to your goal or task (another area, a live session's task), and fix a small unrelated one yourself in its own worktree when you have the repro; ideas are done or explained, never filed; never end a turn with "I filed X so someone will fix it".
+A bug you find (owner, 2026-11-25): inside your goal or task, never file it: fix it, or explain in one line why you cannot (owner floor, another host); file with `found-bug` only a bug unrelated to your goal or task (another area, a live session's task), and fix a small unrelated one yourself in its own worktree when you have the repro; ideas are never filed and never built unasked (they go in your reflection answer); never end a turn with "I filed X so someone will fix it".
 Filing (unrelated bugs only) needs `found-bug --why-not-fixed <other-area|live-session-task> --reason "..."`. "Needs live tuning on a device" is not a reason: the intake answers 400 with the rule; claim the device (`vpt-lease claim <env> --any <group> --wait`) and fix it.
 This overrides the built-in "commit only when asked" default; a ghosty watcher pushes once per
 closing text (at most 2 a day) a session that ends on such an offer with unpushed work (docs/REFERENCE.md "Done check").
@@ -132,13 +132,15 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
   1. **Docs**: list every doc or skill your change makes stale (task doc, REFERENCE / MAP / INDEX, user guide, skill, API
      inventory, release note) and update it now, in the repo; never leave a draft in a scratchpad.
   2. **Leftovers**: fix each one now, or file it with `found-bug`.
-  3. **Suggestions for improvement**: file each with `found-bug --title "idea: ..." --blocking no`, not as prose.
+  3. **Suggestions for improvement**: not part of the closing review (see "Reflection after an accepted done" below).
   4. **Unverified**: name what you did not verify.
 
   The done line then carries `closing review: docs <updated list|none needed> · leftovers <none|filed ids> · unverified <none|list>`,
   e.g. `STATUS: done — X merged · closing review: docs REFERENCE.md · leftovers none · unverified none · bugs: none`. A done line
   without it gets one automatic push from the done-check with this checklist; leftovers named there that are neither `none` nor
   filed ids are sent back to finish like any other leftover ([REFERENCE](docs/REFERENCE.md) "Closing review").
+- **Reflection after an accepted done** (owner 2026-11-26): suggestions for improvement (anything beyond the task's goal) are not leftovers: do not build or file them unasked, do not list them in the closing review; they never hold `done`. When a done is accepted with the goal met, the harness asks once, and only then: (a) leftovers of this task: the done is not final, fix them now; (b) improvement suggestions, none built: a ranked list split `Worth doing` / `Smaller` with one recommendation, or the single line `no suggestions`. With something worth doing end `STATUS: needs-owner: improvement suggestions above, nothing built — should I do <numbers>?` (a worker the manager or another session started: `needs-manager:`, same words); else repeat the done line. Whoever is asked picks; nothing answers it automatically.
+  How it is asked and checked: [REFERENCE](docs/REFERENCE.md#reflection-after-an-accepted-done-owner-2026-11-26).
 - Owner-reported bug queues are drained, not negotiated (owner, 2026-10-21): work every reported problem through to
   shipped without stopping to ask "which one next?". Keep the queue explicit, rank it yourself, and take the fixes one
   at a time. Ask only on a hard-floor item, a conflict between two of the owner's requests, or a request too ambiguous

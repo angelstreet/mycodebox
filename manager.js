@@ -25,6 +25,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { POLICY_DEFAULTS } from './public/policy.js';
 import { classifyStall, applyJev, wouldSend, outcomeKind, setForbiddenExtra, forbiddenMatch, hardMatch, mergeMatch, pushMatch, deployMatch, topicSplit, deployHint, approvedAction, askHardOf, ownerFloorMatch, HANDOVER_STATUSES } from './stall.js';
 import { parkGate } from './own-jobs.js';
+import { isReflectionAsk } from './reflection.js';
 import { MERGE_DEFAULTS, evaluateMerge, journalRecord, composeReply, repoToplevel } from './merge-policy.js';
 import { DECIDE_DEFAULTS, evaluatePush, evaluateDeploy, decisionRecord, menuRecord, parsePushAsk } from './decide-policy.js';
 import { decidedItems, decidedSummary, failedCount } from './decided.js';
@@ -1545,16 +1546,19 @@ export function observe(s) {
       else logLater({ type: 'parked_skip', id, session: s.name, why: gate.why });
     }
     if (final.handoff) { try { await onHandoff(s.name, final.handoff, s.now); } catch (e) { console.error('[manager] onHandoff', e.message); } }
-    const mh = await mergeHandoff({ s, w, id, h, final, stall }).catch((e) => { console.error('[manager] merge handoff', e.message); return { handled: false }; });
+    // the choice of suggestions after the reflection question (reflection.js): the asked one picks, nothing here builds or answers it
+    const ownChoice = isReflectionAsk(stall.excerpt);
+    if (ownChoice) { ws = { send: null, why: 'owner' }; w.stall = { ...w.stall, would: ws }; }
+    const mh = ownChoice ? { handled: false } : await mergeHandoff({ s, w, id, h, final, stall }).catch((e) => { console.error('[manager] merge handoff', e.message); return { handled: false }; });
     if (mh.handled) return;
     if (w.hash !== h) return;
-    const partial = await partialDecision({ s, w, id, h, final, stall }).catch((e) => { console.error('[manager] partial decision', e.message); return { handled: false }; });
+    const partial = ownChoice ? { handled: false } : await partialDecision({ s, w, id, h, final, stall }).catch((e) => { console.error('[manager] partial decision', e.message); return { handled: false }; });
     if (partial.handled) return;
     if (w.hash !== h) return;
     // a recommended menu option the manager may take (or must escalate with a reason): its own text decides, not the whole question
-    const menu = await menuDecision({ s, w, id, h, final, stall }).catch((e) => { console.error('[manager] menu decision', e.message); return null; });
+    const menu = ownChoice ? null : await menuDecision({ s, w, id, h, final, stall }).catch((e) => { console.error('[manager] menu decision', e.message); return null; });
     if (menu?.stale || w.hash !== h) return;
-    if (readyDecision({ s, w, id, h, final, stall })) return;   // ready window (round 9 item 8)
+    if (!ownChoice && readyDecision({ s, w, id, h, final, stall })) return;   // ready window (round 9 item 8)
     if (menu?.ok) { ws = wouldSend({ ...final, forbidden: null }); w.stall = { ...w.stall, forbidden: null, would: ws }; }
     else if (menu) partial.mergeWhy = menu.why;
     // a decided topic that was escalated (merge / push / deploy) must not ride on an automatic "Yes, continue."
@@ -1584,7 +1588,7 @@ export function observe(s) {
         jev: jevOut?.choice ? `${jevOut.choice} ${Math.round(Number(jevOut.probabilities?.[jevOut.choice] ?? jevOut.confidence ?? 0) * 100)} %` : null } : null;
       // auto mode: an owner-free, confident, non-forbidden proposal goes through the same countdown / cap / fire-time gates.
       const a = tri?.ai;
-      if (config.aiTriage === 'auto' && a && !a.owner_needed && a.proposed_reply && !a.forbidden && !final.forbidden && !stall.draft
+      if (config.aiTriage === 'auto' && !ownChoice && a && !a.owner_needed && a.proposed_reply && !a.forbidden && !final.forbidden && !stall.draft
           && !forbiddenMatch(a.proposed_reply) && !AI_NEVER_CASES.includes(final.case) && !aiBlock(s.name, final.case, a.confidence)) {
         const pending = { id, hash: h, answer: { text: a.proposed_reply }, case: final.case, source: 'ai', confidence: a.confidence };
         const pol = policyOf(s.name, s.agent);

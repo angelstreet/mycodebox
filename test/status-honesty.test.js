@@ -261,7 +261,7 @@ test('time box parse and wake text', () => {
 });
 test('done-check (K)/(L): done without a complete Verification is sent back once and rows journalled; all pass skips the goal question; the time box wakes once (dry journals), then one manager item', async () => {
   const entry = { goal: 'ship it', parts: PARTS, timeBoxMs: 3600e3, at: new Date(Date.now() - 2 * 3600e3).toISOString() };
-  const asked = []; const goalGate = { forget: async () => {}, evaluate: async (x) => { asked.push(x.name); return null; }, sent: async () => {} };
+  const asked = []; const goalGate = { forget: async () => {}, evaluate: async (x) => { if (!x.verified) asked.push(x.name); return null; }, sent: async () => {} };
   const mk = (text, boxMode = 'live', sessions = [], draftNow = async () => false) => { const sent = [], events = []; const dir = tmp('doneK-'); let t = Date.now();
     const w = createDoneCheck({ stateDir: dir, git: async () => { throw new Error('x'); }, listDone: async () => [{ name: 'k', cwd: '/nowhere', text }], goalGate, goalEntryOf: () => entry, timeBoxMode: () => boxMode, draftNow, listSessions: async () => sessions, now: () => t, mode: () => 'live', log: { error() {} },
       pressure: () => ({ loadPerCore: 0.1, ramAvailPct: 80 }), send: async (n, x) => { sent.push([n, x]); }, record: async (e) => { events.push(e); } }); return { w, sent, events, adv: (ms) => { t += ms; }, dir }; };

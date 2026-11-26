@@ -1,8 +1,8 @@
 // Owner pushes the manager can send (owner, 2026-10-28: "I keep asking: any leftovers? any suggestion? fix remaining bugs,
 // continue, implement. Most of those things don't break anything"). A review of the owner's replies of 2026-10-27 found
-// three push shapes besides done-with-leftovers (done-leftovers.js); each is a pure reading of a turn's closing text:
-//   suggestions   STATUS done, and the text proposes work the session can do itself ("I'd add ...", "fixes proposed",
-//                 "would settle it", "Suggestions:") -> implement the bug fixes and additive ones, list what was skipped
+// push shapes besides done-with-leftovers (done-leftovers.js); each is a pure reading of a turn's closing text. The `suggestions` push
+// ("implement your own proposals now") is gone since 2026-11-26: nothing is built unasked, the harness asks for the list after an accepted
+// done and the owner (or the manager) picks (reflection.js).
 //   routine-ask   STATUS needs-owner / needs-manager asking for a routine step: a host catch-up through update_core /
 //                 the deploy queue, an allowlisted restart, a reviewed install with a rollback line, an additive migration,
 //                 or a menu whose first option is "yes" / marked recommended -> "yes, do it"
@@ -12,11 +12,11 @@
 // destructive migration, a force-push / history rewrite or publishing never fires (ownerFloorMatch + FLOOR_EXTRA).
 // Nothing here types into a session: the watcher wakes the manager, the manager sends (gates in TASK-44 §5).
 import { ownerFloorMatch } from './stall.js';
+import { isReflectionAsk } from './reflection.js';
 import { routineRestart } from './routine-restart.js';
 import { routineChange } from './host-unit-routine.js';
 
 const STATUS = /^\W*STATUS:\W*([a-z-]+)\b[*_`]*\s*[:.—–-]?\s*(.*)$/i;
-const DONE = /^(?:done|ok|complete|completed|finished|shipped)$/i;
 // the floor the owner floor leaves to other checks (stall.js hardMatch): still never a push
 const FLOOR_EXTRA = /force[- ]?push|--force\b|reset --hard|\brewrit\w*\b[^.\n]{0,20}\bhistory\b|filter-(?:branch|repo)|\bsudo(?:ers)?\b|visudo|(?<!non-)\bprod(?:uction)?\b(?![-/])|\bcustomers?\b|\bpublish\w*|\bpush\w*\b[^.\n]{0,30}\btags?\b|\bdestructive\b|\birreversible\b|\bghosty-sessions\b|\breboot\b|\bshutdown\b|\bsms\b|\bphone\b|\blog ?in\b|\bsign(?:ed)?[- ]in\b|\bprovide\b|\bhardware\b|\bbring \S+ back\b|\bsideload\w*/i;
 
@@ -24,18 +24,6 @@ export function floorOf(text) {
   const t = String(text || '');
   return ownerFloorMatch(t) || (FLOOR_EXTRA.exec(t) || [])[0] || null;
 }
-
-// A list header that is done-leftovers.js's job ("Left to do", "Remaining", "Still open", "open:" on the STATUS line).
-const LEFTOVER_HEAD = /^\W*(?:left to do|leftovers?|remaining(?: work| items| steps)?|still (?:to do|open)|todo|to do|open items?)\W*:|\bopen\s*:\s*\S/im;
-const PROPOSAL = /\bI'?d (?:next |then |also |rather )?(?:add|check|run|fix|build|measure|try|change|replace|implement|write|capture|test|move|split|cache)\b|\bwould (?:settle|fix|confirm|prove|pin (?:it )?down|remove|explain)\b|\b(?:fix(?:es)?|changes?|improvements?) (?:are |were )?proposed\b|\bproposed (?:fix(?:es)?|changes?|improvements?)\b|\bproposals?\b|\bI could (?:also )?(?:add|fix|build|run|write|check|try|implement)\b|\bif you (?:want|like),? I(?:'ll| can| could)\b|^\W*(?:suggestions?|next improvements?|improvement ideas|ideas|follow-?ups?|recommendations?)\W*:/im;
-
-// Bug bug-1f0455fc (2026-10-28): a freeze acknowledgement ("proposal, final names wait for the owner") was read as a proposal the session
-// can implement, and the reply "Implement your own proposals now" contradicted the owner's freeze. Three guards for kind suggestions:
-// a proposal that is deferred or negated is not one; a turn that answers a manager freeze / stop / hold is not pushed; and a push needs
-// an actual list: a heading (Suggestions: ...) or two proposal sentences, never one stray phrase.
-const DEFERRED = /\bwait(?:s|ed|ing)? (?:for|on) (?:the )?(?:owner|jev)\b|\b(?:not|nothing) until\b|\buntil (?:the )?(?:owner|jev)\b|\b(?:pending|after|once|unless) (?:the )?owner\b|\bowner (?:decides|validates|approves|confirms)\b|\b(?:on hold|frozen)\b/i;
-const FREEZE = /\b(?:freeze|frozen)\b|\backnowledg\w*\b[^.\n]{0,80}\b(?:stop|hold|pause|halt)\b|\b(?:stop|hold|pause|halt)(?:ed|ing)? (?:message|order|request|notice)\b|\b(?:holding|pausing|stopping) (?:all|the|my|every|any)\b|\bwill not (?:rename|touch|start|change) (?:anything|any)\b/i;
-const LIST_HEAD = /^\W*(?:suggestions?|next improvements?|improvement ideas|ideas|follow-?ups?|recommendations?|proposals?)\W*:/im;
 
 const statusOf = (lines) => {
   let at = -1, m = null;
@@ -81,16 +69,7 @@ export function pushOf(text) {
   const st = statusOf(lines);
   if (!st) return null;
   const tail = lines.slice(Math.max(0, st.at - 30), st.at + 1).join('\n');
-
-  if (DONE.test(st.kind)) {
-    if (LEFTOVER_HEAD.test(tail)) return null;   // done-leftovers.js owns a listed "Left to do"
-    if (FREEZE.test(raw)) return null;   // the session is answering a freeze / stop: "implement your proposals" would contradict it
-    const hits = sentences(tail).filter((s) => PROPOSAL.test(s) && !DEFERRED.test(s));
-    if (!hits.length || (hits.length < 2 && !LIST_HEAD.test(tail))) return null;
-    const items = [], skipped = [];
-    for (const s of hits) { const f = floorOf(s); (f ? skipped : items).push(f ? `${clip(s)} (owner: ${f})` : clip(s)); }
-    return items.length ? { kind: 'suggestions', items: items.slice(0, 4), skipped, why: 'done with its own proposals' } : null;
-  }
+  if (isReflectionAsk(raw)) return null;   // the choice of suggestions: never answered by a push
 
   if (st.kind === 'needs-owner' || st.kind === 'needs-manager') {
     const ask = st.text;
@@ -118,7 +97,6 @@ export function pushOf(text) {
 // The reply the manager sends (it may sharpen it with the facts it checked; the gates stay its own).
 export function replyFor(p) {
   if (!p) return null;
-  if (p.kind === 'suggestions') return `Implement your own proposals now: ${p.items.join(' | ')}. Do the ones that fix a bug or add something new without breaking anything, verify each, and list what you skip and why. Skip anything that deletes data, touches credentials, money, customers, sudoers, a production host, a destructive migration or a force-push. STATUS: done only when nothing you can do yourself is left.`;
   if (p.kind === 'routine-ask') return p.option
     ? `Yes, option ${p.option}: ${p.items[0]}. It is a routine step (AGENTS.md autonomy, no hard-floor item): do it by the normal procedure (lease first, deploy queue, rollback line), journal it, then continue.`
     : `Yes, do it: ${p.items[0]}. It is a routine step (${p.step}; AGENTS.md autonomy, no hard-floor item): lease first, deploy queue, keep the rollback line, then continue.`;
