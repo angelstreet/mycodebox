@@ -33,6 +33,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **In doubt, the harness now says to ask Opus** — a `jev-ask.js stop` that Jev did not decide, and each session question in the manager's event feed, carry "in doubt: ask Opus to answer" with the command; the new `scripts/ask-opus.js` runs `claude -p --model opus` once and records the answer in `manager-asks.jsonl`. Owner-floor asks (money, credentials, customers, publishing, deleting data, physical) get no hint and are never sent. The server calls no model by itself · area: manager
+
 - **A parked note is no longer lost on a failed send** — a note added to a message that stayed unsubmitted goes back to waiting, and a hook flag left by a killed Claude process no longer blocks notes for another agent in that pane · area: harness
 
 - **An integration result reaches a stopped session within seconds, also when its stop was missed** — the result was typed on the session's turn-end event only; a stop that came during the restart of its own deploy was lost and the session stayed on `waiting: integration` (and red) for the 5 min timer. A sweep every 20 s now delivers a kept wake to every session that is stopped · area: sessions
