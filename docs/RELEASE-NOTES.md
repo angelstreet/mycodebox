@@ -31,6 +31,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A session that writes its own task document gets the MD button** — the button was only for sessions named `taskNN`; the server now also lists the `docs/tasks/*.md` files a session wrote (read from its session file), whatever its name · area: task document
+
 - **A UI review that does not run no longer blames your branch** — the returned request says whether the reviewer broke or could not review, and the manager is woken the first time, also for a live-page review, which used to fail silently · area: integration
 
 - **The dock shows the effort next to the model** — under the input, `Claude  Fable 5.2 · medium`: the effort is read from the session file (Claude Code does not print it in the footer), refreshed once a minute · area: dock

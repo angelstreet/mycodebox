@@ -330,7 +330,7 @@ test('footerModelOf: finds the Claude footer model line under many subagent line
   assert.equal(footerModelOf(['Opus 5.5 is the model I use here', 'plain']), null);
 });
 
-import { effortOf } from '../conversation.js';
+import { effortOf, taskDocsWritten } from '../conversation.js';
 import { writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pjoin } from 'node:path';
@@ -341,4 +341,11 @@ test('effortOf: the last "effort" in the session file tail, null without one', a
   writeFileSync(f, '{"type":"y"}\n');
   assert.equal(await effortOf(f), null);
   assert.equal(await effortOf(pjoin(d, 'missing.jsonl')), null);
+});
+
+test('taskDocsWritten: docs/tasks/*.md the session wrote, unique, other paths ignored', async () => {
+  const d = mkdtempSync(pjoin(tmpdir(), 'td-')), f = pjoin(d, 's.jsonl');
+  writeFileSync(f, ['{"input":{"file_path":"/x/wt/docs/tasks/TASK-9-a.md"}}', '{"input":{"file_path":"/x/wt/src/a.js"}}', '{"input":{"file_path":"/x/wt/docs/tasks/TASK-9-a.md"}}', '{"input":{"file_path":"/x/wt/docs/tasks/b.md"}}'].join('\n'));
+  assert.deepEqual(await taskDocsWritten(f), ['/x/wt/docs/tasks/TASK-9-a.md', '/x/wt/docs/tasks/b.md']);
+  assert.deepEqual(await taskDocsWritten(pjoin(d, 'none.jsonl')), []);
 });

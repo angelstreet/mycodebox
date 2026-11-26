@@ -111,3 +111,16 @@ export async function effortOf(file, bytes = 256 * 1024) {
     return all.length ? all[all.length - 1][1] : null;
   } catch { return null; } finally { await fh?.close().catch(() => {}); }
 }
+
+// Task documents the session itself wrote: a Write / Edit of <...>/docs/tasks/*.md in the tail of its file -> absolute paths (newest last, unique).
+export async function taskDocsWritten(file, bytes = TAIL_BYTES) {
+  let fh;
+  try {
+    fh = await fsp.open(file, 'r');
+    const { size } = await fh.stat(), len = Math.min(size, bytes), buf = Buffer.alloc(len);
+    await fh.read(buf, 0, len, size - len);
+    const out = new Set();
+    for (const m of buf.toString('utf8').matchAll(/"file_path":"((?:\/[^"\\]+)+\/docs\/tasks\/[^"\\\/]+\.md)"/gi)) { out.delete(m[1]); out.add(m[1]); }
+    return [...out];
+  } catch { return []; } finally { await fh?.close().catch(() => {}); }
+}
