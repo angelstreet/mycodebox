@@ -270,7 +270,7 @@ test('reviewer independence: the same model is refused across runtimes, before a
   assert.equal(p('opencode:anthropic/claude-haiku-4-5').provider, 'anthropic');
   assert.equal(p('opencode').provider, 'opencode');
   assert.equal(sameModel(p('opencode:anthropic/claude-haiku-4-5'), p('claude:haiku')), true);
-  assert.equal(sameModel(p('opencode:openai/gpt-6-luna'), p('codex')), true, 'codex runs an unknown default OpenAI model');
+  assert.equal(sameModel(p('opencode:openai/gpt-6.1-sol'), p('codex')), true, 'codex runs an unknown default OpenAI model');
   assert.equal(sameModel(p('opencode:minimax/MiniMax-M3'), p('minimax')), true);
   assert.equal(sameModel(p('claude:haiku'), p('claude:sonnet')), false);
   assert.equal(sameModel(p('claude:haiku'), p('codex')), false);
@@ -280,7 +280,7 @@ test('reviewer independence: the same model is refused across runtimes, before a
     ['opencode:openrouter/claude-sonnet-5-5', 'claude:sonnet'], ['opencode:anthropic/claude-haiku-4.5', 'claude:haiku'],
     ['opencode:anthropic/claude-haiku-4-5-20251001', 'claude:haiku']]) assert.equal(sameModel(p(dev), p(rev)), true, `${dev} vs ${rev}`);
   for (const [dev, rev] of [['opencode:anthropic/claude-haiku-4-5', 'claude:haiku'], ['opencode:opencode/gpt-5-codex', 'codex'],
-    ['opencode:anthropic/claude-haiku-4-5-20251001', 'claude:haiku'], ['opencode:openai/gpt-6-luna', 'codex'], ['opencode:minimax/MiniMax-M3', 'minimax'], ['codex', 'opencode:openai/gpt-6-astra']]) {
+    ['opencode:anthropic/claude-haiku-4-5-20251001', 'claude:haiku'], ['opencode:openai/gpt-6.1-sol', 'codex'], ['opencode:minimax/MiniMax-M3', 'minimax'], ['codex', 'opencode:openai/gpt-6.1-sol']]) {
     const out = outDir();
     await assert.rejects(runBench({ runtimes: [dev], reviewer_map: { [dev]: rev }, out, tasks: 'off-by-one' }), /same model/, `${dev} reviewed by ${rev}`);
     assert.equal(fs.existsSync(out), false, 'refused before anything was set up');

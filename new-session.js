@@ -14,18 +14,18 @@ const MODEL_RE = /^[\w.\-[\]/]{1,64}$/;
 export const CLAUDE_MODELS = ['opus', 'sonnet', 'haiku', 'fable'];
 export const MINIMAX_MODELS = ['MiniMax-M3'];
 // Preselected until the owner picks another one (owner 2026-11-12); at most 4 models per provider.
-export const DEFAULT_MODELS = { claude: 'sonnet', codex: 'gpt-6-luna', minimax: 'MiniMax-M3' };
+export const DEFAULT_MODELS = { claude: 'sonnet', codex: 'gpt-6.1-sol', minimax: 'MiniMax-M3' };
 export const MAX_MODELS = 4;
-// These IDs can appear in the CLI cache even when interactive ChatGPT-account sessions reject them.
-const CODEX_UNAVAILABLE_MODELS = new Set(['gpt-6.2-sol', 'gpt-6.2-astra']);
+const CODEX_VERIFIED_MODELS = ['gpt-6.1-sol'];
+const LEGACY_CODEX_MODEL_RE = /^gpt-6(?:-(?:luna|sol|astra)|\.2-(?:sol|astra))$/;
 
 // Codex models as the CLI lists them (~/.codex/models_cache.json, visibility "list"), the configured default first.
 export function codexModels(cache, configToml = '') {
-  const list = (Array.isArray(cache) ? cache : cache?.models || [])
+  const list = [...CODEX_VERIFIED_MODELS, ...(Array.isArray(cache) ? cache : cache?.models || [])
     .filter((m) => m && (m.visibility == null || m.visibility === 'list'))
-    .map((m) => m.slug || m.id).filter((s) => typeof s === 'string' && MODEL_RE.test(s) && !CODEX_UNAVAILABLE_MODELS.has(s));
+    .map((m) => m.slug || m.id).filter((s) => typeof s === 'string' && MODEL_RE.test(s) && !LEGACY_CODEX_MODEL_RE.test(s))];
   const conf = /^\s*model\s*=\s*"([^"]+)"/m.exec(configToml)?.[1];
-  const def = list.includes(DEFAULT_MODELS.codex) ? DEFAULT_MODELS.codex : (conf && MODEL_RE.test(conf) && !CODEX_UNAVAILABLE_MODELS.has(conf) ? conf : list[0]);
+  const def = list.includes(DEFAULT_MODELS.codex) ? DEFAULT_MODELS.codex : (conf && MODEL_RE.test(conf) ? conf : list[0]);
   const out = [...new Set([...(def ? [def] : []), ...list])].slice(0, MAX_MODELS);
   return { models: out, default: out[0] || null };
 }

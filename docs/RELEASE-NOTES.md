@@ -41,6 +41,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **Codex defaults to GPT-6.1 Sol** — New sessions default to `gpt-6.1-sol` and offer it even when the local model cache is stale. V2 routing registers the model and records ChatGPT-account pricing as unknown rather than inferring API prices (2026-11-26) · area: Codex
+
 - **One session card at a time on phones** — The dashboard opens a single card on mobile, including when a previous visit or link requested the grid. Use the Sessions drawer or swipe the card to switch sessions · area: dashboard
 
 - **Phone sessions stay visible when there are no task sessions** — The Tasks filter applies only while an unhidden `TASK-` or `TASK_` session exists. If active filters match nothing, the grid and Sessions drawer offer **Clear filters** · area: dashboard
