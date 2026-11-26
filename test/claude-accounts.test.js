@@ -184,3 +184,18 @@ test('quota: the claude plan follows the active account and lists every account'
     assert.equal(single.accounts, undefined);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+
+test('scanClaudeLimit: "You hit your weekly limit" (no apostrophe) and the out-of-credits wording are stops (artifact, 2026-11-26)', () => {
+  assert.ok(scanClaudeLimit(['  ⎿  You hit your weekly limit · resets Nov 27, 2pm (UTC)', '❯ ']));
+  assert.ok(scanClaudeLimit(['You have hit your weekly limit']));
+  assert.ok(scanClaudeLimit(["You're out of usage credits"]));
+  assert.ok(!scanClaudeLimit(['we hit your server limit of 5 requests today?']));
+});
+
+test('resumeCommand: a model override replaces the recorded --model (fable swap resumes on opus)', async () => {
+  const { resumeCommand } = await import('../parking.js');
+  const a = { base: 'claude', args: 'claude --model fable', name: 'artifact', sessionId: 'abc' };
+  assert.match(resumeCommand(a), /--model fable/);
+  assert.match(resumeCommand({ ...a, model: 'opus' }), /--model opus/);
+  assert.doesNotMatch(resumeCommand({ ...a, model: 'opus' }), /fable/);
+});

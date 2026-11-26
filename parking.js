@@ -253,13 +253,14 @@ const shq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 
 // Same launch as the session had: ghosty's claude command (AGENT_CMDS.claude, which carries the bypass flag by default; recorded args never add one) + the model the old process had + --resume.
 // Remote Control always comes back under the session name (owner, 2026-10-15: every session has it), unless the base command already sets it.
-export function resumeCommand({ base, args, name, sessionId }) {
+export function resumeCommand({ base, args, name, sessionId, model: modelOverride }) {
   if (typeof sessionId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(sessionId)) {
     throw Object.assign(new Error('invalid resume session id'), { status: 400 });
   }
   const parts = [base];
   const model = /--model[= ]([A-Za-z0-9._\[\]-]+)/.exec(args || '');
-  if (model && !/--model\b/.test(base)) parts.push('--model', model[1]);
+  const useModel = modelOverride || (model && model[1]);
+  if (useModel && !/--model\b/.test(base)) parts.push('--model', useModel);
   if (name && !/--remote-control\b/.test(base)) parts.push('--remote-control', shq(name), '-n', shq(name));
   parts.push('--resume', sessionId);
   return parts.join(' ');
@@ -456,7 +457,7 @@ export function createParking({ file, tmux, exitWaitMs = 30000, pollMs = 500, sl
     // Recreates the tmux session in the recorded folder and starts the agent. Claude: resumeCommand(base, rec.args, rec.claudeName, rec.sessionId).
     // MiniMax: `${base} -c` (reuses AGENT_CMDS.minimax + ' -c' to continue the latest session in the recorded cwd).
     // Codex: `${base} resume <sessionId>` (codexResumeCommand: its launch flags, then the conversation id).
-    async resume(name, { base, start, validate = async () => {} }) {
+    async resume(name, { base, start, validate = async () => {}, model }) {
       await load();
       if (typeof name !== 'string' || !/^[A-Za-z0-9_.-]{1,40}$/.test(name)) throw err(400, 'invalid session name');
       const rec = Object.hasOwn(data.parked, name) ? data.parked[name] : undefined;
@@ -469,7 +470,7 @@ export function createParking({ file, tmux, exitWaitMs = 30000, pollMs = 500, sl
       if (rec.agent === 'minimax') cmd = `${base} -c`;
       else if (rec.agent === 'codex') cmd = codexResumeCommand({ base, sessionId: rec.sessionId });
       else if (!rec.sessionId) throw err(400, 'this parked session has no conversation id to resume (the agent had already died); start a new session in its folder instead');
-      else cmd = resumeCommand({ base, args: rec.args, name: rec.claudeName, sessionId: rec.sessionId });
+      else cmd = resumeCommand({ base, args: rec.args, name: rec.claudeName, sessionId: rec.sessionId, model });
       await tmux.create(name, rec.cwd);
       await start(name, rec, cmd);
       delete data.parked[name];
