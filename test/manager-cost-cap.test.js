@@ -251,6 +251,7 @@ fs.appendFileSync(path.join(dir, 'calls'), JSON.stringify([cmd, ...args, ...(std
 if (cmd === 'curl' && !args.includes('POST')) process.stdout.write(JSON.stringify({ status: { [process.env.FAKE_SESSION]: { state: process.env.FAKE_STATE, stall: {} } } }));
 if (cmd === 'tmux' && args[0] === 'display') console.log('4242');
 if (cmd === 'tmux' && args[0] === 'capture-pane') process.stdout.write(process.env.FAKE_PANE || '');
+if (cmd === 'git' && process.env.FAKE_GIT_FAIL && args.includes('checkout')) { console.error(process.env.FAKE_GIT_FAIL); process.exit(1); }
 if (cmd === 'ps') { console.log('claude'); process.exit(0); }
 if (cmd === 'pgrep') {
   const calls = fs.readFileSync(path.join(dir, 'calls'), 'utf8').split('\\n').filter(Boolean).map(JSON.parse);
@@ -293,6 +294,23 @@ test('manager-fresh.sh: the cap reason is named in the kickoff, which still poin
   assert.match(r.sent[0], /open items in manager-actions\.jsonl \/ manager-asks\.jsonl/);
   assert.match(readFileSync(join(r.home, '.local/state/ghosty/manager-fresh.last'), 'utf8'), /^\d{13}\n$/);
   assert.match(freshRun({}).sent[0], /^Fresh start of the AI manager \(nightly restart, short context on purpose\)/);
+});
+
+test('manager-fresh.sh: a failed manual update is told (manager event, kickoff warning) and the restart goes on; a good one says nothing', () => {
+  const ok = freshRun({});
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.ok(ok.calls.some(([c, ...a]) => c === 'git' && a.includes('checkout')), 'the manual is updated');
+  assert.ok(!existsSync(join(ok.home, '.local/state/ghosty/manager-events.jsonl')));
+  assert.doesNotMatch(ok.sent[0], /WARNING/);
+  const bad = freshRun({ env: { FAKE_GIT_FAIL: 'error: Your local changes would be overwritten by checkout' } });
+  assert.equal(bad.status, 0, bad.stderr);
+  assert.match(bad.stderr, /manual NOT updated: error: Your local changes/);
+  assert.match(bad.sent[0], /^WARNING: your manual in ~\/vpt-manager was NOT updated.*would be overwritten.*Fresh start of the AI manager/s);
+  const [e] = readFileSync(join(bad.home, '.local/state/ghosty/manager-events.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.deepEqual([e.key, e.priority], ['manual:update-failed', 'high']);
+  assert.match(e.body, /would be overwritten/);
+  // a dead manager relaunched with --now gets the update too; a throw-away session never moves the manual
+  assert.ok(!freshRun({ env: { MANAGER_FRESH_SESSION: 'captest', FAKE_GIT_FAIL: 'x' } }).calls.some(([c]) => c === 'git'));
 });
 
 test('manager-fresh.sh: another session gets its own name, kickoff and stamp, and never the manager\'s', () => {

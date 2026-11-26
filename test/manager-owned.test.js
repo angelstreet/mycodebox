@@ -17,6 +17,7 @@ import { isOwnersTurn, buildQueue, unattachedAsks } from '../public/ask-model.js
 import { stopItem } from '../voice.js';
 import { fileAsk, readOpenAsks, resolveMovedOn } from '../owner-asks.js';
 import { askSummary } from '../public/manager-ask.js';
+import { createMockups, OBJECT_TEXT, MANAGER_OBJECT_TEXT } from '../mockups.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const facts = ({ meta = {}, inst = {}, children = new Map() } = {}) => ({ startedBy: (n) => meta[n] || null, instanceOf: (n) => inst[n] || null, children });
@@ -134,4 +135,19 @@ test('an owner-only item: the manager files it naming the source session, it sta
   assert.equal(mgr.status, 0, mgr.stderr);
   assert.ok((await readOpenAsks(ledger)).some((x) => x.id === mgr.stdout.trim() && x.source === 'w' && x.session === 'manager:w'));
   assert.ok(existsSync(ledger));
+});
+
+test('a mockup of a manager-started session goes to the manager, who can object; an owner-started one is posted to the owner as before', async () => {
+  const feed = [], told = [], typed = [];
+  const m = createMockups({ file: join(tmp('mowned-m-'), 'mockups.jsonl'), push: { record: (x) => { feed.push(x); return { id: 7 }; } }, tokenOk: () => true, lintMode: () => 'off',
+    managerStarted: (s) => s === 'w', toManager: async (r, win) => told.push([r.session, r.id, win]), send: async (s, text, by) => typed.push([s, text, by]) });
+  const post = (session) => m.post({ remoteAddress: '127.0.0.1', body: { session, title: 'New layout', url: '/files/x.html' } });
+  const mine = await post('w');
+  assert.deepEqual([mine.status, mine.body.to, mine.body.feedId, feed.length], [200, 'manager', null, 0]);
+  assert.deepEqual(told, [['w', mine.body.id, 10]]);
+  assert.equal((await m.object(mine.body.id, { by: 'manager-agent' })).body.text, MANAGER_OBJECT_TEXT);
+  const own = await post('owners');
+  assert.deepEqual([own.body.feedId, own.body.to, feed.length, told.length], [7, undefined, 1, 1]);
+  assert.equal((await m.object(own.body.id)).body.text, OBJECT_TEXT);
+  assert.deepEqual(typed.map((t) => t[1]), [MANAGER_OBJECT_TEXT, OBJECT_TEXT]);
 });

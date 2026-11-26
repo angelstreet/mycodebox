@@ -79,6 +79,12 @@ done
   assert.equal(isOwnersTurn(card), false);
   assert.equal(displayState(card), 'manager');
 
+  // its mockup reaches the manager, not the owner's feed
+  const mock = await post('/api/mockups', { session: 'worker-session', title: 'New layout', url: 'https://example.test/m.html' }, { 'x-ghosty-reporter-token': readFileSync(join(state, 'reporter.token'), 'utf8').trim() });
+  assert.deepEqual([mock.status, mock.body.to, mock.body.feedId], [200, 'manager', null], JSON.stringify(mock.body));
+  assert.deepEqual((await feed()).filter((x) => /^Mockup:/.test(x.title)), []);
+  await until(() => jsonl('manager-events.jsonl').some((e) => e.key === 'worker-session:mockup' && e.body.includes(`/api/mockups/${mock.body.id}/object`)), 'the manager has the mockup');
+
   // 2. suggestions: asked of the manager; an automatic or peer answer is refused, the manager's is recorded as the manager's
   assert.equal((await post('/api/send/worker-session', { keys: 'list your ideas' }, dashboard)).status, 200);
   await until(async () => (await record())?.items.length === 2, 'the list is recorded');

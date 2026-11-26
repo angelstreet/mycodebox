@@ -72,4 +72,6 @@ test('wake summary: every event on its own line, needs-manager / asks / hold fla
 test('manager-fresh kick text names both scripts and the never-idle rule', () => {
   const src = fs.readFileSync(path.join(SC, 'manager-fresh.sh'), 'utf8');
   assert.match(src, /read ALL events \(scripts\/manager-wake-summary\.sh\) and run scripts\/manager-status-scan\.sh in every hourly sweep; a session whose last STATUS is needs-manager\/needs-owner\/blocked is never "idle"/);
+  assert.match(src, /Close only a session you started, once it is really done \(its ready-to-close event/);
+  assert.doesNotMatch(src, /Never close a session/);
 });

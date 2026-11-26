@@ -145,7 +145,7 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
   things i need to answer it has to come from your session"). This covers every session the manager started and every session those start (`manager-owned.js`: the
   recorded starter, else `manager-children.jsonl`). Where any other line says "ask the owner", "`needs-owner`" or "only the owner answers", this one wins for them:
   - they never ask the owner and never end `needs-owner`: questions, decisions and suggestion lists end `needs-manager`, owner-only items included. No owner push,
-    NEEDS YOU row or voice question is raised for them; each ask is a manager event (`<session>:needs-manager`).
+    NEEDS YOU row, voice question or mockup feed item is raised for them; each ask is a manager event (`<session>:needs-manager`, a mockup `<session>:mockup`).
   - the manager records yes / no per suggestion (`POST /api/send/<s>` `{"keys":"yes 1, no 2","by":"manager-agent"}`; recorded as the manager's, shown to the owner
     in "Decided for you"). The server refuses that for owner-started sessions, and from any other or automatic sender for every session.
   - the hard floor does not change: the manager never answers money, customers, publishing, credentials, data deletion or a physical action. It asks the owner from

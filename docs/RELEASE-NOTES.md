@@ -35,6 +35,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A manager that could not update its manual now says so, and mockups of manager-started sessions go to the manager** — `manager-fresh.sh` ignored a failed manual checkout (and skipped it for a dead manager): it now raises `manual:update-failed` and warns in the kickoff, which also no longer says "never close a session". A manager-started session's mockup is no longer put in your feed; the manager can object · area: manager harness
+
 - **A session that says done with suggestions still open is told to end on the question** — ghosty's closing STATUS line wrapped over 8 pane rows (one cut short before a long URL); `statusLine` followed at most 6 rows of at least 60 characters, so the stop read as "no STATUS line", the done check skipped it, and the push that makes a session with open suggestions end on `STATUS: needs-owner: improvement suggestions ...` never went out: the pane said done, the LED was red. A wrapped STATUS line is now followed for up to 12 rows, and a row cut short because the next word (a URL, a path) did not fit counts as wrapped · area: stall
 
 - **A manager-started session's startup prompt no longer reaches you** — the server learned who started a session only once its agent was up, so a confirmation prompt in those seconds was queued in your digest; `cbsession` now records a manager start before the tmux session exists · area: manager harness

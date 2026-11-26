@@ -5,6 +5,7 @@
 //                              Lint first (mockup-lint.js, manager.json `mockupLint` live|dry|off, default live): a mockup with readability defects is
 //                              NOT posted: 422 { ok:false, error:'mockup-lint', defects } and the session is sent the defects (max 8) to fix and re-post.
 //                              The HTML is read from /files/<path> (the served file) or an http(s) loopback url; anything else is not linted (logged).
+//                              A session the manager started: no feed record and no push; the manager gets the event `<session>:mockup` instead.
 //   POST /api/mockups/:id/object   the owner's "object" tap: the session is told to wait for the owner's notes
 //   mockupRule(final, ...)     a stop asking "show me / approve the mockup before I build?" is answered "Proceed: post the mockup ... and build"
 import { appendFile, readFile } from 'node:fs/promises';
@@ -12,8 +13,10 @@ import { randomUUID } from 'node:crypto';
 import { isLoopback, TOKEN_HEADER } from './reporter.js';
 import { lintMockup, formatDefects } from './mockup-lint.js';
 import { resolveServedFile } from './files-route.js';
+import { MANAGER_ACTOR } from './manager-owned.js';
 
 export const OBJECT_TEXT = 'The owner objects to the mockup: wait for their notes.';
+export const MANAGER_OBJECT_TEXT = 'The manager objects to the mockup: wait for its notes.';
 export const WINDOW_DEFAULT_MIN = 10;
 
 // --- the manager rule (pure) ------------------------------------------------------------------------------------------
@@ -42,7 +45,7 @@ export async function loadMockupHtml(url, { home = process.env.HOME || '/', fetc
 
 // --- the ledger and the routes ------------------------------------------------------------------------------------------
 // Records: { id, at, session, title, url, deadlineAt, state: 'open' } and later { id, state: 'objected', at, late }.
-export function createMockups({ file, push, send = async () => {}, tokenOk = () => false, now = () => Date.now(), windowMin = () => WINDOW_DEFAULT_MIN, maxPerHour = 20, lintMode = () => 'live', load = loadMockupHtml, log = () => {} } = {}) {
+export function createMockups({ file, push, managerStarted = () => false, toManager = async () => {}, send = async () => {}, tokenOk = () => false, now = () => Date.now(), windowMin = () => WINDOW_DEFAULT_MIN, maxPerHour = 20, lintMode = () => 'live', load = loadMockupHtml, log = () => {} } = {}) {
   const calls = [];
   const bad = (status, error) => ({ status, body: { ok: false, error } });
   async function rows() {
@@ -81,6 +84,11 @@ export function createMockups({ file, push, send = async () => {}, tokenOk = () 
     const win = Math.min(1440, Math.max(1, Number(b.windowMin) || Number(windowMin()) || WINDOW_DEFAULT_MIN));
     const rec = { id: randomUUID().slice(0, 8), at: t, session: b.session, title: b.title.trim(), url: b.url, deadlineAt: t + win * 60e3, state: 'open' };
     await appendFile(file, JSON.stringify(rec) + '\n');
+    // a session the manager started (manager-owned.js): the manager has the window to object; nothing reaches the owner's feed
+    if (managerStarted(rec.session)) {
+      await toManager(rec, win);
+      return { status: 200, body: { ok: true, id: rec.id, deadlineAt: rec.deadlineAt, feedId: null, to: 'manager' } };
+    }
     const item = push.record({ title: `Mockup: ${rec.title}`, body: `${b.session} builds on unless you object within ${win} min; you review at the end.`, url: rec.url, tag: 'mockup', kind: 'mockup', mockupId: rec.id, deadlineAt: rec.deadlineAt,
       actions: [{ action: 'object', title: 'Object' }] });
     return { status: 200, body: { ok: true, id: rec.id, deadlineAt: rec.deadlineAt, feedId: item.id } };
@@ -91,9 +99,10 @@ export function createMockups({ file, push, send = async () => {}, tokenOk = () 
     if (!r || !r.session) return bad(404, 'unknown mockup');
     if (r.state === 'objected') return bad(409, 'already objected');
     const t = now();
-    try { await send(r.session, OBJECT_TEXT, by); } catch (e) { return bad(e.status || 502, `could not tell ${r.session}: ${e.message}`); }
+    const text = by === MANAGER_ACTOR && managerStarted(r.session) ? MANAGER_OBJECT_TEXT : OBJECT_TEXT;
+    try { await send(r.session, text, by); } catch (e) { return bad(e.status || 502, `could not tell ${r.session}: ${e.message}`); }
     await appendFile(file, JSON.stringify({ id, state: 'objected', at: t, by, late: t > r.deadlineAt }) + '\n');
-    return { status: 200, body: { ok: true, sent: true, session: r.session, text: OBJECT_TEXT, late: t > r.deadlineAt } };
+    return { status: 200, body: { ok: true, sent: true, session: r.session, text, late: t > r.deadlineAt } };
   }
   return { post, object, rows };
 }
