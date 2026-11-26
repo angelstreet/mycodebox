@@ -11,7 +11,7 @@
 // State: $GHOSTY_STATE_DIR/claude-accounts.json { auto, autoSwapSessions, active, accounts:[{id,label,configDir}], marks:{id:{until,reason}} }
 // Per-account limits: claude-rate-limits.json (default) / claude-rate-limits.<id>.json, written by the status-line script
 // (scripts/claude-statusline-ratelimits.sh reads GHOSTY_CLAUDE_ACCOUNT, which the launch prefix sets).
-import { promises as fs, readFileSync } from 'node:fs';
+import { promises as fs, existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
@@ -118,6 +118,15 @@ export function pickAccount(cfg, states, { exclude = [] } = {}) {
 export function launchPrefix(acct) {
   if (!acct || !acct.configDir) return '';
   return `CLAUDE_CONFIG_DIR=${shq(acct.configDir)} GHOSTY_CLAUDE_ACCOUNT=${acct.id} `;
+}
+
+// The account a launch outside the server starts on (the manager, scripts/manager-command.js): the ACTIVE one, the rule
+// scripts/cbsession follows. null = the default account (also for an account without a login: only the file's presence is checked).
+export function activeAccount(stateDir, { home = homedir(), hasLogin = (dir) => existsSync(join(dir, '.credentials.json')) } = {}) {
+  let cfg;
+  try { cfg = normalize(JSON.parse(readFileSync(join(stateDir, 'claude-accounts.json'), 'utf8')), home); } catch { return null; }
+  const a = cfg.accounts.find((x) => x.id === cfg.active);
+  return a?.configDir && hasLogin(a.configDir) ? a : null;
 }
 
 // The account a running claude process was started on (its environment). Default when unset or unreadable.
