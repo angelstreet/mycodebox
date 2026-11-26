@@ -138,7 +138,7 @@ PUBLIC_URL=https://<machine>.<tailnet>.ts.net     # notification tap opens /?s=<
 | `STALL_SETTLE_MS` | `5000` | a stopped pane must stay unchanged this long before it counts as a stall |
 | `GHOSTY_STATE_DIR` | `~/.local/state/ghosty` | manager config, `stalls.jsonl` log, Jev budget |
 | `GHOSTY_FORBIDDEN_EXTRA` | unset | extra regex of never-auto-answer words (customer names etc. — keep them out of the public repo) |
-| `DONE_IDLE_HOURS` | `6` | a finished agent session turns `done` -> `idle` after this long |
+| `DONE_IDLE_HOURS` | `6` | a finished agent session turns `done` -> `idle` after this long, unless its screen still ends on a hand-over STATUS line (`done`, `needs-owner`, `needs-manager`, `blocked`, `failed`, `handoff`) |
 | `AGENT_CMD_CLAUDE` / `_CODEX` / `_MINIMAX` / `_BASH` | `claude --dangerously-skip-permissions` / `codex --dangerously-bypass-approvals-and-sandbox` / `PATH=$HOME/.local/node-v24.21.0-linux-x64/bin:$PATH mcode` / (none) | create/resume launch commands (owner's default 2026-10-11: prompts skipped, folder trust pre-accepted via `trust.js`); Claude also configures manager-fresh; an override wins verbatim, even empty. Only a non-loopback `HOST` warns |
 | `MANAGER_MODEL` | `sonnet` | Model of the Claude manager (`managerCommand` in `launch-config.js`, used by `manager-fresh.sh` and `manager-watch.sh`); owner decision 2026-10-21: Sonnet, not Opus. A model alias or id; anything else falls back to `sonnet`. |
 | `MANAGER_DIR` | `~/ghosty-sessions-manager` (else `~/ghosty-sessions`) | Directory `manager-fresh.sh --now` creates a missing `manager` tmux session in. |
@@ -703,7 +703,7 @@ node scripts/jev-ask.js stop \
 ```
 
 **Answer popup (TASK-44 phase 11).** One bottom-right popup shows every session that needs you
-(the same set the NEEDS YOU strip does — `waiting` or `done` with a non-pending triage). Each item: the
+(the same set the NEEDS YOU strip does, `isOwnersTurn`: `waiting`, a `done` stop on `STATUS: needs-owner`, or another `done` question with a non-pending triage). Each item: the
 question (max 220 chars), the answer buttons from `public/buttons.js` (`yesno` → Yes / No + Reply…,
 `menu` / `either` → one numbered row per option + Reply…, `open` → Reply…), the AI reviewer's pick
 pre-highlighted with a ★ (only when the proposal maps to a button that has no `confirm` and the AI
@@ -1141,14 +1141,14 @@ event) plus the Claude session id and cwd; a session outside tmux is ignored.
 | `session.start` / `session.end` (`session.start`, `session.end`) | reason | session is `live` / not |
 | `prompt` (`prompt.submit`) | the submitted text (exact, 8 KB cap), `synthetic` for engine-raised prompts such as a finished background task | the owner's reply in the stall `outcome` (`via: "reporter"`); a prompt after a stall also counts as the session moving on |
 | `turn.end` (`turn.complete`) | the final answer (exact), reason, usage; subagent turns carry `agentId` and are ignored as the session's turn | closing text of the stall classifier |
-| `stop` (`classic.Stop`) | `last_assistant_message`, `backgroundWork` = background tasks in flight | `background_wait` when > 0 |
+| `stop` (`classic.Stop`) | `last_assistant_message`, `backgroundWork` = background tasks in flight | `background_wait` when > 0 and the turn does not end on a hand-over STATUS line (below); artifact live-update monitors are not counted |
 | `waiting` (`classic.PermissionRequest`, `classic.Notification` except idle / auth) | message | marks the session `waiting` even when the pane regex missed it, while the pane stays still |
 | `agents` (`agent.spawn`, `classic.SubagentStart/Stop`, `classic.TeammateIdle`, after `turn.complete`) | `$.agent.list()`: id, type, status, description, sent only when it changed | subagent count + statuses in the ⚡ tooltip |
 
 What the manager does with it (Claude sessions only; Codex / MiniMax unchanged): a stop whose turn has a fresh report
 (no newer prompt, ended within 20 s of the stop being seen) is classified from the **reported answer text** instead
 of the pane excerpt (`textSource: "reporter"`, else `"pane"`, in `stalls.jsonl`; `source` stays the rule / Jev
-decision source). A reported turn with background work in flight is logged as `case: "background_wait"` and is never
+decision source). A reported turn with background work in flight and no hand-over STATUS line is logged as `case: "background_wait"` and is never
 escalated or answered. The pane is still read for the owner's unsent draft and for waiting menus / permission dialogs.
 
 **A hand-over line outranks every background count** (owner 2026-11-26): a turn that ends on `STATUS: done`, `needs-owner`, `needs-manager`,
@@ -1568,7 +1568,7 @@ The full scoring report, tool score and proposals are a script: [`scripts/v2-sco
 |---|---|
 | `waiting` | detected question or permission prompt needing input |
 | `working` | detected agent activity |
-| `done` | detected finished turn; becomes idle after the configured interval |
+| `done` | detected finished turn; becomes idle after the configured interval, unless the screen still ends on a hand-over STATUS line |
 | `idle` | no current work/prompt detected |
 | `offline` | session unavailable |
 | `deploy` (display only) | deployment wait overlays raw state except waiting/offline |
