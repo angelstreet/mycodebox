@@ -41,6 +41,7 @@ import { openFilePanel, closeFilePanel, filePanelOpen } from '/file-panel.js';
 
 const $  = (q) => document.querySelector(q);
 const $$ = (q) => Array.from(document.querySelectorAll(q));
+const phoneView = matchMedia('(max-width: 720px), (hover: none) and (pointer: coarse)');
 
 hydrateIcons();
 wireCopyPrompt();
@@ -95,7 +96,7 @@ const state = {
   filter:     [],               // status values ('waiting', 'working', 'paused'...); cumulative, empty = all
   fProject:   [],               // project values, cumulative
   fAgent:     [],               // agent values, cumulative
-  fTask:      matchMedia('(max-width: 720px)').matches,   // chat-raised 2026-10-08: on mobile, default to TASK-prefix only (mm-manager / ghosty / manager/owner are noise on a phone screen). Owner can toggle off; choice persists in localStorage.
+  fTask:      phoneView.matches, // On phones, default to TASK-prefixed sessions when available. The choice persists in localStorage.
   ws:        new Map(),
   statusWs:  null,
   terms:     new Map(),
@@ -1101,7 +1102,7 @@ function onStatus() {
     state.sessions = names.map((n) => state.sessions.find((s) => s.name === n) || { name: n, cmd: state.status[n].cmd || '' });
     sortSessions();
     if (state.active && !names.includes(state.active) && !pendingNew(state.active)) state.active = null;
-    if (!state.active && state.sessions[0]) state.active = state.sessions[0].name;
+    if (!state.active && state.mode !== 'card' && state.sessions[0]) state.active = state.sessions[0].name;
     // QF-12: drop the lock when the locked session goes away (killed, renamed, daemon restart
     // before reattach). A stale lock would block focus for every nav tap with no UI for it.
     if (state.lockedSessions.some((x) => !names.includes(x))) {
@@ -1328,7 +1329,7 @@ function byUrgency(list) {
 }
 // Filters: status (state.filter, also set by the top-bar count chips),
 // project (GitHub repo / folder), agent, and fTask (TASK-prefix only).
-// fTask defaults to ON on ≤720px via state init above; the choice persists in localStorage.
+// The Tasks preference defaults on in the phone view.
 const LS_FILTERS = 'ghosty.filters';
 const LS_FTASK = 'ghosty.fTask';   // '1' / '0'; absent = use the viewport default
 // Owner 2026-11-12: the GitHub name virtualpytest-internal reads as virtualpytest, and a session in no repo (notes folders,
@@ -1369,7 +1370,7 @@ async function fetchInitial() {
     state.statusAt = Date.now();
     state.links = data.links || {};   // configured langfuse / https PUBLIC_URL (server env), either may be null
     sortSessions();
-    if (!state.active && state.sessions[0]) state.active = state.sessions[0].name;
+    if (!state.active && state.mode !== 'card' && state.sessions[0]) state.active = state.sessions[0].name;
     for (const s of state.sessions) state.prevState[s.name] = stateOf(s.name);
     renderAll();
   } catch (err) {
@@ -1745,18 +1746,28 @@ for (const button of $$('[data-clear-session-filters]')) button.onclick = clearA
 function setFilter(f) {
   state.filter = f == null ? [] : [].concat(f);
   saveFilters();
+  selectMatchingPhoneCard();
   renderAll();
 }
 function setFilters(patch) {
   Object.assign(state, patch);
   saveFilters();
+  selectMatchingPhoneCard();
   renderAll();
+}
+function selectMatchingPhoneCard() {
+  if (!phoneView.matches || state.mode !== 'card' || pendingNew(state.active)) return;
+  const matches = visibleSessions();
+  if (!matches.some((s) => s.name === state.active)) {
+    state.active = matches[0]?.name ?? null;
+    lsSet('ghosty.active', state.active ?? '');
+  }
 }
 function loadFilters() {
   try { const f = JSON.parse(lsGet(LS_FILTERS, '{}')) || {}; state.fProject = [].concat(f.p || []); state.fAgent = [].concat(f.a || []); state.filter = [].concat(f.s || []); }
   catch { state.fProject = []; state.fAgent = []; state.filter = []; }
   // fTask is a single boolean (not a multi-select group), so it gets its own key. If unset,
-  // keep the viewport default set in state.fTask = matchMedia('(max-width: 720px)').matches.
+  // keep the phone-view default set at initialization.
   const stored = lsGet(LS_FTASK, null);
   if (stored !== null) state.fTask = stored === '1';
 }
@@ -3062,21 +3073,29 @@ function renderInto(host, sessions) {
 function pendingNew(name) {
   return !!name && state.pendingNew && state.pendingNew.name === name && Date.now() - state.pendingNew.at < 20000;
 }
+function syncMainFilterEmpty(hasSession) {
+  $('#mainFilterEmpty').classList.toggle('hidden', hasSession || !state.sessions.length || !anyFilter());
+}
 function renderCard() {
   let active = state.sessions.find((s) => s.name === state.active);
   if (!active && pendingNew(state.active)) {
+    syncMainFilterEmpty(true);
     renderInto(els.cardPane, []);
     els.cardPane.innerHTML = `<div class="empty">starting ${escapeHtml(displayName(state.active))}\u2026</div>`;
     return;
   }
-  if (!active) active = state.sessions[0];
-  if (active) state.active = active.name;
+  if (!active || (phoneView.matches && state.layout.hidden.includes(active.name))) {
+    active = phoneView.matches ? visibleSessions()[0] : state.sessions[0];
+  }
+  if (active || state.sessions.length) state.active = active?.name ?? null;
+  syncTitle();
+  syncMainFilterEmpty(!!active);
   renderInto(els.cardPane, active ? [active] : []);
 }
 function renderGrid() {
   els.gridPane.className = `grid-pane size-${state.gridSize}`;
   const all = visibleSessions();
-  $('#gridFilterEmpty').classList.toggle('hidden', !state.sessions.length || all.length > 0 || !anyFilter());
+  syncMainFilterEmpty(all.length > 0);
   const limit = state.gridSize;
   // Keep the active session on screen when the grid is limited.
   let targets = all.slice(0, limit);
@@ -3243,12 +3262,13 @@ function syncList() {
 
 // ---------- sync (status tick) ----------
 function syncAll() {
+  if (state.mode === 'card' && phoneView.matches && !state.active) renderCard();
   renderSummary();
   renderFilterBar();
   renderAttention();
   syncTabs();
   syncSide();
-  for (const host of [els.cardPane, els.gridPane]) for (const c of host.children) syncCell(c);
+  for (const host of [els.cardPane, els.gridPane]) for (const c of host.querySelectorAll(':scope > .cell')) syncCell(c);
   if (state.mode === 'list') syncList();
   if (anyFilter() && state.mode === 'grid') renderGrid();
   syncDock();
@@ -3267,7 +3287,7 @@ function tickClock() {
 // ---------- focus ----------
 // title: "codebox" on the overview (grid / board), the session name only on a single card
 function syncTitle() {
-  els.appTitle.textContent = state.mode === 'card' && state.active && isPhone() ? displayName(state.active) : 'mycodebox';   // the web header keeps its name in every view
+  els.appTitle.textContent = state.mode === 'card' && state.active && phoneView.matches ? displayName(state.active) : 'mycodebox';
 }
 function focusSession(name) {
   if (!name) return;
@@ -3336,10 +3356,16 @@ function setLock(name) {
 }
 
 // ---------- mode switching ----------
+function viewForScreen(mode, phone) {
+  return phone && mode === 'grid' ? 'card' : mode;
+}
 function setMode(mode) {
+  const phone = phoneView.matches;
+  mode = viewForScreen(mode, phone);
   if (mode !== 'card') { state.prevMode = mode; if (state.reading) setReading(false); }
   state.mode = mode;
-  lsSet(LS_MODE, mode);
+  if (!phone) lsSet(LS_MODE, mode);
+  document.body.classList.toggle('phone-view', phone);
   els.main.classList.remove('view-card','view-grid','view-list');
   els.main.classList.add(`view-${mode}`);
   document.body.dataset.mode = mode;
@@ -3347,18 +3373,19 @@ function setMode(mode) {
   for (const b of $$('.mode-btn')) b.classList.toggle('on', b.dataset.mode === mode);
   // size buttons are always visible; highlighted only while the grid is shown
   for (const b of $$('.size-btn')) b.classList.toggle('on', Number(b.dataset.size) === 1 ? mode === 'card' : mode === 'grid' && Number(b.dataset.size) === state.gridSize);
-  // phones swap the menu button for Back in a single card; on the web the header never changes
-  els.backBtn.classList.toggle('hidden', !(mode === 'card' && isPhone()));
-  els.menuBtn.classList.toggle('hidden', mode === 'card' && isPhone());
+  const backToBoard = phone && mode === 'card' && state.prevMode === 'list';
+  els.backBtn.classList.toggle('hidden', !backToBoard);
+  els.menuBtn.classList.toggle('hidden', backToBoard);
   // Leaving a view: free its cells so xterm instances are reparented, not duplicated.
   if (mode !== 'card') els.cardPane.innerHTML = '';
   if (mode !== 'grid') els.gridPane.innerHTML = '';
   if (mode !== 'list') els.listPane.innerHTML = '';
   if (mode === 'card') renderCard();
   if (mode === 'grid') renderGrid();
-  if (mode === 'list') renderList();
+  if (mode === 'list') { syncMainFilterEmpty(true); renderList(); }
   syncAll();
 }
+phoneView.addEventListener('change', () => setMode(state.mode));
 
 function setGridSize(n) {
   state.gridSize = n;
@@ -5693,7 +5720,7 @@ wireSideDnd();
 loadLayout();
 window.addEventListener('focus', loadLayout);
 applyDock();
-els.backBtn.onclick   = () => setMode(state.prevMode || (isPhone() ? 'list' : 'grid'));
+els.backBtn.onclick   = () => setMode(state.prevMode);
 els.refreshBtn.onclick= () => { fetchInitial(); for (const s of state.sessions) connectSession(s.name); };
 els.installBtn.onclick= () => promptInstall();
 els.filterBtn.onclick = (e) => { e.stopPropagation(); state.filterOpen = !state.filterOpen; renderFilterBar(); };
@@ -5910,7 +5937,8 @@ function handleBack() {
   if (state.side) { closeSide(); return true; }
   const doc = document.querySelector('.cell.doc-on');
   if (doc) { doc.classList.remove('doc-on'); return true; }
-  if (state.mode === 'card') { setMode(state.prevMode || (isPhone() ? 'list' : 'grid')); return true; }
+  if (state.reading) { setReading(false); return true; }
+  if (state.mode === 'card' && (!phoneView.matches || state.prevMode === 'list')) { setMode(state.prevMode); return true; }
   return false;
 }
 {
@@ -6042,10 +6070,9 @@ if ('serviceWorker' in navigator) {
   loadFilters();
   paintBell();
   syncPush();
-  setGridSize(state.gridSize);
   const wanted = new URLSearchParams(location.search).get('s');
-  // phone home = board, unless the grid was the last view used
-  if (isPhone() && state.mode !== 'grid') { state.mode = 'list'; state.prevMode = 'list'; }
+  if (phoneView.matches) state.mode = 'card';
+  setGridSize(state.gridSize);
   const rd = lsGet(LS_READER, null);
   state.reader = rd == null ? true : rd === '1';   // no saved choice (new browser, cleared site data, private tab) reads as the reader: the raw terminal only after the owner taps >_
   const savedActive = lsGet('ghosty.active', '');

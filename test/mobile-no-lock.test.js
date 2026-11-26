@@ -7,9 +7,11 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runInNewContext } from 'node:vm';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const css = readFileSync(path.join(here, '..', 'public', 'style.css'), 'utf8');
+const app = readFileSync(path.join(here, '..', 'public', 'app.js'), 'utf8');
 
 // Find the body of the @media (max-width: 720px) block that contains the
 // `.cell .h` rules (we have several phone media queries; the right one is the
@@ -29,4 +31,14 @@ test('the lock is hidden on phones', () => {
 test('the fullscreen / open button stays visible inside the focused card on phones', () => {
   assert.match(blockBody, /\.card-pane\s+\.cell\s+\.h\s+\.open[^{]*\{\s*display:\s*inline-flex/i,
     'expected a rule that shows .card-pane .cell .h .open on phones');
+});
+
+test('a grid request opens one card on a phone, while desktop and explicit board views keep their modes', () => {
+  const source = app.slice(app.indexOf('function viewForScreen('), app.indexOf('function setMode('));
+  const mode = runInNewContext(`${source}\nviewForScreen`);
+  assert.equal(mode('grid', true), 'card');
+  assert.equal(mode('grid', false), 'grid');
+  assert.equal(mode('list', true), 'list');
+  assert.equal(mode('card', true), 'card');
+  assert.match(app, /mode = viewForScreen\(mode, phone\)/);
 });

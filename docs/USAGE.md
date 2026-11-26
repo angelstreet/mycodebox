@@ -28,7 +28,7 @@ see [docs/skills/codebox-sessions.md](skills/codebox-sessions.md). Past sessions
    Scrolling a fullscreen (Claude Code) terminal up shows the conversation and scrolls it locally; the bottom returns to the live screen ("Smooth scroll" in the More menu or the text popover turns this off; [why](SCROLL-DESIGN.md)).
 3. Type a reply or choose a quick key. Sending types into the real tmux session. Check the selected target, especially in grid or multi-target mode.
 4. Use filters for project, agent and state. P0/P1/P2 set priority; shared ordering and pins persist on the server, while some display preferences are per device.
-   On phones, the default Tasks filter applies while there are visible sessions with a `TASK-` or `TASK_` prefix. If your filters leave the grid or Sessions drawer empty, tap **Clear filters** there.
+   On phones, the default Tasks filter applies while there are visible sessions with a `TASK-` or `TASK_` prefix. If your filters leave the dashboard or Sessions drawer empty, tap **Clear filters** there.
 
 Pause sends Escape once and holds automatic replies. Resume clears the hold and sends `continue`; neither is just a visual toggle.
 Killing a session ends its tmux process. Parking is for eligible Claude sessions and is subject to idle, lease and running-job checks.
@@ -45,7 +45,7 @@ yes / no is listed in "Decided for you"; what only you may decide arrives as the
 
 ## Phone features
 
-On the grid, swipe inside the focused card to scroll its output. Swipe on an unfocused card to scroll the board; tap it first to focus it.
+The phone dashboard opens one session card at a time. Tap **Sessions** to choose another session, or swipe left or right across the card header to switch. Swipe up or down inside the card to scroll its output.
 
 Use a trusted HTTPS URL for installation, microphone and Web Push. Install from your browser's app menu when supported.
 On iOS/iPadOS, use Add to Home Screen and open the installed app before enabling notifications where required by the OS.
