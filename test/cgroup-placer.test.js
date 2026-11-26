@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isTest, plan, scopeName, SLICES, sourceOf, blind, LANE_SCOPE, DEFAULT_SOURCE } from '../scripts/cgroup-placer.js';
+import { isTest, isLaneHeavy, plan, scopeName, SLICES, sourceOf, blind, LANE_SCOPE, DEFAULT_SOURCE } from '../scripts/cgroup-placer.js';
 
 test('isTest judges argv shape, not prompt text', () => {
   for (const c of ['npm test', '/usr/bin/node /usr/local/bin/npm test', 'npm ci --no-audit', 'npm run test',
@@ -67,4 +67,18 @@ test('plan: the lane service keeps its server, only its test-shaped processes go
   procs.get(1101).cg = `/${SLICES.tests}/${LANE_SCOPE}`; procs.get(1102).cg = `/${SLICES.tests}/${LANE_SCOPE}`;
   procs.delete(20);
   assert.deepEqual(plan(procs, new Map(), new Set()).map((m) => m.pid), [], 'already placed: nothing moves again');
+});
+
+test('plan: the lane\'s UI review (vite, esbuild, headless chrome) goes to cb-lane.scope, the dashboard server and git stay', () => {
+  const lane = '/system.slice/ghosty-sessions.service';
+  const procs = new Map([
+    [1000, { ppid: 1, cmd: 'node /home/x/ghosty-sessions/server.js', cg: lane, lane: true }],
+    [1001, { ppid: 1000, cmd: 'node /home/x/virtualpytest/frontend/node_modules/.bin/vite --config /tmp/ui-review-gate-ab/base/frontend/vite.config.ts', cg: lane, lane: true }],
+    [1002, { ppid: 1001, cmd: '/home/x/virtualpytest/frontend/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.25.12 --ping', cg: lane, lane: true }],
+    [1003, { ppid: 1000, cmd: '/home/x/.cache/ms-playwright/chromium_headless_shell-1243/chrome-headless-shell-linux64/chrome-headless-shell --type=renderer', cg: lane, lane: true }],
+    [1004, { ppid: 1000, cmd: 'git status', cg: lane, lane: true }],
+  ]);
+  const got = Object.fromEntries(plan(procs, new Map(), new Set()).map((m) => [m.pid, `${m.slice}/${m.scope}`]));
+  assert.deepEqual(got, { 1001: `${SLICES.tests}/${LANE_SCOPE}`, 1002: `${SLICES.tests}/${LANE_SCOPE}`, 1003: `${SLICES.tests}/${LANE_SCOPE}` });
+  assert.equal(isLaneHeavy('node server.js'), false); assert.equal(isLaneHeavy('claude --dangerously-skip-permissions'), false);
 });

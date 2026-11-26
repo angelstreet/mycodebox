@@ -46,6 +46,9 @@ export function isTest(cmd) {
   if (['sh', 'bash', 'dash'].includes(b) && t[1] === '-c') return SH_TEST_RE.test(t.slice(2).join(' '));
   return false;
 }
+// The lane's UI review gate (and a frontend e2e) starts a vite dev server, esbuild and a headless Chrome inside ghosty-sessions.service: heavy, short-lived, not test-shaped
+// (2026-11-26: 1.7 cores uncapped while the tests slice stayed empty). The dashboard server itself runs none of them.
+export const isLaneHeavy = (cmd = '') => /(?:^|[\s/])(?:vite|esbuild|chrome-headless-shell|chromium|chrome)(?:\s|$)|\/\.bin\/vite\b|@esbuild\/|\/ms-playwright\//.test(cmd);
 export const scopeName = (session) => `cb-${String(session).replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 60)}.scope`;
 
 // procs: Map pid -> { ppid, cmd, cg }. panes: Map panePid -> session name. tmuxPids: the tmux server(s), never moved.
@@ -74,7 +77,7 @@ export function plan(procs, panes, tmuxPids = new Set()) {
     if (tmuxPids.has(pid) || e.outside) continue;
     let slice, scope;
     if (e.lane) {   // the dashboard service: its server and helpers stay; only test-shaped processes (the lane's runs) move
-      if (!testRoot(pid)) continue;
+      if (!testRoot(pid) && !isLaneHeavy(e.cmd)) continue;
       slice = SLICES.tests; scope = LANE_SCOPE;
     } else if (testRoot(pid)) { slice = SLICES.tests; scope = 'cb-tests.scope'; }
     else {
