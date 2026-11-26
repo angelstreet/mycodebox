@@ -35,6 +35,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 - **The manager starts on the active Claude account** — `scripts/manager-fresh.sh` (nightly, watchdog relaunch, context cap, manager-resume) always started it on the default account, so it stalled when that account ran out; `manager-command.js` now adds `CLAUDE_CONFIG_DIR` + `GHOSTY_CLAUDE_ACCOUNT` like cbsession, and the folder is trusted in that account's own `.claude.json` · area: manager
 
+- **A parked note is no longer lost on a failed send** — a note added to a message that stayed unsubmitted goes back to waiting, and a hook flag left by a killed Claude process no longer blocks notes for another agent in that pane · area: harness
+
 - **An integration result reaches a stopped session within seconds, also when its stop was missed** — the result was typed on the session's turn-end event only; a stop that came during the restart of its own deploy was lost and the session stayed on `waiting: integration` (and red) for the 5 min timer. A sweep every 20 s now delivers a kept wake to every session that is stopped · area: sessions
 
 - **A parked note also arrives during a long turn** — a Claude session working for an hour gets no new prompt, so an overlap warning could land after its commit; the reporter plugin now also attaches waiting notes after a tool call (at most one check a minute) · area: harness
