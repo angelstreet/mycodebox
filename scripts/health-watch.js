@@ -319,11 +319,23 @@ export function buildEvent(issue, fixedNote, reportPath, now) {
   };
 }
 
+// /proc/pressure/cpu "some ... avg300=N" -> N (percent of the last 5 min some task waited for CPU), null when unreadable
+export function readCpuPressure300(text) {
+  try { const m = /^some .*avg300=([\d.]+)/m.exec(text ?? readFileSync('/proc/pressure/cpu', 'utf8')); return m ? Number(m[1]) : null; } catch { return null; }
+}
+// true when codebox-sessions.slice holds at least one scope (the placer works); null when the slices do not exist on this host (a Mac, a dev box)
+export function codeboxSlicesActive(dir = '/sys/fs/cgroup/codebox.slice/codebox-sessions.slice') {
+  if (!existsSync('/etc/systemd/system/codebox-sessions.slice') && !existsSync(dir)) return null;
+  try { return readdirSync(dir).some((f) => f.endsWith('.scope')); } catch { return false; }
+}
+
 // metrics: {diskPct, diskFreeGB, load1, load5, cores, ramAvailPct, runaways:[{p, owner}], stuck:[{p, owner}], defunct}
 export function evaluate(m, cfg, loadTrip) {
   const issues = [];
   if (m.diskPct >= cfg.diskPct) issues.push({ type: 'disk', key: 'disk', severity: m.diskPct, title: `disk ${m.diskPct}% full`, what: `Disk / is ${m.diskPct}% full (${m.diskFreeGB} GB free, limit ${cfg.diskPct}%).` });
   if (loadTrip) issues.push({ type: 'load', key: 'load', severity: m.load5, decision: true, title: `load ${m.load5.toFixed(1)} on ${m.cores} cores`, what: `Load ${m.load1.toFixed(1)}/${m.load5.toFixed(1)} (1/5 min) on ${m.cores} cores, above ${cfg.loadPerCore}/core for ${cfg.loadMinutes} min.` });
+  // CPU saturated while the codebox slices hold nothing: the cgroup placer is not working, so nothing is capped (2026-11-26: watched the wrong unit for 5 days)
+  if (m.cpuPressure300 != null && m.cpuPressure300 >= (cfg.cpuPressurePct ?? 50) && m.codeboxSlicesActive === false) issues.push({ type: 'cpuslices', key: 'cpuslices', severity: Math.round(m.cpuPressure300), title: `CPU pressure ${Math.round(m.cpuPressure300)}% and the codebox slices are empty`, what: `CPU pressure avg300 is ${m.cpuPressure300.toFixed(0)}% (limit ${cfg.cpuPressurePct ?? 50}%) but codebox-sessions.slice holds no scope: ghosty-cgroup-placer is not placing anything, so tests and agents share the CPU uncapped. Check journalctl -u ghosty-cgroup-placer for its WARNING line.` });
   if (m.inodePct >= cfg.inodePct) issues.push({ type: 'inode', key: 'inode', severity: m.inodePct, title: `inodes ${m.inodePct}% used`, what: `Inodes on / are ${m.inodePct}% used (${m.inodeFree} free, limit ${cfg.inodePct}%).` });
   if (m.ramAvailPct < cfg.ramAvailPct) issues.push({ type: 'ram', key: 'ram', severity: 100 - m.ramAvailPct, decision: true, title: `RAM ${m.ramAvailPct.toFixed(0)}% available`, what: `Only ${m.ramAvailPct.toFixed(1)}% RAM available (limit ${cfg.ramAvailPct}%).` });
   for (const r of m.runaways) {
@@ -1106,6 +1118,7 @@ export async function run({ home = homedir(), argv = process.argv.slice(2), now 
     stuck: procs.filter((p) => p.mine && p.pid !== process.pid && isStuckNodeTest(p.args)).map((p) => ({ p, owner: owners(p.pid) })),
     defunct: procs.filter((p) => p.stat.startsWith('Z')).length,
     leftovers: findTestLeftovers(procs, cfg.testLeftoverMin, protectedPids),
+    cpuPressure300: readCpuPressure300(), codeboxSlicesActive: codeboxSlicesActive(),
   };
   state.samples = [...state.samples, { t: now, load1: l1, load5 }].filter((s) => s.t >= now - (cfg.loadMinutes + 10) * 60000);
   const loadTrip = evalLoad(state.samples, now, cores, cfg.loadPerCore, cfg.loadMinutes).tripped;

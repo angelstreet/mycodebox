@@ -13,9 +13,20 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync, existsSync, writeFileSync } from 'node:fs';
 
 const CG = '/sys/fs/cgroup';
-export const SOURCE = process.env.CGROUP_SOURCE || 'system.slice/mm-manager-session.service';
+// The cgroup of the tmux server's unit (every pane lives in it). Read from the tmux server's own cgroup, so a unit rename or a boot race between
+// two units that start tmux cannot silence the placer (2026-11-26: it watched mm-manager-session.service while ghosty-base-session.service held
+// every pane, so the slices stayed empty for 5 days). CGROUP_SOURCE still overrides it.
+export const DEFAULT_SOURCE = 'system.slice/mm-manager-session.service';
+export function sourceOf(tmuxPids, readCgOf = (pid) => { try { return readFileSync(`/proc/${pid}/cgroup`, 'utf8').trim().split('::')[1] || ''; } catch { return ''; } }) {
+  if (process.env.CGROUP_SOURCE) return process.env.CGROUP_SOURCE;
+  for (const pid of tmuxPids) { const cg = readCgOf(pid).replace(/^\//, ''); if (cg && !cg.startsWith('codebox.slice') && cg !== 'init.scope') return cg; }
+  return DEFAULT_SOURCE;
+}
+// The service that runs the dashboard and the integration lane's test runs: only its test-shaped processes move (cb-lane.scope, a heavier weight than session tests: every session waits on the lane).
+export const LANE_SOURCE = process.env.CGROUP_LANE_SOURCE || 'system.slice/ghosty-sessions.service';
+export const LANE_SCOPE = 'cb-lane.scope', LANE_WEIGHT = 400;
 export const SLICES = { core: 'codebox-core.slice', sessions: 'codebox-sessions.slice', tests: 'codebox-tests.slice' };
-const CORE = new Set((process.env.CGROUP_CORE || 'manager,mycodebox-v2,mm-manager').split(',').map((s) => s.trim()).filter(Boolean));
+const CORE = new Set((process.env.CGROUP_CORE || 'manager,mycodebox-v2,mm-manager,ghosty').split(',').map((s) => s.trim()).filter(Boolean));
 const TMUX_SOCKET = process.env.CGROUP_TMUX_SOCKET || '/tmp/tmux-1000/default';
 const SH_TEST_RE = /(?:^|[\s;&|(/])(?:npm(?:\s+run)?\s+(?:test|ci)\b|node\s+--test\b|pnpm\s+(?:run\s+)?test\b|npx\s+(?:vitest|jest|playwright\s+test)\b|pytest\b)/;
 const base = (t = '') => t.slice(t.lastIndexOf('/') + 1);
@@ -25,8 +36,9 @@ export function isTest(cmd) {
   const runner = (i) => ['npm', 'pnpm', 'yarn'].includes(base(t[i])) && ['test', 'ci', 'run'].includes(t[i + 1]) && (t[i + 1] !== 'run' || t[i + 2] === 'test');
   if (['npm', 'pnpm', 'yarn'].includes(b)) return runner(0);
   if (b === 'npx') return ['vitest', 'jest'].includes(t[1]) || (t[1] === 'playwright' && t[2] === 'test');
-  if (['pytest', 'vitest', 'jest'].includes(b)) return true;
+  if (['pytest', 'vitest', 'jest', 'tsc', 'vpt-tsc', 'tesseract'].includes(b)) return true;   // a type check and an OCR run are test-type work: capped like a suite
   if (/^python3?(?:\.\d+)?$/.test(b)) return t[1] === '-m' && t[2] === 'pytest';
+  if (b === 'node' && base(t.slice(1).find((a) => !a.startsWith('-')) || '') === 'tsc') return true;   // node node_modules/.bin/tsc --noEmit
   if (b === 'node') {   // node --test and its per-file children carry --test* flags before the script
     for (const a of t.slice(1)) { if (!a.startsWith('-')) break; if (/^--test(?:$|-|=)/.test(a)) return true; }
     return runner(1);
@@ -61,7 +73,10 @@ export function plan(procs, panes, tmuxPids = new Set()) {
   for (const [pid, e] of procs) {
     if (tmuxPids.has(pid) || e.outside) continue;
     let slice, scope;
-    if (testRoot(pid)) { slice = SLICES.tests; scope = 'cb-tests.scope'; }
+    if (e.lane) {   // the dashboard service: its server and helpers stay; only test-shaped processes (the lane's runs) move
+      if (!testRoot(pid)) continue;
+      slice = SLICES.tests; scope = LANE_SCOPE;
+    } else if (testRoot(pid)) { slice = SLICES.tests; scope = 'cb-tests.scope'; }
     else {
       const s = owner(pid);
       if (s == null) { slice = SLICES.sessions; scope = 'cb-orphans.scope'; }
@@ -81,16 +96,18 @@ function stat(pid) {
   } catch { return null; }
 }
 // Every process in the source unit and in our three slices (a session's test runs start inside its scope).
-function collect() {
-  const dirs = [`${CG}/${SOURCE}`];
+function collect(source, laneSource = LANE_SOURCE) {
+  const dirs = [`${CG}/${source}`];
   for (const sl of Object.values(SLICES)) {
     const d = `${CG}/codebox.slice/${sl}`;
     if (existsSync(d)) for (const f of readdirSync(d)) if (f.endsWith('.scope')) dirs.push(`${d}/${f}`);
   }
   const procs = new Map();
+  const lanePids = (() => { try { return readFileSync(`${CG}/${laneSource}/cgroup.procs`, 'utf8').split('\n').filter(Boolean).map(Number); } catch { return []; } })();
+  for (const pid of lanePids) { const s = stat(pid); const cg = readCg(pid); if (s && cg != null) procs.set(pid, { ...s, cg: cg.replace(/^\/codebox\.slice/, ''), lane: true }); }
   for (const d of dirs) {
     let pids = []; try { pids = readFileSync(`${d}/cgroup.procs`, 'utf8').split('\n').filter(Boolean).map(Number); } catch {}
-    for (const pid of pids) { const s = stat(pid); const cg = readCg(pid); if (s && cg != null) procs.set(pid, { ...s, cg: cg.replace(/^\/codebox\.slice/, '') }); }
+    for (const pid of pids) { const s = stat(pid); const cg = readCg(pid); if (s && cg != null) procs.set(pid, { ...s, cg: cg.replace(/^\/codebox\.slice/, ''), ...(d.endsWith(`/${LANE_SCOPE}`) ? { lane: true } : {}) }); }
   }
   // Ancestors outside these cgroups still decide ownership (a pane's claude may have been placed already).
   for (const [, e] of [...procs]) for (let p = e.ppid, i = 0; p > 1 && !procs.has(p) && i < 64; i++) {
@@ -113,12 +130,18 @@ const MGR = ['org.freedesktop.systemd1', '/org/freedesktop/systemd1', 'org.freed
 function move(scope, slice, pids) {
   const dir = `${CG}/codebox.slice/${slice}/${scope}`;
   if (existsSync(dir)) { for (const pid of pids) writeFileSync(`${dir}/cgroup.procs`, String(pid)); return; }
-  execFileSync('busctl', ['call', ...MGR, 'StartTransientUnit', 'ssa(sv)a(sa(sv))', scope, 'fail', '3',
-    'PIDs', 'au', String(pids.length), ...pids.map(String), 'Slice', 's', slice, 'TasksMax', 't', '18446744073709551615', '0'], { stdio: 'pipe' });
+  const weight = scope === LANE_SCOPE ? ['CPUWeight', 't', String(LANE_WEIGHT)] : [];
+  execFileSync('busctl', ['call', ...MGR, 'StartTransientUnit', 'ssa(sv)a(sa(sv))', scope, 'fail', String(3 + (weight.length ? 1 : 0)),
+    'PIDs', 'au', String(pids.length), ...pids.map(String), 'Slice', 's', slice, 'TasksMax', 't', '18446744073709551615', ...weight, '0'], { stdio: 'pipe' });
 }
+// True when tmux has panes but none of their processes sits in the source cgroup or a placed scope: the placer is looking at the wrong unit.
+export function blind(paneMap, procs) { if (!paneMap.size) return false; for (const pid of paneMap.keys()) if (procs.has(pid)) return false; return true; }
+let blindWarnedAt = 0;
 export function pass(dry = false) {
-  const procs = collect(); const tm = tmuxServers();
-  const moves = plan(procs, panes(), tm);
+  const tm = tmuxServers(); const source = sourceOf(tm);
+  const procs = collect(source); const pn = panes();
+  if (blind(pn, procs) && Date.now() - blindWarnedAt > 600000) { blindWarnedAt = Date.now(); console.error(`[placer] WARNING: tmux has ${pn.size} panes but none of their processes is in ${source}: nothing can be placed (set CGROUP_SOURCE)`); }
+  const moves = plan(procs, pn, tm);
   const byScope = new Map();
   for (const m of moves) { const k = `${m.slice} ${m.scope}`; byScope.set(k, [...(byScope.get(k) || []), m.pid]); }
   for (const [k, pids] of byScope) {
@@ -134,7 +157,7 @@ export function pass(dry = false) {
 }
 if (import.meta.url === `file://${process.argv[1]}`) {
   if (process.argv.includes('--dry-run')) { pass(true); process.exit(0); }
-  console.log(`[placer] core=${[...CORE].join(',')} source=${SOURCE}`);
+  console.log(`[placer] core=${[...CORE].join(',')} source=${sourceOf(tmuxServers())} lane=${LANE_SOURCE}`);
   const tick = () => { try { const n = pass(); if (n) console.log(`[placer] placed ${n}`); } catch (e) { console.error(`[placer] ${e.message}`); } };
   tick(); setInterval(tick, Number(process.env.CGROUP_INTERVAL_MS) || 2000);
 }

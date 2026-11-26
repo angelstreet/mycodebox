@@ -77,7 +77,8 @@ async function main() {
   if (!files.length) return 0;
   const release = files.length >= BIG_RUN ? await ticket() : () => {};
   const tmp = mkdtempSync(path.join(os.tmpdir(), 'gtr-'));   // short: unix socket paths under it must stay < 104 chars; distinct so health-watch can sweep it
-  const child = spawn(process.execPath, ['--test', '--test-timeout=300000', '--test-force-exit', ...files],
+  const child = spawn(process.execPath, ['--test', '--test-concurrency=3', '--test-timeout=300000', '--test-force-exit', ...files],   // 3 files at once (Node's default is cores - 1 = 5: two big runs started 10 files and their servers, 2026-11-26)
+   
     { cwd: root, stdio: 'inherit', env: { ...process.env, TMPDIR: tmp } });
   for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => child.kill(sig));
   const code = await new Promise((r) => child.on('exit', (c, s) => r(c ?? (s ? 1 : 0))));
