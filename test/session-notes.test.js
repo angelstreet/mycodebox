@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createSessionNotes, carriesNotes, withNotes } from '../session-notes.js';
+import { createSessionNotes, carriesNotes, withNotes, carryNotes, hookDelivers } from '../session-notes.js';
 import { createReporter } from '../reporter.js';
 import { informsOnly } from '../lease-source.js';
 import { aiSenderOf, promptSig } from '../public/prompt-sig.js';
@@ -40,6 +40,32 @@ test('notes go along only with a real message, appended so the sender is still r
   const out = withNotes('Go on with part two.', [{ text: 'N1' }, { text: 'N2' }]);
   assert.equal(out, 'Go on with part two.\n\nN1\n\nN2');
   assert.equal(aiSenderOf(out, [{ sig: promptSig('Go on with part two.'), by: 'manager-agent' }]), 'manager-agent');
+});
+
+test('carried notes are claimed while typing, and come back when the send fails or stays unsubmitted', async (t) => {
+  const n = createSessionNotes({ stateDir: tmp(t) });
+  const msg = 'please carry on with part two';
+  n.put('s', 'k', 'N');
+  const during = [];
+  await carryNotes(n, 's', msg, true, async (text) => { during.push(text, n.peek('s').length); return { submitted: false }; });
+  assert.deepEqual(during, [`${msg}\n\nN`, 0]);   // a hook asking during the send gets nothing
+  assert.deepEqual(n.peek('s').map((x) => x.text), ['N']);
+  await assert.rejects(carryNotes(n, 's', msg, true, async () => { throw new Error('tmux gone'); }), /tmux gone/);
+  assert.equal(n.peek('s').length, 1);
+  await carryNotes(n, 's', msg, true, async () => { n.put('s', 'k', 'newer'); return { submitted: false }; });
+  assert.deepEqual(n.peek('s').map((x) => x.text), ['newer']);
+  await carryNotes(n, 's', msg, true, async () => ({ submitted: true }));
+  assert.deepEqual(n.peek('s'), []);
+  n.put('s', 'k', 'N');
+  await carryNotes(n, 's', msg, false, async (text) => { assert.equal(text, msg); return {}; });
+  assert.equal(n.peek('s').length, 1);
+});
+
+test('a hook flag left by a dead Claude process does not count once the pane runs another agent', () => {
+  assert.equal(hookDelivers(true, 'claude'), true);
+  assert.equal(hookDelivers(true, undefined), true);
+  for (const agent of ['codex', 'minimax', 'other']) assert.equal(hookDelivers(true, agent), false, agent);
+  assert.equal(hookDelivers(false, 'claude'), false);
 });
 
 test('reporter: a plugin that asked for notes is remembered (also over a restart), until its session ends', async (t) => {
