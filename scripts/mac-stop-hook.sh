@@ -80,11 +80,14 @@ else
 fi
 [ -n "$TEXT" ] || bail "no assistant text found (transcript: ${TP:-none})"
 
-PROMPT_AT=""; NAME=""; FIRST=""
+PROMPT_AT=""; NAME=""; FIRST=""; LAST=""
 if [ -n "$TP" ] && [ -r "$TP" ]; then
   PROMPT_AT=$(grep -E '"type": *"user"' "$TP" | grep -E '"content": *"' | grep -v '"tool_use_id"' | tail -n 1 | sed -n 's/.*"timestamp": *"\([0-9TZ:.+-]*\)".*/\1/p' | head -n 1)
   NAME=$(grep '"customTitle"' "$TP" | tail -n 1 | sed -nE 's/.*"customTitle": *"(([^"\\]|\\.)*)".*/\1/p' | head -n 1)
   # the Remote Control URL (last "/remote-control is active" line): the dashboard matches an archive in the Claude app by this id (archive-sync.js)
+  # the last typed prompt (still JSON-escaped; the same line as prompt_at): the owner's yes / no on suggestions is read from it
+  LAST=$(grep -E '"type": *"user"' "$TP" | grep -E '"content": *"' | grep -v '"tool_use_id"' | tail -n 1 | awk '{ if (match($0, /"content": *"([^"\\]|\\.)*"/)) { t = substr($0, RSTART, RLENGTH); sub(/^"content": *"/, "", t); sub(/"$/, "", t); print t } }')
+  [ ${#LAST} -le 400 ] || LAST=""   # an answer is short; a cut escape would break the payload
   [ -n "${MYCODEBOX_RC_URL:-}" ] || MYCODEBOX_RC_URL=$(grep -o '"subtype": *"bridge_status"[^}]*"url": *"https://claude\.ai/code/session_[A-Za-z0-9]*"' "$TP" | tail -n 1 | sed -nE 's/.*"url": *"(https:[^"]*)".*/\1/p')
   # the first prompt (still JSON-escaped, first 2000 chars): the goal the server's goal check quotes back (goal-check.js)
   # the real first prompt: the first user line whose text is a string OR a content list with a text block (a desktop session starts with a list),
@@ -111,6 +114,7 @@ NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 PAYLOAD="{\"machine\":\"$(esc "$MACHINE")\",\"project\":\"$(esc "$PROJECT")\",\"session_id\":\"$(esc "$SESSION_ID")\",\"session_name\":\"$(printf '%s' "$NAME" | sed 's/[^A-Za-z0-9 ._@:+-]/-/g' | cut -c1-80)\",\"cwd\":\"$(esc "$WD")\",\"text\":\"$TEXT\",\"stop_hook_active\":$ACTIVE,\"takes_reflect\":true,\"at\":\"$NOW\""
 [ -n "$PROMPT_AT" ] && PAYLOAD="$PAYLOAD,\"prompt_at\":\"$PROMPT_AT\""
 [ -n "${FIRST:-}" ] && PAYLOAD="$PAYLOAD,\"first_prompt\":\"$FIRST\""
+[ -n "${LAST:-}" ] && PAYLOAD="$PAYLOAD,\"last_prompt\":\"$LAST\""
 # sha256 of this script: the dashboard's daily check reports a Mac copy that differs from the repo (installed-copies-check.js)
 SELF_SHA=$( { sha256sum "$0" 2>/dev/null || shasum -a 256 "$0" 2>/dev/null; } | cut -d' ' -f1 | grep -E '^[0-9a-f]{64}$' )
 [ -n "$SELF_SHA" ] && PAYLOAD="$PAYLOAD,\"hook_sha\":\"$SELF_SHA\""

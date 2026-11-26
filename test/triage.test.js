@@ -30,12 +30,13 @@ const dir = tmp('ghosty-triage-');
 Object.assign(process.env, { GHOSTY_STATE_DIR: dir, STALL_SETTLE_MS: '1000', JEV_URL: `http://127.0.0.1:${srv.address().port}/server/ai/decide`, JEV_API_KEY: 'test-key' });
 const m = await import('../manager.js');
 const tri = await import('../triage.js');
-const keys = [], texts = [], pushes = [];
+const keys = [], texts = [], pushes = [], owing = new Set();
 await m.initManager({
   onOwnerNeeded: (s, st, why) => pushes.push({ s, case: st.case, why, ai: st.aiLine }),
   sendKey: async (s, k) => { keys.push([s, k]); },
   sendKeys: async (s, t) => { texts.push([s, t]); },
   context: () => ({ priority: 'P1', quota: 'Claude Max 5h 37% / week 16%', leases: 'none', deploys: 'none queued' }),
+  ownerChoice: (n) => owing.has(n),   // suggestions.js awaiting()
 });
 
 const RULE = '─'.repeat(40);
@@ -219,6 +220,17 @@ test('auto: the choice of suggestions after the reflection question is never ans
   assert.equal(m.autoOf('rf1'), null, 'no countdown');
   assert.deepEqual(sent('rf1'), []);
   assert.ok(pushes.some((p) => p.s === 'rf1' && p.case === 'owner_decision'), 'it reaches the owner');
+});
+
+test('auto: while the record says the owner owes an answer, a reworded closing line is not answered either', async () => {
+  reset(); await AUTO(); owing.add('rf2');
+  reviewer = { content: ans({ proposed_reply: 'Yes, do 1.' }) };
+  await stall('rf2', pane(EITHER));
+  await sleep(300);
+  assert.equal(m.autoOf('rf2'), null);
+  assert.deepEqual(sent('rf2'), []);
+  assert.equal(m.canType('rf2'), false);
+  assert.ok(pushes.some((p) => p.s === 'rf2'), 'it reaches the owner');
 });
 
 test('auto: a confident owner-free proposal goes through the countdown and is typed, logged as source ai', async () => {

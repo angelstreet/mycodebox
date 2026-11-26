@@ -55,6 +55,13 @@ export function displayState(status) {
   // state classifier marked it idle. The reporter / paneBackground signals keep the old "idle stays idle" rule
   // (a finished turn waiting on a cron is still not actively working).
   else if (s === 'idle' && status && status.scriptBusy) s = 'working';
+  // A suggestion the owner has not answered, or the reflection question not answered yet (status.suggestions, suggestions.js): never shown as done.
+  // Open ones are the owner's turn (red); until the question is answered the session still reads as working.
+  const held = status?.suggestions?.state;
+  if (held && s !== 'waiting' && s !== 'offline') {
+    if (held === 'open' && status.state !== 'working') return 'waiting';
+    if (held === 'pending' && s === 'done') return 'working';
+  }
   // 'waiting deploy' (violet) only for a deploy that is really queued or has a waiter in the lease registry; a session that merely
   // SAID it waits for one (a regex on its own text, kind 'said') keeps its real state, so it cannot flip purple <-> red
   const real = status && status.deployWait && status.deployWait.kind !== 'said';

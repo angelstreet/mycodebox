@@ -2129,7 +2129,7 @@ success flags. Canonical rule text (AGENTS.md of mycodebox and VirtualPyTest, `c
 | 2 | `running` | Work **of yours** is still going: your background job, a worker session you started. You will be woken and continue | Nothing is actually running | Nobody; the harness wakes you |
 | 3 | `waiting` | You depend on something **not yours** that ends by itself: a lane request, a deploy, a lease ticket, another session's work, a named time | You could work on something else meanwhile, or nothing will ever end it | Nobody; the harness wakes you |
 | 4 | `needs-manager` | You need a decision or an answer (technical, merge, deploy, lease, design) | You have a recommendation and the choice is reversible: decide | Manager |
-| 5 | `needs-owner` | Money, customers, deleting shared data, a credential only the owner holds, a physical action, or the choice of suggestions the reflection question asked for | Anything else | Owner |
+| 5 | `needs-owner` | Money, customers, deleting shared data, a credential only the owner holds, a physical action, or your yes / no on an improvement suggestion the session listed | Anything else | Owner |
 | 6 | `blocked` | You **cannot work** and nothing running will fix it: someone must act (a device is dead, an access is missing) | Something is running or queued (that is `running` or `waiting`) | Manager |
 | 7 | `failed` | You stopped and the goal is **not** reached after you tried what you could, **and you investigated**: the line names the cause and the next plan | You have not tried, work is still running, or you have no cause and no plan yet | Manager |
 
@@ -2173,7 +2173,7 @@ Goal first, verification last (owner 2026-11-11; `docs/GOAL-RULE.md`, kept equal
 
 ### Reflection after an accepted done (owner, 2026-11-26)
 
-**Reflection after an accepted done** (owner 2026-11-26): suggestions for improvement (anything beyond the task's goal) are not leftovers: do not build or file them unasked, do not list them in the closing review; they never hold `done`. When a done is accepted with the goal met, the harness asks once, and only then: (a) leftovers of this task: the done is not final, fix them now; (b) improvement suggestions, none built: a ranked list split `Worth doing` / `Smaller` with one recommendation, or the single line `no suggestions`. With something worth doing end `STATUS: needs-owner: improvement suggestions above, nothing built — should I do <numbers>?` (a worker the manager or another session started: `needs-manager:`, same words); else repeat the done line. Whoever is asked picks; nothing answers it automatically.
+**Reflection after an accepted done** (owner 2026-11-26): suggestions for improvement (anything beyond the task's goal) are not leftovers: do not build or file them unasked, do not list them in the closing review. A session with a suggestion the owner has not answered is never done: any turn that lists one, in any words, asked or not, ends `STATUS: needs-owner: improvement suggestions above, nothing built — should I do <numbers>?`, workers too. When a done is accepted with the goal met, the harness asks once: (a) leftovers of this task: fix them now; (b) the suggestions under `Suggestions:`, split `Worth doing` / `Smaller` with one recommendation, or the single line `no suggestions`, the only answer that leaves the session done. Only the owner answers, yes or no per item (`yes 1 3, no 2`, `no all`); a manager, a peer or an automatic answer never does. Approved items are a new task with their own `Done when` lines.
 
 Why: after a done with a closing review and a goal check, the owner still had to type "any leftover, suggestion of improvements"
 (2026-11-26, 06:10 UTC, session `artifacts`) to get the useful answer: a ranked list of seven things noticed during the checks, "worth
@@ -2188,18 +2188,46 @@ doing" and "smaller", a recommendation, "should I do them?", none built.
 - **Once** per session and task (`reflect` in `<state>/goal-check.json`). After it, no goal question and no second reflection, also when the
   session fixes a leftover and writes the done line again. A new session under the name, or a new stored goal, starts again. A failed send is
   retried on the next tick. A done turn older than the rollout (`reflectSince`) is never woken.
-- **Who picks** (`reflection.js` `audienceFor`, from `startedBy`): the owner for a dashboard, `cbsession`-from-a-shell, Mac or unknown
-  session (`needs-owner`, the red row and the push every needs-owner stop gets); the manager for a worker that the manager, another session
-  or an automation started (`needs-manager`).
-- **Nothing answers it** (`isReflectionAsk`: the fixed words `improvement suggestions above, nothing built`): no AI-triage auto-answer, menu,
-  merge or ready-window decision in `manager.js`, and no owner push. The `suggestions` push of 2026-10-28 ("Implement your own proposals
-  now") is removed.
-- **A reply that stays `done`** with items under `Worth doing` is raised to the feed (`reflection:<session>`); nothing is typed.
-- **Journal** `<state>/goal-check.jsonl`: `kind: "reflect"` (with `audience`), then `reflectReply: "none" | "list"` for a done reply.
-  `GET /api/done-check` lists `goalCheck.reflected`.
+- **Journal** `<state>/goal-check.jsonl`: `kind: "reflect"`, `suggestions-open`, `reflect-missing`. `GET /api/done-check` lists
+  `goalCheck.reflected` and `goalCheck.suggestions`.
 - **Switch** `manager.json` `reflection`: `live` (default) | `dry` | `off`. `goalCheck: off` turns it off too.
 - **Fixed with it:** `goalGate.forget` was given only the sessions currently done, so a session busy writing its reply lost the gate's state
   and was asked the goal question again (49 repeated asks in the journal). It now keeps every pane that exists.
+
+#### No done while a suggestion has no yes / no (owner, 2026-11-26, `suggestions.js`)
+
+Owner: "if a user say done i'll archive and miss the fact that he suggests improvements, we should not say done until I say yes or no for the
+improvements". The same day, session `mcp-server-audit` had listed "improvements raised by the audit that no worker has taken on" outside any
+reflection reply.
+
+- **What becomes an item:** every bullet or numbered line under a suggestions heading (`Suggestions`, `Worth doing`, `Smaller`,
+  `Possible improvements`, `Ideas`, or any line naming improvements / suggestions that ends in `:`) in a turn that ends `done`, `needs-owner`
+  or `needs-manager` (`suggestionsIn`; 15 of 2,875 past hand-over turns matched on 2026-11-26). A heading about improvements already made (shipped, built, merged, release note) is not one. Running
+  and waiting turns and turns from before the rule are not read. An item listed again is the same item.
+- **Items leave only by the owner's answer.** Dropping the list, or writing `no suggestions` later, removes nothing. `no suggestions` counts
+  only as the reply to the question, with no open item.
+- **Held** (`status.suggestions` in the status map): `{state: "pending"}` from the done line until the question is answered, `{state: "open",
+  open, items}` while any item has no answer. Pending reads as **working** on the dashboard, open as **needs you** (red, NEEDS YOU strip),
+  for workers too. While held there is no "is done" push, no done toast and no "finished a turn" line in the voice digest; the push goes out
+  when nothing is left to answer. A list under another status line is pushed to the owner at once, and a done turn with open items is told
+  once to end `needs-owner`. A reply that answers neither way is asked once more. The manager's own sessions are not held; an accepted-final
+  result is not held as pending, but its open items still are.
+- **The owner's answer** (`answersOf`, per item): `yes 1 3, no 2`, `1 yes, 2 no`, `do 1 and 3`, `no 2-3`, `only 1`, `do 1, no to the rest`,
+  `yes` / `no` / `no all` for every open item. A message with other words (a task, a question), a bare number or a bare `ok` records nothing,
+  and unmentioned items stay open. It counts when it comes from the dashboard, phone or desktop app (a browser request with no `by`), a voice
+  answer, or is typed into the session (terminal or Remote Control: a reporter prompt this server did not type, not a peer message, hook or
+  notification; Mac: the Stop hook's `last_prompt`).
+- **Nobody else answers.** `POST /api/send` and `/api/send-many` from any other actor get **409** for a yes / no or a menu key while items
+  are open; their other messages arrive with a note that they are not the owner's answer. `manager.js` makes no automatic answer (rules, AI
+  triage, menu, merge, ready window; checked again when the countdown fires) while items are open or the question is unanswered, whatever the
+  closing line says.
+- **Approved items are a new task** (`approvedRound`): once every item has an answer, the yes ones become the session's goal and `Done when`
+  lines, so that work gets its own goal check, Verification block and reflection. With only `no`, the session can end done.
+- **Limits:** there is no login, so a process on the host that fakes a browser request, or types into the tmux pane itself, passes as the
+  owner. A peer message sent with Claude's `SendMessage` cannot be refused; it is only never recorded. Codex and MiniMax sessions have no
+  reporter prompt event: answer from the dashboard. A suggestion written as plain prose, with no heading and no list, is only caught by the
+  question's reply being `no suggestions` or a list.
+- **State** `<state>/suggestions.json`, journal `suggestions.jsonl` (`listed`, `asked`, `reply: "none"`, `answered`); `GET /api/suggestions`.
 
 ### Goal check (owner, 2026-11-11)
 

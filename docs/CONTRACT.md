@@ -112,6 +112,7 @@ At most one open ask per session; a system wait (deploy, lease, integration id) 
 | Done with leftovers, "not fully confirmed", `partial` | At most 3 a day (`LEFT_PUSHES_PER_DAY`), then the manager is told |
 | Done line without `bugs:` | Once per 12 h (`BUGS_COOLDOWN_MS`) |
 | Reflection question after a done accepted with the goal met (leftovers, suggestions; nothing built unasked) | Once per session and task ([REFERENCE](REFERENCE.md#reflection-after-an-accepted-done-owner-2026-11-26)) |
+| Done turn while a suggestion has no yes / no from the owner; or a reply that answers the question neither way | Once per done turn; once. Only the owner answers a suggestion, never the manager or an automatic answer |
 | `STATUS: waiting: lease` while a healthy equivalent is free | Once; the manager is told on the second stop |
 
 All kinds together: at most 2 sessions per check (every 5 min), none while the host is busy.

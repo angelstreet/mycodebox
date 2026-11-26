@@ -8,7 +8,9 @@
 //      The next done turn is the reply: accepted only when it restates the goal and cites evidence (file, run id, screenshot, KPI number).
 // At most BOUNCES_PER_DAY bounces (fix-first or a reply not accepted) per session per day, then the manager is told once. Never closes a session.
 //   3. reflection (owner, 2026-11-26, reflection.js): a done accepted with the goal met (every Done-when row passes, or the reply above passed)
-//      is asked once for the task's leftovers and for improvement suggestions. Its reply is never questioned again.
+//      is asked once for the task's leftovers and for improvement suggestions. The goal is not questioned again after it.
+//   4. open suggestions (owner, 2026-11-26, suggestions.js): a done turn while a suggestion has no yes / no from the owner is told to end
+//      needs-owner; a reply that answers neither way (`no suggestions` or a list) is asked once more.
 // The goal is captured at session start (createGoalStore; first prompt / handover line, status-honesty.js goalOf), else the task doc title.
 // Used by done-check.js (codebox panes) and remote-stops.js (the Mac Stop hook). State: <state>/goal-check.json, journal goal-check.jsonl.
 import { readFile, writeFile, appendFile, mkdir } from 'node:fs/promises';
@@ -17,7 +19,8 @@ import { join, basename } from 'node:path';
 import { createHash } from 'node:crypto';
 import { lastStatus, goalOf, timeBoxOf, MACHINE_TEXT_RE, doneButFailedOf, proofWithoutEvidenceOf, doneWithOpenOf, verificationOf } from './status-honesty.js';
 import { leftoverItemsOf } from './done-check.js';
-import { reflectionQuestion, reflectionReplyOf } from './reflection.js';
+import { reflectionQuestion, openSuggestionsMessage, missingReplyMessage } from './reflection.js';
+import { createSuggestions } from './suggestions.js';
 
 export const BOUNCES_PER_DAY = 2;
 const DONE_KINDS = new Set(['done', 'ok', 'complete', 'completed', 'finished', 'shipped']);
@@ -165,6 +168,17 @@ export function fixFirstMessage(items) {
     + 'Keep a bug filed only when its --why-not-fixed reason really holds (large, another host / device / credentials, owner floor, a live session\'s task): say why per bug. Then rewrite the done line.';
 }
 
+// The owner approved suggestions: they are a new task with its own goal and Done-when lines, so its done gets a goal check and a reflection of its own.
+export async function approvedRound({ goals, gate, ledger, name, approved }) {
+  if (!approved?.length) return null;
+  const list = approved.slice(0, 8);
+  goals.forget(name);
+  const entry = goals.capture(name, `Goal: build the improvement suggestions the owner approved (${list.map((i) => i.n).join(', ')}): ${list.map((i) => i.text).join(' / ')}\nDone when:\n${list.map((i, k) => `${k + 1}. suggestion ${i.n}: ${i.text.replace(/:/g, ' -')}`).join('\n')}`, 'suggestions');
+  await gate.drop(name);
+  ledger.newRound(name);
+  return entry;
+}
+
 // ---- the goal store: captured at session start ----
 // <state>/goals.json { "<session>": { goal, source, at } }. The first capture wins unless the later one is explicit (`Goal:` line).
 export function createGoalStore({ stateDir, now = Date.now } = {}) {
@@ -196,11 +210,12 @@ export function createGoalStore({ stateDir, now = Date.now } = {}) {
 // evaluate() -> null (nothing to say) | { kind: 'ask'|'fix-first'|'reply-rejected'|'accepted'|'reflect'|'capped', message?, reflect?, goal, ... }
 // (`reflect: true`: the message is the reflection question, alone or with the acceptance of the goal reply). It never sends:
 // the caller sends `message` and then calls sent(name, decision) so the state counts it (a failed send is not counted).
-export function createGoalGate({ stateDir, goalOf: goalFor = async () => '', partsOf = async () => [], bugsOf = async () => [], touchedOf = async () => [], record = async () => {}, audienceOf = async () => 'owner', reflectMode = () => 'live', now = Date.now, mode = () => 'live', log = console } = {}) {
+export function createGoalGate({ stateDir, goalOf: goalFor = async () => '', partsOf = async () => [], bugsOf = async () => [], touchedOf = async () => [], record = async () => {}, suggestions: ledgerGiven = null, reflectMode = () => 'live', now = Date.now, mode = () => 'live', log = console } = {}) {
   const stFile = join(stateDir, 'goal-check.json');
   const journal = join(stateDir, 'goal-check.jsonl');
   let st = null;
   const born = now();
+  const ledger = ledgerGiven || createSuggestions({ stateDir, now, log, active: () => reflectMode() === 'live' && mode() === 'live' });
   // reflectSince: a done turn older than the rollout is never asked (accepted sessions are not woken again)
   async function load() { if (st) return st; let read; try { read = JSON.parse(await readFile(stFile, 'utf8')); } catch { read = {}; } if (!st) { st = read; st.s ||= {}; st.reflectSince ||= born; } return st; }
   async function save() { try { await mkdir(stateDir, { recursive: true }); await writeFile(stFile, JSON.stringify(st)); } catch (e) { log.error?.('[goal-check] save', e.message); } }
@@ -213,24 +228,12 @@ export function createGoalGate({ stateDir, goalOf: goalFor = async () => '', par
   async function reflection(s, e, { goal, parts, sig }) {
     if (reflectMode() === 'off' || e.reflect || (s.doneAt && s.doneAt < st.reflectSince)) return null;
     if (!reflectionEligible(s.text, { goal, parts })) return null;
-    let audience = 'owner'; try { audience = (await audienceOf(s.name)) === 'manager' ? 'manager' : 'owner'; } catch {}
-    return { kind: 'reflect', reflect: true, audience, message: reflectionQuestion(audience), goal, sig, textSig: textSigOf(s.text) };
+    return { kind: 'reflect', reflect: true, message: reflectionQuestion(), goal, sig, textSig: textSigOf(s.text), turn: s.text };
   }
-  const markReflected = (e, d) => { e.reflect = { at: now(), goal: d.goal || '', text: d.textSig, audience: d.audience }; delete e.reflectDue; };
-  // The turn after the question: journalled once. Never questioned again. Items worth doing under a plain done would read as finished, so the
-  // owner / manager is told through the feed (nothing is typed into the session).
-  async function reflected(s, e) {
-    if (e.reflect.repliedAt || textSigOf(s.text) === e.reflect.text) return null;
-    const r = reflectionReplyOf(s.text);
-    if (!r.answer) return null;
-    e.reflect.repliedAt = now();
-    await note({ session: s.name, reflectReply: r.answer, ...(r.answer === 'list' ? { worth: r.worth, smaller: r.smaller } : {}) }); await save();
-    if (r.worth > 0) await record({ key: `reflection:${s.name}`, title: `${s.name}: ${r.worth} suggestion(s) worth doing, its line says done`, body: `Nothing is built. The list is in the session's last message; ${e.reflect.audience === 'manager' ? 'the manager' : 'the owner'} picks.`, url: `/?s=${encodeURIComponent(s.name)}`, priority: 'default' }).catch(() => {});
-    return null;
-  }
+  const markReflected = (name, e, d) => { e.reflect = { at: now(), goal: d.goal || '', text: d.textSig }; delete e.reflectDue; ledger.asked(name, d.turn); };
   // the caller could not answer (Mac loop guard): the manager relays the question, once
   async function relayReflection(s, e, d) {
-    markReflected(e, d);
+    markReflected(s.name, e, d);
     await record({ key: `reflection-relay:${s.name}`, title: `${s.name}: send the reflection question (Mac: SendMessage to the session name)`, body: d.message, url: '/', priority: 'default' }).catch(() => {});
     await note({ session: s.name, kind: 'reflect', unanswerable: true }); await save();
   }
@@ -240,18 +243,30 @@ export function createGoalGate({ stateDir, goalOf: goalFor = async () => '', par
     const ls = lastStatus(s.text);
     if (!ls || !DONE_KINDS.has(ls.kind)) return null;
     await load();
+    ledger.observe(s.name, s.text, { at: s.doneAt || null });
     const e = (st.s[s.name] ||= {});
     const sig = sigOf(s.text);
     let goal = ''; try { goal = String(await goalFor(s.name) || ''); } catch { goal = ''; }
     let parts = []; try { parts = ((await partsOf(s.name)) || []).map(String).slice(0, 8); } catch { parts = []; }
     if (e.reflect && e.reflect.goal !== goal) delete e.reflect;   // another task under the same name
-    if (e.reflect) return reflected(s, e);
+    // open suggestions: no done while the owner has not answered, whatever else the line says; one push per distinct done turn
+    const unanswered = ledger.openOf(s.name);
+    if (unanswered.length) {
+      const textSig = textSigOf(s.text);
+      if (e.openTold === textSig || reflectMode() !== 'live' || mode() !== 'live' || s.canAnswer === false) return null;
+      return { kind: 'suggestions-open', message: openSuggestionsMessage(unanswered), goal, sig: sigOf(s.text), textSig };
+    }
+    if (e.reflect) {   // asked: the goal is not questioned again. A reply that answers neither way is asked once more.
+      if (reflectMode() !== 'live' || s.canAnswer === false || textSigOf(s.text) === e.reflect.text || (s.doneAt && s.doneAt <= e.reflect.at) || !ledger.claimMissing(s.name, s.text)) return null;
+      await note({ session: s.name, kind: 'reflect-missing' });
+      return { kind: 'reflect-missing', message: missingReplyMessage(), goal, sig: sigOf(s.text) };
+    }
     // a new done turn: a different line, or the same line written after we asked (doneAt later than the ask)
     const fresh = (at) => sig !== e.sig || (s.doneAt && at && s.doneAt > at);
     // the same closing text as the accepted reply is the same turn, whatever its doneAt says: the server re-stamps doneAt of a
     // finished turn (a mid-turn done guess, then a later flip), which re-asked an accepted reply every ~10 min (bug-724947cb)
     const txt = textSigOf(s.text);
-    const dry = (d) => { markReflected(e, d); return note({ dry: true, session: s.name, kind: 'reflect' }).then(save).then(() => ({ ...d, dry: true })); };
+    const dry = (d) => { markReflected(s.name, e, d); return note({ dry: true, session: s.name, kind: 'reflect' }).then(save).then(() => ({ ...d, dry: true })); };
     if (s.verified) {   // every Done-when row passes with its evidence: the goal is met, only the reflection is left
       const r = await reflection(s, e, { goal, parts, sig });
       if (!r) return null;
@@ -288,7 +303,7 @@ export function createGoalGate({ stateDir, goalOf: goalFor = async () => '', par
       if (s.canAnswer === false && !s.canReflect) { await relayReflection(s, e, r); return d; }
       if (mode() === 'dry' || reflectMode() === 'dry') { await dry(r); return d; }
       await save();
-      return { ...d, reflect: true, message: r.message, audience: r.audience, textSig: r.textSig };
+      return { ...d, reflect: true, message: r.message, textSig: r.textSig, turn: r.turn };
     }
     if (d.bounce && b.n >= BOUNCES_PER_DAY) {
       Object.assign(e, { sig, at: now() });
@@ -313,7 +328,9 @@ export function createGoalGate({ stateDir, goalOf: goalFor = async () => '', par
   async function sent(name, d) {
     await load();
     const e = (st.s[name] ||= {});
-    if (d.reflect) { markReflected(e, d); await note({ session: name, kind: 'reflect', audience: d.audience, goal: (d.goal || '').slice(0, 160) }); await save(); return; }
+    if (d.kind === 'suggestions-open') { e.openTold = d.textSig; await note({ session: name, kind: d.kind }); await save(); return; }
+    if (d.kind === 'reflect-missing') return;
+    if (d.reflect) { markReflected(name, e, d); await note({ session: name, kind: 'reflect', goal: (d.goal || '').slice(0, 160) }); await save(); return; }
     Object.assign(e, { sig: d.sig, at: now(), asked: d.kind !== 'fix-first', accepted: null });   // fix-first: the next done is asked the question afresh
     if (d.bounce) { const b = e.bounces?.day === day() ? e.bounces : (e.bounces = { day: day(), n: 0, reported: false }); b.n += 1; e.total = (e.total || 0) + 1; }
     await note({ session: name, kind: d.kind, goal: (d.goal || '').slice(0, 160), ...(d.missing ? { missing: d.missing } : {}), ...(d.leftovers ? { leftovers: d.leftovers } : {}) });
