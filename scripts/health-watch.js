@@ -247,6 +247,31 @@ export function underRoots(dir, roots, realpath = safeRealpath) {
 // Is a session alive inside this worktree? A pane cwd, a Claude session cwd or ANY live process whose /proc cwd is
 // inside the worktree counts. The " (deleted)" suffix is stripped and both sides are compared through realpath, so a
 // re-spelled path or a symlink does not hide a live session.
+// The distinct path candidates named on the command lines of one process list: each token, and the part after `=`
+// (--cwd=<dir>), resolved and realpath'ed once. Keyed by the list itself, so a new tick (a new list) reads afresh.
+const ARG_PATHS = new WeakMap();
+function argPaths(procArgs) {
+  let out = ARG_PATHS.get(procArgs);
+  if (out) return out;
+  const seen = new Set();
+  out = [];
+  const add = (raw) => {
+    const p = stripDeletedSuffix(raw);
+    if (!p || seen.has(p)) return;
+    seen.add(p);
+    const rp = safeRealpath(p);
+    out.push({ q: resolve(p), rq: rp ? resolve(rp) : null });
+  };
+  for (const pr of procArgs) for (const tok of String(pr.args || '').split(/\s+/)) {
+    const t = tok.replace(/^["']|["']$/g, '');
+    if (!t) continue;
+    add(t);
+    const i = t.indexOf('=');
+    if (i > 0) add(t.slice(i + 1));
+  }
+  ARG_PATHS.set(procArgs, out);
+  return out;
+}
 // Two more traces of an agent that works in a worktree from ANOTHER directory (E51: a task-spawned worker runs
 // `git -C <dir>` while its own cwd is the parent directory): its command line names the worktree, or it holds a file
 // of the worktree open.
@@ -259,17 +284,15 @@ export function worktreeIsLive(dir, { panes = [], claude = [], procCwds = [], pr
     const rp = safeRealpath(p);
     return !!rp && pathInside(safeRealpath(dir) || dir, rp);
   };
-  const inArgs = (args) => String(args || '').split(/\s+/).some((tok) => {
-    const t = tok.replace(/^["']|["']$/g, '');
-    if (!t) return false;
-    if (hit(t)) return true;
-    const i = t.indexOf('=');       // --cwd=<dir>
-    return i > 0 && hit(t.slice(i + 1));
-  });
+  // Every argument of every process, against every worktree: the tokens are resolved once per process list
+  // (argPaths), then each worktree only compares strings (30 s of CPU per investigation before, 2026-11-26).
+  const d = resolve(dir), rd = resolve(safeRealpath(dir) || dir);
+  const under = (base, q) => base === '/' || q === base || q.startsWith(base + '/');
+  const inAnyArgs = () => argPaths(procArgs).some((c) => under(d, c.q) || (c.rq && under(rd, c.rq)));
   return panes.some((p) => hit(p.path))
     || claude.some((c) => c.alive && hit(c.cwd))
     || procCwds.some((c) => hit(c.cwd))
-    || procArgs.some((p) => inArgs(p.args))
+    || inAnyArgs()
     || procFds.some((f) => hit(f.path));
 }
 
@@ -460,7 +483,7 @@ export const TMP_PREFIXES = ['altscroll-', 'deploy-live-', 'sc-since-', 'convo-'
   'mac-hook-', 'merge-pol-', 'meval-origin-', 'meval-reg-', 'meval-state-', 'mk-push-', 'mm-mgr-', 'mmmgr-fake-',
   'mycodebox-restart-', 'p1fix-fresh-', 'mgr-acct-', 'mgr-rot-', 'senders-', 'files-route-', 'file-view-', 'upload-log-', 'og-', 'pk-', 'pk-mm-', 'render-skill-', 'rules-watch-', 'session-notes-', 'rv2-fresh-', 'self-out-',
   'pane-claude-', 'poke-ret-', 'prune-daily-', 'self-root-', 'send-ui-shots-', 'send-ui-work-', 'sh-', 'slots-', 'trust-', 'trust-ctl-', 'usage-attr-',
-  'usage-test-', 'v2-acc-fx-', 'v2-acc-runner-', 'v2-acc-state-', 'v2-acceptance-', 'v2-adapters-', 'v2-adverify-',
+  'usage-test-', 'team-reporter-', 'v2-acc-fx-', 'v2-acc-runner-', 'v2-acc-state-', 'v2-acceptance-', 'v2-adapters-', 'v2-adverify-',
   'v2-bench-', 'v2-bench-http-', 'v2-bench-http-reap-', 'v2-bench-http-test-', 'v2-bench-out-', 'v2-bench-r4-test-',
   'v2-bench-test-', 'v2-d017-', 'v2-delivery-', 'v2-delivery-verify-', 'v2-gl-', 'v2-glstall-', 'v2-glv-',
   'v2-glv2-', 'v2-glv3-', 'v2-glv4-', 'v2-glv5-', 'v2-glv6-', 'v2-grants-', 'v2-http-', 'v2-int-', 'v2-intv-',
