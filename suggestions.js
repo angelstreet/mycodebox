@@ -112,6 +112,16 @@ export function answersOf(text, open = []) {
   return Object.keys(out).length ? out : null;
 }
 
+// Pure. text: a message; open: the open item numbers -> the number N when the reply is "do the N" / "do N" / "build N" / "approve N" and N is also how many items are listed
+// (at least two): "do the 4" of a list of 4 reads as "all four" to a person and as "item 4 only" to answersOf, so nothing is recorded and the owner is asked back
+// (2026-11-26: "do the 4" recorded item 4, the session built all four, three items stayed open and the session read as needing the owner for an hour). Else null.
+export function ambiguousAnswer(text, open = []) {
+  const t = unpasted(text).toLowerCase().replace(/[.!\s]+$/, '');
+  const m = /^(?:(?:ok|okay|yes|so|please|pls)[\s,]+)*(?:do|build|approve|implement)\s+(?:the\s+|item\s+|number\s+)?(\d{1,2})$/.exec(t);
+  const n = m ? Number(m[1]) : 0;
+  return n >= 2 && open.length === n && open.includes(n) ? n : null;
+}
+
 // A prompt that is not a person typing: another session, a hook, a task notification, an attachment marker.
 const NOT_TYPED = /^(?:<(?!pasted_content)|another claude session\b|stop hook feedback\b|\[(?:system|request|image|rules-watch)|caveat:|this session is being continued\b)/i;
 // Pure. text: a prompt the session received; typed: [{ sig, by }] of everything this server typed into it -> true when a person typed it.

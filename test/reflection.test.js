@@ -9,7 +9,7 @@ import { createGoalGate, reflectionEligible } from '../goal-check.js';
 import { createDoneCheck } from '../done-check.js';
 import { createFinalAccept } from '../final-accept.js';
 import { isReflectionAsk, reflectionQuestion, ASK_WORDS } from '../reflection.js';
-import { createSuggestions, suggestionsIn, saysNoSuggestions, answersOf, isOwnerTyped, createTypedLog } from '../suggestions.js';
+import { ambiguousAnswer, createSuggestions, suggestionsIn, saysNoSuggestions, answersOf, isOwnerTyped, createTypedLog } from '../suggestions.js';
 import { createGoalStore, approvedRound, worthAGoal } from '../goal-check.js';
 import { MAX_ASKS_PER_TICK, ASK_MAX_LOAD_PER_CORE } from '../done-check.js';
 import { displayState } from '../public/state.js';
@@ -422,4 +422,14 @@ test('one rule text: AGENTS.md, REFERENCE, the cbsession preamble and the MAC-HO
     assert.ok(text.includes(RULE), f);
     assert.doesNotMatch(text, /file (?:each|them)(?: improvement idea)? (?:as|with) (?:a )?`?found-bug[^.]*idea|ideas are done or explained|file each improvement idea/i, f);
   }
+});
+
+test('ambiguousAnswer: "do the 4" of a list of 4 is asked back, clear replies are not', () => {
+  const open = [1, 2, 3, 4];
+  for (const s of ['do the 4', 'do 4', 'ok do the 4', 'Do the 4.', 'approve 4', 'yes build the 4']) assert.equal(ambiguousAnswer(s, open), 4, s);
+  for (const s of ['do 1', 'do the 3', 'yes 4', 'yes 1 2 3 4', 'yes 4, no 1 2 3', 'do all', 'no', 'do 1 and 4', 'do the 4 and 2']) assert.equal(ambiguousAnswer(s, open), null, s);
+  assert.equal(ambiguousAnswer('do 1', [1]), null, 'a single item: "do 1" is clear');
+  assert.equal(ambiguousAnswer('do the 4', [2, 4]), null, 'N is not the list length');
+  assert.equal(ambiguousAnswer('do the 4', [1, 2, 3, 4].slice(0, 3)), null, 'open does not contain N');
+  assert.deepEqual(answersOf('do the 4', open), { 4: 'yes' }, 'the parser itself still reads item 4: the guard sits before it');
 });

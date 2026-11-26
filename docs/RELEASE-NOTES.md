@@ -35,6 +35,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **An ambiguous answer to a suggestion list is asked back, not guessed** — "do the 4" of a list of 4 was recorded as item 4 only while a person (and the session) meant all four, so three items stayed open and the session read as needing you for an hour. Now nothing is recorded and the feed asks: reply `yes 1 2 3 4` for all or `yes 4, no 1 2 3` for item 4 only · area: suggestions
+
 - **The manager moves to another Claude account by itself, and the owner is warned before the accounts run out** — it was excluded from rotation (a push only), so everything stalled with its account. Now a usage-limit stop, or being idle on an account at 95 %, restarts it fresh on the next account with headroom (`manager-rotation.js` + `manager-fresh.sh`); with none free the owner gets the next reset time and it restarts once one frees up. One early alert fires when all accounts together hold no more than one fresh account's week · area: manager
 
 - **The manager starts on the active Claude account** — `scripts/manager-fresh.sh` (nightly, watchdog relaunch, context cap, manager-resume) always started it on the default account, so it stalled when that account ran out; `manager-command.js` now adds `CLAUDE_CONFIG_DIR` + `GHOSTY_CLAUDE_ACCOUNT` like cbsession, and the folder is trusted in that account's own `.claude.json` · area: manager
