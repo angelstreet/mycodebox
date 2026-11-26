@@ -10,7 +10,9 @@ import { createServer } from 'node:net';
 import { tmp } from './helpers-tmp.js';
 import { displayState } from '../public/state.js';
 import { isOwnersTurn } from '../public/ask-model.js';
+import { hashToken } from '../lease-routes.js';
 
+const MAC = 'tok-wire-0123456789abcdef';   // leak-scan: allow (fake test token)
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const freePort = () => new Promise((r) => { const s = createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)); }); });
@@ -20,7 +22,8 @@ after(() => cleanups.forEach((f) => { try { f(); } catch { /* gone */ } }));
 
 test('server: a listed suggestion keeps a done session out of done; only the owner\'s dashboard or typed answer counts, per item', { timeout: 150_000, skip: !hasTmux && 'no tmux' }, async () => {
   const base = tmp('sugg-wire-'), state = join(base, 'state'), home = join(base, 'home'), bin = join(base, 'bin');
-  [state, home, bin].forEach((d) => mkdirSync(d, { recursive: true }));
+  [state, home, bin, join(state, 'leases')].forEach((d) => mkdirSync(d, { recursive: true }));
+  writeFileSync(join(state, 'leases', 'clients.json'), JSON.stringify({ clients: [{ name: 'mac-a', sha256: hashToken(MAC), remote: true }] }));
   writeFileSync(join(state, 'manager.json'), JSON.stringify({ enabled: true, aiTriage: 'off', routerShadow: false, wakeShadow: false }));
   const socket = `suggwire${process.pid}`, tmuxBin = join(bin, 'tmux');
   writeFileSync(tmuxBin, `#!/bin/sh\nexec ${execFileSync('sh', ['-c', 'command -v tmux']).toString().trim()} -L ${socket} "$@"\n`); chmodSync(tmuxBin, 0o755);
@@ -109,4 +112,15 @@ done
   await until(async () => !(await row()).suggestions, 'nothing left to answer: the hold is gone');
   await until(async () => (await feed()).some((x) => /worker-session is done/.test(x.title)) || (existsSync(join(state, 'push-digest.json')) && /worker-session/.test(readFileSync(join(state, 'push-digest.json'), 'utf8'))), 'the held "is done" push goes out once everything is answered');
   assert.deepEqual((await record()).items.map((i) => [i.answer, i.by, i.via]), [['no', 'owner', 'typed'], ['no', 'owner', 'dashboard']]);
+
+  // a Mac session has no pane: the dashboard answer is recorded and handed to the manager to pass on; nobody else can give it
+  const mac = await (await fetch(`${url}/api/remote/v1/stops`, { method: 'POST', headers: { authorization: `Bearer ${MAC}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ machine: 'mac-test', project: 'demo', session_id: 'sid-wire-mac-1', session_name: 'macrow', text: 'Suggestions:\n1. cache the list\nSTATUS: done — list fixed' }) })).json();
+  const path = `/api/send/${encodeURIComponent(mac.session)}`;
+  assert.equal((await post(path, { keys: 'no all', by: 'manager-agent' }, dashboard)).status, 409);
+  assert.equal((await post(path, { keys: 'no all' })).status, 409, 'not a browser');
+  assert.equal((await post(path, { keys: 'please rebase' }, dashboard)).status, 400);
+  const ok = await post(path, { keys: 'no all' }, dashboard);
+  assert.deepEqual([ok.status, ok.body.recorded, ok.body.open], [200, true, 0]);
+  await until(() => readFileSync(join(state, 'manager-events.jsonl'), 'utf8').includes('pass it on with SendMessage'), 'the manager is asked to relay it');
 });
