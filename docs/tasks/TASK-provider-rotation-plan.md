@@ -83,7 +83,7 @@ no headroom (≥ 95 %), or is switched off.
 | Worker (interactive) | `claude:default → claude:team1 → claude:team2` → **then policy `onAllOut`**: `wait` (default) / `codex:main` / `minimax:main` | `resume` across Claude seats (today); `handover` to Codex / MiniMax; with `wait`: one `continue` at the earliest reset (new: Claude in quota-resume) |
 | Worker, return | when a preferred Claude seat frees up, a session that was moved **by the chain** to Codex/MiniMax is **not** moved back automatically (would churn); the card shows "Claude free: move back?" | owner / manager clicks Move |
 | Manager | L0 `claude` seats (fresh restart, today) → L1 `minimax:main` (`mm-manager`, today's failover) → L2 `codex:main` (fresh `manager-codex` with MANAGER.md kickoff) → L3 `api:<key>` headless loop → L4 rules-only | Always a **fresh** start from files (MANAGER.md, manager-events, manager-actions); never a resume |
-| Ghosty AI judges (triage, router, Jev) | OpenRouter → MiniMax `mcode exec` → `claude -p haiku` on a plan seat with headroom → `api:<key>` `claude -p haiku` → rules-only + judge-down alarm | Per call; no state |
+| Ghosty AI judges (triage, router, Jev) | OpenRouter → MiniMax `mcode exec` → `api:<key>` `claude -p haiku` (owner 2026-11-26: Haiku on the API token, never the subscription) → rules-only + judge-down alarm | Per call; no state |
 
 `onAllOut` is per session (card setting) with a global default; `wait` keeps today's behaviour plus the reset resume.
 
@@ -187,13 +187,18 @@ Sizes: S ≤ ½ day, M 1–2 days, L 3+ days. Each phase ships through the lane 
 | 4 | S–M | UI: Move sheet (mockup → build), card chip, "move back?" hint. | `test/buttons.test.js`-style DOM tests; headless Playwright on a worktree via route-override (`reference_ui-repro-playwright`), desktop + phone width, light + dark; no live card opened |
 | 5 | M | Worker chain on exhaustion: `providerLimitTick` replaces `claudeLimitTick` + quota-resume dispatch; per-session `onAllOut`. Default `wait` = today + Phase 0 resume. | Tick tests: all Claude out + `onAllOut=codex` → handover move once; `wait` → no move, continue at reset; paused / held untouched; one move per stop |
 | 6 | M | Manager ladder L1–L4 under one decider; `manager-api-loop.sh` (L3, off); rules-only mode (L4) + alert; handback. | `test/manager-rotation.test.js` ladder table (each rung out → next); L3 never starts with the switch off or over the cap; drill on a throw-away session with `MANAGER_FRESH_KICK` (never the live manager) |
-| 7 | S | Ghosty judges ladder: add plan-seat `claude -p` with headroom and the API-key rung (off) to `minimax-fallback.js`; docs (REFERENCE "Provider rotation", MAP row, skill `codebox-sessions` move section). | `test/minimax-fallback.test.js` rung order; docs-links test |
+| 7 | S | Ghosty judges ladder: `claude -p haiku` on the API key (owner preference, Haiku only; other models never fall back to the key until the owner says) in `minimax-fallback.js`; docs (REFERENCE "Provider rotation", MAP row, skill `codebox-sessions` move section). | `test/minimax-fallback.test.js` rung order; docs-links test |
 
 Order of value: 0 (stops the dead end now) → 1–3 (button backend) → 4 (button) → 5 → 6 → 7.
 
 ## 7. Decisions
 
 1. **Money (owner, open):** may API keys be used as automatic fallback rungs (manager L3, judges), and with which daily cap? Until the owner answers: **off by default** (manager 2026-11-26).
+   **Owner preference (2026-11-26): Haiku runs on the API token, not the subscription.** Every Haiku call (today the
+   `aiFallback: "claude"` judge path in `minimax-fallback.js`, `claude -p --model haiku`) uses an Anthropic API key
+   (`ANTHROPIC_API_KEY` / `apiKeyHelper` on a `~/.config/anthropic/<name>.key`), headless `claude -p` only, never an
+   interactive session. This applies to Haiku only: no other model falls back to the key automatically until the owner
+   says so. Phase 7 implements it (the judges ladder's `claude -p haiku` rung moves from "plan seat" to the key).
 2. **Worker default `onAllOut`: `wait`** — decided by the manager 2026-11-26.
 3. **Manager ladder: MiniMax (L1) before Codex (L2)** — decided by the manager 2026-11-26.
 4. **Re-enabling `ghosty-manager-failover` (owner, open):** needs sudo on codebox, or Phase 6 moves L1 into the server tick and the unit is retired. The manager takes it to the owner.
