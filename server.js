@@ -2386,7 +2386,7 @@ async function autoParkTick() {
 }
 
 // claudeAccount: the Claude account to resume on (default: the active one, so a session parked on a used-up account comes back on one with headroom).
-async function resumeSession(name, { claudeAccount } = {}) {
+async function resumeSession(name, { claudeAccount, model } = {}) {
   const rec = await parking.get(name);
   if (!rec) throw httpError(404, 'not parked');
   // Claude entries have no `agent` field (legacy); MiniMax entries store agent:'minimax', Codex agent:'codex'. Dispatch on that.
@@ -2396,7 +2396,7 @@ async function resumeSession(name, { claudeAccount } = {}) {
   const base = acct ? claudeAccounts.commandFor(AGENT_CMDS[agent], acct) : AGENT_CMDS[agent];
   const trustAgent = agent;
   const out = await parking.resume(name, {
-    base,
+    base, model,
     validate: async (r) => { r.cwd = await sessionDirectory(r.cwd, HOME); },
     start: async (n, r, cmd) => {
       try { await trustFolder(trustAgent, r.cwd); } catch { /* best effort */ }
@@ -2443,7 +2443,9 @@ async function swapClaudeAccount(name, account, by, { limitStop = false, force =
   if (row && row.agent !== 'claude') throw httpError(400, 'not a Claude session');
   if (limitStop) { try { await sendKey(name, 'Escape'); await new Promise((r) => setTimeout(r, 1500)); } catch { /* the limit menu may be gone already */ } }
   const parkOut = await parkSession(name, { limitStop, force });
-  const out = await resumeSession(name, { claudeAccount: account });
+  // a Fable session resumed on another account stops at the "Fable now runs on usage credits" prompt: come back on opus
+  const parkedArgs = String((await parking.get(name))?.args || '');
+  const out = await resumeSession(name, { claudeAccount: account, ...(/--model[= ]fable/i.test(parkedArgs) ? { model: 'opus' } : {}) });
   logEvent({ type: 'claude-account-swap', session: name, by, account, ...(force ? { killed: parkOut.killed, leases: parkOut.leases } : {}) });
   if (limitStop && !sessionMeta.isPaused(name)) {
     setTimeout(() => { sendKeys(name, 'continue', true).then(() => logSend(name, 'claude-accounts', { keys: 'continue' })).catch((e) => console.error('[claude-accounts] continue', e.message)); }, 15000).unref?.();
@@ -2488,6 +2490,7 @@ async function claudeLimitTick(status) {
       await swapClaudeAccount(name, next, 'claude-accounts', { limitStop: true });
       await managerEvents.record({ key: `health:claude-account-swap:${name}`, kind: 'health', title: `session moved to ${label(next)}: ${name}`, body: `${label(acct)} hit its usage limit; same conversation resumed on ${label(next)}` });
     } catch (e) {
+      claudeLimitSeen.delete(name);   // a failed switch is retried at the next tick, not forgotten
       push.record({ title: `${name} hit the ${label(acct)} limit, switch failed`, body: `to ${label(next)}: ${String(e.message).slice(0, 250)}`, url, tag: 'claude-account' });
     }
   }

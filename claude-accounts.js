@@ -32,7 +32,7 @@ export const SHARED = ['settings.json', 'CLAUDE.md', 'projects', 'sessions', 'to
 // The "hit your ... limit" form names the window or the model before "limit" ("weekly", "usage", "Opus", "5-hour"), so those
 // words belong to the stop: without them the weekly stop of Claude Code 2.x was never seen and no account was swapped
 // (owner, 2026-11-19: sessions sat on the weekly limit for days).
-const LIMIT_RE = /\b(?:claude(?: ai)? usage limit reached|usage limit reached|(?:5-hour|weekly|session|opus(?: weekly)?|sonnet(?: weekly)?) limit reached|you(?:'|’)ve hit your(?: [\w-]+)* limit)\b/i;
+const LIMIT_RE = /\b(?:claude(?: ai)? usage limit reached|usage limit reached|(?:5-hour|weekly|session|opus(?: weekly)?|sonnet(?: weekly)?) limit reached|you(?:(?:'|’)ve| have)? hit your(?: [\w-]+)* limit|you(?:(?:'|’)re| are) out of (?:extra )?usage(?: credits)?)\b/i;
 // Claude Code's own output lines: a message ("●"), a tool result or error ("⎿"), a spinner ("◐"). The user's own lines
 // start with "❯" and the UI (the limit menu, the status bar) carries none of them.
 const AGENT_OUT_RE = /^\s*[●⏺⎿◐]/;
