@@ -1054,14 +1054,13 @@ sends `continue`. A held session that moves on by itself loses the hold. Cards, 
 "held: quota" (tooltip = reason); the manager panel lists held sessions. The manager never switches an agent.
 
 **New session** (owner 2026-11-12: two clicks). A centred dialog: agent (claude, codex, minimax; bash is API only), priority,
-model (at most 4 per provider, preselected: claude sonnet of opus / sonnet / haiku / fable; codex gpt-6-luna then the first
-models its CLI lists in `~/.codex/models_cache.json`; minimax MiniMax-M3; `GET /api/new-session/models`), project, an optional first message (images / .md picked, pasted or
+model (at most 4 per provider, preselected: claude sonnet of opus / sonnet / haiku / fable; codex gpt-6.1-sol, then the first
+other models its CLI lists in `~/.codex/models_cache.json`; stale GPT-6 and GPT-6.2 entries are hidden; minimax MiniMax-M3; `GET /api/new-session/models`), project, an optional first message (images / .md picked, pasted or
 dropped are uploaded and added as `@path`) and the name (left empty with a prompt: `POST /api/new-session/name {prompt}` -> `{name, source: ai|words}`, one Haiku `claude -p` call with a 25 s timeout, else the prompt's first words; the dialog then makes it unique). Every choice of the last create (agent, model per agent, project,
 priority) is preselected (the project defaults to virtualpytest), so "+" then "create" repeats it. `POST /api/sessions {name, agent, cwd, priority, model?, prompt?}`
 starts the CLI with the model flag and the prompt as its first message (read from `<state>/prompts/<name>-<ms>.txt`, so the
 text never meets the shell). The project list (`GET /api/dirs`) offers main checkouts under `$HOME` only (no worktrees: entries
 carry `worktree: true` and the dialog hides them), without tmp*, scratchpad or hidden-folder ones (`new-session.js` `pickableProject`). The old headroom suggestion is gone.
-For Codex, an interactive launch is authoritative: `codex exec -m <model>` can succeed, and the CLI cache can list a model, while the interactive dashboard session rejects it with `model_not_in_accessible_catalog`. The picker excludes GPT-6.2 Sol and Astra on this account until an interactive session completes a turn with them.
 
 **Project of a session** (owner 2026-11-12). A session is grouped and filtered by the git project of its pane's folder; one in no
 repo belongs to virtualpytest (it used to show its agent name, which read as a fake "claude" project), and the GitHub name
