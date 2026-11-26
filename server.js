@@ -159,7 +159,7 @@ import { pickableProject, launchArgs, codexModels, CLAUDE_MODELS, MINIMAX_MODELS
 import { createSessionHistory } from './session-history.js';
 import { paneLinesOk } from './pane-lines.js';
 import { scrollPlan, wheelPlan, altScrollApplies } from './alt-scroll.js';
-import { effortOf, taskDocsWritten, findSessionFile, readConversation, tailChars } from './conversation.js';
+import { timelineOf, effortOf, taskDocsWritten, findSessionFile, readConversation, tailChars } from './conversation.js';
 import { createLimiter, createCoalescer } from './pane-cache.js';
 import { findInFolder, resolveServedFile } from './files-route.js';
 import { readViewFile } from './file-view.js';
@@ -2828,6 +2828,23 @@ async function handleHttp(req, res) {
     const f = files.find((x) => x.name === want) || files[0];
     if (!f) return json(res, 404, { ok: false, error: 'no task doc' });
     return json(res, 200, { session, name: f.name, text: (await readFile(f.path, 'utf8')).slice(0, 400000) });
+  }
+  if (req.method === 'GET' && p === '/api/rules') {   // the harness rules, read-only: AGENTS.md and the two docs it points to (the Rules entry of the More menu)
+    const root = dirname(fileURLToPath(import.meta.url)), files = [];
+    for (const [name, rel] of [['AGENTS.md', 'AGENTS.md'], ['STATUS-TABLE.md', 'docs/STATUS-TABLE.md'], ['CONTRACT.md', 'docs/CONTRACT.md']]) {
+      try { files.push({ name, text: (await readFile(join(root, rel), 'utf8')).slice(0, 200000) }); } catch { /* a missing doc is just not listed */ }
+    }
+    return json(res, 200, { files });
+  }
+  if (req.method === 'GET' && p.startsWith('/api/timeline/')) {   // one session: owner prompts, STATUS lines (its own file) and the manager's events about it
+    const session = decodeURIComponent(p.slice('/api/timeline/'.length));
+    const sid = (latest || await poll().catch(() => null))?.status?.[session]?.claudeSessionId;
+    const file = sid ? await findSessionFile(sid).catch(() => null) : null;
+    const items = file ? await timelineOf(file) : [];
+    const ev = (await managerEvents.tail({ since: '', limit: 2000 }).catch(() => [])).filter((e) => e.session === session);
+    for (const e of ev) { const at = Date.parse(e.at); if (at) items.push({ at, kind: e.kind || 'event', text: String(e.title || '').slice(0, 200) + (e.body ? ' — ' + String(e.body).split('\n')[0].slice(0, 160) : ''), manager: true }); }
+    items.sort((a, b) => a.at - b.at);
+    return json(res, 200, { session, items: items.slice(-200) });
   }
   if (req.method === 'GET' && p.startsWith('/api/transcript/')) {
     const session = decodeURIComponent(p.slice('/api/transcript/'.length));

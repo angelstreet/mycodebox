@@ -124,3 +124,31 @@ export async function taskDocsWritten(file, bytes = TAIL_BYTES) {
     return [...out];
   } catch { return []; } finally { await fh?.close().catch(() => {}); }
 }
+
+// Timeline of one Claude session from its file: the owner's prompts and the STATUS lines the agent wrote, with their times (newest last, at most `limit`).
+export async function timelineOf(file, { bytes = TAIL_BYTES, limit = 120 } = {}) {
+  let fh;
+  try {
+    fh = await fsp.open(file, 'r');
+    const { size } = await fh.stat(), len = Math.min(size, bytes), buf = Buffer.alloc(len);
+    await fh.read(buf, 0, len, size - len);
+    const out = [];
+    for (const line of buf.toString('utf8').split('\n')) {
+      if (!line.includes('"timestamp"') || !(line.includes('"type":"user"') || line.includes('"type":"assistant"'))) continue;
+      let r; try { r = JSON.parse(line); } catch { continue; }   // the first line of a tail can be cut
+      const at = Date.parse(r.timestamp); if (!at) continue;
+      const parts = blocks(r.message?.content);
+      if (r.type === 'user' && !r.isMeta) {
+        const t = strip(parts.filter((b) => b.type === 'text').map((b) => b.text).join('\n'));
+        if (t && !t.startsWith('[Request interrupted')) out.push({ at, kind: 'prompt', text: t.replace(/\s+/g, ' ').slice(0, 220) });
+      } else if (r.type === 'assistant') {
+        for (const b of parts) {
+          if (b.type !== 'text') continue;
+          const m = /^\s*STATUS:\s*(.+)$/m.exec(b.text || '');
+          if (m) out.push({ at, kind: 'status', text: m[1].replace(/\s+/g, ' ').slice(0, 260) });
+        }
+      }
+    }
+    return out.slice(-limit);
+  } catch { return []; } finally { await fh?.close().catch(() => {}); }
+}

@@ -330,7 +330,7 @@ test('footerModelOf: finds the Claude footer model line under many subagent line
   assert.equal(footerModelOf(['Opus 5.5 is the model I use here', 'plain']), null);
 });
 
-import { effortOf, taskDocsWritten } from '../conversation.js';
+import { effortOf, taskDocsWritten, timelineOf } from '../conversation.js';
 import { writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pjoin } from 'node:path';
@@ -355,4 +355,18 @@ test('paneShellOf: the Claude shell footer is its own signal, not paneBackground
   assert.equal(paneShellOf(l), true);
   assert.equal(paneBackgroundOf(l, { shell: false }), false);
   assert.equal(paneBackgroundOf(l), true);
+});
+
+test('timelineOf: the owner\'s prompts and STATUS lines with their times, tool results and meta turns left out', async () => {
+  const d = mkdtempSync(pjoin(tmpdir(), 'tl-')), f = pjoin(d, 's.jsonl');
+  const L = (o) => JSON.stringify(o);
+  writeFileSync(f, [
+    L({ type: 'user', timestamp: '2026-11-26T09:00:00.000Z', message: { content: 'do the 4' } }),
+    L({ type: 'user', timestamp: '2026-11-26T09:00:01.000Z', message: { content: [{ type: 'tool_result', content: 'x' }] } }),
+    L({ type: 'assistant', timestamp: '2026-11-26T09:05:00.000Z', message: { content: [{ type: 'text', text: 'done.\nSTATUS: done — merged' }] } }),
+    L({ type: 'user', isMeta: true, timestamp: '2026-11-26T09:06:00.000Z', message: { content: 'meta' } }),
+  ].join('\n'));
+  const r = await timelineOf(f);
+  assert.deepEqual(r.map((x) => [x.kind, x.text]), [['prompt', 'do the 4'], ['status', 'done — merged']]);
+  assert.deepEqual(await timelineOf(pjoin(d, 'none.jsonl')), []);
 });

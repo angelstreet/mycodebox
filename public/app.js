@@ -4194,8 +4194,7 @@ function openUsage() {
       .catch(() => { content.innerHTML = '<div class="sheet-empty">no usage summary yet (is the ghosty-usage unit running?)</div>'; });
   });
 }
-els.usageBtn.onclick = openUsage;
-document.getElementById('usagePageBtn').onclick = openUsagePage;
+els.usageBtn.onclick = openUsagePage;   // one entry: the full page; the compact sheet is its "classic view" button
 
 // ----- Usage & cost page (/?usage=1): public/usage-view.js is loaded on first use.
 // The sheet above stays as it was; this is the readable full-width version (owner request 2026-10-21: "usage and cost is too small").
@@ -4205,7 +4204,7 @@ async function openUsagePage() {
   openSheet('Usage & cost', ({ body, foot, close }) => {
     body.closest('.sheet').classList.add('usage', 'uv-sheet');
     foot.classList.remove('hidden');
-    foot.innerHTML = '<button class="sbtn" data-a="refresh">refresh</button><span class="grow"></span><button class="sbtn" data-a="close">close</button>';
+    foot.innerHTML = '<button class="sbtn" data-a="refresh">refresh</button><button class="sbtn" data-a="classic" title="The compact sheet with the Langfuse link">classic view</button><span class="grow"></span><button class="sbtn" data-a="close">close</button>';
 
     // ui is the page's own view state; tab/view survive a reload through localStorage like the sheet's
     const ui = {
@@ -4262,7 +4261,7 @@ async function openUsagePage() {
 
     foot.onclick = (e) => {
       const a = e.target.closest('[data-a]')?.dataset.a;
-      if (a === 'close') { clearInterval(v.poll); close(); } else if (a === 'refresh') load();
+      if (a === 'close') { clearInterval(v.poll); close(); } else if (a === 'refresh') load(); else if (a === 'classic') { clearInterval(v.poll); openUsage(); }
     };
 
     body.addEventListener('click', (e) => {
@@ -5443,6 +5442,53 @@ function alertsHtml() {
     return `<div class="${classes}"><div class="at"><b>${escapeHtml(i.title || '')}</b><time>${isNaN(d) ? '' : d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + d.toTimeString().slice(0, 5)}</time></div>${i.body ? `<div class="ab">${escapeHtml(i.body)}</div>` : ''}${u ? `<a href="${escapeHtml(u)}" target="_blank" rel="noopener">open</a> ` : ''}${i.tag ? `<span class="tg">${escapeHtml(i.tag)}</span>` : ''}</div>`;
   }).join('') || '<div class="sheet-empty">no alerts yet</div>';
 }
+
+// ----- Rules (⋮ menu): the harness rules, read-only: AGENTS.md, the STATUS table and the contract (GET /api/rules) -----
+function openRules() {
+  openSheet('Rules', ({ body, foot }) => {
+    body.closest('.sheet').classList.add('uv-sheet');
+    body.innerHTML = '<div class="sheet-empty">loading…</div>';
+    getJson('/api/rules', 15000).then((j) => {
+      const files = j.files || [];
+      if (!files.length) { body.innerHTML = '<div class="sheet-empty">no rules files found on the server</div>'; return; }
+      const draw = (i) => {
+        body.innerHTML = `<div class="mdbar">${files.map((f, k) => `<button class="sbtn${k === i ? ' on' : ''}" data-rf="${k}">${escapeHtml(f.name)}</button>`).join('')}</div><div class="mdbody">${renderMd(files[i].text)}</div>`;
+        body.scrollTop = 0;
+      };
+      body.onclick = (e) => { const b = e.target.closest('[data-rf]'); if (b) draw(+b.dataset.rf); };
+      draw(0);
+    }).catch(() => { body.innerHTML = '<div class="sheet-empty">rules unavailable</div>'; });
+  });
+}
+$('#rulesBtn').onclick = openRules;
+
+// ----- Session log (⋮ menu): one session's stats, the owner's prompts, its STATUS lines and the manager's events in time order -----
+function openSessionLog(name) {
+  const n = name || state.active;
+  if (!n) { toast('pick a session first', 1600); return; }
+  openSheet(`Session log · ${displayName(n)}`, ({ body }) => {
+    body.closest('.sheet').classList.add('uv-sheet');
+    body.innerHTML = '<div class="sheet-empty">loading…</div>';
+    const st = state.status[n] || {};
+    Promise.all([
+      getJson(`/api/timeline/${encodeURIComponent(n)}`, 20000).catch(() => ({ items: [] })),
+      getJson('/api/usage', 20000).catch(() => null),
+    ]).then(([tl, us]) => {
+      const u = us && Array.isArray(us.perSession) ? us.perSession.find((x) => x.session === n) : null;
+      const facts = [
+        ['agent', agentOf(n)], ['model', [st.model, st.effort].filter(Boolean).join(' · ')], ['state', listStateOf(n)],
+        ['project', [st.repo, st.branch].filter(Boolean).join(' / ')], ['context left', st.contextLeft != null ? `${Math.round(st.contextLeft)}%` : ''],
+        ['turns', u ? u.turns : ''], ['tokens', u ? fmtTok(u.total) : ''], ['cost (API-equivalent)', u && u.cost != null ? fmtUsd(u.cost) : ''],
+      ].filter(([, v]) => v !== '' && v != null);
+      const when = (at) => { const d = new Date(at); return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + d.toTimeString().slice(0, 5); };
+      const rows = (tl.items || []).slice().reverse().map((i) => `<div class="tl-row ${escapeHtml(i.kind)}"><time>${escapeHtml(when(i.at))}</time><b>${escapeHtml(i.manager ? `manager · ${i.kind}` : i.kind)}</b><span>${escapeHtml(i.text)}</span></div>`).join('');
+      body.innerHTML = `<div class="tl-facts">${facts.map(([k, v]) => `<div><i>${escapeHtml(k)}</i><b>${escapeHtml(String(v))}</b></div>`).join('')}</div>`
+        + `<div class="tl-list">${rows || '<div class="sheet-empty">no events found for this session (only Claude sessions have a conversation file)</div>'}</div>`;
+    });
+  });
+}
+$('#timelineBtn').onclick = () => openSessionLog();
+
 function openAlerts() {
   openSheet('Alerts', ({ body, foot }) => {
     foot.classList.remove('hidden');
