@@ -200,8 +200,9 @@ export function createGoalGate({ stateDir, goalOf: goalFor = async () => '', par
   const stFile = join(stateDir, 'goal-check.json');
   const journal = join(stateDir, 'goal-check.jsonl');
   let st = null;
+  const born = now();
   // reflectSince: a done turn older than the rollout is never asked (accepted sessions are not woken again)
-  async function load() { if (st) return st; let read; try { read = JSON.parse(await readFile(stFile, 'utf8')); } catch { read = {}; } if (!st) { st = read; st.s ||= {}; st.reflectSince ||= now(); } return st; }
+  async function load() { if (st) return st; let read; try { read = JSON.parse(await readFile(stFile, 'utf8')); } catch { read = {}; } if (!st) { st = read; st.s ||= {}; st.reflectSince ||= born; } return st; }
   async function save() { try { await mkdir(stateDir, { recursive: true }); await writeFile(stFile, JSON.stringify(st)); } catch (e) { log.error?.('[goal-check] save', e.message); } }
   async function note(e) { try { await appendFile(journal, JSON.stringify({ at: new Date(now()).toISOString(), ...e }) + '\n'); } catch {} }
   const day = () => new Date(now()).toISOString().slice(0, 10);
