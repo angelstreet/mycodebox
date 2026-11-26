@@ -159,7 +159,7 @@ import { pickableProject, launchArgs, codexModels, CLAUDE_MODELS, MINIMAX_MODELS
 import { createSessionHistory } from './session-history.js';
 import { paneLinesOk } from './pane-lines.js';
 import { scrollPlan, wheelPlan, altScrollApplies } from './alt-scroll.js';
-import { findSessionFile, readConversation, tailChars } from './conversation.js';
+import { effortOf, findSessionFile, readConversation, tailChars } from './conversation.js';
 import { createLimiter, createCoalescer } from './pane-cache.js';
 import { findInFolder, resolveServedFile } from './files-route.js';
 import { readViewFile } from './file-view.js';
@@ -702,6 +702,17 @@ function footerInfo(lines) {
   m = own ? [own, own] : foot.match(/✦\s*([A-Za-z][\w.-]*)/) || foot.match(/\b(gpt-[\w.-]+)/i) || foot.match(/\b((?:opus|sonnet|haiku|fable)(?:[ -]\d+(?:[.-]\d+)?)?)/i);
   if (m) model = m[1].replace(/-(\d+)-(\d+)$/, ' $1.$2').replace(/-/g, ' ');
   return { contextLeft, model };
+}
+
+// effort of a Claude session, from its file's tail; read at most once a minute per session
+const effortCache = new Map();   // session id -> { at, v }
+async function effortCached(sid) {
+  const hit = effortCache.get(sid), now = Date.now();
+  if (hit && now - hit.at < 60000) return hit.v;
+  const file = await findSessionFile(sid).catch(() => null);
+  const v = file ? await effortOf(file) : null;
+  effortCache.set(sid, { at: now, v: v ?? hit?.v ?? null });
+  return v ?? hit?.v ?? null;
 }
 
 const shortHash = (s) => createHash('sha1').update(s).digest('hex').slice(0, 8);
@@ -1791,6 +1802,7 @@ async function pollOnce() {
     v.claudeSessionId = c ? c.info.sessionId : null;
     if (c?.info?.sessionId) crashResumeKnown.set(k, { claudeSessionId: c.info.sessionId, model: v.model, base: claudeAccounts.commandFor(launch.commands.claude) });
     v.claudeAccount = c ? claudeAccountOfPid(c.pid) : null;
+    v.effort = c ? await effortCached(c.info.sessionId) : null;   // the dock shows it next to the model
     v.rssMb = c && table.rss.get(c.pid) ? Math.round(table.rss.get(c.pid) / 1024) : null;
   }
   Object.assign(status, remote.statusRows());   // round 9: sessions of other machines, posted by the Mac Stop hook (remote-stops.js)

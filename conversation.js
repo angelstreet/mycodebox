@@ -99,3 +99,15 @@ export async function readConversation(file, { maxChars = MAX_CHARS, maxScan = M
     return pieces.reverse().join('\n\n');
   } finally { await fh.close(); }
 }
+
+// The reasoning effort Claude Code runs with ("low" ... "max"): every api-request-shape record carries `"effort":"<level>"`; the last one in the file's tail wins.
+export async function effortOf(file, bytes = 256 * 1024) {
+  let fh;
+  try {
+    fh = await fsp.open(file, 'r');
+    const { size } = await fh.stat(), len = Math.min(size, bytes), buf = Buffer.alloc(len);
+    await fh.read(buf, 0, len, size - len);
+    const all = [...buf.toString('utf8').matchAll(/"effort":"([a-z]{3,8})"/g)];
+    return all.length ? all[all.length - 1][1] : null;
+  } catch { return null; } finally { await fh?.close().catch(() => {}); }
+}
