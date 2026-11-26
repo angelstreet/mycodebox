@@ -147,7 +147,8 @@ export function loadConfig(stateDir) {
   try { return validateConfig(JSON.parse(fs.readFileSync(path.join(stateDir, 'integration.json'), 'utf8'))); } catch { return { repos: {}, settleMs: null, errors: [] }; }
 }
 
-const isReleaseNote = (f) => /(^|\/)release_note\/README\.md$/.test(f);
+const isReleaseNote = (f) => /(^|\/)(?:release_note\/README|RELEASE-NOTES)\.md$/.test(f);
+const isFlatNote = (f) => /(^|\/)RELEASE-NOTES\.md$/.test(f);
 const RN_SHIPPED = /release note: "## build \d+" (differs from what tag|did not exist at tag)/;
 
 // ---- convention files: the build number -----------------------------------------------------------------------------------
@@ -552,7 +553,7 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
         const [bp, op, tp] = ['base', 'ours', 'theirs'].map((n) => path.join(tmp, n));
         fs.writeFileSync(bp, b.out); fs.writeFileSync(op, o.out); fs.writeFileSync(tp, t.out);
         // a release note (has "## Unreleased"): main's file plus only the branch's added entries, shipped sections untouched
-        const rn = isReleaseNote(f) ? mergeReleaseNote(b.out, o.out, t.out) : null;
+        const rn = isReleaseNote(f) ? mergeReleaseNote(b.out, o.out, t.out, { flat: isFlatNote(f) }) : null;
         if (rn && !rn.ok) return { ok: false, tail: `release note conflict with main: ${rn.error}` };
         const m = rn ? { code: 0, out: rn.text } : await git(['merge-file', '--union', '--stdout', op, bp, tp], { cwd: wt });
         const merged = m.out;
