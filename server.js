@@ -167,6 +167,7 @@ import { readViewFile } from './file-view.js';
 import { uploadTarget } from './upload-kind.js';
 import { createHistoryView } from './history-view.js';
 import { createQuota, defaults as quotaDefaults } from './quota.js';
+import { createManagerRotation, parisTime } from './manager-rotation.js';
 import { createClaudeAccounts, rateFile as claudeRateFile, accountOfPid, scanClaudeLimit, DEFAULT_ID as CLAUDE_DEFAULT_ACCOUNT } from './claude-accounts.js';
 import { createMinimaxMeter, meterConfig, newShareAlerts } from './minimax-meter.js';
 import { createCredits } from './credits.js';
@@ -2354,6 +2355,10 @@ function claudeAccountOfPid(pid) {
 }
 async function claudeAccountsRefresh() {
   const r = await claudeAccounts.refresh();
+  const early = await claudeAccounts.earlyAlert();
+  if (early) {
+    claudeAlert('claude-account:nearly-used-up', { title: 'Claude accounts nearly used up', body: `All accounts together have ${early.left}% of one account's week left (${early.accounts.map((a) => `${a.label}: ${a.exhausted ? 'used up' : `week ${Math.round(a.windows.find((w) => w.name === 'week')?.usedPercent || 0)}%`}`).join(', ')}). Next reset: ${parisTime(early.nextReset)}.` });
+  }
   if (!r.changed) return r;
   quota.poll().catch(() => {});   // the `claude` plan follows the active account: show the switch now, not at the next minute
   const from = claudeAccounts.byId(r.from), to = claudeAccounts.byId(r.to), st = claudeAccounts.states()[r.from];
@@ -2377,14 +2382,27 @@ async function swapClaudeAccount(name, account, by, { limitStop = false, force =
 }
 // A Claude session stopped on its usage limit: mark that account used up and, with another account free, restart the session
 // on it (manager.json-independent switch: claude-accounts.json autoSwapSessions, default on). One handling per stop and account.
+// The manager is not parked: manager-rotation.js restarts it fresh on the next account (limit stop, or idle past the threshold).
+const claudeAlert = (key, a) => alert(key, { ...a, url: '/', tag: 'claude-account', priority: 'high', tier: 'interrupt', ntfyTags: 'warning' }, 0);
+const managerRotation = createManagerRotation({
+  accounts: claudeAccounts, refresh: () => claudeAccountsRefresh(), alert: claudeAlert,
+  record: (e) => managerEvents.record({ ...e, at: new Date().toISOString() }),
+  restart: (session, env) => new Promise((done) => {
+    execFile(join(dirname(fileURLToPath(import.meta.url)), 'scripts', 'manager-fresh.sh'), [], { timeout: 5 * 60e3, env: { ...process.env, ...env, PATH: `${dirname(process.execPath)}:${process.env.PATH || '/usr/bin:/bin'}`, GHOSTY_URL: `http://127.0.0.1:${PORT}` } },
+      (err, stdout, stderr) => { console.log(`[manager-rotation] ${session}: ${`${stdout} ${stderr}`.trim().slice(-300)}`); done(err ? (Number.isInteger(err.code) ? err.code : 1) : 0); });
+  }),
+});
 const claudeLimitSeen = new Map();
 async function claudeLimitTick(status) {
-  if (claudeAccounts.config().accounts.length < 2) return;
   const managers = new Set(loadManagerSessions());
+  const several = claudeAccounts.config().accounts.length > 1;
   for (const [name, v] of Object.entries(status)) {
     if (v.agent !== 'claude') continue;
     const st = crashResumeStates.get(name);
-    if (!st || st.agent !== 'claude' || !scanClaudeLimit(st.lines)) { claudeLimitSeen.delete(name); continue; }
+    const limitStop = !!st && st.agent === 'claude' && scanClaudeLimit(st.lines);
+    if (managers.has(name)) { await managerRotation.tick(name, v, { limitStop, paused: sessionMeta.isPaused(name) }); continue; }
+    if (!several) continue;
+    if (!limitStop) { claudeLimitSeen.delete(name); continue; }
     const acct = v.claudeAccount || CLAUDE_DEFAULT_ACCOUNT;
     if (claudeLimitSeen.get(name) === acct) continue;
     claudeLimitSeen.set(name, acct);
@@ -2394,7 +2412,7 @@ async function claudeLimitTick(status) {
     const label = (id) => claudeAccounts.byId(id)?.label || id;
     const url = `/?s=${encodeURIComponent(name)}`;
     if (!next) { push.record({ title: `Every Claude account is used up: ${name} waits`, body: `${label(acct)} hit its limit and no other account has headroom`, url, tag: 'claude-account' }); continue; }
-    const why = !claudeAccounts.config().autoSwapSessions ? 'automatic switch is off' : managers.has(name) ? 'manager session' : sessionMeta.isPaused(name) ? 'paused' : null;
+    const why = !claudeAccounts.config().autoSwapSessions ? 'automatic switch is off' : sessionMeta.isPaused(name) ? 'paused' : null;
     if (why) { push.record({ title: `${name} hit the ${label(acct)} limit`, body: `${label(next)} has headroom; not switched (${why}). Use "Switch account" on the card.`, url, tag: 'claude-account' }); continue; }
     try {
       await swapClaudeAccount(name, next, 'claude-accounts', { limitStop: true });

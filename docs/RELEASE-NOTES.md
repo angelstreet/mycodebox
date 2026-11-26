@@ -35,6 +35,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The manager moves to another Claude account by itself, and the owner is warned before the accounts run out** — it was excluded from rotation (a push only), so everything stalled with its account. Now a usage-limit stop, or being idle on an account at 95 %, restarts it fresh on the next account with headroom (`manager-rotation.js` + `manager-fresh.sh`); with none free the owner gets the next reset time and it restarts once one frees up. One early alert fires when all accounts together hold no more than one fresh account's week · area: manager
+
 - **The manager starts on the active Claude account** — `scripts/manager-fresh.sh` (nightly, watchdog relaunch, context cap, manager-resume) always started it on the default account, so it stalled when that account ran out; `manager-command.js` now adds `CLAUDE_CONFIG_DIR` + `GHOSTY_CLAUDE_ACCOUNT` like cbsession, and the folder is trusted in that account's own `.claude.json` · area: manager
 
 - **In doubt, the harness now says to ask Opus** — a `jev-ask.js stop` that Jev did not decide, and each session question in the manager's event feed, carry "in doubt: ask Opus to answer" with the command; the new `scripts/ask-opus.js` runs `claude -p --model opus` once and records the answer in `manager-asks.jsonl`. Owner-floor asks (money, credentials, customers, publishing, deleting data, physical) get no hint and are never sent. The server calls no model by itself · area: manager

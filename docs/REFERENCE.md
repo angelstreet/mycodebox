@@ -1373,8 +1373,23 @@ marks its account used up (until the window's reset, else 1 h) and, with `autoSw
 the limit stop waives the "waiting" and pending-question checks, never the lease, job or attached-terminal ones) and
 resumed on that account, then gets `continue` after 15 s. The stop must be the agent's last output: a resumed pane replays the
 whole conversation, so the old stop sits above the park's "/exit" and "Catch you later!", and that replay is not a new stop (it must not
-swap the session a second time). A manager or paused session, a failed park, or no account
-left is pushed to the owner instead. Each row shows its account; the row's switch button moves a session by hand.
+swap the session a second time). A paused session, a failed park, or no account
+left is pushed to the owner instead.
+**The manager moves too (`manager-rotation.js`, owner 2026-11-26).** Every launch through `scripts/manager-fresh.sh`
+(nightly, `manager-watch.sh` relaunch, context cap, manager-resume) gets the active account from
+`scripts/manager-command.js` (same two variables as cbsession; an account without a login is not used; an
+`AGENT_CMD_CLAUDE` that sets its own `CLAUDE_CONFIG_DIR` wins) and trusts the folder in that account's `.claude.json`.
+The manager is never parked: a session in `managerSessions` is restarted **fresh** through the same script
+(`MANAGER_FRESH_ACCOUNT=<id>`), (1) on a usage-limit stop (`MANAGER_FRESH_LIMIT=1`: no idle wait, Escape, C-u, `/exit`),
+or (2) while `done` / `idle` / `waiting` with no draft on an account at the 95 % threshold or marked used up. The target
+is the first account in list order with headroom and a login. One restart per 10 min (1 min after "not idle", exit 3);
+a failed one alerts the owner. No account free, `autoSwapSessions` off or the manager paused: one high-priority alert
+(no account: with the next reset time, Paris), and it restarts by itself once an account frees up. A dead manager stays
+`manager-watch.sh`'s job.
+**Early alert:** one high-priority alert when all logged-in accounts together hold no more than 100 points of one fresh
+account's week up to 95 % (for example the last-but-one at 90 % with one untouched account left: before the last
+switch). A 5 h block still counts its week; a block ending more than 6 h away counts 0. It re-arms above 120 points
+(`earlyAlerted` in the state file). Tests: `test/manager-account.test.js`, `test/manager-rotation.test.js`. Each row shows its account; the row's switch button moves a session by hand.
 State: `$GHOSTY_STATE_DIR/claude-accounts.json`. API: `GET/POST /api/claude-accounts`, `POST /api/claude-accounts/settings`
 `{active?, auto?, autoSwapSessions?, order?, clearMark?}`, `DELETE /api/claude-accounts/:id`,
 `POST /api/claude-accounts/:id/login` (tmux session `login-<id>` running claude on that account),

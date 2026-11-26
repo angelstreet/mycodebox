@@ -22,3 +22,11 @@ test('manager launch command per active account', (t) => {
   assert.equal(command('nologin'), BASE, 'an account without a login is not used');
   assert.match(command('team1', { AGENT_CMD_CLAUDE: 'CLAUDE_CONFIG_DIR=/x claude' }), /^CLAUDE_CONFIG_DIR=\/x claude --model/, 'an override with its own dir wins');
 });
+
+test('MANAGER_FRESH_ACCOUNT wins over the active account', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'mgr-acct-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
+  mkdirSync(join(dir, 'team2')); writeFileSync(join(dir, 'team2', '.credentials.json'), '{}');
+  writeFileSync(join(dir, 'claude-accounts.json'), JSON.stringify({ active: 'default', accounts: [{ id: 'team2', configDir: join(dir, 'team2') }] }));
+  const out = execFileSync(process.execPath, ['scripts/manager-command.js'], { env: { HOME: dir, GHOSTY_STATE_DIR: dir, MANAGER_FRESH_ACCOUNT: 'team2' }, encoding: 'utf8' });
+  assert.equal(out, `CLAUDE_CONFIG_DIR='${join(dir, 'team2')}' GHOSTY_CLAUDE_ACCOUNT=team2 ${BASE}`);
+});

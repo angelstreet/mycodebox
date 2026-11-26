@@ -8,4 +8,6 @@ import { activeAccount, launchPrefix } from '../claude-accounts.js';
 for (const warning of launchWarnings()) console.error(`[launch] ${warning}`);
 const cmd = managerCommand();
 const stateDir = process.env.GHOSTY_STATE_DIR || join(homedir(), '.local', 'state', 'ghosty');
-process.stdout.write(`${/\bCLAUDE_CONFIG_DIR=/.test(cmd) ? '' : launchPrefix(activeAccount(stateDir))}${cmd}`);
+// MANAGER_FRESH_ACCOUNT: the account manager-rotation.js moves the manager to (it wins over the active one).
+const account = activeAccount(stateDir, { id: process.env.MANAGER_FRESH_ACCOUNT || null });
+process.stdout.write(`${/\bCLAUDE_CONFIG_DIR=/.test(cmd) ? '' : launchPrefix(account)}${cmd}`);

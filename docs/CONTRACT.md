@@ -99,6 +99,7 @@ Dated exceptions (not floor):
 | 2026-10-29 | Using a credential already on the box, through the service's own environment, for an idempotent additive write |
 | 2026-10-30 | A one-time SMS / 2FA code the owner gives in chat: pass it on, it is not a secret |
 | 2026-11-06 | Account rotation restart of a session stopped on a usage limit |
+| 2026-11-26 | The fresh restart of the manager on another Claude account (usage-limit stop, or idle at the 95 % threshold; `manager-rotation.js`) |
 
 At most one open ask per session; a system wait (deploy, lease, integration id) is not a question (owner 2026-10-31).
 
