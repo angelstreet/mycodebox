@@ -2060,7 +2060,7 @@ whose reply approves the plan around the question (round 9 `approvedAction`).
   and is later than the ask (30 s) appends `{state:"resolved", via:"session-moved-on", reason, at}` (`resolveMovedOn` in `owner-asks.js`, called from `manager.js`
   through `onAskMovedOn`). **Second trigger, the item acted on**: the session's own integration request reaching `merged` / `deployed` (a real merge, not `alreadyMerged`) calls `onMerged` in `integration-notify.js`, which resolves the session's older open asks with the branch in the reason; the open view, `manager-ask-scan.sh`, the stale list and the ask fold read the ledger, so the item is gone from all of them.
 - **Mockup-first** (`mockups.js`; `mockupFirst`, `mockupWindowMin` default 10): `POST /api/mockups` (loopback + reporter token) records a feed item
-  `kind: mockup` with a link and a deadline; a stop asking to show the mockup before building is answered "post it to the feed and build"; the owner's
+  `kind: mockup` with a link and a deadline ([a session the manager started](#sessions-the-manager-started-owner-2026-11-26): a manager event instead); a stop asking to show the mockup before building is answered "post it to the feed and build"; the owner's
   "Object" (notification button or `POST /api/mockups/<id>/object`) sends the session "The owner objects to the mockup: wait for their notes."
   **Mockup lint** (`mockup-lint.js`, manager.json `mockupLint` `live` default | `dry` | `off`, owner 2026-11-25): before a mockup reaches the feed its HTML
   (read from `/files/<path>` or a loopback http url; other urls are skipped and logged) is checked for sentences over 12 words, text blocks over 140
@@ -2383,14 +2383,18 @@ started answer to the manager". Owner-started sessions behave as before.
 - **Suggestions:** `POST /api/send/<s>` (or `/api/send-many`) with `by: "manager-agent"` and a yes / no records it with `by: "manager"`
   (`suggestions.json`, `suggestions.jsonl`, "Decided for you"). "do the N" of N items gets 400, a menu key 409. For an owner-started session, and for any
   other sender, the 409 of [No done while a suggestion has no yes / no](#no-done-while-a-suggestion-has-no-yes--no-owner-2026-11-26-suggestionsjs) stands. The owner can still answer.
+- **Mockups:** `POST /api/mockups` from such a session records the mockup but adds no owner feed item and sends no push; the manager gets
+  `<s>:mockup` with the link, the window and the object call (`POST /api/mockups/<id>/object` `{"by":"manager-agent"}`; the session is told the
+  manager objects). The answer is `{ feedId: null, to: "manager" }`.
+- **Manual update:** `scripts/manager-fresh.sh` moves `~/vpt-manager` to `origin/task44-ai-manager` on every manager relaunch (a dead one too). If
+  git fails, the restart goes on, but the manager gets `manual:update-failed` (high priority) and its kickoff starts with a warning naming git's error.
 - **Owner-only items:** `scripts/manager-ask.js --source <s>` (also `owner-ask.js`) files the ask under `manager:<s>` with `source`, so the source
   session's later turns do not close it; the owner reads "(from session <s>)". `--session <s>` of such a session is treated the same. Run from such a
   session itself (`CBSESSION_PARENT`), both commands refuse.
 - **Ready to close:** when the reflection is cleared (`no suggestions` on a done line, or every item answered with nothing approved left to build) the
   manager gets `<s>:ready-to-close` once per round. The manager checks the done line, then closes with `DELETE /api/sessions/<s>?confirm=<s>`; the delete
   guard is unchanged and nothing closes by itself. With `reflection` or `goalCheck` off there is no such event.
-- **Limits:** `by` is declared by the caller (no login), as for every manager send. Mac sessions are never the manager's. A mockup a session posts still
-  reaches the owner's feed.
+- **Limits:** `by` is declared by the caller (no login), as for every manager send. Mac sessions are never the manager's.
 
 ### Goal check (owner, 2026-11-11)
 
