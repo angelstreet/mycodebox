@@ -31,6 +31,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A `STATUS: done` line outranks the "1 shell" footer** — a session that said done while Claude's footer still listed a background shell stayed green; the shell footer is now its own signal and the done line wins, like it does over the reporter's task count · area: status dot
+
 - **A session that writes its own task document gets the MD button** — the button was only for sessions named `taskNN`; the server now also lists the `docs/tasks/*.md` files a session wrote (read from its session file), whatever its name · area: task document
 
 - **A UI review that does not run no longer blames your branch** — the returned request says whether the reviewer broke or could not review, and the manager is woken the first time, also for a live-page review, which used to fail silently · area: integration

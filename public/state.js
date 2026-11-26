@@ -39,6 +39,7 @@ export function isLoopWaiting(status) {
     (r && (r.backgroundWork > 0 || r.crons > 0) && !saidDone(status.stall) && !stop) ||
     (!stop && status.stall && (status.stall.case === 'background_wait' || status.stall.case === 'own_job_wait' || isOwnWait(status.stall))) ||
     status.paneBackground ||
+    (status.paneShell && !saidDone(status.stall) && !stop) ||   // Claude's "1 shell" footer: a STATUS: done line outranks it (owner 2026-11-26: artifacts said done and stayed green)
     status.scriptBusy
   );
 }

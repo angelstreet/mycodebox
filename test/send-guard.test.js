@@ -100,7 +100,7 @@ test('agentFromArgs: shells and sleep do not match any agent', () => {
 // Display-only signals for the green "working" badge: MiniMax/Codex footers that don't
 // go through the Claude Stop hook, and script-wrapped `claude -p` / `sleep` children.
 
-import { footerModelOf, paneBackgroundOf, scriptBusyOf, interactiveAgentOf } from '../api-extras.js';
+import { paneShellOf, footerModelOf, paneBackgroundOf, scriptBusyOf, interactiveAgentOf } from '../api-extras.js';
 
 test('paneBackgroundOf: a MiniMax "Tasks · 1 background active" footer counts', () => {
   const lines = [
@@ -348,4 +348,11 @@ test('taskDocsWritten: docs/tasks/*.md the session wrote, unique, other paths ig
   writeFileSync(f, ['{"input":{"file_path":"/x/wt/docs/tasks/TASK-9-a.md"}}', '{"input":{"file_path":"/x/wt/src/a.js"}}', '{"input":{"file_path":"/x/wt/docs/tasks/TASK-9-a.md"}}', '{"input":{"file_path":"/x/wt/docs/tasks/b.md"}}'].join('\n'));
   assert.deepEqual(await taskDocsWritten(f), ['/x/wt/docs/tasks/TASK-9-a.md', '/x/wt/docs/tasks/b.md']);
   assert.deepEqual(await taskDocsWritten(pjoin(d, 'none.jsonl')), []);
+});
+
+test('paneShellOf: the Claude shell footer is its own signal, not paneBackground', () => {
+  const l = ['✻ Cooked for 6m · done 10:50 PM · 1 shell still running', '  ⏵⏵ bypass permissions on · 1 shell · ↓ to manage'];
+  assert.equal(paneShellOf(l), true);
+  assert.equal(paneBackgroundOf(l, { shell: false }), false);
+  assert.equal(paneBackgroundOf(l), true);
 });
