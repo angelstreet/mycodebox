@@ -43,6 +43,12 @@ what changed and why it matters, ending with `· area: <area>`.
 
 - **Codex defaults to GPT-6.1 Sol** — New sessions default to `gpt-6.1-sol` and offer it even when the local model cache is stale. V2 routing registers the model and records ChatGPT-account pricing as unknown rather than inferring API prices (2026-11-26) · area: Codex
 
+- **One session card at a time on phones** — The dashboard opens a single card on mobile, including when a previous visit or link requested the grid. Use the Sessions drawer or swipe the card to switch sessions · area: dashboard
+
+- **Phone sessions stay visible when there are no task sessions** — The Tasks filter applies only while an unhidden `TASK-` or `TASK_` session exists. If active filters match nothing, the grid and Sessions drawer offer **Clear filters** · area: dashboard
+
+- **Codex model picker excludes the two GPT-6.2 models rejected by interactive sessions** — An earlier change inserted GPT-6.2 Sol and Astra because `codex exec` succeeded, but dashboard-created interactive sessions rejected both with `model_not_in_accessible_catalog`. Even the freshly updated CLI cache lists them, so the picker explicitly filters them; the V2 registry and price rows return to their prior entries, and the live Codex model line is restored separately from its backup (2026-11-26) · area: Codex
+
 - **An in-task fix is recorded in words, not as a filed bug** — the done check sent every fix without a `bug-<id>` back with "file the bug you fixed", while `found-bug` refuses a bug inside the session's own task (owner 2026-11-25): sessions were pushed into filings the rules forbid. `bugs: fixed — <what was broken>` now passes; a filed bug is still named by its id. The rule bullet in AGENTS.md, the cbsession preamble and MAC-HOOK says so, and AGENTS.md tells a fresh worktree to run `npm ci` before `npm test` (manager 2026-11-26) · area: done check
 
 - **A session with open suggestions is told first, and nothing else** — the push that makes a session with unanswered suggestions end on `STATUS: needs-owner: improvement suggestions ...` sat behind the proof, closing-review and load gates of the done check and reached ghosty 7 min late. It now runs first, without the load gate, and while items are open no other done check types into the session (owner 2026-11-26: "if there is suggestion open we cannot be on done") · area: done check
