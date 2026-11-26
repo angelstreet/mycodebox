@@ -12,7 +12,7 @@
 //   lease:released|expired|narrowed              → kind = 'lease', state (written by lease-watch.js straight to the feed, no push)
 //   handoff:overdue                              → kind = 'handoff', state (written by handoffs.js straight to the feed, no push)
 //   <session>:leftovers                          → kind = 'leftovers', items (done-leftovers.js: a done session idle > 10 min that lists work it can do itself)
-//   <session>:push                               → kind = 'push', items, pushKind (suggestions | routine-ask | blocked-host), reply (owner-push.js: the manager sends the push itself)
+//   <session>:push                               → kind = 'push', items, pushKind (routine-ask | blocked-host), reply (owner-push.js: the manager sends the push itself)
 //   <session>:bug                            → kind = 'bug', bug {id,title,endpoint,blocking,...} (found-bugs.js: a session filed a bug outside its scope; the manager sends a worker)
 //   <session>:bug-unreported                 → kind = 'bug-unreported', items [sentence] (found-bugs.js detector: closing text mentions a failure but no found-bug record)
 //   <TASK-NN>:orphaned-task                  → kind = 'orphaned-task', items [open rows], task {id,doc,lastSession,ownerOnly} (unfinished.js: open task rows, no live session; the manager runs scripts/resume-task)

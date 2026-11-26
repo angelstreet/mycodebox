@@ -1,6 +1,6 @@
 #!/bin/sh
-# found-bug: ONLY for a bug unrelated to your goal or task (owner, 2026-11-25). A bug, leftover or idea inside your task is fixed or explained
-# in your reply, never filed; a small unrelated bug with a repro is fixed too, in its own worktree. Never end a turn with "I filed X so someone
+# found-bug: ONLY for a bug unrelated to your goal or task (owner, 2026-11-25). A bug or leftover inside your task is fixed or explained
+# in your reply, never filed (an idea is never built unasked: it goes in the reflection answer); a small unrelated bug with a repro is fixed too, in its own worktree. Never end a turn with "I filed X so someone
 # will fix it". POSIX sh + curl: codebox, Mac, cloud.
 #   found-bug --title "REST list of virtual scripts errors" --why-not-fixed other-area|live-session-task
 #             --reason "one line: why you could not fix it now" --checked-main <sha> --tried "one line: what you tried" --error "exact text"
