@@ -41,6 +41,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **One session card at a time on phones** — The dashboard opens a single card on mobile, including when a previous visit or link requested the grid. Use the Sessions drawer or swipe the card to switch sessions · area: dashboard
+
 - **Phone sessions stay visible when there are no task sessions** — The Tasks filter applies only while an unhidden `TASK-` or `TASK_` session exists. If active filters match nothing, the grid and Sessions drawer offer **Clear filters** · area: dashboard
 
 - **Codex model picker excludes the two GPT-6.2 models rejected by interactive sessions** — An earlier change inserted GPT-6.2 Sol and Astra because `codex exec` succeeded, but dashboard-created interactive sessions rejected both with `model_not_in_accessible_catalog`. Even the freshly updated CLI cache lists them, so the picker explicitly filters them; the V2 registry and price rows return to their prior entries, and the live Codex model line is restored separately from its backup (2026-11-26) · area: Codex
