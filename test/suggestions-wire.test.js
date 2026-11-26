@@ -97,6 +97,11 @@ done
   await sleep(5000);
   assert.equal((await record()).items.filter((i) => i.answer).length, 0);
 
+  // "do the 2" of a list of 2 is ambiguous (all two, or item 2): nothing is recorded and the feed asks the owner
+  assert.equal((await post('/api/send/worker-session', { keys: 'do the 2' }, dashboard)).status, 200);
+  await until(async () => (await feed()).some((x) => /all 2 suggestions, or only item 2\?/.test(x.title)), 'the owner is asked back');
+  assert.equal((await record()).items.filter((i) => i.answer).length, 0, 'nothing recorded for the ambiguous reply');
+  await sleep(4000);
   assert.equal((await post('/api/send/worker-session', { keys: 'no 2' }, dashboard)).status, 200);
   await until(async () => (await record()).items[1].answer === 'no', 'the dashboard answer is recorded');
   assert.equal((await record()).clear, undefined, 'one item is still open');
