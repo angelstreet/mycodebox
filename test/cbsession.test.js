@@ -145,3 +145,15 @@ test('a claude session starts on the active Claude account (the rotation reaches
   assert.ok(!launch('cb-mmacct').includes('CLAUDE_CONFIG_DIR'));
   fs.rmSync(accountsFile, { force: true });
 });
+
+// The start report comes only once the agent is up: a startup prompt in those seconds was queued for the owner (2026-11-26).
+test('a manager start is on record before the tmux session exists; an owner start writes nothing', () => {
+  const bin = path.join(home, 'shim'); fs.mkdirSync(bin, { recursive: true });
+  const seen = path.join(home, 'at-new-session.jsonl'), state = path.join(home, 'state-early'), children = path.join(state, 'manager-children.jsonl');
+  fs.writeFileSync(path.join(bin, 'tmux'), `#!/bin/sh\n[ "$1" = new-session ] && cat "${children}" > "${seen}" 2>/dev/null\nexit 1\n`, { mode: 0o755 });
+  const start = (name, by) => spawnSync('bash', [SCRIPT, '-n', name, '-d', work, '-p', 'codex', '-t', 'x'], { encoding: 'utf8', env: { PATH: `${bin}:${process.env.PATH}`, HOME: home, GHOSTY_STATE_DIR: state, CBSESSION_BY: by } });
+  start('cb-early', 'manager');
+  assert.match(fs.readFileSync(seen, 'utf8'), /"session":"cb-early","by":"manager"/);
+  start('cb-early-own', 'dashboard');
+  assert.doesNotMatch(fs.readFileSync(children, 'utf8'), /cb-early-own/);
+});

@@ -2372,7 +2372,8 @@ started answer to the manager". Owner-started sessions behave as before.
 
 - **Who** (`manager-owned.js`): the recorded starter is a manager session (`managerSessions`) or `manager-agent`, or is itself such a session (the
   chain is followed). With no recorded starter (`unknown`, `cbsession`) a line in `manager-children.jsonl` counts, unless it is more than a day older than
-  the running instance (a reused name). `dashboard`, `owner` and `v2` starts are never the manager's. A starter that is a session name is stored in
+  the running instance (a reused name). `cbsession` writes that line before it creates the tmux session, because its start report arrives only once the
+  agent is up (a startup prompt in between was queued for the owner, 2026-11-26). `dashboard`, `owner` and `v2` starts are never the manager's. A starter that is a session name is stored in
   `session-history.jsonl` as `parent` (`started_by: "cbsession"`); before this, `POST /api/history/started` refused it and nothing was recorded.
 - **Told:** `cbsession` adds the rule to the brief; the reflection, open-suggestions and missing-reply messages say `needs-manager`; every other harness
   text that names `needs-owner` (done-check, goal-check, UI review) is rewritten on send (`forManagerSession`).

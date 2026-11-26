@@ -346,6 +346,12 @@ if [ "$PROV" = claude ] && command -v node >/dev/null; then
     printf '\n**MCP not connected** (cbsession, %s UTC): the MCP server %s did not answer for %s s when this session started (down or restarting), so its tools are missing here and do not come back by themselves. Do not read code to replace them: use the command-line or REST way your skill names (VirtualPyTest: `scripts/agent/vpt_quicktest.py` to save a Quick Test, `scripts/agent/vpt_run.py` to run), and say in your first message that the MCP was down.\n' "$(date -u +%H:%M)" "$MCPDOWN" "${CBSESSION_MCP_WAIT:-60}" >> "$P"
   fi
 fi
+# The manager's session is known as such BEFORE it exists: the start report below comes only once the agent is up, and a startup prompt in between
+# was queued for the owner (failing-schedules-20261126, 2026-11-26). manager-owned.js reads this line while no starter is recorded.
+if [ -n "${MRULE:-}" ]; then
+  SD="${GHOSTY_STATE_DIR:-$HOME/.local/state/ghosty}"; mkdir -p "$SD"
+  printf '{"session":"%s","by":"%s","at":"%s","note":"cbsession"}\n' "$NAME" "$(tr -cd 'A-Za-z0-9_.-' <<<"$STARTED_BY")" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$SD/manager-children.jsonl"
+fi
 tmux new-session -d -s "$NAME" -c "$DIR" -x 160 -y 45 "bash $(q "$L"); exec bash -l"
 # Claude: accept the folder-trust dialog if it appears (the selected option differs by version), then wait for Remote Control.
 for i in $(seq 1 30); do
