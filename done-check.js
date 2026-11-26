@@ -147,14 +147,16 @@ export function evidenceGapOf(text, integrations, goal = '') {
     const seg = /\bbugs\s*[:=]\s*(.*)$/i.exec(line)?.[1] || '';
     const named = BUG_ID.test(seg);
     const none = /^none\b[\s:;,(—-]*(.{8,})/i.exec(seg);   // `bugs: none` needs a reason after a fix
-    if (!named && !none) bug = { ids: (fixes.length ? fixes : ints).map((i) => i.id).slice(0, 3) };
+    // a bug inside the session's own task is never filed (found-bug, owner 2026-11-25): `bugs: fixed — <what>` in words is the record (manager 2026-11-26)
+    const said = /^fixed\b[\s:;,(—-]*(.{8,})/i.exec(seg);
+    if (!named && !none && !said) bug = { ids: (fixes.length ? fixes : ints).map((i) => i.id).slice(0, 3) };
   }
   return releaseNote.length || bug ? { releaseNote, bug } : null;
 }
 export function evidenceGapMessage(g) {
   const parts = [];
   if (g.releaseNote.length) parts.push(`(1) Release note: you merged code (${g.releaseNote.join(', ')}) and no integration of yours touches the release note (virtualpytest docs/release_note/README.md, mycodebox docs/RELEASE-NOTES.md), and your closing review names none. Add the entry now on your branch and \`integrate request\` it, or write \`docs ... release note none needed: <reason>\`.`);
-  if (g.bug) parts.push(`(2) Bug record: your work fixed something (integration ${g.bug.ids.join(', ')}) but the bugs field names no bug id. File the bug you fixed (\`found-bug --title ... --blocking no\`) and resolve it with \`found-bug --resolve <id> --commit <integration id>\`, then write \`bugs: fixed <id>\`; \`bugs: none\` is only accepted with a reason after it (for example \`bugs: none — a feature, nothing was broken\`).`);
+  if (g.bug) parts.push(`(2) Bug record: your work fixed something (integration ${g.bug.ids.join(', ')}) but the bugs field does not say what. A bug inside your own task is never filed: write \`bugs: fixed — <what was broken>\`. A filed bug you fixed: resolve it with \`found-bug --resolve <id> --commit <integration id>\` and write \`bugs: fixed <id>\`. \`bugs: none\` is only accepted with a reason after it (for example \`bugs: none — a feature, nothing was broken\`).`);
   return `Done check: your STATUS: done line is missing evidence for a change you shipped. ${parts.join(' ')} Then rewrite the done line (keep the closing review and bugs fields) and end with a STATUS line.`;
 }
 

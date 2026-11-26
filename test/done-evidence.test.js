@@ -13,6 +13,9 @@ test('evidenceGapOf: a code fix without release-note diff or bug id is a gap; bo
   assert.deepEqual(g.releaseNote, ['virtualpytest']);
   assert.deepEqual(g.bug, { ids: ['int-1'] });
   assert.equal(evidenceGapOf(line('release note updated', 'fixed bug-1a2b3c4d'), [fixInt({ files: ['backend/a.py', RN] })]), null);
+  // an in-task fix said in words (2026-11-26: the push made a session file a bug found-bug says is never filed)
+  assert.equal(evidenceGapOf(line('release note updated', 'fixed — a reply of numbers alone was not recorded'), [fixInt({ files: ['backend/a.py', RN] })]), null);
+  assert.deepEqual(evidenceGapOf(line('release note updated', 'fixed'), [fixInt({ files: ['backend/a.py', RN] })]).bug, { ids: ['int-1'] }, 'a bare "fixed" says nothing');
   assert.equal(evidenceGapOf(line('REFERENCE.md', 'none — a feature, nothing was broken'), [fixInt({ files: ['backend/a.py', RN], branch: 'feat/x', subjects: ['feat: x'] })]), null);
 });
 
@@ -29,7 +32,8 @@ test('evidenceGapOf: words alone do not count as a release note; "none needed: <
 
 test('evidenceGapMessage names both asks and the resolve command', () => {
   const m = evidenceGapMessage(evidenceGapOf(line('REFERENCE.md', 'none'), [fixInt()]));
-  for (const re of [/release note/i, /docs\/RELEASE-NOTES\.md/, /found-bug --title/, /--resolve <id> --commit <integration id>/, /bugs: fixed <id>/]) assert.match(m, re);
+  for (const re of [/release note/i, /docs\/RELEASE-NOTES\.md/, /never filed: write `bugs: fixed — <what was broken>`/, /--resolve <id> --commit <integration id>/, /bugs: fixed <id>/]) assert.match(m, re);
+  assert.doesNotMatch(m, /found-bug --title/, 'an in-task bug is never filed: the push does not ask for a filing');
 });
 
 function harness(text, ints, over = {}) {
@@ -42,7 +46,7 @@ function harness(text, ints, over = {}) {
 test('done-check: pushed back once after a fix integration without evidence; none with both; not for non-merged work', async () => {
   const h = harness(line('REFERENCE.md updated', 'none'), [fixInt()]);
   await h.w.tick(); await h.w.tick();
-  assert.equal(h.sent.length, 1); assert.match(h.sent[0][1], /release note/i); assert.match(h.sent[0][1], /bug id/);
+  assert.equal(h.sent.length, 1); assert.match(h.sent[0][1], /release note/i); assert.match(h.sent[0][1], /bugs field does not say what/);
   h.sessions[0].text = line('REFERENCE.md updated, rewritten', 'none');   // same gap, new line: not pushed again
   await h.w.tick(); assert.equal(h.sent.length, 1);
   const ok = harness(line('release note updated', 'fixed bug-1a2b3c4d'), [fixInt({ files: ['backend/a.py', RN] })]);
