@@ -245,6 +245,21 @@ export function createGoalGate({ stateDir, goalOf: goalFor = async () => '', par
     await note({ session: s.name, kind: 'reflect', unanswerable: true }); await save();
   }
 
+  // Open suggestions alone, ahead of every other done check (owner 2026-11-26: "if there is suggestion open we cannot be on done, otherwise it
+  // needs to be last msg of the session"): the push behind the proof / evidence / load gates reached ghosty 7 min late. -> d | null, as evaluate()
+  async function openSuggestions(s) {
+    if (mode() !== 'live' || reflectMode() !== 'live' || s.canAnswer === false) return null;
+    const ls = lastStatus(s.text);
+    if (!ls || !DONE_KINDS.has(ls.kind)) return null;
+    await load();
+    ledger.observe(s.name, s.text, { at: s.doneAt || null });
+    const unanswered = ledger.openOf(s.name);
+    if (!unanswered.length) return null;
+    const e = (st.s[s.name] ||= {}), textSig = textSigOf(s.text);
+    if (e.openTold === textSig) return null;
+    return { kind: 'suggestions-open', message: openSuggestionsMessage(unanswered, { manager: managerStarted(s.name) }), goal: '', sig: sigOf(s.text), textSig };
+  }
+
   async function evaluate(s) {
     if (mode() === 'off') return null;
     const ls = lastStatus(s.text);
@@ -357,5 +372,5 @@ export function createGoalGate({ stateDir, goalOf: goalFor = async () => '', par
   async function forget(live) { await load(); let ch = false; for (const n of Object.keys(st.s)) if (!live.has(n) && !n.startsWith('mac:')) { delete st.s[n]; ch = true; } if (ch) await save(); }
   // a new session took the name: nothing of the old one's counts
   async function drop(name) { await load(); if (st.s[name]) { delete st.s[name]; await save(); } }
-  return { evaluate, sent, snapshot, forget, drop };
+  return { evaluate, openSuggestions, openCount: (name) => ledger.openOf(name).length, sent, snapshot, forget, drop };
 }

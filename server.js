@@ -1902,7 +1902,8 @@ async function pollOnce() {
       observe({ name: s.name, state, agent, plain, raw: pane.split('\n').slice(0, plain.length), changed: paneChanged || t.prevObserved !== state, realWork: spinning,
         project: meta.project ?? null, cwd: meta.cwd || null, lastSendAt: sentAt, lastSendText: lastSendText.get(s.name) ?? null, now,
         scriptBusy,
-        rep: agent === 'claude' && reporter.liveOf(s.name) ? { turnStart: () => reporter.activityOf(s.name)?.promptAt || null, turnForStop: (since) => reporter.turnForStop(s.name, since), promptSince: (since) => reporter.promptSince(s.name, since) } : null });
+        // a quiet reporter still holds the finished turn (turnForStop); the rest keeps the LIVE_MS window
+        rep: agent === 'claude' && reporter.attached(s.name) ? { turnStart: () => (reporter.liveOf(s.name) ? reporter.activityOf(s.name)?.promptAt || null : null), turnForStop: (since) => reporter.turnForStop(s.name, since), promptSince: (since) => reporter.promptSince(s.name, since) } : null });
       t.prevObserved = state;
     }
     // the stop's own closing text (the whole reported turn when there is one), read once the manager has classified it

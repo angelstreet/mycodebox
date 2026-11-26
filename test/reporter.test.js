@@ -63,6 +63,10 @@ test('turn.end and stop of one turn merge, in either order', () => {
 test('a report belongs to a stop only when no newer prompt and not long before it', () => {
   const stopSince = clock;
   assert.equal(rep.turnForStop('sess', stopSince).text, 'done now');
+  clock += 30 * 60000;   // a finished session is quiet: its turn is still the stop's text (2026-11-26: after 10 min it fell back to the pane)
+  assert.equal(rep.liveOf('sess'), false);
+  assert.equal(rep.attached('sess'), true);
+  assert.equal(rep.turnForStop('sess', stopSince).text, 'done now');
   assert.equal(rep.turnForStop('sess', stopSince + 120000), null, 'ended long before the stop began');
   clock += 10;
   rep.ingest(ev('prompt', { text: 'next task' }));
@@ -234,4 +238,15 @@ test('a peer record appended via logEvent lands in stalls.jsonl and is ignored b
   // the same consumers that iterate stalls.jsonl should not misread a peer record
   const stalls = lines.map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter((x) => x && x.type === 'stall' && Date.parse(x.at) >= clock - 86400000);
   assert.equal(stalls.length, 0, 'no stall records produced by these peer tests');
+});
+
+test('a session that ended (session.end) no longer gives its last turn to a stop', () => {
+  const r2 = createReporter({ stateDir: tmp('ghosty-rep-end-'), now: () => clock });
+  const e = (event, extra = {}) => ({ v: 1, event, session: 'gone', sessionId: 'sid-2', cwd: '/x', at: clock, ...extra });
+  r2.ingest(e('session.start'));
+  r2.ingest(e('turn.end', { text: 'STATUS: done — x', reason: 'answer' }));
+  const since = clock;
+  assert.equal(r2.turnForStop('gone', since).text, 'STATUS: done — x');
+  r2.ingest(e('session.end'));
+  assert.equal(r2.turnForStop('gone', since), null);
 });
