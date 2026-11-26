@@ -1415,7 +1415,7 @@ The manager is never parked: a session in `managerSessions` is restarted **fresh
 (`MANAGER_FRESH_ACCOUNT=<id>`), (1) on a usage-limit stop (`MANAGER_FRESH_LIMIT=1`: no idle wait, Escape, C-u, `/exit`),
 or (2) while `done` / `idle` / `waiting` with no draft on an account at the 95 % threshold or marked used up. The target
 is the first account in list order with headroom and a login. One restart per 10 min (1 min after "not idle", exit 3);
-a failed one alerts the owner and is retried at the next tick; a Fable session is resumed on `--model opus` (the Fable usage-credits prompt would stop it). No account free, `autoSwapSessions` off or the manager paused: one high-priority alert
+a failed one alerts the owner and is retried after 5 min; a Fable session is resumed on `--model opus` (the Fable usage-credits prompt would stop it). No account free, `autoSwapSessions` off or the manager paused: one high-priority alert
 (no account: with the next reset time, Paris), and it restarts by itself once an account frees up. A dead manager stays
 `manager-watch.sh`'s job.
 **Early alert:** one high-priority alert when all logged-in accounts together hold no more than 100 points of one fresh
