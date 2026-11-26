@@ -83,6 +83,8 @@ export function createPendingWakes({ file = null, now = () => Date.now(), setTim
       for (const e of pending.filter((x) => x.session === session)) { if (!(await deliver(e, false))) break; n++; }
       return n;
     },
+    // every session with a kept wake that is stopped right now gets it (a turn-end event lost to a restart or a hook failure must not leave the result waiting for the 5 min timer: 2026-11-26, a deploy's own restart ate the stop)
+    async sweep() { let n = 0; for (const s of new Set(pending.map((e) => e.session))) n += await this.onStop(s); return n; },
     has: (session) => pending.some((e) => e.session === session),
     pendingOf: (session) => pending.filter((e) => e.session === session).map((e) => ({ key: e.key, text: e.text, attempts: e.attempts })),
     // the session ended: nothing to deliver any more
