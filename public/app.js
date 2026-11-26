@@ -1888,7 +1888,7 @@ function renderFilterBar() {
 }
 
 // ---------- task document (.md) ----------
-// Sessions named taskNN get an MD button when the server finds a TASK-NN*.md (or task.md) for them.
+// A session gets an MD button when the server finds a task doc for it: TASK-NN*.md for a taskNN name, a task.md in its folder, or a docs/tasks/*.md it wrote itself.
 state.taskDocs = new Map();   // session -> { files: [] , at }
 // QF-08 — in-memory cache for /api/taskdoc so re-opening a doc doesn't flash
 // 'loading…'. Keyed by "session\0file" so two sessions can have a same-named
@@ -1900,7 +1900,7 @@ function probeTaskDoc(cell, n) {
   const btn = cell.querySelector('.td');
   if (!btn) return;
   let d = state.taskDocs.get(n);
-  if (!/(?:^|[-_])task\d+/i.test(n)) { btn.classList.add('hidden'); return; }
+  if (n.startsWith('mac:')) { btn.classList.add('hidden'); return; }   // any session can have a task doc: one it wrote itself, or TASK-NN for a taskNN name
   if (!d || (!d.busy && Date.now() - d.at > 120000)) {
     d = d || { files: [], at: 0 };
     d.busy = true; state.taskDocs.set(n, d);

@@ -159,7 +159,7 @@ import { pickableProject, launchArgs, codexModels, CLAUDE_MODELS, MINIMAX_MODELS
 import { createSessionHistory } from './session-history.js';
 import { paneLinesOk } from './pane-lines.js';
 import { scrollPlan, wheelPlan, altScrollApplies } from './alt-scroll.js';
-import { effortOf, findSessionFile, readConversation, tailChars } from './conversation.js';
+import { effortOf, taskDocsWritten, findSessionFile, readConversation, tailChars } from './conversation.js';
 import { createLimiter, createCoalescer } from './pane-cache.js';
 import { findInFolder, resolveServedFile } from './files-route.js';
 import { readViewFile } from './file-view.js';
@@ -672,7 +672,22 @@ async function taskDocFiles(session) {
       else if (m && new RegExp(`^TASK-0*${m[1]}(?!\\d)`, 'i').test(n)) add(d, n);
     }
   }
+  // a task doc the session wrote itself (docs/tasks/*.md in its own file), whatever the session is called (owner 2026-11-26: settings-script wrote TASK-262 and had no MD button)
+  try {
+    const sid = (latest || await poll().catch(() => null))?.status?.[session]?.claudeSessionId;
+    for (const f of await writtenTaskDocs(sid)) if (existsSync(f)) add(dirname(f), basename(f));
+  } catch { /* the doc buttons just stay as they were */ }
   return out;
+}
+const writtenDocsCache = new Map();   // session id -> { at, files }
+async function writtenTaskDocs(sid) {
+  if (!sid) return [];
+  const hit = writtenDocsCache.get(sid), now = Date.now();
+  if (hit && now - hit.at < 30000) return hit.files;
+  const file = await findSessionFile(sid).catch(() => null);
+  const files = file ? await taskDocsWritten(file) : [];
+  writtenDocsCache.set(sid, { at: now, files });
+  return files;
 }
 
 // The whole captured conversation as readable text: prompts, replies, and tool names only.
