@@ -35,6 +35,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A new Claude session no longer loses its first turn's report** — the reporter plugin's first send can take over 800 ms on a cold start, which it read as "ghosty is down" and stayed silent for 30 s, dropping the first prompt and turn end. A send that answers late now ends the silence. Also documented: on Team / Enterprise accounts Claude Code's `cc-plugin-sec-default` skips every `classic.*` plugin hook (organisation policy, not changed here); the done check works there from `turn.end` (`test/team-account-reporter.test.js`), what is missing and the one admin setting are in REFERENCE "Session reporter" · area: reporter
+
 - **An ambiguous answer to a suggestion list is asked back, not guessed** — "do the 4" of a list of 4 was recorded as item 4 only while a person (and the session) meant all four, so three items stayed open and the session read as needing you for an hour. Now nothing is recorded and the feed asks: reply `yes 1 2 3 4` for all or `yes 4, no 1 2 3` for item 4 only · area: suggestions
 
 - **The manager moves to another Claude account by itself, and the owner is warned before the accounts run out** — it was excluded from rotation (a push only), so everything stalled with its account. Now a usage-limit stop, or being idle on an account at 95 %, restarts it fresh on the next account with headroom (`manager-rotation.js` + `manager-fresh.sh`); with none free the owner gets the next reset time and it restarts once one frees up. One early alert fires when all accounts together hold no more than one fresh account's week · area: manager

@@ -61,10 +61,13 @@ async function report($: any, event: string, data: Record<string, unknown> = {},
     if (now < state.downUntil) return null
     const id = await identity($)
     const body = payload(event, id, now, data, agentId)
-    const sent = send($, body).then(text => ({ text }), () => null)
+    let late = false
+    // Slow is not down: a send that answers after the bound ends the quiet period it caused. A cold start's first send takes
+    // over 800 ms, and 30 s of silence then dropped the first turn's prompt and turn.end (bug-81f093be).
+    const sent = send($, body).then(text => { if (late) state.downUntil = 0; return { text } }, () => null)
     const timeout = $.clock.sleep(ms).then(() => null, () => null)
     const ok = await Promise.race([sent, timeout])
-    if (!ok) state.downUntil = now + DOWN_MS
+    if (!ok) { late = true; state.downUntil = now + DOWN_MS }
     return ok ? ok.text : null
   } catch { return null }
 }
