@@ -3611,6 +3611,8 @@ const integrationNotify = createIntegrationNotify({
   log: (r) => logEvent(r),
 });
 pendingWakes.restore();   // wakes kept before a restart are armed again
+// a wake kept for a session that is already stopped is delivered within seconds: the turn-end event is the fast path, this sweep covers one that was lost (restart, hook failure)
+setInterval(() => { if (!pendingWakes.size()) return; poll().then(() => pendingWakes.sweep()).catch((e) => console.error('[pending-wake] sweep', e.message)); }, 20000).unref?.();
 // Progress watch (progress-watch.js): a looping or no-progress working session -> one `no-progress` manager event per 2 h; never types.
 // manager.json `progressWatch`: "live" (default) | "dry" | "off". `GET /api/progress-watch` shows the last tick.
 const progressWatch = createProgressWatch({
