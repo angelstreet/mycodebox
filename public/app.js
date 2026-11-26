@@ -25,7 +25,7 @@ import { uploadOne, uploadType, UPLOAD_ACCEPT, UPLOAD_HINT } from '/upload.js';
 import { renderMd } from '/md.js';
 import { decideReaderPaint, autoFullDue, autoFullDone } from '/reader-paint.js';
 import { localScrollEnters, localScrollExits, flingVelocity, flingStep, ENTER_PX } from '/local-scroll.js';
-import { chipModel, machinesOf, holdingsOf, blocksDeploy, shortResource, ttlText } from '/platforms.js';
+import { chipModel, machinesOf, holdingsOf, blocksDeploy, shortResource, ttlText, shortRef, leaseHostSummary } from '/platforms.js';
 import { displayStateOf, STATE_RANK, STATE_LABEL, isRoutineAlert } from '/state.js';
 import { fmtTok, fmtUsd, sessionRows, topEntries, dayBars, summaryFresh, managerBlockHtml } from '/usage.js';
 import '/tip.js';
@@ -1133,7 +1133,7 @@ function renderDeployBanner() {
   const rank = { running: 0, 'awaiting-approval': 1, queued: 2 };
   const act = list.filter((x) => x.state in rank).sort((p, q) => rank[p.state] - rank[q.state] || p.created - q.created);
   if (!act.length) {
-    if (el.dataset.key !== 'idle') { el.dataset.key = 'idle'; el.className = 'deployban idle'; el.innerHTML = '<span class="lbl">DEPLOY</span><span class="dnone">none</span>'; }
+    if (el.dataset.key !== 'idle') { el.dataset.key = 'idle'; el.className = 'deployban idle'; el.innerHTML = '<span class="lbl">DEPLOY</span><span class="dnone">\u2014</span>'; }
     syncAlertRowVisibility();
     return;
   }
@@ -1145,13 +1145,19 @@ function renderDeployBanner() {
   el.className = `deployban${running ? ' run' : ' wait'}`;
   el.innerHTML = `<span class="lbl">${running ? 'DEPLOYING' : act.some((x) => x.state === 'awaiting-approval') ? 'DEPLOY NEEDS APPROVAL' : 'DEPLOY QUEUED'}</span>` + act.map((x) => {
     const since = state.depSeen.get(x.id);
-    const what = `<b>${escapeHtml(x.env)}</b> ${escapeHtml(x.scope)} &middot; ${escapeHtml(x.ref)}`;
+    const what = `<b>${escapeHtml(x.env)}</b> ${escapeHtml(x.scope)} &middot; ${escapeHtml(shortRef(x.ref))}`;
     const tail = x.state === 'running' ? `${since ? `<i data-since="${since}">${fmtDur((Date.now() - since) / 1000)}</i>` : ''}`
       : x.state === 'awaiting-approval' ? '<i>approve?</i>' : '<i>queued</i>';
-    return `<button class="dchip ${x.state === 'awaiting-approval' ? 'ask' : x.state}" data-dep-open="${escapeHtml(x.id)}" title="${escapeHtml(`${x.agent || ''}${x.purpose ? ' \u2014 ' + x.purpose : ''}`)}">${x.state === 'running' ? icon('refresh', 13, 'spin') : icon('timer', 13)}${what}${tail ? ` ${tail}` : ''}</button>`;
+    return `<button class="dchip ${x.state === 'awaiting-approval' ? 'ask' : x.state}" data-dep-open="${escapeHtml(x.id)}" title="${escapeHtml(`${x.ref || ''}\n${x.agent || ''}${x.purpose ? ' \u2014 ' + x.purpose : ''}`)}">${x.state === 'running' ? icon('refresh', 13, 'spin') : icon('timer', 13)}${what}${tail ? ` ${tail}` : ''}</button>`;
   }).join('') + (blockers.length ? `<span class="dblk" title="${escapeHtml(blockers.join(', '))}">${icon('lock', 12)}blocked by: <b>${escapeHtml(blockers.join(', '))}</b></span>` : '');
   for (const b of el.querySelectorAll('[data-dep-open]')) b.onclick = () => openPlatforms({ deploy: b.dataset.depOpen });
   syncAlertRowVisibility();
+  markFade(el);
+}
+
+// a section of the alert row that still scrolls sideways fades out at its right edge, so a clipped chip reads as clipped
+function markFade(el) {
+  if (el) el.classList.toggle('ov', el.scrollWidth > el.clientWidth + 2);
 }
 
 // ---------- disk banner: the disk-space safety policy (reason code disk_low) ----------
@@ -1219,13 +1225,38 @@ function renderLeaseBar() {
   if (el.dataset.key === key) return;
   el.dataset.key = key;
   el.className = `leasebar${ls.length ? '' : ' idle'}`;
-  el.innerHTML = `<span class="lbl">LEASES</span>` + (ls.length ? ls.map((l) => {
-    const who = String(l.agent || '').replace(/^[^:]*:/, '');
-    const t = ttlText(l.ttlLeftMin);
-    return `<button class="lchip${blocksDeploy(l, deps) ? ' blocks' : ''}" data-plat="${escapeHtml(l.env + '|' + l.resource)}" title="${escapeHtml(`${l.resource}\n${l.agent || ''}${l.purpose ? '\n' + l.purpose : ''}`)}">${icon('lock', 12)}<b>${escapeHtml(shortResource(l))}</b>${who ? ` ${escapeHtml(who)}` : ''}${t ? ` <i>${t}</i>` : ''}</button>`;
-  }).join('') : '<span class="dnone">none</span>');
+  const wasOpen = !!document.getElementById('leasePop');   // a TTL tick re-renders; an open popover stays open with the new numbers
+  document.getElementById('leasePop')?.remove();
+  // one summary button (count + hosts); the per-lease detail opens in a popover, so nothing is clipped
+  const blocks = ls.some((l) => blocksDeploy(l, deps));
+  el.innerHTML = ls.length
+    ? `<button class="lsum${blocks ? ' blocks' : ''}" type="button" aria-haspopup="true" aria-expanded="false" title="${escapeHtml(ls.map((l) => shortResource(l)).join(', '))}">${icon('lock', 12)}<span class="lbl">LEASES</span><b>${ls.length}</b>${icon('chevron-down', 12)}<span class="lhosts">${escapeHtml(leaseHostSummary(ls))}</span></button>`
+    : '<span class="lbl">LEASES</span><span class="dnone">0</span>';
+  const sum = el.querySelector('.lsum');
+  if (sum) sum.onclick = (e) => { e.stopPropagation(); toggleLeasePop(sum, ls, deps); };
+  if (sum && wasOpen) toggleLeasePop(sum, ls, deps);
   syncAlertRowVisibility();
 }
+function toggleLeasePop(anchor, ls, deps) {
+  const old = document.getElementById('leasePop');
+  anchor.setAttribute('aria-expanded', old ? 'false' : 'true');
+  if (old) { old.remove(); return; }
+  const pop = document.createElement('div');
+  pop.id = 'leasePop'; pop.className = 'attnpop leasepop';
+  pop.innerHTML = ls.map((l) => {
+    const who = String(l.agent || '').replace(/^[^:]*:/, '');
+    const t = ttlText(l.ttlLeftMin);
+    return `<button class="lrow${blocksDeploy(l, deps) ? ' blocks' : ''}" data-plat="${escapeHtml(l.env + '|' + l.resource)}" title="${escapeHtml(`${l.resource}\n${l.agent || ''}${l.purpose ? '\n' + l.purpose : ''}`)}">`
+      + `<span class="lr1"><b>${escapeHtml(shortResource(l))}</b>${t ? `<i>${t}</i>` : ''}</span>`
+      + `${who || l.purpose ? `<span class="lr2">${escapeHtml([who, l.purpose].filter(Boolean).join(' \u00b7 '))}</span>` : ''}</button>`;
+  }).join('');
+  document.body.appendChild(pop);
+  const r = anchor.getBoundingClientRect();
+  pop.style.top = `${r.bottom + 4}px`;
+  pop.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - pop.offsetWidth - 8))}px`;
+}
+document.addEventListener('pointerdown', (e) => { if (!e.target.closest('#leasePop, .lsum')) document.getElementById('leasePop')?.remove(); });
+if (typeof ResizeObserver !== 'undefined') { const d = document.getElementById('deployBanner'); if (d) new ResizeObserver(() => markFade(d)).observe(d); }
 function onLeases(msg) {
   state.leases = msg;       // {leases, waiters, hostname} or {error}
   renderLeaseBar();
@@ -1568,7 +1599,9 @@ function markAttentionOverflow() {
   const pills = [...el.querySelectorAll('button[data-session]')];
   pills.forEach((p) => p.classList.remove('cut'));
   el.classList.remove('ov');
-  if (pills.length < 2 || el.scrollWidth <= el.clientWidth + 2) return;
+  const over = el.scrollWidth > el.clientWidth + 2;
+  if (pills.length < 2) { el.classList.toggle('ov', over); return; }   // one pill: nothing to tuck away, just show it is clipped
+  if (!over) return;
   const more = document.createElement('button');
   more.className = 'anmore'; more.type = 'button';
   el.appendChild(more);
@@ -3665,7 +3698,7 @@ function openPlatforms(focus) {
 // chips and purple badges open Platforms at their resource / deploy; the manager panel and the ⋮ menu link to it
 document.addEventListener('click', (e) => {
   const c = e.target.closest('[data-plat]');
-  if (c) { e.stopPropagation(); openPlatforms({ res: c.dataset.plat }); return; }
+  if (c) { e.stopPropagation(); document.getElementById('leasePop')?.remove(); openPlatforms({ res: c.dataset.plat }); return; }
   const w = e.target.closest('.state[data-wd]');
   if (w) { e.stopPropagation(); openPlatforms({ deploy: w.dataset.wd }); return; }
   if (e.target.closest('[data-plat-open]')) openPlatforms();
