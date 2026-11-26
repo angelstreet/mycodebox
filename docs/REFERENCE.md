@@ -1054,8 +1054,8 @@ sends `continue`. A held session that moves on by itself loses the hold. Cards, 
 "held: quota" (tooltip = reason); the manager panel lists held sessions. The manager never switches an agent.
 
 **New session** (owner 2026-11-12: two clicks). A centred dialog: agent (claude, codex, minimax; bash is API only), priority,
-model (at most 4 per provider, preselected: claude sonnet of opus / sonnet / haiku / fable; codex gpt-6-luna then the first
-models its CLI lists in `~/.codex/models_cache.json`; minimax MiniMax-M3; `GET /api/new-session/models`), project, an optional first message (images / .md picked, pasted or
+model (at most 4 per provider, preselected: claude sonnet of opus / sonnet / haiku / fable; codex gpt-6.2-sol, gpt-6.2-astra, then the first
+other models its CLI lists in `~/.codex/models_cache.json`; stale GPT-6 and GPT-6.1 Sol entries are hidden; minimax MiniMax-M3; `GET /api/new-session/models`), project, an optional first message (images / .md picked, pasted or
 dropped are uploaded and added as `@path`) and the name (left empty with a prompt: `POST /api/new-session/name {prompt}` -> `{name, source: ai|words}`, one Haiku `claude -p` call with a 25 s timeout, else the prompt's first words; the dialog then makes it unique). Every choice of the last create (agent, model per agent, project,
 priority) is preselected (the project defaults to virtualpytest), so "+" then "create" repeats it. `POST /api/sessions {name, agent, cwd, priority, model?, prompt?}`
 starts the CLI with the model flag and the prompt as its first message (read from `<state>/prompts/<name>-<ms>.txt`, so the

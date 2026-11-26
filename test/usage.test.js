@@ -142,7 +142,7 @@ test('codex rollout: one generation per token_usage_record, cached tokens split 
   const rec = (resp, ts, usage) => JSON.stringify({ timestamp: ts, ordinal: 1, type: 'token_usage_record', payload: { session_id: 'codex-sess-1', response_id: resp, usage } }) + '\n';
   await fs.writeFile(join(cfg.codexDir, '2026/10/03/rollout-x.jsonl'),
     JSON.stringify({ timestamp: '2026-10-03T10:00:00Z', type: 'session_meta', payload: { session_id: 'codex-sess-1', cwd: '/work/demo-repo' } }) + '\n'
-    + JSON.stringify({ timestamp: '2026-10-03T10:00:01Z', type: 'turn_context', payload: { model: 'gpt-6-astra', cwd: '/work/demo-repo' } }) + '\n'
+    + JSON.stringify({ timestamp: '2026-10-03T10:00:01Z', type: 'turn_context', payload: { model: 'gpt-6.2-astra', cwd: '/work/demo-repo' } }) + '\n'
     + rec('resp_1', '2026-10-03T10:00:05Z', { input_tokens: 20000, cached_input_tokens: 15000, cache_write_input_tokens: 0, output_tokens: 300 })
     + rec('resp_2', '2026-10-03T10:00:09Z', { input_tokens: 21000, cached_input_tokens: 20000, cache_write_input_tokens: 0, output_tokens: 100 })
     + JSON.stringify({ timestamp: '2026-10-03T10:00:10Z', type: 'event_msg', payload: { type: 'token_count', info: null } }) + '\n');
@@ -152,15 +152,14 @@ test('codex rollout: one generation per token_usage_record, cached tokens split 
   const g = gens(lf.batches);
   const g1 = g.find((x) => x.id === genIdOf('codex:resp_1'));
   assert.deepEqual(g1.usageDetails, { input: 5000, output: 300, cache_read: 15000, cache_creation: 0 });
-  // 5000*10 + 300*50 + 15000*1 = 50000+15000+15000 = 80000 per 1M
-  assert.equal(g1.costDetails.total, 0.08);
-  assert.equal(g1.model, 'gpt-6-astra');
+  assert.equal(g1.costDetails?.total, undefined); // ChatGPT-account price is unknown
+  assert.equal(g1.model, 'gpt-6.2-astra');
   assert.equal(g1.metadata.agent, 'codex');
   const s = await ing.summary();
   assert.equal(s.perAgent.codex.turns, 2);
-  assert.equal(s.perModel['gpt-6-astra'].output, 400);
-  // second turn: 1000*10 + 100*50 + 20000*1 = 35000 per 1M -> 0.035
-  assert.equal(s.perAgent.codex.cost, 0.115);
+  assert.equal(s.perModel['gpt-6.2-astra'].output, 400);
+  assert.equal(s.perAgent.codex.cost, 0);
+  assert.equal(s.perAgent.codex.unpriced, 2);
 });
 
 test('summary: totals by day and outlier rule (>3x project median per active hour, >= 3 sessions)', () => {

@@ -13,7 +13,7 @@ test('picker keeps repos under home and drops tmp, scratchpad, lane and hidden-f
 
 test('launch args carry the model per CLI and read the prompt from a file', () => {
   assert.equal(launchArgs('claude', { model: 'sonnet' }), " --model 'sonnet'");
-  assert.equal(launchArgs('codex', { model: 'gpt-6-sol' }), " -m 'gpt-6-sol'");
+  assert.equal(launchArgs('codex', { model: 'gpt-6.2-sol' }), " -m 'gpt-6.2-sol'");
   assert.equal(launchArgs('minimax', { model: 'MiniMax-M3' }), " -m 'minimax/MiniMax-M3'");
   assert.equal(launchArgs('claude', { model: 'opus', promptFile: "/s/p/a'b.txt" }), ` --model 'opus' "$(cat '/s/p/a'\\''b.txt')"`);
   assert.equal(launchArgs('bash', { promptFile: '/s/p.txt' }), '');
@@ -22,12 +22,14 @@ test('launch args carry the model per CLI and read the prompt from a file', () =
 });
 
 test('codex models: listed ones only, configured default first', () => {
-  const cache = { models: [{ slug: 'gpt-6-sol', visibility: 'list' }, { slug: 'gpt-reserve', visibility: 'hide' }, { slug: 'gpt-5.6-luna', visibility: 'list' }] };
-  assert.deepEqual(codexModels(cache, 'model = "gpt-5.6-luna"\n'), { models: ['gpt-5.6-luna', 'gpt-6-sol'], default: 'gpt-5.6-luna' });
-  // gpt-6-luna is the preselected one when the CLI lists it, and at most 4 models are offered
-  const many = { models: ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6.1-terra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol'].map((slug) => ({ slug, visibility: 'list' })) };
-  assert.deepEqual(codexModels(many, 'model = "gpt-5.6-luna"\n'), { models: ['gpt-6-luna', 'gpt-6.1-sol', 'gpt-6-astra', 'gpt-6.1-terra'], default: 'gpt-6-luna' });
-  assert.deepEqual(codexModels(null, ''), { models: [], default: null });
+  const cache = { models: [{ slug: 'gpt-6.2-sol', visibility: 'list' }, { slug: 'gpt-reserve', visibility: 'hide' }, { slug: 'gpt-5.6-luna', visibility: 'list' }] };
+  assert.deepEqual(codexModels(cache, 'model = "gpt-5.6-luna"\n'), { models: ['gpt-6.2-sol', 'gpt-6.2-astra', 'gpt-5.6-luna'], default: 'gpt-6.2-sol' });
+  // gpt-6.2-sol is the preselected one when the CLI lists it, and at most 4 models are offered
+  const many = { models: ['gpt-6.2-astra', 'gpt-6.1-terra', 'gpt-6.2-sol', 'gpt-5.6-sol', 'gpt-reserve'].map((slug) => ({ slug, visibility: 'list' })) };
+  assert.deepEqual(codexModels(many, 'model = "gpt-5.6-luna"\n'), { models: ['gpt-6.2-sol', 'gpt-6.2-astra', 'gpt-6.1-terra', 'gpt-5.6-sol'], default: 'gpt-6.2-sol' });
+  assert.deepEqual(codexModels(null, ''), { models: ['gpt-6.2-sol', 'gpt-6.2-astra'], default: 'gpt-6.2-sol' });
+  const stale = { models: ['gpt-6-luna', 'gpt-6-sol', 'gpt-6-astra', 'gpt-6.1-sol'].map((slug) => ({ slug, visibility: 'list' })) };
+  assert.deepEqual(codexModels(stale, ''), { models: ['gpt-6.2-sol', 'gpt-6.2-astra'], default: 'gpt-6.2-sol' });
 });
 
 test('a Mac Claude worktree reports its repo as the project', () => {
