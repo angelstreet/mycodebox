@@ -10,7 +10,7 @@
 //   3. reflection (owner, 2026-11-26, reflection.js): a done accepted with the goal met (every Done-when row passes, or the reply above passed)
 //      is asked once for the task's leftovers and for improvement suggestions. The goal is not questioned again after it.
 //   4. open suggestions (owner, 2026-11-26, suggestions.js): a done turn while a suggestion has no yes / no from the owner is told to end
-//      needs-owner; a reply that answers neither way (`no suggestions` or a list) is asked once more.
+//      needs-owner (needs-manager for a session the manager started); a reply that answers neither way is asked once more.
 // The goal is captured at session start (createGoalStore; first prompt / handover line, status-honesty.js goalOf), else the task doc title.
 // Used by done-check.js (codebox panes) and remote-stops.js (the Mac Stop hook). State: <state>/goal-check.json, journal goal-check.jsonl.
 import { readFile, writeFile, appendFile, mkdir } from 'node:fs/promises';
@@ -168,12 +168,12 @@ export function fixFirstMessage(items) {
     + 'Keep a bug filed only when its --why-not-fixed reason really holds (large, another host / device / credentials, owner floor, a live session\'s task): say why per bug. Then rewrite the done line.';
 }
 
-// The owner approved suggestions: they are a new task with its own goal and Done-when lines, so its done gets a goal check and a reflection of its own.
+// Suggestions were approved (by the owner, or the manager for its own session): they are a new task with its own goal and Done-when lines, so its done gets a goal check and a reflection of its own.
 export async function approvedRound({ goals, gate, ledger, name, approved }) {
   if (!approved?.length) return null;
   const list = approved.slice(0, 8);
   goals.forget(name);
-  const entry = goals.capture(name, `Goal: build the improvement suggestions the owner approved (${list.map((i) => i.n).join(', ')}): ${list.map((i) => i.text).join(' / ')}\nDone when:\n${list.map((i, k) => `${k + 1}. suggestion ${i.n} - ${i.text.replace(/:/g, ' -')}`).join('\n')}`, 'suggestions');
+  const entry = goals.capture(name, `Goal: build the approved improvement suggestions (${list.map((i) => i.n).join(', ')}): ${list.map((i) => i.text).join(' / ')}\nDone when:\n${list.map((i, k) => `${k + 1}. suggestion ${i.n} - ${i.text.replace(/:/g, ' -')}`).join('\n')}`, 'suggestions');
   await gate.drop(name);
   ledger.newRound(name);
   return entry;
@@ -217,7 +217,7 @@ export function createGoalStore({ stateDir, now = Date.now } = {}) {
 // evaluate() -> null (nothing to say) | { kind: 'ask'|'fix-first'|'reply-rejected'|'accepted'|'reflect'|'capped', message?, reflect?, goal, ... }
 // (`reflect: true`: the message is the reflection question, alone or with the acceptance of the goal reply). It never sends:
 // the caller sends `message` and then calls sent(name, decision) so the state counts it (a failed send is not counted).
-export function createGoalGate({ stateDir, goalOf: goalFor = async () => '', partsOf = async () => [], bugsOf = async () => [], touchedOf = async () => [], record = async () => {}, suggestions: ledgerGiven = null, reflectMode = () => 'live', now = Date.now, mode = () => 'live', log = console } = {}) {
+export function createGoalGate({ stateDir, goalOf: goalFor = async () => '', partsOf = async () => [], bugsOf = async () => [], touchedOf = async () => [], record = async () => {}, suggestions: ledgerGiven = null, reflectMode = () => 'live', managerStarted = () => false, now = Date.now, mode = () => 'live', log = console } = {}) {
   const stFile = join(stateDir, 'goal-check.json');
   const journal = join(stateDir, 'goal-check.jsonl');
   let st = null;
@@ -235,7 +235,7 @@ export function createGoalGate({ stateDir, goalOf: goalFor = async () => '', par
   async function reflection(s, e, { goal, parts, sig }) {
     if (reflectMode() === 'off' || e.reflect || (s.doneAt && s.doneAt < st.reflectSince)) return null;
     if (!reflectionEligible(s.text, { goal, parts })) return null;
-    return { kind: 'reflect', reflect: true, message: reflectionQuestion(), goal, sig, textSig: textSigOf(s.text), turn: s.text };
+    return { kind: 'reflect', reflect: true, message: reflectionQuestion({ manager: managerStarted(s.name) }), goal, sig, textSig: textSigOf(s.text), turn: s.text };
   }
   const markReflected = (name, e, d) => { e.reflect = { at: now(), goal: d.goal || '', text: d.textSig }; delete e.reflectDue; ledger.asked(name, d.turn); };
   // the caller could not answer (Mac loop guard): the manager relays the question, once
@@ -261,12 +261,12 @@ export function createGoalGate({ stateDir, goalOf: goalFor = async () => '', par
     if (unanswered.length) {
       const textSig = textSigOf(s.text);
       if (e.openTold === textSig || reflectMode() !== 'live' || mode() !== 'live' || s.canAnswer === false) return null;
-      return { kind: 'suggestions-open', message: openSuggestionsMessage(unanswered), goal, sig: sigOf(s.text), textSig };
+      return { kind: 'suggestions-open', message: openSuggestionsMessage(unanswered, { manager: managerStarted(s.name) }), goal, sig: sigOf(s.text), textSig };
     }
     if (e.reflect) {   // asked: the goal is not questioned again. A reply that answers neither way is asked once more.
       if (reflectMode() !== 'live' || s.canAnswer === false || textSigOf(s.text) === e.reflect.text || (s.doneAt && s.doneAt <= e.reflect.at) || !ledger.claimMissing(s.name, s.text)) return null;
       await note({ session: s.name, kind: 'reflect-missing' });
-      return { kind: 'reflect-missing', message: missingReplyMessage(), goal, sig: sigOf(s.text) };
+      return { kind: 'reflect-missing', message: missingReplyMessage({ manager: managerStarted(s.name) }), goal, sig: sigOf(s.text) };
     }
     // a new done turn: a different line, or the same line written after we asked (doneAt later than the ask)
     const fresh = (at) => sig !== e.sig || (s.doneAt && at && s.doneAt > at);

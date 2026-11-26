@@ -45,7 +45,7 @@ export function recommendationText(ask) {
 export function askSummary(ask) {
   return {
     id: String(ask?.id || ''),
-    what: oneLine(ask?.what) || oneLine(ask?.question),
+    what: `${oneLine(ask?.what) || oneLine(ask?.question)}${ask?.source ? ` (from session ${ask.source})` : ''}`,
     why: oneLine(ask?.why),
     rec: recommendationText(ask),
   };

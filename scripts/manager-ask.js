@@ -11,6 +11,7 @@
 //     --what "<2-4 lines: what it is, where, what each option does>" \
 //     --options "1 ...|2 ..." --recommendation "1 - <your view, one line>" \
 //     --floor <floor> --why "<why you: what could be lost, exposed or restarted>" [--jev "..."] \
+//     [--source <session>]      the ask comes from a session you (the manager) started: filed under manager:<session>, the owner reads its name
 //     [--supersedes Q12,Q13]     (only these, or the same question reworded, are closed; other open asks stay open)
 //   node scripts/manager-ask.js --resolve Q12 --answer "..."
 //   node scripts/manager-ask.js --stale [hours]   (open asks older than hours, default 48: '!! ask-stale ...' lines, exit 0)
@@ -25,6 +26,7 @@ import { join } from 'node:path';
 import { readFile, appendFile } from 'node:fs/promises';
 import { readLedger, openAsksFromRecords, withFileLock, appendRecord, fileAsk, staleAsks, STALE_ASK_HOURS } from '../owner-asks.js';
 import { askLine } from '../public/manager-ask.js';
+import { createManagerOwned, ownerAskRoute } from '../manager-owned.js';
 
 const STATE_DIR = process.env.GHOSTY_STATE_DIR || join(homedir(), '.local', 'state', 'ghosty');
 const BASE = (process.env.GHOSTY_URL || `http://127.0.0.1:${process.env.PORT || 7777}`).replace(/\/$/, '');
@@ -55,8 +57,11 @@ const served = async () => {
 };
 
 async function ask(f) {
-  const session = String(f.session || '').trim(), question = String(f.question || '').trim();
-  if (!session || !question) die(2, '--session and --question are required');
+  const question = String(f.question || '').trim();
+  const route = ownerAskRoute(createManagerOwned({ stateDir: STATE_DIR }), { session: f.session, source: f.source, caller: process.env.CBSESSION_PARENT });
+  if (route.refuse) die(2, route.refuse);
+  const { session, source } = route;
+  if (!session || !question) die(2, '--session (or --source) and --question are required');
   const options = String(f.options || '').split('|').map((s) => s.trim()).filter(Boolean);
   // the same ask (session + question) while it is still open: the same id, no second question
   const { records } = await readLedger(LEDGER);
@@ -64,7 +69,7 @@ async function ask(f) {
   if (same) { console.log(same.id); return; }
   // the gate (owner-asks.js checkAsk): a refused ask writes nothing and prints why
   const filed = await fileAsk(LEDGER, {
-    session, question, what: f.what, options,
+    session, source, question, what: f.what, options,
     recommend: f.recommend || f.recommendation, recommendation: f.recommendation || f.recommend,
     floor: f.floor, why: f.why, jev: f.jev, supersedes: f.supersedes,
   });
@@ -75,7 +80,7 @@ async function ask(f) {
   try {
     const alerted = (await readFile(ALERTS, 'utf8').catch(() => '')).split('\n').some((l) => { try { return JSON.parse(l).id === id; } catch { return false; } });
     if (!alerted) {
-      const a = await postAlert(`Needs you: ${id}`, `${askLine(filed.record)} (answer in /?s=${session})`, `ask-${id}`);
+      const a = await postAlert(`Needs you: ${id}`, `${askLine(filed.record)} (answer in /?s=${source ? 'manager' : session})`, `ask-${id}`);
       if (!a.ok) alertErr = `alert not accepted (${a.status} ${a.error || ''})`;
       else { await withFileLock(ALERTS, () => appendFile(ALERTS, JSON.stringify({ id, at: Date.now(), via: 'manager-ask' }) + '\n')); }
     }
@@ -110,5 +115,5 @@ async function stale(f) {
 }
 
 const f = flags(process.argv.slice(2));
-if (f.help) { console.log('usage: manager-ask --session S --question Q --what W --options "1 ..|2 .." --recommendation "1 - why" --floor F --why "why you" [--jev J] [--supersedes Q1,Q2] | --resolve Q<n> --answer A | --stale [hours]'); process.exit(0); }
+if (f.help) { console.log('usage: manager-ask --session S --question Q --what W --options "1 ..|2 .." --recommendation "1 - why" --floor F --why "why you" [--source <session you started>] [--jev J] [--supersedes Q1,Q2] | --resolve Q<n> --answer A | --stale [hours]'); process.exit(0); }
 await (f.stale ? stale(f) : f.resolve ? resolve(f) : ask(f));

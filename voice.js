@@ -88,7 +88,7 @@ export function voiceQueue({ status = {}, ownerAsks = [], managerSessions = [], 
 // One stop -> an item, or null when it is not the owner's to answer by voice.
 export function stopItem(session, st, { mgrs = new Set(), isPaused = () => false, priority = () => null, now = Date.now() } = {}) {
   const stall = st?.stall;
-  if (!stall || mgrs.has(session) || isPaused(session) || st.auto || st.state === 'working') return null;
+  if (!stall || mgrs.has(session) || st.managerStarted || isPaused(session) || st.auto || st.state === 'working') return null;
   if (!needsOwner(st)) return null;
   if (!(stall.escalated || st.state === 'waiting' || stall.case === 'owner_decision' || st.suggestions?.state === 'open')) return null;
   const { kind, options } = stopOptions({ state: st.state, stall, triage: st.triage, suggestions: st.suggestions });

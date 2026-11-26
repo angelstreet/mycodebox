@@ -131,6 +131,7 @@ import { createFoundBugs, sessionOfRequest, unreportedBugOf, sendBackOf, sendBac
 import { goalOf as goalOfPrompt, blockedOrUnknownStatus, lastStatus } from './status-honesty.js';
 import { createGoalGate, createGoalStore, approvedRound, worthAGoal } from './goal-check.js';
 import { createSuggestions, createTypedLog, isOwnerTyped, answersOf, ambiguousAnswer, bareNumbersOk } from './suggestions.js';
+import { createManagerOwned, forManagerSession, MANAGER_ACTOR } from './manager-owned.js';
 import { createFinalAccept, isTaskActor, isTaskMessage } from './final-accept.js';
 import { createDoneCheck, closingTextOf, DEFAULT_IGNORE_BRANCHES, shipOfferOf, unconfirmedStatusOf, waitingOnLeaseStatus } from './done-check.js';
 import { createLeftovers, pushableItems } from './done-leftovers.js';
@@ -157,7 +158,7 @@ import { goneCwd, projectCandidates } from './cwd-gone.js';
 import { maybeGzip, acceptsGzip } from './gzip-send.js';
 import { logUpload, readUploadLog, cleanReport, clientOf } from './upload-log.js';
 import { pickableProject, launchArgs, codexModels, CLAUDE_MODELS, MINIMAX_MODELS, DEFAULT_MODELS, aiNamePrompt, cleanAiName, nameFromWords } from './new-session.js';
-import { createSessionHistory } from './session-history.js';
+import { createSessionHistory, STARTED_BY } from './session-history.js';
 import { paneLinesOk } from './pane-lines.js';
 import { scrollPlan, wheelPlan, altScrollApplies } from './alt-scroll.js';
 import { timelineOf, effortOf, taskDocsWritten, findSessionFile, readConversation, tailChars } from './conversation.js';
@@ -205,7 +206,7 @@ import { appendRegret, readRegrets, effectiveRegrets, regretKey } from './regret
 import { createWakesView, startWakesLogger } from './manager-wakes.js';
 import { wakeFacts, quotaPercents } from './wake-shadow.js';
 import { createTranscriber, extFor, MAX_AUDIO } from './transcribe.js';
-import { readOpenAsks, readOpenAsksReport, recordOwnerAnswer, resolveMovedOn } from './owner-asks.js';
+import { readOpenAsks, readOpenAsksReport, recordOwnerAnswer, resolveMovedOn, fileDecision } from './owner-asks.js';
 import { createAskFold } from './ask-fold.js';
 import { createAskGuard } from './ask-guard.js';
 import { createOwnJobs, jobPids, parkedDeps } from './own-jobs.js';
@@ -1255,8 +1256,30 @@ async function goalForSession(name) {
 const reflectionMode = () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).reflection; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } };
 const goalCheckMode = () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).goalCheck; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } };
 const suggestions = createSuggestions({ stateDir: STATE_DIR, active: () => reflectionMode() === 'live' && goalCheckMode() === 'live',
-  // the held "is done" push goes out once the owner has nothing left to answer
-  onResolved: (name) => setTimeout(() => { if (NTFY_DONE && latest?.status?.[name]?.state === 'done') notifySession(name, 'done', 'no suggestion left to answer'); }, 0) });
+  // the held "is done" push goes out once nothing is left to answer
+  onResolved: (name, how, { done } = {}) => setTimeout(() => { if (done) noteReadyToClose(name); if (NTFY_DONE && latest?.status?.[name]?.state === 'done') notifySession(name, 'done', 'no suggestion left to answer'); }, 0) });
+// Sessions the manager started (manager-owned.js, owner 2026-11-26): their questions and suggestions are the manager's, never the owner's.
+let managerOwnedImpl = null;   // built on first use: history and sessionMeta are declared further down
+const managerOwned = (name) => (managerOwnedImpl ||= createManagerOwned({ stateDir: STATE_DIR, history, startedBy: (n) => sessionMeta.startedBy(n), managers: loadManagerSessions }))(name);
+// Under 300 characters of an event body: what the manager reads and how it answers.
+function managerAskBody(name, text) {
+  const open = suggestions.openOf(name);
+  const what = open.length ? `${open.length} suggestion(s): ${open.map((i) => `${i.n}. ${i.text.slice(0, 40)}`).join(' | ')}` : String(text || '').replace(/\s+/g, ' ');
+  const how = open.length ? `answer: POST /api/send/${name} {"keys":"yes 1, no 2","by":"${MANAGER_ACTOR}"}` : 'you answer';
+  const tail = ` [you started it, ${how}; owner-only item: manager-ask.js --source ${name}]`;
+  return `${`${name} needs the manager: ${what}`.slice(0, Math.max(60, 300 - tail.length))}${tail}`;
+}
+function askManager(name, text) {
+  managerEvents.record({ key: `${name}:needs-manager`, title: `${name}: needs the manager (you started it)`, body: managerAskBody(name, text), url: `/?s=${encodeURIComponent(name)}`, priority: 'default' })
+    .catch((e) => console.error('[manager-owned] event', e.message));
+}
+// A manager-started session that is really done (done accepted, no suggestion open): the manager closes it. Told once; nothing closes by itself.
+function noteReadyToClose(name) {
+  if (!managerOwned(name) || !suggestions.claimReadyToClose(name)) return;
+  managerEvents.record({ key: `${name}:ready-to-close`, title: `${name}: done, ready to close (you started it)`,
+    body: `Done accepted, no suggestion open. Check its done line, then close it: DELETE /api/sessions/${name}?confirm=${name} with by "manager". Nothing closes it automatically.`, url: `/?s=${encodeURIComponent(name)}`, priority: 'default' })
+    .catch((e) => console.error('[manager-owned] event', e.message));
+}
 // What holds a session's done: null | { state: 'open' | 'pending', open?, items? }. text: its closing text. The manager's own sessions are not held.
 function suggestionHold(name, text, doneAt = null) {
   if (loadOwnerHiddenSessions().includes(name)) return null;
@@ -1271,8 +1294,9 @@ function noteSuggestions(name, text, doneAt = null) {
   const kind = lastStatus(text)?.kind;
   if (added.length && kind !== 'needs-owner') notifySession(name, 'asks', `${suggestions.openOf(name).length} improvement suggestion(s) to answer, yes or no each: ${added.slice(0, 3).map((i) => `${i.n}. ${i.text.slice(0, 80)}`).join(' | ')}`);
 }
-// The owner said yes / no (dashboard, or typed into the session). Approved items become a new task with its own goal.
-function ownerAnswered(name, text, via) {
+// The owner said yes / no (dashboard, or typed into the session), or the manager did for a session it started (by 'manager').
+// Approved items become a new task with its own goal.
+function ownerAnswered(name, text, via, by = 'owner') {
   const question = latest?.status?.[name]?.stall?.question || '';
   const open = suggestions.openOf(name).map((i) => i.n), amb = ambiguousAnswer(text, open, { bare: bareNumbersOk(question) });
   if (amb) {   // "do the 4" of 4 items: all four or only item 4? Nothing is recorded; the owner is asked, in the feed
@@ -1281,9 +1305,15 @@ function ownerAnswered(name, text, via) {
       body: `Your reply "${String(text).trim().slice(0, 60)}" can mean all ${amb} items or only item ${amb}. Nothing was recorded. Reply "yes ${open.join(' ')}" for all, or "yes ${amb}, no ${open.filter((n) => n !== amb).join(' ')}" for item ${amb} only.`, url: `/?s=${encodeURIComponent(name)}`, tag: `ghosty-${name}` });
     return;
   }
-  const r = suggestions.ownerMessage(name, text, { via, question });
+  const r = suggestions.ownerMessage(name, text, { via, by, question });
   if (!r) return;
-  logEvent({ type: 'suggestions-answered', session: name, via, answered: r.answered.map((i) => `${i.n}:${i.answer}`), open: r.open });
+  logEvent({ type: 'suggestions-answered', session: name, via, by, answered: r.answered.map((i) => `${i.n}:${i.answer}`), open: r.open });
+  // the manager's yes / no is shown to the owner in "Decided for you"
+  if (by === 'manager') {
+    fileDecision(join(STATE_DIR, 'manager-decisions.jsonl'), { session: name, decision: `${name}, suggestions: ${r.answered.map((i) => `${i.n} ${i.answer} (${i.text.slice(0, 80)})`).join(' | ')}`,
+      why: 'The manager started this session, so it answers its suggestions (owner 2026-11-26).', undo: `Tell ${name} which items to drop or build.` })
+      .catch((e) => console.error('[manager-owned] decision', e.message));
+  }
   if (r.approved.length) approvedRound({ goals, gate: goalGate, ledger: suggestions, name, approved: r.approved }).catch((e) => console.error('[suggestions] new round', e.message));
 }
 // A send through the API. The owner is a browser request with no `by` (the dashboard, phone or desktop app): its yes / no is recorded. Anyone else cannot
@@ -1292,8 +1322,24 @@ const fromOwnerUi = (req, by) => by === DEFAULT_ACTOR && !!(req.headers.origin |
 function guardOwnerChoice(req, session, by, payload) {
   const open = suggestions.openOf(session);
   if (!open.length || fromOwnerUi(req, by)) return payload;
+  if (by === MANAGER_ACTOR && managerOwned(session)) return managerChoice(session, open.map((i) => i.n), payload);
   if (payload.key !== undefined || answersOf(payload.keys, open.map((i) => i.n))) throw httpError(409, `${session} has ${open.length} improvement suggestion(s) only the owner may answer (dashboard, or typed in the session): "${by}" cannot say yes or no for them`);
   return { ...payload, keys: `${payload.keys || ''}\n[mycodebox: this message is from "${by}", not the owner's answer to your ${open.length} open improvement suggestion(s). Build none of them.]` };
+}
+// The manager answering a session it started: its yes / no is typed as it is (and recorded once sent, recordChoice).
+function managerChoice(session, open, payload) {
+  if (payload.key !== undefined) throw httpError(409, `${session} has ${open.length} open suggestion(s): answer in words ("yes ${open[0]}, no to the rest" or "no all"), not with a menu key`);
+  const bare = bareNumbersOk(latest?.status?.[session]?.stall?.question || '');
+  const amb = ambiguousAnswer(payload.keys, open, { bare });
+  if (amb) throw httpError(400, `"do the ${amb}" can mean all ${amb} items or only item ${amb}: nothing was sent; write "yes ${open.join(' ')}" or "yes ${amb}, no to the rest"`);
+  if (answersOf(payload.keys, open, { bare })) return payload;
+  return { ...payload, keys: `${payload.keys || ''}\n[mycodebox: this is not a yes / no to your ${open.length} open improvement suggestion(s). Build none of them yet.]` };
+}
+// What a delivered send says about the open suggestions: the owner's dashboard, or the manager for a session it started. Nobody else.
+function recordChoice(req, session, by, payload) {
+  if (payload.key !== undefined) return;
+  if (fromOwnerUi(req, by)) ownerAnswered(session, String(payload.keys || ''), 'dashboard');
+  else if (by === MANAGER_ACTOR && managerOwned(session) && suggestions.openOf(session).length) ownerAnswered(session, String(payload.keys || ''), 'send', 'manager');
 }
 // A Mac row has no pane to type into: the owner's yes / no is recorded here and the manager passes it to the session. Nothing else can be sent.
 function answerRemote(req, session, by, payload) {
@@ -1319,6 +1365,7 @@ const goalGate = createGoalGate({
   },
   record: (e) => managerEvents.record(e),
   mode: goalCheckMode,
+  managerStarted: managerOwned,
   reflectMode: reflectionMode,   // the reflection question after an accepted done (reflection.js)
 });
 
@@ -1623,6 +1670,8 @@ function notifySession(session, kind, body, meta, stateHint = null, reviewed = f
   // a needs-owner stop on something to look at is reviewed by ghosty before the owner hears of it (ui-review-ask.js)
   if (!reviewed && askReviewOn() && askReview.takeAlert(session, { kind, state: stateHint, status: meta?.status, text: meta?.closing || closingTextOf(latest?.status?.[session]?.stall) },
     (note) => notifySession(session, kind, note ? `${note.split('\n')[0]}\n${body || ''}\n${note.split('\n').slice(1).join('\n')}` : body, meta, stateHint, true))) return;
+  // a session the manager started asks the manager, never the owner (manager-owned.js)
+  if ((kind === 'waiting' || kind === 'asks') && managerOwned(session)) return askManager(session, meta?.question || body);
   if (askFold.folds(session, kind)) return;   // folded into the session's open ask: no new push, no new event until it is answered or superseded
   const waiting = kind === 'waiting' || kind === 'asks';
   // The agent's STATUS verdict + what the turn took (elapsed, tokens) + its own info, first in the body so every cut keeps it.
@@ -1815,7 +1864,8 @@ async function pollOnce() {
     // Notifications: transitions only, never on first sight.
     if (t.prevState !== undefined && t.prevState !== state) {
       if (state === 'waiting') notifySession(s.name, 'waiting', waitReason || 'needs input');
-      else if (state === 'done' && t.realWork && NTFY_DONE) notifySession(s.name, 'done', lastMessage || 'turn finished');
+      // a manager-started session that ends asking is not announced to the owner as done either
+      else if (state === 'done' && t.realWork && NTFY_DONE && !(/^needs-/.test(lastStatus(doneText)?.kind || '') && managerOwned(s.name))) notifySession(s.name, 'done', lastMessage || 'turn finished');
     }
     if (state === 'done') t.realWork = false;
     t.prevState = state;
@@ -1855,6 +1905,7 @@ async function pollOnce() {
 
     status[s.name] = {
       state, agent, agentCmd, waitReason,
+      ...(managerOwned(s.name) ? { managerStarted: true } : {}),   // never the owner's turn (public/ask-model.js)
       ...(() => { const f = standbyFlagsOf(s.name); return { managerSession: loadManagerSessions().includes(s.name) || f.standby, standby: f.standby, hidden: f.hidden }; })(),   // operational manager stops are not NEEDS YOU; a standby in shadow is hidden entirely
       stall: stallOf(s.name),
       triage: triageOf(s.name),
@@ -2474,6 +2525,7 @@ promptSenders.seed(LOG_FILE).catch(() => {});
 // record it as the AI side's (by 'harness'), so the reader and the terminal do not show it as the owner's. Not through logSend: these are
 // not answers to a stop, and the owner round-trip counters must not count them.
 async function harnessSend(name, text) {
+  if (managerOwned(name)) text = forManagerSession(text);   // needs-manager
   const r = await sendKeys(name, text);
   logEvent({ type: 'send', session: name, by: 'harness', text: String(text || '').slice(0, 200) });
   promptSenders.note(name, 'harness', String(text || ''));
@@ -2522,7 +2574,7 @@ async function sendMany(sessions, payload, req) {
         ? await sendKey(session, String(mine.key))
         : await sendKeys(session, mine.keys, mine.enter !== false);
       logSend(session, by, mine);
-      if (fromOwnerUi(req, by) && payload.key === undefined) ownerAnswered(session, payload.keys, 'dashboard');
+      recordChoice(req, session, by, payload);
       results[idx] = { session, ...out };
     } catch (err) {
       results[idx] = { session, ok: false, error: err.stderr ? String(err.stderr).trim().slice(0, 120) : err.message };
@@ -2787,11 +2839,12 @@ async function handleHttp(req, res) {
     if (['x-forwarded-for', 'forwarded', 'tailscale-user-login'].some((h) => req.headers[h] !== undefined)) return json(res, 403, { ok: false, error: 'proxied requests refused' });
     if (!reporter.tokenOk(req.headers[TOKEN_HEADER])) return json(res, 401, { ok: false, error: 'bad token' });
     try {
-      const { ts: _ts, tmux_created: _tc, ...b } = await readJsonBody(req);   // server time and tmux facts only, never the client's
+      const { ts: _ts, tmux_created: _tc, parent: _parent, ...b } = await readJsonBody(req);   // server time and tmux facts only, never the client's
       // cbsession reports who started it (CBSESSION_BY env or its calling tmux session). The dashboard create path
       // records 'owner' itself; cbsession is the default when the caller forgot both (legacy cbsession, manual run).
       const sb = typeof b.started_by === 'string' && b.started_by ? b.started_by : 'cbsession';
-      const r = await history.append({ ...b, kind: 'session.started', started_by: sb, tmux_created: typeof b.name === 'string' ? await tmuxCreated(b.name) : null });
+      // a starter that is a session name is kept as `parent` (manager-owned.js follows it: what a manager's session starts is the manager's too)
+      const r = await history.append({ ...b, kind: 'session.started', ...(STARTED_BY.includes(sb) ? { started_by: sb } : { started_by: 'cbsession', parent: sb }), tmux_created: typeof b.name === 'string' ? await tmuxCreated(b.name) : null });
       if (typeof b.name === 'string' && b.name) { reopenFinal(b.name, sb, 'a new session took the name'); goalGate.drop(b.name).catch(() => {}); suggestions.drop(b.name); goals.forget(b.name); captureGoal(b.name, b.prompt_ref || b.handover_ref, 'cbsession'); }   // goal check: the goal as given at start
       if (typeof b.name === 'string' && b.name) {
         try { sessionMeta.setStartedBy(b.name, sb); } catch (e) { console.error('[history] setStartedBy', e.message); }
@@ -3005,8 +3058,8 @@ async function handleHttp(req, res) {
       const asked = payload;
       payload = guardOwnerChoice(req, session, by, payload);
       const answering = () => {
+        recordChoice(req, session, by, asked);
         if (!fromOwnerUi(req, by) || asked.key !== undefined) return;
-        ownerAnswered(session, String(asked.keys || ''), 'dashboard');
         goalFromOwner(session, String(asked.keys || '')).catch((e) => console.error('[goals] owner prompt', e.message));
       };
       // accept_final: true — this message IS the acceptance. Recorded before typing, so the stop it causes is already quiet.
@@ -3850,6 +3903,7 @@ server.listen(PORT, HOST, async () => {
   integrationOwnJobs = ownJobs;
   setInterval(() => ownJobs.tick().catch((e) => console.error('[own-jobs] tick', e.message)), 20000).unref?.();
   await initManager({
+    managerStarted: managerOwned,
     ownerChoice: (n) => suggestions.awaiting(n),   // open suggestions or an unanswered reflection question: nothing is answered automatically
     finalAccepted,
     onJudgeDown: (a) => push.record({ title: a.title, body: a.body, url: '/', tag: `judge-down-${a.kind}`, priority: 'high' }),
@@ -3884,6 +3938,7 @@ server.listen(PORT, HOST, async () => {
     onMergeCancelled: (session, r) => push.record({ title: `Merge reply not sent: ${session}`, body: String(r.reason).slice(0, 300), url: `/?s=${encodeURIComponent(session)}`, tag: 'merge-decision' }),
     // a merge the manager decided or escalated: a notice in the owner's feed (no push)
     onMergeDecision: (session, r) => {
+      if (r.chosen !== (r.kind === 'push' || r.kind === 'deploy' ? r.kind : 'merge') && managerOwned(session)) return;   // an escalation of its session is the manager's
       const kind = r.kind === 'push' || r.kind === 'deploy' ? r.kind : 'merge', yes = r.chosen === kind, Kind = kind[0].toUpperCase() + kind.slice(1);
       const what = kind === 'merge' ? `${r.branch} -> ${r.target}` : kind === 'push' ? `${r.branch} -> origin/${r.dest}` : `${r.ref} -> ${r.env} (${r.scope})`;
       const undo = kind === 'merge' ? 'Revert: git revert -m 1 <merge sha>' : kind === 'push' ? 'Revert: git revert the pushed commits' : String(r.rollback || '');
@@ -3922,7 +3977,7 @@ server.listen(PORT, HOST, async () => {
           .catch((e) => console.error('[manager-item]', e.message));
         return;
       }
-      managerEvents.record({ key, title: `${it.session}: ${it.kind === 'manager-item' ? 'needs the manager' : `${it.kind} stop for the manager`}`, body, url: `/?s=${encodeURIComponent(it.session)}`, priority: 'default', session: it.session })
+      managerEvents.record({ key, title: `${it.session}: ${it.kind === 'manager-item' ? 'needs the manager' : `${it.kind} stop for the manager`}`, body: it.kind === 'manager-item' && managerOwned(it.session) ? managerAskBody(it.session, it.question || it.reason) : body, url: `/?s=${encodeURIComponent(it.session)}`, priority: 'default', session: it.session })
         .catch((e) => console.error('[manager-item]', e.message));
     },
   });

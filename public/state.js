@@ -50,6 +50,8 @@ export function displayState(status) {
   // "STATUS: needs-manager: <what the manager must do>": the turn is finished but the next step belongs to the AI manager,
   // so it reads as 'manager' (its own LED) instead of the blue 'done'. A live 'waiting' prompt and 'offline' still win.
   if (s !== 'waiting' && s !== 'offline' && status && status.stall && status.stall.case === 'needs_manager') s = 'manager';
+  // A session the manager started never needs the owner (manager-owned.js): its prompt, needs-owner line or open suggestions read as the manager's turn.
+  if (status?.managerStarted && s !== 'offline' && (s === 'waiting' || (s !== 'working' && (status.suggestions?.state === 'open' || status.stall?.status === 'needs-owner')))) return 'manager';
   // A finished turn that still waits on a scheduled wakeup (/loop, ScheduleWakeup) or on background tasks is not "done": it shows as working (green)
   if (s === 'done' && isLoopWaiting(status)) s = 'working';
   // A script-wrapped `claude -p` / `sleep` child in the pane means the pane is still doing work, even when the raw
@@ -59,7 +61,7 @@ export function displayState(status) {
   // A suggestion the owner has not answered, or the reflection question not answered yet (status.suggestions, suggestions.js): never shown as done.
   // Open ones are the owner's turn (red).
   const held = status?.suggestions?.state;
-  if (held && s !== 'waiting' && s !== 'offline') {
+  if (held && s !== 'waiting' && s !== 'offline' && s !== 'manager') {
     if (held === 'open' && status.state !== 'working') return 'waiting';
     // 'pending' (the reflection question not asked or answered yet) is not shown as working: a session that said STATUS: done reads done (owner 2026-11-26, again: four finished sessions stayed green for an hour); once the question is typed in it really works and turns green by itself
   }

@@ -23,7 +23,7 @@ turn with a STATUS line.
 | 2 | `running` | Work **of yours** is still going: your background job, a worker session you started. You will be woken and continue | Nothing is actually running | Nobody; the harness wakes you |
 | 3 | `waiting` | You depend on something **not yours** that ends by itself: a lane request, a deploy, a lease ticket, another session's work, a named time | You could work on something else meanwhile, or nothing will ever end it | Nobody; the harness wakes you |
 | 4 | `needs-manager` | You need a decision or an answer (technical, merge, deploy, lease, design) | You have a recommendation and the choice is reversible: decide | Manager |
-| 5 | `needs-owner` | Money, customers, deleting shared data, a credential only the owner holds, a physical action, or your yes / no on an improvement suggestion the session listed | Anything else | Owner |
+| 5 | `needs-owner` | Money, customers, deleting shared data, a credential only the owner holds, a physical action, or your yes / no on an improvement suggestion the session listed | Anything else, and any session the manager started (it ends `needs-manager`) | Owner |
 | 6 | `blocked` | You **cannot work** and nothing running will fix it: someone must act (a device is dead, an access is missing) | Something is running or queued (that is `running` or `waiting`) | Manager |
 | 7 | `failed` | You stopped and the goal is **not** reached after you tried what you could, **and you investigated**: the line names the cause and the next plan | You have not tried, work is still running, or you have no cause and no plan yet | Manager |
 
@@ -139,8 +139,21 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
   e.g. `STATUS: done — X merged · closing review: docs REFERENCE.md · leftovers none · unverified none · bugs: none`. A done line
   without it gets one automatic push from the done-check with this checklist; leftovers named there that are neither `none` nor
   filed ids are sent back to finish like any other leftover ([REFERENCE](docs/REFERENCE.md) "Closing review").
-- **Reflection after an accepted done** (owner 2026-11-26): suggestions for improvement (anything beyond the task's goal) are not leftovers: do not build or file them unasked, do not list them in the closing review. A session with a suggestion the owner has not answered is never done: any turn that lists one, in any words, asked or not, ends `STATUS: needs-owner: improvement suggestions above, nothing built — should I do <numbers>?`, workers too. When a done is accepted with the goal met, the harness asks once: (a) leftovers of this task: fix them now; (b) the suggestions under `Suggestions:`, split `Worth doing` / `Smaller` with one recommendation, or the single line `no suggestions`, the only answer that leaves the session done. Only the owner answers, yes or no per item (`yes 1 3, no 2`, `no all`); a manager, a peer or an automatic answer never does. Approved items are a new task with their own `Done when` lines.
+- **Reflection after an accepted done** (owner 2026-11-26): suggestions for improvement (anything beyond the task's goal) are not leftovers: do not build or file them unasked, do not list them in the closing review. A session with a suggestion the owner has not answered is never done: any turn that lists one, in any words, asked or not, ends `STATUS: needs-owner: improvement suggestions above, nothing built — should I do <numbers>?`, workers too. When a done is accepted with the goal met, the harness asks once: (a) leftovers of this task: fix them now; (b) the suggestions under `Suggestions:`, split `Worth doing` / `Smaller` with one recommendation, or the single line `no suggestions`, the only answer that leaves the session done. Only the owner answers, yes or no per item (`yes 1 3, no 2`, `no all`); a manager, a peer or an automatic answer never does. The one exception is a session the manager started: it ends `needs-manager`, never `needs-owner`, and the manager answers its suggestions (a peer or an automatic answer still never does). Approved items are a new task with their own `Done when` lines.
   How it is asked and checked: [REFERENCE](docs/REFERENCE.md#reflection-after-an-accepted-done-owner-2026-11-26).
+- **Sessions the manager started answer to the manager** (owner 2026-11-26: "those should not ask me since you opened you need to handle them ... if there is
+  things i need to answer it has to come from your session"). This covers every session the manager started and every session those start (`manager-owned.js`: the
+  recorded starter, else `manager-children.jsonl`). Where any other line says "ask the owner", "`needs-owner`" or "only the owner answers", this one wins for them:
+  - they never ask the owner and never end `needs-owner`: questions, decisions and suggestion lists end `needs-manager`, owner-only items included. No owner push,
+    NEEDS YOU row or voice question is raised for them; each ask is a manager event (`<session>:needs-manager`).
+  - the manager records yes / no per suggestion (`POST /api/send/<s>` `{"keys":"yes 1, no 2","by":"manager-agent"}`; recorded as the manager's, shown to the owner
+    in "Decided for you"). The server refuses that for owner-started sessions, and from any other or automatic sender for every session.
+  - the hard floor does not change: the manager never answers money, customers, publishing, credentials, data deletion or a physical action. It asks the owner from
+    its own session with `scripts/manager-ask.js --source <s> ...`; such a session's own owner ask is refused.
+  - the manager closes it once it is really done (done accepted, no suggestion open): the event `<s>:ready-to-close` arrives once (owner 2026-11-26: "it is your
+    session if done you have to close it"). Nothing closes it automatically.
+
+  Owner-started sessions are unchanged. [REFERENCE](docs/REFERENCE.md#sessions-the-manager-started-owner-2026-11-26).
 - Owner-reported bug queues are drained, not negotiated (owner, 2026-10-21): work every reported problem through to
   shipped without stopping to ask "which one next?". Keep the queue explicit, rank it yourself, and take the fixes one
   at a time. Ask only on a hard-floor item, a conflict between two of the owner's requests, or a request too ambiguous
@@ -161,7 +174,8 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
 
 - Sessions are never auto-closed (owner, 2026-10-30, bug-9e811bf0; 2026-11-01): no ghosty tick sends `/exit`, `/quit` or kills a
   session on its own. Only the owner or the agent that spawned the session may close it (`DELETE /api/sessions/<s>?confirm=<s>`);
-  the manager closes one only when the owner asks for it (owner 2026-11-01). The old worker auto-close (2026-10-18) is removed;
+  the manager closes a session it started once it is really done (owner 2026-11-26, see "Sessions the manager started"), and any other one only when the owner
+  asks for it (owner 2026-11-01). The old worker auto-close (2026-10-18) is removed;
   `workerAutoClose` in `manager.json` is ignored. [CONTRACT](docs/CONTRACT.md#who-does-each-action).
 
 
@@ -189,7 +203,7 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
   a device lease on that host unless the unit drives no device (vpt-kpi, vpt-avq, vpt-archiver, vpt-timeline). NOT vpt-vnc,
   vpt-websockify, lircd, bluetooth.service, vpt-server, databases, nginx, `ghosty-sessions`, nor anything on a production host.
 
-- Ask the owner only when (owner, 2026-10-31): the item is on the hard floor or physical, it blocks you, and you cannot pick a safe
+- Ask the owner only when (owner, 2026-10-31; a session the manager started never does, it ends `needs-manager`): the item is on the hard floor or physical, it blocks you, and you cannot pick a safe
   default. Before asking for a physical action (replug, power, plug a phone in, release a window on a device) try the software
   equivalent first (USB re-enumeration under the lease, restart of an allowlisted unit, reading the data another way) and name what
   you tried in the question. A non-blocking item with a safe "leave as is" is not a question: leave it and mention it in your

@@ -137,9 +137,11 @@ const hash = (s) => createHash('sha1').update(s).digest('hex').slice(0, 10);
 let finalAccepted = () => false;
 let ownerChoice = () => false;   // (suggestions.js) the session has suggestions only the owner may answer, or the question is open
 const OWNER_CHOICE = 'the owner has suggestions to answer';
-export async function initManager({ onJudgeDown, managerSessions, credits, onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context, onHandoff = () => {}, onMergeDecision: mergeHook, onMergeCancelled: cancelHook, mergeJev: mergeJevFn, decideContext: decideCtx, onDigest: digestHook, onNotice, leaseView, onStatus, onManagerItem, hasOpenAsk, onAskMovedOn, ownJobs: ownJobsDep, integration: integrationDep, readyStore, stopFacts: stopFactsDep, finalAccepted: finalAcceptedDep, ownerChoice: ownerChoiceDep } = {}) {
+let managerStarted = () => false;   // (manager-owned.js)
+export async function initManager({ managerStarted: managerStartedDep, onJudgeDown, managerSessions, credits, onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context, onHandoff = () => {}, onMergeDecision: mergeHook, onMergeCancelled: cancelHook, mergeJev: mergeJevFn, decideContext: decideCtx, onDigest: digestHook, onNotice, leaseView, onStatus, onManagerItem, hasOpenAsk, onAskMovedOn, ownJobs: ownJobsDep, integration: integrationDep, readyStore, stopFacts: stopFactsDep, finalAccepted: finalAcceptedDep, ownerChoice: ownerChoiceDep } = {}) {
   finalAccepted = finalAcceptedDep || (() => false);
   ownerChoice = ownerChoiceDep || (() => false);
+  managerStarted = managerStartedDep || (() => false);
   await mkdir(STATE_DIR, { recursive: true });
   try {
     const saved = JSON.parse(await readFile(CONFIG_FILE, 'utf8'));
@@ -444,8 +446,10 @@ function escalate(name, state, final, id, reason, aiLine = null) {
   const tech = technicalStop(final);
   if (final.systemWait === 'owner-answer') { try { final = { ...final, ownerAskOpen: !!hasOpenAskHook(name) }; } catch { /* no ledger: a real blocker */ } }
   const sysKind = systemWaitKind(final);   // waiting / blocked on a deploy, lease, integration or a ledger ask: never the owner's (owner, 2026-10-31)
-  const opsKind = sysKind || (tech.technical === 'yes' ? 'technical-item' : final.case === 'needs_manager' ? 'manager-item'
+  const routed = sysKind || (tech.technical === 'yes' ? 'technical-item' : final.case === 'needs_manager' ? 'manager-item'
     : config.opsToManager !== false && (!final.topics?.merge || final.case === 'merge_wait') && !final.topics?.push ? opsAsk(final) : null);
+  // a session the manager started never reaches the owner (manager-owned.js): whatever is left is the manager's item
+  const opsKind = routed || (managerStarted(name) && !isPaused(name) && final.case !== 'error' && toOwnerCase(final) ? 'manager-item' : null);
   if (opsKind) {
     managerStops.add(id); if (managerStops.size > 500) managerStops.delete(managerStops.values().next().value);
     escalatedStops.add(id); if (escalatedStops.size > 500) escalatedStops.delete(escalatedStops.values().next().value);
