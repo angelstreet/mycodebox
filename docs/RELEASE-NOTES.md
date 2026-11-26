@@ -31,6 +31,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **An accepted done is no longer woken by its time box** — a finished session that answered a notice with `STATUS: acknowledged` was told its time box had run out, because only the latest STATUS word was read. A done that passed the checks now closes that task's box, on codebox and Mac sessions · area: harness
+
 - **The UI review runs again, and a new import in the reviewer can no longer break it** — the lane copied a fixed list of folders; once VirtualPyTest's reviewer imported a script outside it, graphical requests came back on `ModuleNotFoundError`. The export now also follows the reviewer's imports, transitively, on the product's target branch (`scripts/ui-review-closure.py`) · area: integration
 
 - **A session that ends on `needs-owner` stays red** — Claude lists its artifact live-update monitors as background work, which made such a stop a "background wait" (green, no ask, no push). Those monitors are no longer counted, a closing hand-over STATUS outranks any background count, and the row keeps its verdict after a bare keypress or a server restart · area: manager

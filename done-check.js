@@ -555,6 +555,7 @@ export function createDoneCheck({
       }
       // (L) time box (owner 2026-11-11): at 100% of the stored box ONE wake ("write Verification as it stands and end failed / needs-manager"); 30 min later, when the
       // session is still going, ONE manager item. Never kills or closes a session. timeBoxMode dry (default) journals only.
+      // An accepted done closes the box of that task (closeBox below, kept by the goal's `at`): a later "STATUS: acknowledged" must not reopen it.
       st.toldBox ||= {};
       const TIMEBOX_GRACE_MS = 30 * 60e3, tbMode = timeBoxMode();
       if (tbMode !== 'off') for (const s of await listSessions().catch(() => [])) {
@@ -562,6 +563,7 @@ export function createDoneCheck({
         const startAt = Date.parse(e?.at || ''), box = e?.timeBoxMs;
         if (!box || !Number.isFinite(startAt) || now() - startAt < box) continue;
         const tb = (st.toldBox[s.name] ||= {});
+        if (tb.accepted === e.at) continue;
         const ended = /^(?:done|failed|needs-manager|needs-owner)$/i.test(lastStatusOf(s.text || '')?.kind || '');
         if (!tb.woke) {
           if (tbMode === 'dry') { tb.woke = now(); tb.dry = true; await note({ dry: true, session: s.name, timeBox: 'reached', boxMin: Math.round(box / 6e4), elapsedMin: Math.round((now() - startAt) / 6e4) }); continue; }
@@ -660,6 +662,12 @@ export function createDoneCheck({
         catch (e) { log.error?.('[done-check] send proof gap', s.name, e.message); }
       }
       const goalCheck = { asked: [], bounced: [], accepted: [], capped: [], reflected: [] };
+      const closeBox = async (name) => {
+        let e = null; try { e = await goalEntryOf(name); } catch {}
+        if (!e?.timeBoxMs || !e.at || st.toldBox[name]?.accepted === e.at) return;
+        (st.toldBox[name] ||= {}).accepted = e.at;
+        await note({ session: name, timeBox: 'closed-by-accepted-done' });
+      };
       if (goalGate) {
         // forget only sessions that are gone: `live` holds the done ones, and a session busy writing its reply lost its state and was asked again
         let panes = null; try { panes = await liveNames(); } catch {}
@@ -670,12 +678,13 @@ export function createDoneCheck({
           if (rowsPass) goalCheck.accepted.push(s.name);
           if (s.doneAt && now() - s.doneAt > REVIEW_MAX_AGE_MS) continue;   // an old done turn is not reopened by the rollout
           if (leftoverItemsOf(s.text).length || closingReviewOf(s.text)?.missing || doneButFailedOf(s.text) || proofWithoutEvidenceOf(s.text)) continue;   // (B)/(C)/(F)/(G) first
+          if (rowsPass) await closeBox(s.name);
           if (m === 'dry') continue;
           if (!quiet || nudged >= MAX_NUDGES_PER_TICK) continue;   // nothing is recorded until it is sent: a later tick asks
           let d = null;
           try { d = await goalGate.evaluate(rowsPass ? { ...s, verified: true } : s); } catch (e) { log.error?.('[done-check] goal gate', s.name, e.message); }
           if (!d) continue;
-          if (d.kind === 'accepted') goalCheck.accepted.push(s.name);
+          if (d.kind === 'accepted') { goalCheck.accepted.push(s.name); await closeBox(s.name); }
           if (d.kind === 'capped') { goalCheck.capped.push(s.name); continue; }
           if (!d.message || d.dry) continue;
           try { await send(s.name, d.message); await goalGate.sent(s.name, d); nudged++; (d.reflect ? goalCheck.reflected : d.bounce ? goalCheck.bounced : goalCheck.asked).push(s.name); }

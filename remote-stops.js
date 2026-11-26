@@ -106,6 +106,14 @@ export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goa
     try { return typeof p === 'string' && isAbsolute(p) && fs.statSync(p).isDirectory() ? p : null; } catch { return null; }
   };
 
+  const boxFile = join(stateDir, 'remote-box-closed.json');   // { name: the goal `at` whose done was accepted }
+  const closedBoxes = () => { try { return JSON.parse(fs.readFileSync(boxFile, 'utf8')) || {}; } catch { return {}; } };
+  const closeBox = (name, at) => {
+    const all = closedBoxes();
+    if (!at || all[name] === at) return;
+    try { fs.writeFileSync(boxFile, JSON.stringify({ ...all, [name]: at })); } catch (e) { console.error('[remote] time box', e.message); }
+  };
+
   const sessions = new Map();   // name -> { name, machine, project, sessionId, client, lastSeen, open: stop|null, last: stop|null, lastSendAt, lastSendText, rcUrl }
   const stops = new Map();      // id -> stop (kept an hour)
   const byMid = new Map();      // the manager's pending id -> stop: every hook call is tied to its stop by this id
@@ -234,8 +242,11 @@ export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goa
         const sig = createHash('sha1').update(ls?.line || stx.slice(-200)).digest('hex').slice(0, 12);
         const vr = entry?.parts?.length ? verificationOf(stx, entry.parts) : null;
         if (vr) { vj({ passed: vr.passed, total: vr.total, problems: vr.problems }); if (vr.ok) verified = true; else if (!refusal && !stateWaiting && s.verifySig !== sig) { s.verifySig = sig; refusal = { kind: 'verification', message: verificationMessage(vr, entry.parts) }; } }
+        // as in done-check.js: an accepted done closes the box of that task, and a done stop is never woken. Kept on disk: `sessions` is lost at each restart.
+        const accepted = !!vr?.ok && !refusal && !stateWaiting && !doneWithOpenOf(stx) && !doneButFailedOf(stx, entry.goal || '') && !doneWithoutGoalOf(stx);
+        if (accepted) closeBox(name, entry.at);
         const startAt = Date.parse(entry?.at || ''), box = entry?.timeBoxMs;
-        if (box && Number.isFinite(startAt) && t - startAt >= box && !s.boxWoke && timeBoxMode() !== 'off') {
+        if (box && Number.isFinite(startAt) && t - startAt >= box && ls?.kind !== 'done' && closedBoxes()[name] !== entry.at && !s.boxWoke && timeBoxMode() !== 'off') {
           s.boxWoke = t; vj({ timeBox: 'reached', boxMin: Math.round(box / 6e4), elapsedMin: Math.round((t - startAt) / 6e4), dry: timeBoxMode() === 'dry' });
           if (timeBoxMode() === 'live' && !refusal) refusal = { kind: 'time-box', message: timeBoxWakeMessage(box) };
         }
@@ -248,6 +259,7 @@ export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goa
     let gate = null;
     // canReflect: the one answer a loop-guarded stop may get (asked once per task, so it cannot loop), when the hook says it waits for it
     if (goalGate && !refusal && !stateWaiting && !(verified && !allRows) && !lacksGoal && checksOn(name)) { try { gate = await goalGate.evaluate({ name, text: stopText(v), doneAt: t, remote: true, canAnswer: !v.stop_hook_active, canReflect: v.takes_reflect, verified: allRows }); } catch (e) { console.error('[remote] goal gate', e.message); } }
+    if (gate?.kind === 'accepted') closeBox(name, goals?.get(name)?.at);
     // the goal check had nothing to say (not wired, or this done turn was already handled): a done line without `goal: achieved` + evidence is still refused, once per line
     if (!refusal && !gate && !v.stop_hook_active && checksOn(name)) {
       const stx = stopText(v), g = doneWithoutGoalOf(stx), sig = createHash('sha1').update(lastStatus(stx)?.line || '').digest('hex').slice(0, 12);
