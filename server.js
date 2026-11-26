@@ -675,7 +675,12 @@ async function taskDocFiles(session) {
   // a task doc the session wrote itself (docs/tasks/*.md in its own file), whatever the session is called (owner 2026-11-26: settings-script wrote TASK-262 and had no MD button)
   try {
     const sid = (latest || await poll().catch(() => null))?.status?.[session]?.claudeSessionId;
-    for (const f of await writtenTaskDocs(sid)) if (existsSync(f)) add(dirname(f), basename(f));
+    for (const f of await writtenTaskDocs(sid)) {
+      if (existsSync(f)) { add(dirname(f), basename(f)); continue; }
+      // the worktree it was written in is gone once merged: the same file name in the session's repo / the main checkout
+      const home = dirs.find((d) => existsSync(join(d, basename(f))));
+      if (home) add(home, basename(f));
+    }
   } catch { /* the doc buttons just stay as they were */ }
   return out;
 }
