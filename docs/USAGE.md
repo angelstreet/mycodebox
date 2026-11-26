@@ -36,7 +36,9 @@ Killing a session ends its tmux process. Parking is for eligible Claude sessions
 
 A session that lists an improvement suggestion is not done until you answer it. It shows as **needs you** (red), and no "is done" notification
 goes out. Open it, read the numbered list and reply in the send box (or type in the session): `yes 1 3, no 2`, `do 1, no to the rest`,
-`no all`. Each item is recorded; the ones you leave out stay open. A bare number or `ok` is not an answer, and neither is anything the
+`no all`, or just the numbers you want (`1` = yes to 1, no to the rest). Each item is recorded; the ones you leave out stay open. Numbers
+match the session's latest list or the dashboard's item numbers; if they could mean either, nothing is recorded and you are asked which.
+A bare `ok` is not an answer, and neither is anything the
 manager sends (except for a session the manager started: the manager answers those, never shows them to you as "needs you", and its
 yes / no is listed in "Decided for you"; what only you may decide arrives as the manager's own question, naming the session). Approved items become the session's next task. Details: [reference](REFERENCE.md#no-done-while-a-suggestion-has-no-yes--no-owner-2026-11-26-suggestionsjs).
 

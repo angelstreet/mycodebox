@@ -2334,8 +2334,13 @@ reflection reply.
 - **Buttons** (answer popup, notification actions, voice): while items are open they are `Yes to all N` (sends `yes all`) and `No to all N`
   (`no all`), with the items listed; no AI pick and no generic `Yes, continue`, which would have approved everything without saying so.
 - **The owner's answer** (`answersOf`, per item): `yes 1 3, no 2`, `1 yes, 2 no`, `do 1 and 3`, `no 2-3`, `only 1`, `do 1, no to the rest`,
-  `yes` / `no` / `no all` for every open item. A message with other words (a task, a question), a bare number or a bare `ok` records nothing,
-  and unmentioned items stay open. It counts when it comes from the dashboard, phone or desktop app (a browser request with no `by`), a voice
+  `yes` / `no` / `no all` for every open item. Numbers alone (`1`, `1 3`) mean "only those": yes to them, no to the other open items, unless the
+  session's closing question is a numbered menu (`[1 yes / 2 no]`, `(1)`, `1.` lines), where the number stays a menu key (`bareNumbersOk`).
+  A message with other words (a task, a question) or a bare `ok` records nothing, and unmentioned items stay open. A bare `N` (or `do the N`)
+  when N items are open is asked back in the feed (all N, or item N only?). **Numbering:** items keep one numbering per session, so a second
+  list's `1.` `2.` can be items 5 and 6; the ledger remembers the numbers of the latest list (`shown`). A reply that reads only one way (item
+  numbers, as the dashboard lists them, or the session's own) takes it; one that reads both ways with different items records nothing and
+  is asked back (`suggestions-numbering` alert). It counts when it comes from the dashboard, phone or desktop app (a browser request with no `by`), a voice
   answer, or is typed into the session (terminal or Remote Control: a reporter prompt this server did not type, not a peer message, hook or
   notification; Mac: the Stop hook's `last_prompt`). A Mac row has no pane: a dashboard yes / no is recorded (nothing is typed) and the
   manager gets `suggestions-answered:<session>` to pass your words on with `SendMessage`.
