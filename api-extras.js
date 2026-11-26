@@ -196,3 +196,14 @@ export function createAlertApi({ alert, tokenOk, now = Date.now, maxPerHour = AL
     },
   };
 }
+
+// Claude Code's footer line "  Fable 5.2 wk 80%" / "  Opus 5.5 5h 2% wk 0%": the model name, searched in the last 40 lines because subagent
+// lines listed under it push it out of the 12-line window (the dock then showed only "Claude"). Anchored on the usage part so a sentence
+// that starts with a model name is not taken for it.
+const FOOTER_MODEL_RE = /^\s*((?:Opus|Sonnet|Haiku|Fable)\s+\d+(?:\.\d+)?)\s+(?:\d+h\s+\d+%\s+)?wk\s+\d+%/;
+export function footerModelOf(lines) {
+  if (!Array.isArray(lines)) return null;
+  let found = null;
+  for (const l of lines.slice(-40)) { const m = FOOTER_MODEL_RE.exec(String(l)); if (m) found = m[1]; }
+  return found;
+}

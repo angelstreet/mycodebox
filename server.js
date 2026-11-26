@@ -190,7 +190,7 @@ import { createIntegrationRoutes, PREFIX as INTEGRATION_API } from './integratio
 import { createPeerSession } from './peer-session.js';
 import { createHostAllow } from './host-allow.js';
 import { createClaudeIndex, claudeOfPane, minimaxOfPane, codexOfPane, busyChildren, lastActivityOf, leasesOfSession, capView, createParking, readManualNotes, autoParkArchived, transcriptFile, SESSION_CAP, ownChildTree, isDescendant } from './parking.js';
-import { actorOf, agentFromArgs, createAlertApi, DEFAULT_ACTOR, interactiveAgentOf, paneBackgroundOf, scriptBusyOf, shouldRefuse } from './api-extras.js';
+import { footerModelOf, actorOf, agentFromArgs, createAlertApi, DEFAULT_ACTOR, interactiveAgentOf, paneBackgroundOf, scriptBusyOf, shouldRefuse } from './api-extras.js';
 import { gitCleanOf } from './git-facts.js';
 import { callerOf, deleteVerdict } from './session-delete-guard.js';
 import { appendJsonLine } from './jsonl-append.js';
@@ -698,7 +698,8 @@ function footerInfo(lines) {
   let contextLeft = null, model = null;
   let m = foot.match(/Context (\d+)% left/i) || foot.match(/(\d+)%\s+context left/i) || foot.match(/Context left until auto-compact:\s*(\d+)%/i) || foot.match(/auto-compact[^\n]*?(\d+)%/i);
   if (m) contextLeft = Number(m[1]);
-  m = foot.match(/✦\s*([A-Za-z][\w.-]*)/) || foot.match(/\b(gpt-[\w.-]+)/i) || foot.match(/\b((?:opus|sonnet|haiku|fable)(?:[ -]\d+(?:[.-]\d+)?)?)/i);
+  const own = footerModelOf(lines);   // Claude Code's own footer line, found even when subagent lines push it out of the last 12
+  m = own ? [own, own] : foot.match(/✦\s*([A-Za-z][\w.-]*)/) || foot.match(/\b(gpt-[\w.-]+)/i) || foot.match(/\b((?:opus|sonnet|haiku|fable)(?:[ -]\d+(?:[.-]\d+)?)?)/i);
   if (m) model = m[1].replace(/-(\d+)-(\d+)$/, ' $1.$2').replace(/-/g, ' ');
   return { contextLeft, model };
 }
