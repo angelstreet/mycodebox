@@ -191,9 +191,11 @@ Sizes: S ≤ ½ day, M 1–2 days, L 3+ days. Each phase ships through the lane 
 
 Order of value: 0 (stops the dead end now) → 1–3 (button backend) → 4 (button) → 5 → 6 → 7.
 
-## 7. Decisions needed before implementation
+## 7. Decisions
 
-1. **Money (owner):** may API keys be used as automatic fallback rungs (manager L3, judges), and with which daily cap? Default in this plan: off.
-2. **Worker default `onAllOut`** (technical, manager): `wait` (recommended: no context loss, resets are ≤ 5 h) vs `codex` / `minimax`.
-3. **Manager L1 vs L2 order** (technical, manager): MiniMax first (exists, cheap) — recommended — or Codex first.
-4. **Re-enabling `ghosty-manager-failover`** needs sudo on codebox (owner action), or Phase 6 moves L1 into the server tick and the unit is retired.
+1. **Money (owner, open):** may API keys be used as automatic fallback rungs (manager L3, judges), and with which daily cap? Until the owner answers: **off by default** (manager 2026-11-26).
+2. **Worker default `onAllOut`: `wait`** — decided by the manager 2026-11-26.
+3. **Manager ladder: MiniMax (L1) before Codex (L2)** — decided by the manager 2026-11-26.
+4. **Re-enabling `ghosty-manager-failover` (owner, open):** needs sudo on codebox, or Phase 6 moves L1 into the server tick and the unit is retired. The manager takes it to the owner.
+
+Implementation starts only after the owner's go.
