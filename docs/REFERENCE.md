@@ -2218,7 +2218,8 @@ reflection reply.
   `yes` / `no` / `no all` for every open item. A message with other words (a task, a question), a bare number or a bare `ok` records nothing,
   and unmentioned items stay open. It counts when it comes from the dashboard, phone or desktop app (a browser request with no `by`), a voice
   answer, or is typed into the session (terminal or Remote Control: a reporter prompt this server did not type, not a peer message, hook or
-  notification; Mac: the Stop hook's `last_prompt`).
+  notification; Mac: the Stop hook's `last_prompt`). A Mac row has no pane: a dashboard yes / no is recorded (nothing is typed) and the
+  manager gets `suggestions-answered:<session>` to pass your words on with `SendMessage`.
 - **Nobody else answers.** `POST /api/send` and `/api/send-many` from any other actor get **409** for a yes / no or a menu key while items
   are open; their other messages arrive with a note that they are not the owner's answer. `manager.js` makes no automatic answer (rules, AI
   triage, menu, merge, ready window; checked again when the countdown fires) while items are open or the question is unanswered, whatever the

@@ -1252,6 +1252,16 @@ function guardOwnerChoice(req, session, by, payload) {
   if (payload.key !== undefined || answersOf(payload.keys, open.map((i) => i.n))) throw httpError(409, `${session} has ${open.length} improvement suggestion(s) only the owner may answer (dashboard, or typed in the session): "${by}" cannot say yes or no for them`);
   return { ...payload, keys: `${payload.keys || ''}\n[mycodebox: this message is from "${by}", not the owner's answer to your ${open.length} open improvement suggestion(s). Build none of them.]` };
 }
+// A Mac row has no pane to type into: the owner's yes / no is recorded here and the manager passes it to the session. Nothing else can be sent.
+function answerRemote(req, session, by, payload) {
+  const open = suggestions.openOf(session).map((i) => i.n);
+  if (!open.length) throw httpError(404, 'no such session');
+  if (!fromOwnerUi(req, by)) throw httpError(409, `${session} has ${open.length} improvement suggestion(s) only the owner may answer: "${by}" cannot say yes or no for them`);
+  if (payload.key !== undefined || !answersOf(payload.keys, open)) throw httpError(400, `a Mac session takes only your yes / no here (open: ${open.join(', ')}), for example "yes ${open[0]}, no to the rest" or "no all"`);
+  ownerAnswered(session, String(payload.keys), 'dashboard');
+  managerEvents.record({ key: `suggestions-answered:${session}`, title: `${session}: the owner answered its suggestions (pass it on with SendMessage)`, body: `Owner's words, on the dashboard: "${String(payload.keys).slice(0, 200)}". Still open: ${suggestions.openOf(session).length}.`, url: '/', priority: 'default' }).catch(() => {});
+  return { ok: true, recorded: true, session, open: suggestions.openOf(session).length };
+}
 const goalGate = createGoalGate({
   stateDir: STATE_DIR,
   suggestions,
@@ -2904,6 +2914,7 @@ async function handleHttp(req, res) {
     try {
       const by = actorOf(payload);
       const when = payload.when === undefined || payload.when === null ? null : String(payload.when);
+      if (remote.owns(session)) return json(res, 200, answerRemote(req, session, by, payload));
       if (!(await sessionExists(session))) throw httpError(404, 'no such session');
       await assertAgentPane(session, by);
       const asked = payload;
