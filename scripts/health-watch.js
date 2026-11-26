@@ -436,7 +436,7 @@ export const TMP_PREFIXES = ['altscroll-', 'deploy-live-', 'sc-since-', 'convo-'
   'ghosty-remote-', 'ghosty-rep-', 'ghosty-repmgr-', 'ghosty-review-', 'ghosty-rpf-', 'ghosty-rprompt-',
   'ghosty-rt-', 'ghosty-rt2-', 'ghosty-run-', 'ghosty-selfcheck-', 'ghosty-shadow-', 'ghosty-tm-', 'ghosty-triage-',
   'ghosty-tts-test-', 'ghosty-wake-', 'ghosty-wakes-', 'ghosty-wk-', 'gu-', 'handoffs-', 'hv-', 'hv6b-',
-  'info-plain-', 'int-wire-', 'ja-', 'jev-ask-', 'jev-ask-facts-', 'lane-', 'lane-api-', 'lane-cli-', 'lane-home-',
+  'info-plain-', 'int-wire-', 'ja-', 'ask-opus-', 'doubt-cli-', 'doubt-ev-', 'jev-ask-', 'jev-ask-facts-', 'lane-', 'lane-api-', 'lane-cli-', 'lane-home-',
   'lane-restart-', 'lane-self-', 'lane-state-', 'launch-path-', 'layout-', 'lease-cssh-', 'lease-http-',
   'lease-any-', 'lease-integ-', 'lease-owner-', 'lease-scripts-', 'lease-serve-', 'lease-svc-', 'lfeval-', 'lw-', 'mac-checkout-',
   'mac-hook-', 'merge-pol-', 'meval-origin-', 'meval-reg-', 'meval-state-', 'mk-push-', 'mm-mgr-', 'mmmgr-fake-',

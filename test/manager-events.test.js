@@ -10,6 +10,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { createAlerts } from '../push.js';
 import { createManagerEvents, classifyKey, FILE_NAME, FILE_NAME_OLD } from '../manager-events.js';
+import { eventDoubt } from '../doubt.js';
 import { tmp as mkTmp } from './helpers-tmp.js';
 
 const tmp = () => mkTmp('ghosty-mevents-');
@@ -96,7 +97,8 @@ test('record: writes one JSON line with the expected shape per key family', asyn
   await me.record({ at, key: 'openrouter:credits', title: 't5' });
   const lines = readLines(me.file);
   assert.equal(lines.length, 5);
-  assert.deepEqual(lines[0], { at, key: 'web:asks', kind: 'asks', session: 'web', title: 't1', body: 'b1', url: '/?s=web', priority: 'high' });
+  assert.deepEqual(lines[0], { at, key: 'web:asks', kind: 'asks', session: 'web', title: 't1', body: 'b1', url: '/?s=web', priority: 'high',
+    askOpus: eventDoubt({ key: 'web:asks', session: 'web', body: 'b1' }) });   // a session's question: doubt.test.js
   assert.deepEqual(lines[1], { at, key: 'deploy:abc123:failed', kind: 'deploy', deployId: 'abc123', state: 'failed', title: 't2', body: '', url: '/', priority: 'default' });
   assert.deepEqual(lines[2], { at, key: 'quota:codex:5h', kind: 'quota', quotaKey: 'codex:5h', title: 't3', body: '', url: '/', priority: 'high' });
   assert.deepEqual(lines[3], { at, key: 'disk:/', kind: 'disk', diskPath: '/', title: 't4', body: '', url: '/', priority: 'urgent' });
@@ -125,12 +127,12 @@ test('rotation: when file size + new line >= maxBytes, the live file is renamed 
   const dir = tmp();
   const me = createManagerEvents({ stateDir: dir, managerSessions: () => [], maxBytes: 500 });
   // Three small writes that together exceed 500 bytes on the third append (each ~150 bytes including JSON overhead).
-  await me.record({ at: '2026-01-01T00:00:00.000Z', key: 'web:asks', title: 'one', body: 'a'.repeat(80) });
+  await me.record({ at: '2026-01-01T00:00:00.000Z', key: 'web:hold', title: 'one', body: 'a'.repeat(80) });
   assert.equal(existsSync(join(dir, FILE_NAME_OLD)), false, 'no .1 yet');
   await me.record({ at: '2026-01-01T00:00:01.000Z', key: 'api:waiting', title: 'two', body: 'b'.repeat(80) });
   assert.equal(existsSync(join(dir, FILE_NAME_OLD)), false, 'still no .1 after second write');
   // third write: ~150 bytes (80 'c's + JSON), ~300 + ~150 = ~450. Still under 500. Use larger body to push past.
-  await me.record({ at: '2026-01-01T00:00:02.000Z', key: 'foo:asks', title: 'three', body: 'c'.repeat(180) });
+  await me.record({ at: '2026-01-01T00:00:02.000Z', key: 'foo:hold', title: 'three', body: 'c'.repeat(180) });
   const oldFile = join(dir, FILE_NAME_OLD);
   assert.ok(existsSync(oldFile), 'old file exists after rotation');
   const oldLines = readLines(oldFile);

@@ -14,6 +14,7 @@
 // own directory: ~/ghosty-sessions/.env when run there). No external dependency.
 //
 // stdout: exactly ONE JSON line: { point, pick, technical, why, confidence, source, ruleDefault, allowed, decision_id }
+//   plus, on a `stop` Jev did not decide: in_doubt + ask_opus, or owner_only (doubt.js)
 // stderr: one-line error on bad usage (exit 2)
 // Side effect: appends one line per call to <state dir>/manager-asks.jsonl
 //
@@ -29,6 +30,7 @@ import { decide, POINTS } from '../router.js';
 import { serverBase } from '../decisions.js';
 import { isDisabledReply } from '../jev-switch.js';
 import { createJevBreaker } from '../jev-breaker.js';
+import { jevDoubt } from '../doubt.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..');
@@ -97,6 +99,8 @@ env (process.env or <repoRoot>/.env):
 stdout is exactly one JSON line:
   { point, pick, confidence, source, ruleDefault, allowed, decision_id }
   source = "forced" | "jev" | "rule" | "error"   (error = the Jev call failed, e.g. HTTP 403; "error" has the text; the pick is the rule default)
+  stop with source rule / error: "in_doubt" + "ask_opus" (the command to run before guessing or asking the owner),
+  or "owner_only" (an owner-floor ask: the owner decides, Opus is not asked)
 
 exit codes:
   0  printed a pick (also on rule fallback, also on forced floor)
@@ -204,6 +208,7 @@ async function main() {
     ...(out.source === 'error' ? { error: out.error } : {}),
     ...(jevDisabled && out.source !== 'forced' ? { jev: 'disabled' } : {}),
     ...(breakerOpen && out.source !== 'forced' ? { jev: 'down' } : {}),
+    ...jevDoubt({ point, source: out.source, facts, script: join(__dirname, 'ask-opus.js') }),   // stop only: Jev did not decide
   };
 
   // Exactly ONE JSON line on stdout.
@@ -222,6 +227,7 @@ async function main() {
       ...(out.technical ? { technical: out.technical, why: out.why } : {}),
       decision_id: out.decision_id || null,
       ...(jevDisabled && out.source !== 'forced' ? { skipped: 'jev_disabled' } : {}),
+      ...(record.ask_opus ? { in_doubt: true } : {}),
       ...(args.flags.task ? { task: String(args.flags.task).slice(0, 500) } : {}),
     }) + '\n');
   } catch { /* logging is best-effort; never block the answer */ }
