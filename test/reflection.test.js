@@ -9,7 +9,7 @@ import { createGoalGate, reflectionEligible } from '../goal-check.js';
 import { createDoneCheck } from '../done-check.js';
 import { createFinalAccept } from '../final-accept.js';
 import { isReflectionAsk, reflectionQuestion, ASK_WORDS } from '../reflection.js';
-import { ambiguousAnswer, createSuggestions, suggestionsIn, saysNoSuggestions, answersOf, isOwnerTyped, createTypedLog } from '../suggestions.js';
+import { ambiguousAnswer, bareNumbersOk, createSuggestions, suggestionsIn, saysNoSuggestions, answersOf, isOwnerTyped, createTypedLog } from '../suggestions.js';
 import { createGoalStore, approvedRound, worthAGoal } from '../goal-check.js';
 import { MAX_ASKS_PER_TICK, ASK_MAX_LOAD_PER_CORE } from '../done-check.js';
 import { displayState } from '../public/state.js';
@@ -432,4 +432,29 @@ test('ambiguousAnswer: "do the 4" of a list of 4 is asked back, clear replies ar
   assert.equal(ambiguousAnswer('do the 4', [2, 4]), null, 'N is not the list length');
   assert.equal(ambiguousAnswer('do the 4', [1, 2, 3, 4].slice(0, 3)), null, 'open does not contain N');
   assert.deepEqual(answersOf('do the 4', open), { 4: 'yes' }, 'the parser itself still reads item 4: the guard sits before it');
+  assert.equal(ambiguousAnswer('4', open, { bare: true }), 4, 'a bare "4" of 4 is asked back when bare numbers count');
+  assert.equal(ambiguousAnswer('4', open), null, 'a menu key is not asked back');
+});
+
+test('a bare number answers "only those" unless the closing question is a numbered menu (2026-11-26: "1" built item 1, the ledger kept 3 open)', () => {
+  const open = [1, 2, 3], y = 'yes', n = 'no';
+  assert.equal(answersOf('1', open), null, 'off by default');
+  for (const [text, want] of [['1', { 1: y, 2: n, 3: n }], ['1 3', { 1: y, 2: n, 3: y }], ['1, 2', { 1: y, 2: y, 3: n }], ['7', null], ['1 yes', { 1: y }], ['ok', null]]) {
+    assert.deepEqual(answersOf(text, open, { bare: true }), want, text);
+  }
+  assert.equal(bareNumbersOk('improvement suggestions above, nothing built — should I do 1 and 2? (manager recommends yes to 1, no to 2 and 3)'), true);
+  assert.equal(bareNumbersOk(''), true);
+  for (const q of ['should I do 1? [1 yes (recommended) / 2 no]', 'which: (1) merge (2) drop', 'Pick one:\n1. merge\n2. drop']) assert.equal(bareNumbersOk(q), false, q);
+});
+
+test('record: a bare "1" to "should I do 1 and 2?" clears the hold', async () => {
+  const dir = tmp('sugg-bare-');
+  const led = createSuggestions({ stateDir: dir, active: () => true });
+  led.observe('s', 'Suggestions:\n1. one\n2. two\n3. three\nSTATUS: needs-owner: improvement suggestions above, nothing built — should I do 1 and 2?');
+  assert.equal(led.openOf('s').length, 3);
+  assert.equal(led.ownerMessage('s', '2', { question: 'should I do 1? [1 yes / 2 no]' }), null, 'a menu key records nothing');
+  const r = led.ownerMessage('s', '1', { question: 'should I do 1 and 2?' });
+  assert.deepEqual(r.answered.map((i) => `${i.n}:${i.answer}`), ['1:yes', '2:no', '3:no']);
+  assert.equal(led.openOf('s').length, 0);
+  assert.deepEqual(r.approved.map((i) => i.n), [1]);
 });

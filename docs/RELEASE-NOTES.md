@@ -35,6 +35,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A bare "1" now answers the improvement suggestions** — to "should I do 1 and 2?" the owner replied "1"; the session built item 1, but the ledger only counted replies with a yes / no word, kept all 3 items open, and the finished session stayed red (needs you) under its `STATUS: done`. A reply of numbers only now reads as "only those" (yes to them, no to the rest), unless the closing question offers a numbered menu (`[1 yes / 2 no]`, `(1)`, `1.` lines), where the number stays a menu key; a bare "N" of N items is asked back like "do the N" (`suggestions.js` `bareNumbersOk`) · area: suggestions
+
 - **The lane's UI review is capped with the tests, and OCR runs one thread per tesseract** — vite, esbuild and the headless Chrome of the UI review gate ran uncapped in `ghosty-sessions.service` (1.7 cores while the tests slice was empty); the placer now moves them to `cb-lane.scope` (tests slice, 4-core cap). `scripts/codebox-tesseract` (installed as `~/.local/bin/tesseract`) sets `OMP_THREAD_LIMIT=1`, so two OCR runs no longer mean eight runnable threads. A transient scope created with a pid that had already exited stayed `failed` and blocked every later start (`cb-tests.scope` for an hour: the test cap did nothing); the placer now runs `reset-failed` and starts it again · area: codebox cpu
 
 - **A picture an agent saved in /tmp opens from the reader** — the link to `/tmp/vpt-shots/…jpg` answered 403 (only the home folder and the Claude scratchpads were served); media files this user owns under `/tmp` are served too, never through a hidden folder or a non-media type · area: reader
