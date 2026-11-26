@@ -13,6 +13,8 @@ import { createSuggestions, suggestionsIn, saysNoSuggestions, answersOf, isOwner
 import { createGoalStore, approvedRound } from '../goal-check.js';
 import { displayState } from '../public/state.js';
 import { isOwnersTurn } from '../public/ask-model.js';
+import { deriveButtons, needsOwner } from '../public/buttons.js';
+import { stopOptions, stopItem } from '../voice.js';
 import { pushableItems } from '../done-leftovers.js';
 import { classifyStall } from '../stall.js';
 
@@ -306,6 +308,21 @@ test('the dashboard never shows a held done as done: pending reads as working, o
   assert.equal(displayState({ ...open, state: 'idle' }), 'waiting');
   assert.equal(displayState({ ...open, state: 'working' }), 'working');
   assert.equal(isOwnersTurn(row({ suggestions: { state: 'pending' } })), false);
+});
+
+test('popup, notification and voice buttons say what they approve: no generic "Yes, continue" while suggestions are open', () => {
+  const stall = { id: 's1', case: 'owner_decision', status: 'needs-owner', question: 'improvement suggestions above, nothing built — should I do 1?', excerpt: ANSWER };
+  const held = { state: 'open', open: 2, items: [{ n: 1, text: 'add a retry' }, { n: 2, text: 'shorter rows' }] };
+  const d = deriveButtons({ state: 'done', stall, triage: { ai: { proposed_reply: 'Yes, do 1.' } }, suggestions: held });
+  assert.deepEqual(d.buttons.map((b) => [b.label, b.text]), [['Yes to all 2', 'yes all'], ['No to all 2', 'no all'], ['✎ yes / no per item…', undefined]]);
+  assert.match(d.buttons[0].desc, /1\. add a retry · 2\. shorter rows/);
+  assert.deepEqual(stopOptions({ state: 'done', stall, suggestions: held }).options.map((o) => [o.label, o.answer.text]), [['Yes to all 2', 'yes all'], ['No to all 2', 'no all']]);
+  for (const b of d.buttons.filter((x) => x.text)) assert.ok(answersOf(b.text, [1, 2]), b.text);
+  // a list above a plain done line asks too, by voice as well
+  const done = { state: 'done', stall: { ...stall, case: 'done', status: 'done', question: 'catch-up fixed' }, suggestions: held };
+  assert.equal(needsOwner(done), true);
+  assert.equal(stopItem('a', done)?.options.length, 2);
+  assert.ok(deriveButtons({ state: 'done', stall }).buttons.every((b) => !/to all/.test(b.label)), 'other stops keep their buttons');
 });
 
 test('approved items are a new task: its goal and Done-when lines are the approved suggestions, and its done is checked and asked again', async () => {

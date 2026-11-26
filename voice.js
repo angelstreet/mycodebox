@@ -45,8 +45,9 @@ const WAIT_ID = /^wait$/;
 const stopHash = (stall) => createHash('sha1').update(JSON.stringify([String(stall.question || ''), (stall.options || []).map((o) => String(o.text || ''))])).digest('hex').slice(0, 8);
 
 // Options of a stop, from the same derivation the buttons use: a live menu -> { key: 'N' }, yes/no and lettered -> { text }.
-export function stopOptions({ state, stall, triage }) {
-  const d = deriveButtons({ state, stall, triage });
+export function stopOptions({ state, stall, triage, suggestions = null }) {
+  const owed = suggestions?.state === 'open';   // a spoken or tapped "yes" must say that it approves every suggestion
+  const d = deriveButtons({ state, stall, triage: owed ? null : triage, suggestions });
   const menu = d.kind === 'menu';
   const full = menu ? new Map(stall.options.map((o) => [String(o.n), o.text])) : null;
   const buttons = d.buttons.filter((b) => !b.reply && (b.key != null || b.text != null));
@@ -89,8 +90,8 @@ export function stopItem(session, st, { mgrs = new Set(), isPaused = () => false
   const stall = st?.stall;
   if (!stall || mgrs.has(session) || isPaused(session) || st.auto || st.state === 'working') return null;
   if (!needsOwner(st)) return null;
-  if (!(stall.escalated || st.state === 'waiting' || stall.case === 'owner_decision')) return null;
-  const { kind, options } = stopOptions({ state: st.state, stall, triage: st.triage });
+  if (!(stall.escalated || st.state === 'waiting' || stall.case === 'owner_decision' || st.suggestions?.state === 'open')) return null;
+  const { kind, options } = stopOptions({ state: st.state, stall, triage: st.triage, suggestions: st.suggestions });
   if (!stall.id) return null;   // no stop id: nothing to validate a later answer against
   const stallId = stall.id;
   const question = plainSpeech(stall.question || stall.excerpt || '');

@@ -351,6 +351,7 @@ export function questionKind({ state, stall }) {
 export function needsOwner(st) {
   const s = st?.stall;
   if (!s || st.auto) return false;
+  if (st.suggestions?.state === 'open' && st.state !== 'working') return true;   // only the owner says yes / no
   if (s.case === 'background_wait' || s.case === 'own_job_wait' || s.case === 'needs_manager') return false;   // needs_manager waits on the AI manager, not on the owner
   // a plain finished report is only a question when it really asks one: a '?' followed by a space / the end (not the '?' of a '?s=' in a URL)
   if (s.case === 'done') return /\?(?=["')\]]*(?:\s|$))/.test(s.question || '');
@@ -550,7 +551,16 @@ function suggestionOf(stall, buttons, ai, topicForbidden) {
   return { text: sg, confirm: topicForbidden || !!stall?.suggestionForbidden };
 }
 
-export function deriveButtons({ state, stall, triage }) {
+export function deriveButtons({ state, stall, triage, suggestions = null }) {
+  // Open improvement suggestions (status.suggestions): the two answers say what they approve. A generic "Yes, continue" would approve them all unsaid.
+  if (suggestions?.state === 'open' && state !== 'working') {
+    const n = suggestions.open, list = (suggestions.items || []).map((i) => `${i.n}. ${trunc(i.text, 70)}`).join(' · ');
+    return { kind: 'yesno', buttons: [
+      { id: 'yes', label: `Yes to all ${n}`, text: 'yes all', primary: true, ...(list ? { desc: list } : {}) },
+      { id: 'no', label: `No to all ${n}`, text: 'no all' },
+      { id: 'reply', label: '✎ yes / no per item…', reply: true },
+    ], esc: false, keys: RAW_KEYS, suggestion: null };
+  }
   const kind = questionKind({ state, stall });
   const topicForbidden = !!stall?.forbidden;
   const buttons = [];
