@@ -1527,7 +1527,7 @@ const rulesWatch = createRulesWatch({
   mode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).rulesWatch; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
 });
 // Overlap guard (overlap-guard.js): two sessions changing the same file vs origin/main -> GET /api/overlaps, a manager
-// event and one silent message to each session. manager.json `overlapGuard`: "live" (default) | "dry" | "off"; `overlapIgnore`: globs.
+// event and one note with each session's next turn (session-notes.js). manager.json `overlapGuard`: "live" (default) | "dry" | "off"; `overlapIgnore`: globs.
 const overlapGuard = createOverlapGuard({
   stateDir: STATE_DIR,
   git: async (cwd, args) => (await exec('git', ['-C', cwd, ...args], { timeout: 30000 })).stdout,
@@ -1540,7 +1540,7 @@ const overlapGuard = createOverlapGuard({
   ignoreList: () => { try { const l = JSON.parse(readFileSync(managerConfigFile, 'utf8')).overlapIgnore; return Array.isArray(l) ? l.map(String) : DEFAULT_IGNORE; } catch { return DEFAULT_IGNORE; } },
 });
 // Shared-checkout guard (shared-checkout-guard.js): a dirty / off-main / ahead shared checkout -> GET /api/shared-checkouts, a manager
-// event and one silent message to the sessions that started there. manager.json: `sharedCheckoutGuard` "live" (default) | "dry" | "off";
+// event and one note with the next turn of each session that started there (session-notes.js). manager.json: `sharedCheckoutGuard` "live" (default) | "dry" | "off";
 // `sharedCheckouts` (list of paths, ~ allowed; default ~/ghosty-sessions and ~/virtualpytest).
 const sharedCheckoutGuard = createSharedCheckoutGuard({
   stateDir: STATE_DIR,
