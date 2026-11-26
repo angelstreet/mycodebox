@@ -130,7 +130,7 @@ import { createSharedCheckoutGuard, expandHome } from './shared-checkout-guard.j
 import { createFoundBugs, sessionOfRequest, unreportedBugOf, sendBackOf, sendBackText, sweepGroups, equivalentFreeOf } from './found-bugs.js';
 import { goalOf as goalOfPrompt, blockedOrUnknownStatus, lastStatus } from './status-honesty.js';
 import { createGoalGate, createGoalStore, approvedRound, worthAGoal } from './goal-check.js';
-import { createSuggestions, createTypedLog, isOwnerTyped, answersOf, ambiguousAnswer } from './suggestions.js';
+import { createSuggestions, createTypedLog, isOwnerTyped, answersOf, ambiguousAnswer, bareNumbersOk } from './suggestions.js';
 import { createManagerOwned, forManagerSession, MANAGER_ACTOR } from './manager-owned.js';
 import { createFinalAccept, isTaskActor, isTaskMessage } from './final-accept.js';
 import { createDoneCheck, closingTextOf, DEFAULT_IGNORE_BRANCHES, shipOfferOf, unconfirmedStatusOf, waitingOnLeaseStatus } from './done-check.js';
@@ -1297,14 +1297,15 @@ function noteSuggestions(name, text, doneAt = null) {
 // The owner said yes / no (dashboard, or typed into the session), or the manager did for a session it started (by 'manager').
 // Approved items become a new task with its own goal.
 function ownerAnswered(name, text, via, by = 'owner') {
-  const open = suggestions.openOf(name).map((i) => i.n), amb = ambiguousAnswer(text, open);
+  const question = latest?.status?.[name]?.stall?.question || '';
+  const open = suggestions.openOf(name).map((i) => i.n), amb = ambiguousAnswer(text, open, { bare: bareNumbersOk(question) });
   if (amb) {   // "do the 4" of 4 items: all four or only item 4? Nothing is recorded; the owner is asked, in the feed
     logEvent({ type: 'suggestions-ambiguous', session: name, via, text: String(text).slice(0, 80), open });
     alert(`${name}:suggestions-ambiguous`, { title: `${name}: all ${amb} suggestions, or only item ${amb}?`, priority: 'high', tier: 'interrupt', ntfyTags: 'question',
       body: `Your reply "${String(text).trim().slice(0, 60)}" can mean all ${amb} items or only item ${amb}. Nothing was recorded. Reply "yes ${open.join(' ')}" for all, or "yes ${amb}, no ${open.filter((n) => n !== amb).join(' ')}" for item ${amb} only.`, url: `/?s=${encodeURIComponent(name)}`, tag: `ghosty-${name}` });
     return;
   }
-  const r = suggestions.ownerMessage(name, text, { via, by });
+  const r = suggestions.ownerMessage(name, text, { via, by, question });
   if (!r) return;
   logEvent({ type: 'suggestions-answered', session: name, via, by, answered: r.answered.map((i) => `${i.n}:${i.answer}`), open: r.open });
   // the manager's yes / no is shown to the owner in "Decided for you"
@@ -1328,9 +1329,10 @@ function guardOwnerChoice(req, session, by, payload) {
 // The manager answering a session it started: its yes / no is typed as it is (and recorded once sent, recordChoice).
 function managerChoice(session, open, payload) {
   if (payload.key !== undefined) throw httpError(409, `${session} has ${open.length} open suggestion(s): answer in words ("yes ${open[0]}, no to the rest" or "no all"), not with a menu key`);
-  const amb = ambiguousAnswer(payload.keys, open);
+  const bare = bareNumbersOk(latest?.status?.[session]?.stall?.question || '');
+  const amb = ambiguousAnswer(payload.keys, open, { bare });
   if (amb) throw httpError(400, `"do the ${amb}" can mean all ${amb} items or only item ${amb}: nothing was sent; write "yes ${open.join(' ')}" or "yes ${amb}, no to the rest"`);
-  if (answersOf(payload.keys, open)) return payload;
+  if (answersOf(payload.keys, open, { bare })) return payload;
   return { ...payload, keys: `${payload.keys || ''}\n[mycodebox: this is not a yes / no to your ${open.length} open improvement suggestion(s). Build none of them yet.]` };
 }
 // What a delivered send says about the open suggestions: the owner's dashboard, or the manager for a session it started. Nobody else.

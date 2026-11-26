@@ -81,3 +81,17 @@ test('findInFolder: <cwd>/<rel> first, else a bounded search for a file ending i
     assert.equal(findInFolder(d, 'out/ep.mp4', { maxDepth: 1 }), null, 'bounded depth');
   } finally { rmSync(d, { recursive: true, force: true }); }
 });
+
+test('files route: a media file this user owns under /tmp is served; a hidden folder, another owner and a non-media type are not', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'reader-media-t-')), home = mkdtempSync(join(tmpdir(), 'reader-media-h-'));
+  mkdirSync(join(tmp, 'vpt-shots')); mkdirSync(join(tmp, '.secret'));
+  writeFileSync(join(tmp, 'vpt-shots', 'a.jpg'), 'x'); writeFileSync(join(tmp, '.secret', 'b.png'), 'x'); writeFileSync(join(tmp, 'vpt-shots', 'c.txt'), 'x');
+  const opt = { home, tmpDir: tmp };
+  const ok = resolveServedFile(join(tmp, 'vpt-shots', 'a.jpg'), opt);
+  assert.equal(ok.type, 'image/jpeg');
+  assert.equal(resolveServedFile(join(tmp, '.secret', 'b.png'), opt).status, 403, 'hidden folder');
+  assert.equal(resolveServedFile(join(tmp, 'vpt-shots', 'c.txt'), opt).status, 403, 'not media');
+  assert.equal(resolveServedFile(join(tmp, 'vpt-shots', 'a.jpg'), { ...opt, uid: (process.getuid?.() ?? 0) + 1 }).status, 403, 'another owner');
+  assert.equal(resolveServedFile(join(tmp, 'vpt-shots', 'a.jpg'), { home, tmpDir: '/nonexistent-tmp' }).status, 403, 'outside the tmp folder and home');
+  rmSync(tmp, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true });
+});

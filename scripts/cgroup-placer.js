@@ -46,6 +46,9 @@ export function isTest(cmd) {
   if (['sh', 'bash', 'dash'].includes(b) && t[1] === '-c') return SH_TEST_RE.test(t.slice(2).join(' '));
   return false;
 }
+// The lane's UI review gate (and a frontend e2e) starts a vite dev server, esbuild and a headless Chrome inside ghosty-sessions.service: heavy, short-lived, not test-shaped
+// (2026-11-26: 1.7 cores uncapped while the tests slice stayed empty). The dashboard server itself runs none of them.
+export const isLaneHeavy = (cmd = '') => /(?:^|[\s/])(?:vite|esbuild|chrome-headless-shell|chromium|chrome)(?:\s|$)|\/\.bin\/vite\b|@esbuild\/|\/ms-playwright\//.test(cmd);
 export const scopeName = (session) => `cb-${String(session).replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 60)}.scope`;
 
 // procs: Map pid -> { ppid, cmd, cg }. panes: Map panePid -> session name. tmuxPids: the tmux server(s), never moved.
@@ -74,7 +77,7 @@ export function plan(procs, panes, tmuxPids = new Set()) {
     if (tmuxPids.has(pid) || e.outside) continue;
     let slice, scope;
     if (e.lane) {   // the dashboard service: its server and helpers stay; only test-shaped processes (the lane's runs) move
-      if (!testRoot(pid)) continue;
+      if (!testRoot(pid) && !isLaneHeavy(e.cmd)) continue;
       slice = SLICES.tests; scope = LANE_SCOPE;
     } else if (testRoot(pid)) { slice = SLICES.tests; scope = 'cb-tests.scope'; }
     else {
@@ -125,14 +128,22 @@ function panes() {
 }
 const tmuxServers = () => { try { return new Set(execFileSync('pgrep', ['-x', 'tmux: server'], { encoding: 'utf8' }).split('\n').filter(Boolean).map(Number)); } catch { return new Set(); } };
 const MGR = ['org.freedesktop.systemd1', '/org/freedesktop/systemd1', 'org.freedesktop.systemd1.Manager'];
+export const isStaleScopeError = (e) => /already loaded|fragment file/i.test(String(e?.stderr || e?.message || e));
 // New scope: systemd creates it (no per-scope cap, the slice's TasksMax governs). Existing scope: write the pid into its
 // cgroup.procs; AttachProcessesToUnit would need Delegate=yes, which a transient scope cannot gain later.
 function move(scope, slice, pids) {
   const dir = `${CG}/codebox.slice/${slice}/${scope}`;
   if (existsSync(dir)) { for (const pid of pids) writeFileSync(`${dir}/cgroup.procs`, String(pid)); return; }
   const weight = scope === LANE_SCOPE ? ['CPUWeight', 't', String(LANE_WEIGHT)] : [];
-  execFileSync('busctl', ['call', ...MGR, 'StartTransientUnit', 'ssa(sv)a(sa(sv))', scope, 'fail', String(3 + (weight.length ? 1 : 0)),
+  const start = () => execFileSync('busctl', ['call', ...MGR, 'StartTransientUnit', 'ssa(sv)a(sa(sv))', scope, 'fail', String(3 + (weight.length ? 1 : 0)),
     'PIDs', 'au', String(pids.length), ...pids.map(String), 'Slice', 's', slice, 'TasksMax', 't', '18446744073709551615', ...weight, '0'], { stdio: 'pipe' });
+  try { start(); } catch (e) {
+    // a scope created with a pid that had already exited ends `failed` and stays loaded: every later start answers "already loaded" and nothing of that class is placed
+    // (2026-11-26: cb-tests.scope and cb-lane.scope stayed failed for an hour, so the test cap did nothing). Clear it and start once more.
+    if (!isStaleScopeError(e)) throw e;
+    execFileSync('systemctl', ['reset-failed', scope], { stdio: 'pipe' });
+    start();
+  }
 }
 // True when tmux has panes but none of their processes sits in the source cgroup or a placed scope: the placer is looking at the wrong unit.
 export function blind(paneMap, procs) { if (!paneMap.size) return false; for (const pid of paneMap.keys()) if (procs.has(pid)) return false; return true; }

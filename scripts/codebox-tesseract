@@ -1,0 +1,6 @@
+#!/bin/sh
+# tesseract with one OpenMP thread per run (OMP_THREAD_LIMIT=1): the OCR sweeps start many short runs at once and each used 4 threads, which put the load
+# average at 26 on 6 cores (2026-11-26) without making the sweep faster. Install: ln -sf <checkout>/scripts/codebox-tesseract ~/.local/bin/tesseract
+# (~/.local/bin comes before /usr/bin in the sessions' PATH). OMP_THREAD_LIMIT set by the caller wins.
+export OMP_THREAD_LIMIT="${OMP_THREAD_LIMIT:-1}"
+exec /usr/bin/tesseract "$@"

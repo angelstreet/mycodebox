@@ -1,7 +1,7 @@
 // /files/<absolute path>: a picture, video, PDF or HTML mockup an agent made, shown in the reader or opened in a tab from any device
 // on the tailnet (owner 2026-11-22). The path is in the URL (not a query) so a mockup's relative CSS / JS / images resolve beside it.
 // Only media and page types, only under the home folder or this user's Claude scratchpads, never through a dot folder (keys, .env,
-// state) except the dashboard's own uploads. HTML and SVG are served sandboxed (opaque origin): a mockup's script cannot call the
+// state) except the dashboard's own uploads; and media this user owns under /tmp (agents save screenshots there). HTML and SVG are served sandboxed (opaque origin): a mockup's script cannot call the
 // dashboard's API.
 import { readdirSync, realpathSync, statSync } from 'node:fs';
 import { extname, isAbsolute, join, normalize, resolve, sep } from 'node:path';
@@ -25,15 +25,17 @@ export function placeError(file, { home, uid = process.getuid?.() ?? 0 }) {
 }
 
 // urlPath: the part after /files (decoded or not) -> { file, type, sandbox, size } or { status, error }
-export function resolveServedFile(urlPath, { home, uid = process.getuid?.() ?? 0, real = realpathSync, stat = statSync } = {}) {
+export function resolveServedFile(urlPath, { home, uid = process.getuid?.() ?? 0, real = realpathSync, stat = statSync, tmpDir = '/tmp' } = {}) {
   let p; try { p = decodeURIComponent(String(urlPath || '')); } catch { return { status: 400, error: 'bad path' }; }
   if (p.startsWith('/~/')) p = join(home, p.slice(3));
   if (!p.startsWith('/') || p.includes('\0')) return { status: 400, error: 'absolute path only' };
   const ext = extname(p).toLowerCase();
   if (!FILE_TYPES[ext]) return { status: 403, error: 'not a picture, video, PDF or page' };
   let file; try { file = real(resolve(p)); } catch { return { status: 404, error: 'no such file' }; }
-  const bad = placeError(file, { home, uid }); if (bad) return bad;
   let st; try { st = stat(file); } catch { return { status: 404, error: 'no such file' }; }
+  // a picture an agent saved in /tmp (a screenshot folder such as /tmp/vpt-shots) is served when this user owns it (owner 2026-11-26: the reader link was a 403)
+  const tmpOwned = file.startsWith(`${tmpDir}${sep}`) && st.uid === uid && !file.slice(tmpDir.length).split(sep).some((s) => s.startsWith('.'));
+  const bad = tmpOwned ? null : placeError(file, { home, uid }); if (bad) return bad;
   if (!st.isFile()) return { status: 404, error: 'not a file' };
   return { file, type: FILE_TYPES[ext], sandbox: SANDBOXED.has(ext), size: st.size };
 }
