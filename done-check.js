@@ -343,8 +343,23 @@ export function createDoneCheck({
       if (m === 'off') return (last = { at: now(), mode: m, checked: 0, findings: [] });
       const touched = new Set();   // sessions pushed in this tick: (F)/(G) wait for the next tick rather than type a second message
       const send = async (n, x) => { touched.add(n); return sendRaw(n, x); };
-      const sessions = await listDone();
+      let sessions = await listDone();
       const st = await load();
+      // (S) open improvement suggestions first: such a session is not done whatever else its line says, so it is told to end on the question
+      // before any other check (and only that, this tick). No load gate: the reply is one short line.
+      const openTold = [];
+      if (goalGate?.openSuggestions && m === 'live') {
+        let told = 0;
+        for (const s of sessions) {
+          if (s.working || s.draft || told >= MAX_ASKS_PER_TICK || (s.doneAt && now() - s.doneAt > REVIEW_MAX_AGE_MS)) continue;
+          let d = null;
+          try { d = await goalGate.openSuggestions(s); } catch (e) { log.error?.('[done-check] open suggestions', s.name, e.message); }
+          if (!d?.message) continue;
+          try { await send(s.name, d.message); await goalGate.sent(s.name, d); told++; openTold.push(s.name); } catch (e) { log.error?.('[done-check] send open suggestions', s.name, e.message); }
+        }
+        // a session with an open suggestion is not done: no other done check reads it until the owner answers (or it ends needs-owner)
+        sessions = sessions.filter((s) => !touched.has(s.name) && !(goalGate.openCount?.(s.name) > 0));
+      }
       const live = new Set(sessions.map((s) => s.name));
       for (const n of Object.keys(st.told)) if (!live.has(n)) delete st.told[n];
       const findings = [];
@@ -664,7 +679,7 @@ export function createDoneCheck({
         try { await send(s.name, proofGapMessage(g)); st.toldProof[s.name] = { sig }; nudged++; await note({ session: s.name, proofGap: g }); }
         catch (e) { log.error?.('[done-check] send proof gap', s.name, e.message); }
       }
-      const goalCheck = { asked: [], bounced: [], accepted: [], capped: [], reflected: [], suggestions: [] };
+      const goalCheck = { asked: [], bounced: [], accepted: [], capped: [], reflected: [], suggestions: [...openTold] };
       const closeBox = async (name) => {
         let e = null; try { e = await goalEntryOf(name); } catch {}
         if (!e?.timeBoxMs || !e.at || st.toldBox[name]?.accepted === e.at) return;

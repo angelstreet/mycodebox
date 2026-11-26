@@ -485,3 +485,23 @@ test('a reply that reads as item numbers and as the session\'s numbers, differen
   assert.deepEqual(led.ownerMessage('g', 'yes 5').answered.map((i) => i.n), [5], 'a number only the items have');
   assert.deepEqual(led.ownerMessage('g', 'no all').answered.map((i) => i.n), [1, 2, 3, 4], 'no number: no ambiguity (round 2 is items 4 and 5)');
 });
+
+test('open suggestions are told first: no proof, review or load gate holds the push, and no other check types into that session this tick (2026-11-26 ghosty: 7 min late)', async () => {
+  const r = rig({ parts: PARTS });
+  const noReview = 'Suggestions:\n1. x\n2. y\nSTATUS: done — shipped it';   // no closing review: (C) would push first
+  r.turn(noReview); r.read(noReview);
+  const dc = r.check({ goalEntryOf: () => null, pressure: () => ({ loadPerCore: 9, ramAvailPct: 5 }) });   // a loaded host
+  const tick = await dc.tick();
+  assert.deepEqual(tick.goalCheck.suggestions, ['a']);
+  assert.equal(r.sent.length, 1, 'one message only');
+  assert.match(r.sent[0][1], /you cannot be done, 2 improvement suggestion/);
+  await dc.tick();
+  assert.equal(r.sent.length, 1, 'once per done turn, and no closing-review push to a session that is not done');
+  const quietDc = r.check({ goalEntryOf: () => null });
+  await quietDc.tick();
+  assert.equal(r.sent.length, 1, 'a quiet host changes nothing while the items are open');
+  r.ledger.ownerMessage('a', 'no all');
+  await quietDc.tick();
+  assert.equal(r.sent.length, 2, 'answered: the other checks read it again');
+  assert.match(r.sent[1][1], /closing review/i);
+});
