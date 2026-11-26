@@ -23,6 +23,8 @@ test('server: a manager-started session asks the manager, never the owner; the m
   [state, home, bin].forEach((d) => mkdirSync(d, { recursive: true }));
   writeFileSync(join(state, 'manager.json'), JSON.stringify({ enabled: true, aiTriage: 'off', routerShadow: false, wakeShadow: false }));
   writeFileSync(join(state, 'sessions.json'), JSON.stringify({ 'worker-session': { priority: 'P2', paused: false, seenAt: Date.now(), startedBy: 'manager' } }));
+  // the reflection question was already asked (the done check sends it on its own 5-min tick): answering the last item then ends the session's work
+  writeFileSync(join(state, 'suggestions.json'), JSON.stringify({ since: 1, s: { 'worker-session': { asked: { at: 1, sig: 'earlier-done' }, items: [] } } }));
   const socket = `mownedwire${process.pid}`, tmuxBin = join(bin, 'tmux');
   writeFileSync(tmuxBin, `#!/bin/sh\nexec ${execFileSync('sh', ['-c', 'command -v tmux']).toString().trim()} -L ${socket} "$@"\n`); chmodSync(tmuxBin, 0o755);
   const got = join(base, 'typed.log');
@@ -97,6 +99,14 @@ done
   await until(async () => (await record()).items.every((i) => i.answer === 'no'), 'recorded');
   assert.deepEqual((await record()).items.map((i) => i.by), ['manager', 'manager']);
   await until(() => jsonl('manager-decisions.jsonl').some((d) => d.session === 'worker-session' && /suggestions: 1 no/.test(d.what)), 'shown to the owner in Decided for you');
+
+  // really done (done accepted, nothing open): the manager is told once that it can close it, and nothing closes it
+  const ready = () => jsonl('manager-events.jsonl').filter((e) => e.key === 'worker-session:ready-to-close');
+  await until(() => ready().length === 1, 'ready-to-close event');
+  assert.match(ready()[0].body, /DELETE \/api\/sessions\/worker-session\?confirm=worker-session/);
+  await sleep(4000);
+  assert.equal(ready().length, 1, 'once');
+  assert.ok(await row(), 'the session is still there');
 
   // 3. a session this one starts is the manager's too (its name used to be refused as started_by, so nothing was recorded)
   const token = readFileSync(join(state, 'reporter.token'), 'utf8').trim();
