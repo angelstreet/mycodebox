@@ -80,7 +80,9 @@ const REST = new Set(['rest', 'others', 'other', 'remaining']);
 const FILLER = new Set(['and', 'to', 'the', 'only', 'please', 'pls', 'it', 'of', 'item', 'items', 'suggestion', 'suggestions', 'number', 'numbers', 'but', 'for', 'ahead', 'them', 'those', 'these', 'also', 'thanks', 'then', 'a', 'with', 'is', 'ok', 'okay']);
 // Pure. text: a message; open: the open item numbers -> { <n>: 'yes' | 'no' } or null when the message is not purely an answer (a new task, a question).
 // "yes 1 3, no 2" · "1 yes, 2: no" · "do 1 and 3" · "no 4-5" · "yes all" · "no all" / "none" · "do 1, no to the rest" · "only 1"
-export function answersOf(text, open = []) {
+// bare: a reply of numbers only ("1", "1 3") reads as "only those" (yes to them, no to the rest). Off by default: a bare "2" is a menu key when the
+// closing question offers a numbered menu ("[1 yes / 2 no]"); the caller turns it on only when it does not (bareNumbersOk).
+export function answersOf(text, open = [], { bare = false } = {}) {
   const t = String(text || '').trim().toLowerCase().replace(/don['’]t/g, 'dont').replace(/(\d)\s*(?:-|–)\s*(?=\d)/g, '$1..').replace(/(?<!\.)\.(?!\.)/g, ' ');
   if (!t || t.length > 200 || /\?/.test(t) || !open.length) return null;
   const tok = t.split(/[\s,;:=+&/()#]+/).map((x) => x.replace(/!+$/, '')).filter(Boolean);
@@ -104,6 +106,11 @@ export function answersOf(text, open = []) {
     else if (REST.has(w)) restOf = polarity || 'no';
     else if (!FILLER.has(w)) return null;
   }
+  if (pending.length && bare && !polarity && !restOf && !all && Object.keys(out).length === 0 && tok.every((w) => /^\d/.test(w))) {
+    // "1" to "should I do 1 and 2?": yes to 1, no to the rest (2026-11-26: the session built 1, the ledger kept all three open and the done read as needs-you)
+    for (const n of open) out[n] = pending.includes(n) ? 'yes' : 'no';
+    return out;
+  }
   if (pending.length) return null;   // a number with no yes or no
   if (restOf) { for (const n of open) out[n] ||= restOf; }
   else if (all && !sawNum) { for (const n of open) out[n] = all; }
@@ -115,12 +122,18 @@ export function answersOf(text, open = []) {
 // Pure. text: a message; open: the open item numbers -> the number N when the reply is "do the N" / "do N" / "build N" / "approve N" and N is also how many items are listed
 // (at least two): "do the 4" of a list of 4 reads as "all four" to a person and as "item 4 only" to answersOf, so nothing is recorded and the owner is asked back
 // (2026-11-26: "do the 4" recorded item 4, the session built all four, three items stayed open and the session read as needing the owner for an hour). Else null.
-export function ambiguousAnswer(text, open = []) {
+// bare: a bare "4" counts too (the caller's bareNumbersOk: not a menu key).
+export function ambiguousAnswer(text, open = [], { bare = false } = {}) {
   const t = unpasted(text).toLowerCase().replace(/[.!\s]+$/, '');
-  const m = /^(?:(?:ok|okay|yes|so|please|pls)[\s,]+)*(?:do|build|approve|implement)\s+(?:the\s+|item\s+|number\s+)?(\d{1,2})$/.exec(t);
+  if (!bare && /^\d+$/.test(t)) return null;
+  const m = /^(?:(?:ok|okay|yes|so|please|pls)[\s,]+)*(?:do|build|approve|implement)\s+(?:the\s+|item\s+|number\s+)?(\d{1,2})$/.exec(t) || /^(\d{1,2})$/.exec(t);   // a bare "4" too
   const n = m ? Number(m[1]) : 0;
   return n >= 2 && open.length === n && open.includes(n) ? n : null;
 }
+
+// Pure. question: the session's closing question -> false when it offers a numbered menu ("[1 yes / 2 no]", "(1) ... (2) ...", "1. ..." lines),
+// where a bare number is a menu key, not an item number.
+export const bareNumbersOk = (question) => !/\[\s*1\b[^\]]*\/|\(1\)|(?:^|\n)\s*1[.)]\s/.test(String(question || ''));
 
 // A prompt that is not a person typing: another session, a hook, a task notification, an attachment marker.
 const NOT_TYPED = /^(?:<(?!pasted_content)|another claude session\b|stop hook feedback\b|\[(?:system|request|image|rules-watch)|caveat:|this session is being continued\b)/i;
@@ -230,9 +243,10 @@ export function createSuggestions({ stateDir, now = Date.now, active = () => tru
     return { answered, open: openOf(r).length, approved };
   }
   // A message that reached the session and was typed by the owner: records it when it reads as an answer. -> answer() result or null
-  function ownerMessage(name, text, opts) {
+  // opts.question: the session's closing question; bare numbers count as an answer only when it is not a numbered menu
+  function ownerMessage(name, text, opts = {}) {
     const open = openOf(rec(name)).map((i) => i.n);
-    const a = answersOf(unpasted(text), open);
+    const a = answersOf(unpasted(text), open, { bare: bareNumbersOk(opts.question) });
     return a ? answer(name, a, opts) : null;
   }
   // -> null (nothing holds it) | { state: 'open', open: n, items } | { state: 'pending' } for a session whose latest turn is `text`
