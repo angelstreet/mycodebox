@@ -2602,8 +2602,9 @@ id, repo, branch, files of the merge, commit subjects; last 12 h) and sends a do
 - **Release note**: an integration of `virtualpytest` (`docs/release_note/README.md`) or `mycodebox` (`docs/RELEASE-NOTES.md`) changed code (anything but `docs/`, `*.md`,
   `VERSION.txt`, lockfile) and no integration of that repo touched its release-note file, unless the closing review's `docs` says
   `release note none needed: <reason>`. The words "release note updated" without a diff do not pass.
-- **Bug record**: an integration's branch or commit subject says fix / bug / hotfix / regression (or the task goal does), and the `bugs:` field names no `bug-<hex>` id
-  and is not `none` with a reason after it. The push says: file the bug you fixed and resolve it with `found-bug --resolve <id> --commit <integration id>`.
+- **Bug record**: an integration's branch or commit subject says fix / bug / hotfix / regression (or the task goal does), and the `bugs:` field names no `bug-<hex>` id,
+  is not `fixed — <what was broken>` (a bug inside the session's own task, which `found-bug` never files; manager 2026-11-26) and is not `none` with a reason after it.
+  The push asks for those words, or for a filed bug's `found-bug --resolve <id> --commit <integration id>`; it never asks to file an in-task bug.
 - Same gates as (N): idle, no draft, done turn under 6 h, after the git / leftovers / closing-review / honesty pushes; dry mode journals `evidenceGap` only;
   journal `done-check.jsonl` `evidenceGap`. The goal question waits for it.
 - The rule text is one bullet, "Release note and bug record for shipped code", identical in AGENTS.md, the `scripts/cbsession` preamble, the
