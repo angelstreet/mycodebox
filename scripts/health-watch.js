@@ -483,7 +483,7 @@ export const TMP_PREFIXES = ['altscroll-', 'deploy-live-', 'sc-since-', 'convo-'
   'mac-hook-', 'merge-pol-', 'meval-origin-', 'meval-reg-', 'meval-state-', 'mk-push-', 'mm-mgr-', 'mmmgr-fake-',
   'mycodebox-restart-', 'p1fix-fresh-', 'mgr-acct-', 'mgr-rot-', 'senders-', 'files-route-', 'file-view-', 'upload-log-', 'og-', 'pk-', 'pk-mm-', 'render-skill-', 'rules-watch-', 'session-notes-', 'rv2-fresh-', 'self-out-',
   'pane-claude-', 'poke-ret-', 'prune-daily-', 'self-root-', 'send-ui-shots-', 'send-ui-work-', 'sh-', 'slots-', 'trust-', 'trust-ctl-', 'usage-attr-',
-  'usage-test-', 'team-reporter-', 'v2-acc-fx-', 'v2-acc-runner-', 'v2-acc-state-', 'v2-acceptance-', 'v2-adapters-', 'v2-adverify-',
+  'usage-test-', 'team-reporter-', 'reader-media-', 'v2-acc-fx-', 'v2-acc-runner-', 'v2-acc-state-', 'v2-acceptance-', 'v2-adapters-', 'v2-adverify-',
   'v2-bench-', 'v2-bench-http-', 'v2-bench-http-reap-', 'v2-bench-http-test-', 'v2-bench-out-', 'v2-bench-r4-test-',
   'v2-bench-test-', 'v2-d017-', 'v2-delivery-', 'v2-delivery-verify-', 'v2-gl-', 'v2-glstall-', 'v2-glv-',
   'v2-glv2-', 'v2-glv3-', 'v2-glv4-', 'v2-glv5-', 'v2-glv6-', 'v2-grants-', 'v2-http-', 'v2-int-', 'v2-intv-',
@@ -694,7 +694,9 @@ export function scanWorktrees({ cfg, panes = [], claude = [], procCwds = [], pro
       // Pushed counts as safe too (owner, 2026-11-03): when the tip is already contained in an origin branch, removing
       // the worktree loses no commit. The lane's squash/rebase merges leave the tip off origin/main, so "ancestor"
       // alone kept dozens of finished worktrees (~230M each) forever.
-      const pushed = !ancestor && !!run('git', ['-C', dir, 'for-each-ref', '--count=1', '--contains', 'HEAD', '--format=%(refname)', 'refs/remotes/origin']);
+      // "0 commits of HEAD are on no origin ref" = some origin ref contains HEAD. One bounded walk: `for-each-ref --contains`
+      // tested each of 2500 remote refs (1.1 s per worktree, 40 of the 56 s of an investigating tick, 2026-11-26).
+      const pushed = !ancestor && (run('git', ['-C', dir, 'rev-list', '--count', 'HEAD', '--not', '--remotes=origin']) || '').trim() === '0';
       const merged = (ancestor || pushed) && !unstarted;   // an unstarted branch has no work of its own to be merged
       // Recent activity: the worktree's own git metadata, or its last commit. "clean" only means "no tracked file is
       // modified", so a worktree whose owner has not written anything yet is still work in progress (E51).
