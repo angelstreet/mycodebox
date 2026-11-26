@@ -5962,7 +5962,7 @@ if ('serviceWorker' in navigator) {
   // phone home = board, unless the grid was the last view used
   if (isPhone() && state.mode !== 'grid') { state.mode = 'list'; state.prevMode = 'list'; }
   const rd = lsGet(LS_READER, null);
-  state.reader = rd == null ? isPhone() : rd === '1';
+  state.reader = rd == null ? true : rd === '1';   // no saved choice (new browser, cleared site data, private tab) reads as the reader: the raw terminal only after the owner taps >_
   const savedActive = lsGet('ghosty.active', '');
   if (savedActive) state.active = savedActive;   // validated against the live sessions once they load
   // QF-12: a soft reload comes back with the same card locked. Empty string = no lock.

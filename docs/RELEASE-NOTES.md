@@ -31,6 +31,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A browser with no saved choice opens cards as the reader** — the default was the reader on a phone only, so a desktop browser that had lost its site data (or a new one) showed the raw terminal until `Aa` was tapped; the reader is now the default everywhere, `>_` still switches to the terminal and is remembered · area: reader
+
 - **A result the manager accepted as final is left alone** — after the manager accepted a partial review, the harness still sent a time-box wake and a "blocked lacks tried/need" check and woke the manager with new `asks` events. The manager now records the acceptance (`accept_final: true` on the decision message, or `POST /api/manager/accept-final/<session>`); the done-check, time box, stop handling and asks stay quiet until a new owner or manager task message. No failed row becomes a pass · area: harness
 
 - **The needs-owner hold now really holds** — it listened on the `waiting` alert (a prompt on screen), but a `STATUS: needs-owner` stop reaches the owner as the manager's `asks` alert, so it never fired. `test/ui-review-wire.test.js` drives a real server with a stand-in agent pane; it fails on the old wiring · area: harness
