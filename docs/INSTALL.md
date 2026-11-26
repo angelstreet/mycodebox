@@ -95,12 +95,15 @@ All tmux panes inherit the cgroup of whatever started the tmux server, so every 
 `TasksMax` (systemd's default is 15% of `kernel.threads-max`, about 1000 on a small VM). Leaked dev servers plus a few
 parallel `npm test` runs fill it, thread creation fails and agents abort. `scripts/cgroup-placer.js` (root, polling
 every 2 s) moves them into three slices: `codebox-core.slice` (the sessions in `CGROUP_CORE`, default
-`manager,mycodebox-v2,mm-manager`; no cap), `codebox-sessions.slice` (one `cb-<session>.scope` per session, 6144 tasks)
-and `codebox-tests.slice` (npm test/ci, node --test, pytest; 1024 tasks, low CPU weight). Processes whose session died
+`manager,mycodebox-v2,mm-manager,ghosty`; no cap), `codebox-sessions.slice` (one `cb-<session>.scope` per session, 6144 tasks)
+and `codebox-tests.slice` (npm test/ci, node --test, pytest, tsc, tesseract, and the integration lane's runs in `cb-lane.scope`;
+2048 tasks, CPU weight 25, `CPUQuota=400%`). The placer reads the tmux server's own cgroup, so it needs no source setting. Processes whose session died
 land in `cb-orphans.scope`. Install it by copying `systemd/codebox*.slice` and an edited
 `systemd/ghosty-cgroup-placer.service`, then `sudo systemctl daemon-reload && sudo systemctl enable --now
 ghosty-cgroup-placer`. Run `systemd-cgtop -P codebox.slice` to see who holds the tasks, and
-`sudo node scripts/cgroup-placer.js --dry-run` to check placements without moving anything.
+`sudo node scripts/cgroup-placer.js --dry-run` to check placements without moving anything. The daily checks compare every installed unit with
+its `systemd/` template (`scripts/installed-copies-check.js`) and report a template line missing on the host, so a merged unit
+change that was never installed shows up the next morning.
 
 ### Recommended: private HTTPS with Tailscale Serve
 

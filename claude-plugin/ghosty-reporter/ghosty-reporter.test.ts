@@ -15,21 +15,22 @@ type Sent = { url: string; headers: Record<string, string>; body: any }
 
 // The world beneath the plugin: env, clock, tmux, token file, ghosty. Returns what ghosty received.
 function world(on: any, opts: { down?: boolean; env?: Record<string, string>; noToken?: boolean; notes?: { id: string; text: string }[]; tmux?: string; receiveOk?: (e: any) => any } = {}) {
-  const sent: Sent[] & { attempts?: number } = []
+  const sent: Sent[] & { attempts?: number; clock?: any } = []
   sent.attempts = 0
   mock.env(on, { ...ENV, ...(opts.env ?? {}) })
-  mock.clock(on, { now: 1_000_000 })
+  const clock = mock.clock(on, { now: 1_000_000 })
+  sent.clock = clock
   on('process.run', async (_$: any, e: any) => ({ value: { exitCode: 0, stdout: e.argv?.[0] === 'tmux' ? `${opts.tmux ?? 'my-session'}\n` : '', stderr: '' } }))
   on('fs.read', async () => { if (opts.noToken) throw new Error('ENOENT'); return { value: 'tok-123\n' } })
   // the engine's own bottoms: what each event answers when nobody above changes it
   on('turn.complete', async (_$: any, e: any) => ({ text: e.answer }))
   on('prompt.submit', async (_$: any, e: any) => ({ text: e.text, ...(e.context ? { context: e.context } : {}) }))
-  on('session.start', async () => ({}))
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
   on('session.end', async (_$: any, e: any) => ({ sessionId: e.sessionId }))
   on('session.send', async () => ({ isDelivered: true }))
   on('session.receive', async (_$: any, e: any) => (opts.receiveOk ? opts.receiveOk(e) : { text: e.text }))
   on('agent.spawn', async () => ({ model: 'm' }))
-  for (const c of ['Stop', 'PermissionRequest', 'Notification', 'SubagentStart', 'SubagentStop', 'TeammateIdle']) on(`classic.${c}`, async () => ({}))
+  for (const c of ['PostToolUse', 'PostToolUseFailure', 'Stop', 'PermissionRequest', 'Notification', 'SubagentStart', 'SubagentStop', 'TeammateIdle']) on(`classic.${c}`, async () => ({}))
   on('http.fetch', async (_$: any, e: any) => {
     sent.attempts = (sent.attempts ?? 0) + 1
     if (opts.down) throw new Error('ECONNREFUSED')
@@ -88,6 +89,41 @@ test('no note: the prompt passes unchanged and nothing is acked; ghosty down cha
   await settle()
   expect(r.context).toBeUndefined()
   expect(sent.some(s => s.body.event === 'notes.ack')).toBe(false)
+})
+
+const toolCall = (extra: object = {}) => ({ tool_name: 'Bash', tool_input: {}, tool_response: 'ok', tool_use_id: 'u1', ...extra }) as any
+const takes = (sent: Sent[]) => sent.filter(s => s.body.event === 'notes.take').length
+
+test('a note parked during a long turn is attached after a tool call, once per interval, and acked', async ($, on) => {
+  const notes: { id: string; text: string }[] = []
+  const sent = world(on, { notes })
+  await $.prompt.submit({ text: 'a long task', wait: false } as any)   // nothing parked yet
+  await settle()
+  notes.push({ id: 'n2', text: 'overlap on server.js' })
+  expect((await $.classic.PostToolUse(toolCall())).additionalContext).toBeUndefined()   // inside the interval: no request
+  expect(takes(sent)).toBe(1)
+  await sent.clock!.advance(61_000)
+  const both = await Promise.all([$.classic.PostToolUse(toolCall()), $.classic.PostToolUse(toolCall())])   // parallel calls
+  await settle()
+  expect(both.flatMap(r => r.additionalContext ?? [])).toEqual(['overlap on server.js'])
+  expect(takes(sent)).toBe(2)
+  expect(sent.filter(s => s.body.event === 'notes.ack').map(s => s.body.ids)).toEqual([['n2']])
+})
+
+test('a failed tool call delivers the note too', async ($, on) => {
+  world(on, { notes: [{ id: 'n3', text: 'rules changed' }] })
+  const r = await $.classic.PostToolUseFailure(toolCall({ error: 'boom' }))
+  expect(r.additionalContext).toEqual(['rules changed'])
+})
+
+test('a subagent tool call, and a headless session, take no note', async ($, on) => {
+  const sent = world(on, { notes: [{ id: 'n4', text: 'x' }] })
+  expect((await $.classic.PostToolUse(toolCall({ agent_id: 'ag-1' }))).additionalContext).toBeUndefined()
+  await $.session.start({ surface: 'terminal', isInteractive: false, cwd: '/w' } as any)
+  await settle()
+  await sent.clock!.advance(61_000)
+  expect((await $.classic.PostToolUse(toolCall())).additionalContext).toBeUndefined()
+  expect(takes(sent)).toBe(0)
 })
 
 test('a task notification waking the session is marked synthetic, the owner prompt is not', async ($, on) => {

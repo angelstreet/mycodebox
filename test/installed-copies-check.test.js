@@ -59,3 +59,21 @@ test('Mac hook: a machine whose reported sha differs from the repo script is DRI
   assert.deepEqual(r.results.map((x) => [x.name, x.status]), [['mac-stop-hook@mac-a', 'ok'], ['mac-stop-hook@mac-b', 'drift'], ['mac-stop-hook@mac-nosha', 'drift']]);
   assert.equal(r.findings.length, 2); assert.match(r.findings[0].body, /mac-b/);
 });
+
+test('units: a template line missing on the host is DRIFT; host extras, drop-ins and local env values are fine', async () => {
+  const { checkUnits } = await import('../scripts/installed-copies-check.js');
+  const repo = tmp('icu-repo-'), etc = tmp('icu-etc-');
+  mkdirSync(join(repo, 'systemd'));
+  writeFileSync(join(repo, 'systemd/a.service'), '# EXAMPLE <user>\n[Service]\nUser=<user>\nEnvironment=HOST=127.0.0.1\nCPUWeight=20\nNice=10\n');
+  writeFileSync(join(repo, 'systemd/b.slice'), '[Slice]\nCPUQuota=400%\n');
+  writeFileSync(join(repo, 'systemd/c.timer'), '[Timer]\nOnCalendar=daily\n');
+  writeFileSync(join(etc, 'a.service'), '[Service]\nUser=alice\nEnvironment=HOST=0.0.0.0\nEnvironment=PORT=1\nNice=10\n');
+  mkdirSync(join(etc, 'a.service.d')); writeFileSync(join(etc, 'a.service.d/cpu.conf'), '[Service]\nCPUWeight=20\n');
+  writeFileSync(join(etc, 'b.slice'), '[Slice]\nCPUQuota=300%\n');
+  const r = checkUnits({ repoRoot: repo, etc, vars: { user: 'alice', uid: '1000' } });
+  const st = Object.fromEntries(r.results.map((x) => [x.name, x.status]));
+  assert.deepEqual(st, { 'unit a.service': 'ok', 'unit b.slice': 'drift', 'unit c.timer': 'missing' });
+  assert.equal(r.findings.length, 1);
+  assert.match(r.findings[0].body, /CPUQuota=400% \(host: CPUQuota=300%\)/);
+  assert.match(render(r).report, /unit b\.slice: DRIFT — CPUQuota=400%/);
+});

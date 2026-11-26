@@ -3,6 +3,8 @@
 The release note of this repo (owner 2026-11-13). Every merged code change (not docs-only) adds one entry at the top of
 `## Unreleased`; the done-check reads the merged diff for this file (REFERENCE "Closing review"). Entry form: one line,
 
+- **The daily checks now say when an installed systemd unit lags its repo template** — a merged `CPUWeight=20` for health-watch sat uninstalled for 2 days and the CPU slice templates still said 300 % after the host moved to 400 %. `installed-copies-check.js` compares each `systemd/` template (comments dropped, `<user>`/`<uid>` filled) with `/etc/systemd/system/<unit>` plus its drop-ins and reports every template line missing on the host; host-only lines and local `Environment=` values are fine, a unit not installed is listed, not a finding. Report only: installing stays a root step. The tests slice and placer templates now match the reviewed host settings (400 %, 2048 tasks) · area: health
+
 - **A deploy's server-restart warning no longer wakes the manager** — each queued server deploy raised it twice ("waiting up to 10 min", "restarting now") with nothing to do; it is still in the event file and the owner views, and a failed deploy still wakes urgently · area: manager
 
 - **Open tabs pick up the play-on-tap change, and a late render stays silent** — a tab reloads only when `sw.js` changes, so tabs opened earlier kept rendering every reply; the shell cache version is bumped. Audio no longer starts if you left the reply while it rendered · area: voice
@@ -32,6 +34,8 @@ what changed and why it matters, ending with `· area: <area>`.
 ## Unreleased
 
 - **In doubt, the harness now says to ask Opus** — a `jev-ask.js stop` that Jev did not decide, and each session question in the manager's event feed, carry "in doubt: ask Opus to answer" with the command; the new `scripts/ask-opus.js` runs `claude -p --model opus` once and records the answer in `manager-asks.jsonl`. Owner-floor asks (money, credentials, customers, publishing, deleting data, physical) get no hint and are never sent. The server calls no model by itself · area: manager
+
+- **A parked note also arrives during a long turn** — a Claude session working for an hour gets no new prompt, so an overlap warning could land after its commit; the reporter plugin now also attaches waiting notes after a tool call (at most one check a minute) · area: harness
 
 - **The CPU placer finds the tmux server's unit itself, also caps the lane's test runs, and health-watch tells you when it is blind** — `cgroup-placer.js` read a fixed unit (`mm-manager-session.service`) while every pane lived in `ghosty-base-session.service`, so the codebox slices stayed empty for 5 days and tests ran uncapped (load 13-20 on 6 cores). It now reads the source from the tmux server's cgroup, warns when none of the panes are in it, moves the lane's test-shaped processes (the dashboard server stays) into `cb-lane.scope` (weight 400), counts `tsc` and `tesseract` as test work, and puts `ghosty` in the core slice. `scripts/test-run.js` runs 3 test files at once (Node's default was 5). `health-watch` raises `cpuslices` when CPU pressure avg300 is over 50 % and the slices are empty. Needs the root steps in `~/CODEBOX_TROUBLESHOOTING.md` (R1-R4) to take effect · area: codebox cpu
 
