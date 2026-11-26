@@ -41,7 +41,7 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
-- **Codex uses the verified GPT-6.2 models** — New sessions default to `gpt-6.2-sol` and offer `gpt-6.2-astra` even when the local model cache is stale. V2 routing registers both models, and unknown ChatGPT-account prices remain unknown. Both model IDs passed a local `codex exec` check (2026-11-26) · area: Codex
+- **Codex model picker excludes the two GPT-6.2 models rejected by interactive sessions** — An earlier change inserted GPT-6.2 Sol and Astra because `codex exec` succeeded, but dashboard-created interactive sessions rejected both with `model_not_in_accessible_catalog`. Even the freshly updated CLI cache lists them, so the picker explicitly filters them; the V2 registry and price rows return to their prior entries, and the live Codex model line is restored separately from its backup (2026-11-26) · area: Codex
 
 - **An in-task fix is recorded in words, not as a filed bug** — the done check sent every fix without a `bug-<id>` back with "file the bug you fixed", while `found-bug` refuses a bug inside the session's own task (owner 2026-11-25): sessions were pushed into filings the rules forbid. `bugs: fixed — <what was broken>` now passes; a filed bug is still named by its id. The rule bullet in AGENTS.md, the cbsession preamble and MAC-HOOK says so, and AGENTS.md tells a fresh worktree to run `npm ci` before `npm test` (manager 2026-11-26) · area: done check
 

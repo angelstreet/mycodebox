@@ -35,7 +35,7 @@ const ROOT = new URL('..', import.meta.url).pathname;
 const T0 = Date.parse('2026-01-01T00:00:00Z');
 const NOW = () => Date.parse('2026-10-11T00:00:00Z');
 const storeIn = (dir) => { let t = T0; let n = 0; return createTaskStore({ dir, now: () => (t += 1000), randomId: () => `r${++n}` }); };
-const REV = 'codex:gpt-6.2-sol';
+const REV = 'codex:gpt-6-luna';
 const tspec = (id, over = {}) => spec({ task_id: id, runtime_capabilities: ['code'], scope: { paths: ['README.md'] }, ...over });
 
 async function accepted(s, id, who, { usd = [0.1], rework = 0, reject = 0, approvals = 0, resumes = 0, sha = SHA_A, over = {} } = {}) {
@@ -116,7 +116,7 @@ test('unknown stays unknown: unpriced cost, no latency, regressions not derivabl
   const dir = tmp('v2-sc-');
   const s = storeIn(dir);
   await accepted(s, 'a1', 'claude:claude-sonnet-5-5', { usd: [null] });
-  await failed(s, 'f1', 'codex:gpt-6.2-astra');
+  await failed(s, 'f1', 'codex:gpt-6-astra');
   const r = sc(dir);
   const m = r.by_model.find((g) => g.key === 'claude:claude-sonnet-5-5');
   assert.equal(m.cost.per_verified_completion_usd, null);
@@ -126,7 +126,7 @@ test('unknown stays unknown: unpriced cost, no latency, regressions not derivabl
   assert.match(m.unknown.regressions, /no later evidence/);
   assert.equal(m.owner_interventions.messages, null);
   assert.ok(m.unknown.owner_messages && m.unknown.reopened);
-  const f = r.by_model.find((g) => g.key === 'codex:gpt-6.2-astra');
+  const f = r.by_model.find((g) => g.key === 'codex:gpt-6-astra');
   assert.equal(f.median_latency_ms, null);
   assert.equal(f.verified_rate, 0);
   assert.equal(f.first_pass_rate, 0);
@@ -153,7 +153,7 @@ test('regression after acceptance: a later failing run of the same check on the 
 
 const manifest = (over = {}) => ({ schema: BENCH_SCHEMA, suite_id: 'core', suite_version: '1', budget_policy: { max_usd: 1, max_task_ms: 3_600_000 },
   runs: [
-    { task_id: 'b-done', bench_task_id: 'B1', task_class: 'docs', expected_outcome: 'done', runtime: 'claude', model: 'claude-sonnet-5-5', reviewer_runtime: 'codex', reviewer_model: 'gpt-6.2-sol' },
+    { task_id: 'b-done', bench_task_id: 'B1', task_class: 'docs', expected_outcome: 'done', runtime: 'claude', model: 'claude-sonnet-5-5', reviewer_runtime: 'codex', reviewer_model: 'gpt-6-luna' },
     { task_id: 'b-appr', bench_task_id: 'B2', task_class: 'deploy', expected_outcome: 'awaiting_approval', runtime: 'claude', model: 'claude-sonnet-5-5' },
     { task_id: 'b-wait', bench_task_id: 'B3', task_class: 'stuck', expected_outcome: 'waiting', runtime: 'claude', model: 'claude-sonnet-5-5' },
   ], ...over });
@@ -260,8 +260,8 @@ async function weakModelStore() {
   const dir = tmp('v2-prop-');
   const s = storeIn(dir);
   for (let i = 0; i < 6; i++) await accepted(s, `ok${i}`, 'claude:claude-sonnet-5-5', { usd: [0.1], reject: 1, rework: 2 });
-  for (let i = 0; i < 5; i++) await failed(s, `bad${i}`, 'codex:gpt-6.2-astra');
-  await accepted(s, 'one', 'codex:gpt-6.2-astra');
+  for (let i = 0; i < 5; i++) await failed(s, `bad${i}`, 'codex:gpt-6-astra');
+  await accepted(s, 'one', 'codex:gpt-6-astra');
   return { dir, s };
 }
 
@@ -288,7 +288,7 @@ test('proposals: generated with shadow evidence, recorded as awaiting_approval t
   const kinds = proposals.map((p) => p.kind);
   for (const k of ['router_history', 'model_registry', 'role_prompt', 'harness']) assert.ok(kinds.includes(k), `${k} in ${kinds}`);
   const demote = proposals.find((p) => p.kind === 'model_registry');
-  assert.deepEqual(demote.change.exclude, ['codex:gpt-6.2-astra']);
+  assert.deepEqual(demote.change.exclude, ['codex:gpt-6-astra']);
   assert.equal(demote.risk_class, 'high');
   assert.ok(demote.shadow.evaluated > 0);
   for (const p of proposals) { assert.equal(p.applies_itself, false); assert.ok(['medium', 'high', 'critical'].includes(p.risk_class)); assert.ok(p.evidence_refs.length); }
