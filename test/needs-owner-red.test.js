@@ -113,3 +113,9 @@ test('a needs-owner line that is a merge or system wait is not shown without the
   assert.equal(isOwnersTurn({ ...base, stall: { case: 'owner_decision', status: 'needs-owner', systemWait: 'deploy' } }), false);
   assert.equal(isOwnersTurn({ ...base, stall: { case: 'owner_decision', status: 'blocked' } }), false);
 });
+
+test('the NEEDS YOU strip, the counts and the filters use the same predicate as the red rows', () => {
+  const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  assert.match(app, /const filterStateOf = \(n\) => \(pausedOf\(n\) \? 'paused' : listStateOf\(n\)\);/);
+  assert.match(app, /const waiting = state\.sessions\.filter\(\(s\) => isOwnersTurn\(state\.status\[s\.name\]\)\)/);
+});

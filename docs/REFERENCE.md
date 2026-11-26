@@ -1157,6 +1157,7 @@ Claude Code's artifact monitors (`type: monitor`, `live updates for artifact ...
 STATUS-line check). A pane that still ends on a hand-over line keeps the row at state `done` (with `stall` and `lastTurn`) however old it is, after
 a ghosty-sessions restart, or after a keypress that started no turn (`stall.js` `endsHandedOver`). A `needs-owner` line is the owner's turn
 (`public/ask-model.js` `isOwnersTurn`, the dashboard, the phone app and the desktop app) without waiting for the AI reviewer, unless it is a merge or system wait.
+The NEEDS YOU strip, the top counts, the filters and the tab title use that same predicate as the red rows and the answer popup.
 
 The status payload carries a small `reporter` object per live Claude session (`seenAt`, `turnAt`, `backgroundWork`,
 `waiting`, `agents {count, by}`, `agentList`); the session cards show a ⚡ (not the left list rows, owner 2026-11-20) (with the subagent count) whose tooltip lists them.
