@@ -72,7 +72,7 @@ export function summary(items) { return items.slice(0, 3).join(' | ').slice(0, 2
 // but supplies the facts); record: manager feed. Gates: no draft, not working, not paused/held, not a manager session,
 // idle > IDLE_MS, once per session turn (signature of the items), at most MAX_PER_HOUR events per session.
 // classify(text) -> { kind, items, title?, ...extra } | null picks what a stop is; the default is done-with-leftovers. The server
-// passes one that also reads owner-push.js (kind 'push': suggestions / routine-ask / blocked-host, extra = pushKind + reply).
+// passes one that also reads owner-push.js (kind 'push': routine-ask / blocked-host, extra = pushKind + reply).
 const leftoversKind = (text) => { const items = pushableItems(text); return items && { kind: 'leftovers', items, title: 'done with leftovers' }; };
 export function createLeftovers({ listIdle, record, classify = leftoversKind, mode = () => 'live', now = Date.now, pollMs = POLL_MS, log = console } = {}) {
   const told = new Map();    // session -> signature already reported

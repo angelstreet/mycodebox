@@ -1742,7 +1742,8 @@ held, not a manager session, at most 4 events per session per hour. Nothing is t
 
 ## Owner pushes the manager sends (owner, 2026-10-28)
 
-A review of every owner reply of 2026-10-27 (101 messages, 15 of them pushes) found three push shapes besides done-with-leftovers.
+A review of every owner reply of 2026-10-27 (101 messages, 15 of them pushes) found three push shapes besides done-with-leftovers; two remain
+(`suggestions` was removed on 2026-11-26, see [Reflection after an accepted done](#reflection-after-an-accepted-done-owner-2026-11-26)).
 `owner-push.js` reads them from the closing text (`pushOf`, pure; `replyFor` gives the reply), and the leftovers watcher emits one
 feed event `<session>:push` (kind `push`, `pushKind`, `items`, `reply`) per session turn, under the same gates (idle > 10 min, no
 draft, not working / paused / held, not a manager session, at most 4 per session per hour). Nothing is typed: the manager checks and sends.
