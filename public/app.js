@@ -5110,7 +5110,7 @@ function addRecentDir(d) { lsSet(LS_RECENT, JSON.stringify([d, ...recentDirs().f
 function baseName(p) { return String(p || '').replace(/\/+$/, '').split('/').pop() || ''; }
 function safeName(s) { return String(s).replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32); }
 const NEW_AGENTS = ['claude', 'codex', 'minimax'];   // bash left out of the dialog (owner 2026-11-12); the API still takes it
-const NEW_MODELS = { claude: { models: ['opus', 'sonnet', 'haiku', 'fable'], default: 'sonnet' }, codex: { models: ['gpt-6.2-sol', 'gpt-6.2-astra'], default: 'gpt-6.2-sol' }, minimax: { models: ['MiniMax-M3'], default: 'MiniMax-M3' } };
+const NEW_MODELS = { claude: { models: ['opus', 'sonnet', 'haiku', 'fable'], default: 'sonnet' }, codex: { models: ['gpt-6-luna'], default: 'gpt-6-luna' }, minimax: { models: ['MiniMax-M3'], default: 'MiniMax-M3' } };
 const NEW_DEFAULT_PROJECT = 'virtualpytest';   // preselected until the owner creates a session elsewhere (owner 2026-11-12)
 const LS_NEW_LAST = 'ghosty.newLast';
 // Projects the picker offers: repos and worktrees under the home folder, no tmp / scratchpad / hidden-folder ones (same rule as the server).

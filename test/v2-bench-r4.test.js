@@ -105,7 +105,7 @@ test('subscription billing: a subscription record is not unknown, not estimated,
 const T0 = Date.parse('2026-01-01T00:00:00Z');
 const storeIn = (dir) => { let t = T0; let k = 0; return createTaskStore({ dir, now: () => (t += 1000), randomId: () => `r${++k}` }); };
 const tspec = (id, over = {}) => spec({ task_id: id, runtime_capabilities: ['code'], scope: { paths: ['README.md'] }, ...over });
-const MM = 'minimax:MiniMax-M3', HK = 'claude:claude-haiku-4-5', REVR = 'codex:gpt-6.2-sol';
+const MM = 'minimax:MiniMax-M3', HK = 'claude:claude-haiku-4-5', REVR = 'codex:gpt-6-luna';
 async function done(s, id, who, { usd = null, rework = 0, tin = 100, tout = 20, revUsd = 0.01 } = {}) {
   await s.createTask(tspec(id));
   for (const st of ['clarified', 'planned', 'ready', 'executing']) await s.transition(id, st);
@@ -114,7 +114,7 @@ async function done(s, id, who, { usd = null, rework = 0, tin = 100, tout = 20, 
   await s.setHead(id, SHA_A, { actor: { role: 'developer', id: who } });
   const [runtime, ...m] = who.split(':');
   await s.recordUsage(id, { runtime, model: m.join(':'), usd, input_tokens: tin, output_tokens: tout, run_id: `${id}-d` });
-  await s.recordUsage(id, { runtime: 'codex', model: 'gpt-6.2-sol', usd: revUsd, input_tokens: 7, output_tokens: 3, run_id: `${id}-r` });
+  await s.recordUsage(id, { runtime: 'codex', model: 'gpt-6-luna', usd: revUsd, input_tokens: 7, output_tokens: 3, run_id: `${id}-r` });
   await s.recordEvidence(id, { check_id: 'unit', sha: SHA_A, command: ['npm', 'test'], exit: 0, actor: { role: 'tester', id: 't' } });
   await s.recordVerdict(id, { sha: SHA_A, actor: { role: 'verifier', id: REVR }, verdict: 'approve', findings: [] });
   await s.transition(id, 'accepted');
