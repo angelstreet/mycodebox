@@ -162,7 +162,7 @@ test('T03: bypass flags are named only in launch-config (the default) and nowher
 });
 
 test('T03: the manager command helper keeps an explicit override verbatim and its diagnostics name only the setting', () => {
-  const run = (env) => spawnSync(process.execPath, ['scripts/manager-command.js'], { cwd: new URL('.', ROOT).pathname, env, encoding: 'utf8' });
+  const run = (env) => spawnSync(process.execPath, ['scripts/manager-command.js'], { cwd: new URL('.', ROOT).pathname, env: { GHOSTY_STATE_DIR: '/nonexistent-ghosty', ...env }, encoding: 'utf8' });
   const clean = run({});
   assert.equal(clean.status, 0);
   assert.equal(clean.stdout, 'claude --dangerously-skip-permissions --model sonnet --remote-control manager -n manager');

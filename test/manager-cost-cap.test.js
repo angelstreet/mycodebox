@@ -92,7 +92,9 @@ test('daily report: the Manager cost section is written, its finding wakes the m
     recs.push({ type: 'assistant', timestamp: at, message: { id: `m${i}`, model: 'm', role: 'assistant', content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 600000 } } });
   }
   writeFileSync(join(proj, `${sid}.jsonl`), recs.map((r) => JSON.stringify(r)).join('\n') + '\n');
-  writeFileSync(join(dir, 'daily-checks.json'), JSON.stringify({ checks: [] }));
+  // the built-in installed-copies check reads this host's real /etc/systemd: stub it, it is not what this test is about
+  const checks = [{ id: 'installed-copies', title: 'stub', command: [process.execPath, '-e', 'console.log(JSON.stringify({ summary: "stub", report: "stub", findings: [] }))'] }];
+  writeFileSync(join(dir, 'daily-checks.json'), JSON.stringify({ checks }));
   const saved = process.env.CLAUDE_PROJECTS_DIR; delete process.env.CLAUDE_PROJECTS_DIR;
   try {
     let r = await dailyRun({ home, now: NOW, argv: [], out: () => {} });
@@ -102,10 +104,10 @@ test('daily report: the Manager cost section is written, its finding wakes the m
     assert.deepEqual(r.events.map((e) => [e.key, e.priority]), [['daily:manager-cost', 'default']]);
     r = await dailyRun({ home, now: NOW + 1000, argv: [], out: () => {} });
     assert.equal(r.events.length, 0, 'debounced');
-    writeFileSync(join(dir, 'daily-checks.json'), JSON.stringify({ checks: [], managerCost: false }));
+    writeFileSync(join(dir, 'daily-checks.json'), JSON.stringify({ checks, managerCost: false }));
     r = await dailyRun({ home, now: NOW + DAY, argv: [], out: () => {} });
     assert.doesNotMatch(readFileSync(r.reportPath, 'utf8'), /## Manager cost/); assert.equal(r.events.length, 0);
-    writeFileSync(join(dir, 'daily-checks.json'), JSON.stringify({ checks: [], managerCost: { p90CtxMax: 900000, idleShareMax: 1 } }));
+    writeFileSync(join(dir, 'daily-checks.json'), JSON.stringify({ checks, managerCost: { p90CtxMax: 900000, idleShareMax: 1 } }));
     r = await dailyRun({ home, now: NOW + 2000, argv: [], out: () => {} });
     assert.equal(r.events.length, 0, 'thresholds from the config');
   } finally { if (saved !== undefined) process.env.CLAUDE_PROJECTS_DIR = saved; }

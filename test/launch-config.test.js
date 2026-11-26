@@ -37,7 +37,7 @@ test('explicit overrides win verbatim and only HOST draws a warning', () => {
 });
 
 test('manager script command helper uses configured CLI without live operations', () => {
-  const output = execFileSync(process.execPath, ['scripts/manager-command.js'], { env: { AGENT_CMD_CLAUDE: '/fake/claude' }, encoding: 'utf8' });
+  const output = execFileSync(process.execPath, ['scripts/manager-command.js'], { env: { AGENT_CMD_CLAUDE: '/fake/claude', GHOSTY_STATE_DIR: '/nonexistent-ghosty' }, encoding: 'utf8' });
   assert.equal(output, '/fake/claude --model sonnet --remote-control manager -n manager');
 });
 

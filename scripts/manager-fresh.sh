@@ -72,7 +72,9 @@ else
   done
   pane_has_claude "$pane" && { echo "claude did not exit"; exit 1; }
 fi
-node --input-type=module -e "import {pathToFileURL} from 'node:url'; const {trustFolder}=await import(pathToFileURL(process.argv[1]).href); await trustFolder('claude', process.argv[2]).catch(()=>{})" "$SCRIPT_DIR/../trust.js" "$(tmux display -p -t "=$S:" '#{pane_current_path}')" || true   # best effort
+# Another Claude account keeps its own .claude.json: trust the folder where the launch command will look for it.
+acct_json=; case "$CMD" in "CLAUDE_CONFIG_DIR='"*) acct_dir=${CMD#"CLAUDE_CONFIG_DIR='"}; acct_json="${acct_dir%%\'*}/.claude.json";; esac
+node --input-type=module -e "import {pathToFileURL} from 'node:url'; const t=await import(pathToFileURL(process.argv[1]).href); await (process.argv[3] ? t.trustClaude(process.argv[2], process.argv[3]) : t.trustFolder('claude', process.argv[2])).catch(()=>{})" "$SCRIPT_DIR/../trust.js" "$(tmux display -p -t "=$S:" '#{pane_current_path}')" "$acct_json" || true   # best effort
 tmux send-keys -t "=$S:" -l "$CMD"; sleep 0.3; tmux send-keys -t "=$S:" Enter
 ready=0
 # Current Claude Code no longer prints "remote-control is active" under --remote-control; it prints a session link

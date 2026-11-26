@@ -458,7 +458,7 @@ export const TMP_PREFIXES = ['altscroll-', 'deploy-live-', 'sc-since-', 'convo-'
   'lane-restart-', 'lane-self-', 'lane-state-', 'launch-path-', 'layout-', 'lease-cssh-', 'lease-http-',
   'lease-any-', 'lease-integ-', 'lease-owner-', 'lease-scripts-', 'lease-serve-', 'lease-svc-', 'lfeval-', 'lw-', 'mac-checkout-',
   'mac-hook-', 'merge-pol-', 'meval-origin-', 'meval-reg-', 'meval-state-', 'mk-push-', 'mm-mgr-', 'mmmgr-fake-',
-  'mycodebox-restart-', 'p1fix-fresh-', 'senders-', 'files-route-', 'file-view-', 'upload-log-', 'og-', 'pk-', 'pk-mm-', 'render-skill-', 'rules-watch-', 'session-notes-', 'rv2-fresh-', 'self-out-',
+  'mycodebox-restart-', 'p1fix-fresh-', 'mgr-acct-', 'senders-', 'files-route-', 'file-view-', 'upload-log-', 'og-', 'pk-', 'pk-mm-', 'render-skill-', 'rules-watch-', 'session-notes-', 'rv2-fresh-', 'self-out-',
   'pane-claude-', 'poke-ret-', 'prune-daily-', 'self-root-', 'send-ui-shots-', 'send-ui-work-', 'sh-', 'slots-', 'trust-', 'trust-ctl-', 'usage-attr-',
   'usage-test-', 'v2-acc-fx-', 'v2-acc-runner-', 'v2-acc-state-', 'v2-acceptance-', 'v2-adapters-', 'v2-adverify-',
   'v2-bench-', 'v2-bench-http-', 'v2-bench-http-reap-', 'v2-bench-http-test-', 'v2-bench-out-', 'v2-bench-r4-test-',
