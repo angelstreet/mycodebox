@@ -661,7 +661,7 @@ export function createDoneCheck({
         try { await send(s.name, proofGapMessage(g)); st.toldProof[s.name] = { sig }; nudged++; await note({ session: s.name, proofGap: g }); }
         catch (e) { log.error?.('[done-check] send proof gap', s.name, e.message); }
       }
-      const goalCheck = { asked: [], bounced: [], accepted: [], capped: [], reflected: [] };
+      const goalCheck = { asked: [], bounced: [], accepted: [], capped: [], reflected: [], suggestions: [] };
       const closeBox = async (name) => {
         let e = null; try { e = await goalEntryOf(name); } catch {}
         if (!e?.timeBoxMs || !e.at || st.toldBox[name]?.accepted === e.at) return;
@@ -687,7 +687,7 @@ export function createDoneCheck({
           if (d.kind === 'accepted') { goalCheck.accepted.push(s.name); await closeBox(s.name); }
           if (d.kind === 'capped') { goalCheck.capped.push(s.name); continue; }
           if (!d.message || d.dry) continue;
-          try { await send(s.name, d.message); await goalGate.sent(s.name, d); nudged++; (d.reflect ? goalCheck.reflected : d.bounce ? goalCheck.bounced : goalCheck.asked).push(s.name); }
+          try { await send(s.name, d.message); await goalGate.sent(s.name, d); nudged++; (d.reflect ? goalCheck.reflected : d.bounce ? goalCheck.bounced : d.kind === 'ask' ? goalCheck.asked : goalCheck.suggestions).push(s.name); }
           catch (e) { log.error?.('[done-check] send goal check', s.name, e.message); }
         }
       }

@@ -135,8 +135,11 @@ const hash = (s) => createHash('sha1').update(s).digest('hex').slice(0, 10);
 
 // the manager / owner accepted this session's result as final (final-accept.js): its stops are logged, then nothing is sent, parked or escalated
 let finalAccepted = () => false;
-export async function initManager({ onJudgeDown, managerSessions, credits, onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context, onHandoff = () => {}, onMergeDecision: mergeHook, onMergeCancelled: cancelHook, mergeJev: mergeJevFn, decideContext: decideCtx, onDigest: digestHook, onNotice, leaseView, onStatus, onManagerItem, hasOpenAsk, onAskMovedOn, ownJobs: ownJobsDep, integration: integrationDep, readyStore, stopFacts: stopFactsDep, finalAccepted: finalAcceptedDep } = {}) {
+let ownerChoice = () => false;   // (suggestions.js) the session has suggestions only the owner may answer, or the question is open
+const OWNER_CHOICE = 'the owner has suggestions to answer';
+export async function initManager({ onJudgeDown, managerSessions, credits, onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context, onHandoff = () => {}, onMergeDecision: mergeHook, onMergeCancelled: cancelHook, mergeJev: mergeJevFn, decideContext: decideCtx, onDigest: digestHook, onNotice, leaseView, onStatus, onManagerItem, hasOpenAsk, onAskMovedOn, ownJobs: ownJobsDep, integration: integrationDep, readyStore, stopFacts: stopFactsDep, finalAccepted: finalAcceptedDep, ownerChoice: ownerChoiceDep } = {}) {
   finalAccepted = finalAcceptedDep || (() => false);
+  ownerChoice = ownerChoiceDep || (() => false);
   await mkdir(STATE_DIR, { recursive: true });
   try {
     const saved = JSON.parse(await readFile(CONFIG_FILE, 'utf8'));
@@ -336,6 +339,7 @@ function humanWhy(final, ws) {
 
 // Why an otherwise-sendable answer must not go out automatically, or null.
 function autoBlock(name, final, confidence) {
+  if (ownerChoice(name)) return OWNER_CHOICE;
   if (isPaused(name)) return 'session paused by owner';
   if (!config.autoSend) return 'auto-answer is off';
   const key = final.autoCase || final.case;
@@ -366,6 +370,7 @@ function decisionBlock(name, kinds = {}) {
 
 // The AI's proposal as an automatic answer: its own switch (aiTriage 'auto') on top of autoSend, its own case list and threshold.
 function aiBlock(name, kase, confidence) {
+  if (ownerChoice(name)) return OWNER_CHOICE;
   if (isPaused(name)) return 'session paused by owner';
   if (config.aiTriage !== 'auto') return 'AI auto-answer is off';
   if (!config.autoSend) return 'auto-answer is off';
@@ -632,6 +637,7 @@ async function fire(name, auto) {
   const mdBlock = md || auto.override ? decisionBlock(name, kinds) : null;   // a decided menu pick is gated by the same switches and confidence floors
   let reason = null, esc = false;
   if (isPaused(name)) reason = 'session paused by owner';
+  else if (ownerChoice(name)) reason = OWNER_CHOICE;
   else if (!config.autoSend) reason = 'auto-answer turned off';
   else if (!sessionOn(name)) reason = 'manager disabled for this session';
   else if (mdBlock) { reason = mdBlock; esc = mdBlock.startsWith('hourly'); }
@@ -1547,7 +1553,8 @@ export function observe(s) {
     }
     if (final.handoff) { try { await onHandoff(s.name, final.handoff, s.now); } catch (e) { console.error('[manager] onHandoff', e.message); } }
     // the choice of suggestions after the reflection question (reflection.js): the asked one picks, nothing here builds or answers it
-    const ownChoice = isReflectionAsk(stall.excerpt);
+    // by the record, not only by the words: a reworded closing line is not answered either
+    const ownChoice = isReflectionAsk(stall.excerpt) || ownerChoice(s.name);
     if (ownChoice) { ws = { send: null, why: 'owner' }; w.stall = { ...w.stall, would: ws }; }
     const mh = ownChoice ? { handled: false } : await mergeHandoff({ s, w, id, h, final, stall }).catch((e) => { console.error('[manager] merge handoff', e.message); return { handled: false }; });
     if (mh.handled) return;
@@ -1610,7 +1617,7 @@ export function forget(name) { cancelAuto(name, 'session removed'); const p = wa
 // For the own-jobs watcher: is `session` still stopped at the stop `stopId` (so a wake is still wanted), and may text be typed into it now?
 export const stillStopped = (session, stopId) => { const w = watch.get(session); return !!(w && w.pending?.id === stopId && w.last && (w.last.state === 'done' || w.last.state === 'waiting')); };
 // The same gates as a decided reply (decisionBlock: pause, autoSend, hourly cap, draft) plus enabled / sessionOn; a wake counts in the hourly cap (countSent).
-export const canType = (session) => { const w = watch.get(session); return !!w && !finalAccepted(session) && w.last?.state === 'done' && config.enabled && sessionOn(session) && !decisionBlock(session, {}); };
+export const canType = (session) => { const w = watch.get(session); return !!w && !finalAccepted(session) && !ownerChoice(session) && w.last?.state === 'done' && config.enabled && sessionOn(session) && !decisionBlock(session, {}); };
 export const countSent = (session) => { sentLog.set(session, [...(sentLog.get(session) || []), Date.now()]); };
 export function prune(live) { for (const k of [...watch.keys()]) if (!live.has(k)) forget(k); }
 

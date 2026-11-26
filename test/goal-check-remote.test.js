@@ -13,6 +13,7 @@ Object.assign(process.env, { GHOSTY_STATE_DIR: stateDir, JEV_URL: '', JEV_API_KE
 const manager = await import('../manager.js');
 const { createRemoteStops, PREFIX } = await import('../remote-stops.js');
 const { createGoalGate, createGoalStore } = await import('../goal-check.js');
+const { createSuggestions, isOwnerTyped } = await import('../suggestions.js');
 
 const REMOTE = 'tok-remote-0123456789abcdef';   // leak-scan: allow (fake test token)
 const leasesDir = path.join(stateDir, 'leases');
@@ -133,7 +134,7 @@ test('Mac: question, accepted reply (loop-guarded) gets the reflection once; its
   const a = await answerOf(r);
   assert.match(a.answer, /^Reflection \(your done is accepted/);
   assert.match(a.answer, /STATUS: needs-owner: improvement suggestions above, nothing built/);
-  assert.match(a.answer, /bugs field\.$/, 'not cut by the answer limit');
+  assert.match(a.answer, /leaves you done\.$/, 'not cut by the answer limit');
   await new Promise((res) => setTimeout(res, 100));
   const done = await post('no suggestions\n' + CLEAN, { stop_hook_active: true });
   assert.equal(done.body.reflect, undefined);
@@ -184,6 +185,26 @@ test('Mac: failed, blocked, waiting, partial, a bounced done and an accepted-fin
       body: JSON.stringify({ machine: 'mac-test', project: 'demo', session_id: 'sid-refl-8hhhh', session_name: 'final', text: ROWS + CLEAN, first_prompt: PROMPT2, takes_reflect: true }) });
     assert.equal((await r.json()).reflect, undefined);
   } finally { await new Promise((res) => s2.close(res)); }
+});
+
+test('Mac: a listed suggestion holds the row until the owner\'s yes / no, read from the prompt typed on the Mac, once; what the manager sent is not it', async () => {
+  const ledger = createSuggestions({ stateDir: tmp('mac-sugg-') });
+  const held = createRemoteStops({ manager, dir: leasesDir, stateDir, goals,
+    suggestions: { hold: (n, text, at) => ledger.hold(n, text, { at }), note: (n, text, at) => ledger.observe(n, text, { at }), ownerTyped: (n, text, typed) => { if (isOwnerTyped(text, typed)) ledger.ownerMessage(n, text, { via: 'mac' }); } } });
+  const s3 = http.createServer((req, res) => { held.handle(req, res); });
+  await new Promise((res) => s3.listen(0, '127.0.0.1', res));
+  const send3 = async (text, extra = {}) => (await fetch(`http://127.0.0.1:${s3.address().port}${PREFIX}/stops`, { method: 'POST', headers: { authorization: `Bearer ${REMOTE}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ machine: 'mac-test', project: 'demo', session_id: 'sid-sugg-9iiii', session_name: 'sugg', text, ...extra }) })).json();
+  try {
+    const name = (await send3('Suggestions:\n1. add a retry\n2. shorter rows\n' + CLEAN)).session;
+    assert.deepEqual([held.statusRows()[name].suggestions.state, held.statusRows()[name].suggestions.open], ['open', 2]);
+    const at = new Date().toISOString();
+    await send3('Noted.\n' + CLEAN, { last_prompt: '<cross-session-message>no all</cross-session-message>', prompt_at: at });
+    assert.equal(ledger.openOf(name).length, 2);
+    await send3('Noted.\n' + CLEAN, { last_prompt: 'no all', prompt_at: new Date(Date.parse(at) + 1000).toISOString() });
+    assert.equal(ledger.openOf(name).length, 0);
+    assert.equal(held.statusRows()[name].suggestions, undefined);
+  } finally { await new Promise((res) => s3.close(res)); }
 });
 
 // the manager's countdowns and journal writes (delayMs 250) land before helpers-tmp.js removes the state dir

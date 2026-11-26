@@ -32,6 +32,13 @@ see [docs/skills/codebox-sessions.md](skills/codebox-sessions.md). Past sessions
 Pause sends Escape once and holds automatic replies. Resume clears the hold and sends `continue`; neither is just a visual toggle.
 Killing a session ends its tmux process. Parking is for eligible Claude sessions and is subject to idle, lease and running-job checks.
 
+## Suggestions: yes or no before done
+
+A session that lists an improvement suggestion is not done until you answer it. It shows as **needs you** (red), and no "is done" notification
+goes out. Open it, read the numbered list and reply in the send box (or type in the session): `yes 1 3, no 2`, `do 1, no to the rest`,
+`no all`. Each item is recorded; the ones you leave out stay open. A bare number or `ok` is not an answer, and neither is anything the
+manager sends. Approved items become the session's next task. Details: [reference](REFERENCE.md#no-done-while-a-suggestion-has-no-yes--no-owner-2026-11-26-suggestionsjs).
+
 ## Phone features
 
 On the grid, swipe inside the focused card to scroll its output. Swipe on an unfocused card to scroll the board; tap it first to focus it.

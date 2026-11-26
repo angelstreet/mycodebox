@@ -7,6 +7,7 @@
 // Answer channel (justified in docs/MAC-HOOK.md): the hook's own long-poll, returning {"decision":"block","reason":<answer>} to Claude Code.
 // The session shows on the dashboard as `mac:<session_name>`; manager.js treats it like any other session (s.remote = true, no tmux).
 import { projectFromCwd } from './new-session.js';
+import { promptSig } from './public/prompt-sig.js';
 import fs from 'node:fs';
 import { join, isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -66,6 +67,8 @@ export function validateStop(b, now = Date.now()) {
   if (typeof b.first_prompt === 'string' && b.first_prompt.trim()) out.first_prompt = clean(b.first_prompt).slice(0, 4000);
   if (typeof b.hook_sha === 'string' && /^[0-9a-f]{64}$/.test(b.hook_sha)) out.hook_sha = b.hook_sha;   // sha256 of the Mac hook script (installed-copies-check.js)
   out.stop_hook_active = b.stop_hook_active === true;
+  // the last prompt typed on the Mac (still raw): the owner's yes / no on suggestions is read from it
+  if (typeof b.last_prompt === 'string' && b.last_prompt.trim()) out.last_prompt = clean(b.last_prompt).slice(0, 1000);
   out.takes_reflect = b.takes_reflect === true;   // hook copies from 2026-11-26 wait for a flagged reflection answer under the loop guard
   const at = b.at ? tms(b.at) : null;
   out.at = at != null && Math.abs(at - now) < 10 * 60e3 ? at : now;   // the Mac's clock is only believed when close to ours
@@ -86,7 +89,7 @@ export function stopText(v) {
 // manager: { observe, sessionOn, setRemoteHooks, cancelAuto, forget, stallOf, triageOf, autoOf, REMOTE_PREFIX }
 // goalGate / goals: goal-check.js createGoalGate / createGoalStore (optional). A done stop the gate questions or bounces is answered with the
 // gate's text at once (no countdown); the manager journals the stop but schedules no answer of its own for it.
-export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goals = null, blockedMode = () => 'dry', stopFacts = null, stateMode = () => 'dry', timeBoxMode = () => 'dry', finalAccepted = () => false, cidrs = process.env.LEASE_ALLOW_CIDRS, viaServe = () => false, now = Date.now, graceMs = GRACE_MS, pollWaitMs = POLL_WAIT_MS } = {}) {
+export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goals = null, blockedMode = () => 'dry', stopFacts = null, stateMode = () => 'dry', timeBoxMode = () => 'dry', finalAccepted = () => false, suggestions = null, cidrs = process.env.LEASE_ALLOW_CIDRS, viaServe = () => false, now = Date.now, graceMs = GRACE_MS, pollWaitMs = POLL_WAIT_MS } = {}) {
   const allow = parseCidrs([...DEFAULT_CIDRS, ...String(cidrs || '').split(',')].join(','));
   const clientsFile = join(dir, 'clients.json');
   const configFile = join(stateDir, 'remote.json');   // { waitS, checkouts: { "<project>": "/abs/path/of/the/local/checkout" } }
@@ -191,6 +194,9 @@ export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goa
     // Only the deploy topic is evaluated for a Mac session (it reads origin); merge and push escalate in manager.js (remote block). A project without a
     // configured local checkout gets a path that does not exist, so every evaluation finds no repository and escalates.
     if (v.first_prompt && goals) { try { goals.capture(name, v.first_prompt, 'mac-first-prompt'); } catch { /* best effort */ } }
+    // suggestions (suggestions.js): first what the owner typed since the last stop (each prompt once), then what this turn lists or answers
+    if (suggestions && v.last_prompt && v.prompt_at && v.prompt_at !== s.answerPromptAt) { s.answerPromptAt = v.prompt_at; try { suggestions.ownerTyped(name, v.last_prompt, s.lastSendText ? [{ sig: promptSig(s.lastSendText), by: 'manager' }] : []); } catch (e) { console.error('[remote] suggestions answer', e.message); } }
+    try { suggestions?.note(name, stopText(v), t); } catch (e) { console.error('[remote] suggestions', e.message); }
     // Deterministic done check (harness-done-honest 2026-11-11, the same words as done-check.js (F)): a done line that says the work is not done, or
     // lacks `goal: achieved` + evidence, is answered at once through the hook; it only refuses a done line, so it is live. Once per done line.
     let refusal = null;
@@ -326,7 +332,8 @@ export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goa
       const open = s.open;
       const stall = manager.stallOf(s.name);
       rows[s.name] = {
-        state: 'done', agent: 'claude', agentCmd: 'claude', waitReason: null, stall, triage: manager.triageOf(s.name), auto: manager.autoOf(s.name), handoffs: [],
+        state: 'done', agent: 'claude', agentCmd: 'claude', waitReason: null, stall,
+        ...(() => { const h = suggestions?.hold(s.name, s.last?.text || '', s.last?.postedAt || null); return h ? { suggestions: h } : {}; })(), triage: manager.triageOf(s.name), auto: manager.autoOf(s.name), handoffs: [],
         lastActivitySec: Math.max(0, Math.round((t - s.lastSeen) / 1000)), lastSendAt: s.lastSendAt, lastSendAck: null, workingSinceMs: null, doneAt: s.last?.postedAt || null,
         activity: null, lastMessage: (s.last?.text || '').split('\n').filter((l) => l.trim()).slice(-3).join(' ').slice(0, 300) || null, lastTurn: null, replyHash: null,
         cwd: s.cwd, repo: null, branch: null, dirty: null, project: s.project, github: false, worktree: null, contextLeft: null, model: null,
