@@ -87,7 +87,7 @@ function findCaches(root, names, maxDepth) {
   return hits;
 }
 
-export async function planCleanup({ policy = loadPolicy(), state = stateDir(), now = Date.now(), noFetch = false, cwds, refs, url } = {}) {
+export async function planCleanup({ policy = loadPolicy(), state = stateDir(), now = Date.now(), noFetch = false, cwds, refs, url, minAgeH, worktreesOnly = false } = {}) {
   const repos = (policy.repos || []).map(expand).filter((r) => fs.existsSync(path.join(r, '.git')));
   const fetchFailed = noFetch ? [] : fetchOrigin(repos);
   cwds ||= usedCwds(); refs ||= await liveRefs({ state, url });
@@ -95,7 +95,7 @@ export async function planCleanup({ policy = loadPolicy(), state = stateDir(), n
   const items = [];   // { step, path, bytes, action, why }
   const skipped = [];
   // a) merged worktrees
-  const p = await plan(repos, { cwds, refs, state, now, minAgeH: policy.worktrees?.minAgeH ?? 24 });
+  const p = await plan(repos, { cwds, refs, state, now, minAgeH: minAgeH ?? policy.worktrees?.minAgeH ?? 24 });
   const planned = [];
   for (const i of p.items) {
     if (i.verdict !== 'remove') continue;
@@ -104,6 +104,7 @@ export async function planCleanup({ policy = loadPolicy(), state = stateDir(), n
     planned.push(i);
     items.push({ step: 'worktree', path: i.path, branch: i.branch, bytes: i.bytes, why: i.why });
   }
+  if (worktreesOnly) return { items, skipped, repos, fetchFailed, planned, sessionsOk: p.sessionsOk, cwds, refs };
   // b) caches of idle worktrees (also of worktrees that stay: only the regenerable dirs go)
   const removing = new Set(planned.map((i) => i.path));
   const idleMs = (policy.caches?.idleDays ?? 3) * 864e5;
@@ -169,7 +170,7 @@ export async function runCleanup({ live = false, ...opts } = {}) {
       const file = path.join(state, 'worktree-prune', `plan-cleanup-${Date.now()}.json`);
       const sha = writePlan(P.repos, sub, file);
       try {
-        const r = await apply(file, sha, { state, cwds: P.cwds, refs: P.refs, minAgeH: opts.policy?.worktrees?.minAgeH ?? loadPolicy().worktrees?.minAgeH ?? 24 });
+        const r = await apply(file, sha, { state, cwds: P.cwds, refs: P.refs, minAgeH: opts.minAgeH ?? opts.policy?.worktrees?.minAgeH ?? loadPolicy().worktrees?.minAgeH ?? 24 });
         for (const x of r.removed) res.done.push({ step: 'worktree', path: x });
         res.freed += r.bytes; res.refused.push(...r.refused.map((x) => ({ step: 'worktree', ...x })));
       } catch (e) { res.refused.push({ step: 'worktree', error: e.message }); }
@@ -211,13 +212,38 @@ export function report(P, res) {
   return L.join('\n');
 }
 
+// Percent of `/` (or `p`) in use; null when unreadable. The sweep mode acts only above its threshold.
+export function diskUsedPct(p = '/', statfs = fs.statfsSync) {
+  try { const s = statfs(p); return s.blocks ? Math.round(((s.blocks - s.bavail) / s.blocks) * 100) : null; } catch { return null; }
+}
+
+// One journal line per removed worktree (path, branch, size) plus before / after disk use: the owner-visible record of a sweep.
+export function journalText({ res, before, after, at = new Date() }) {
+  const L = [`# disk sweep ${at.toISOString()} / before: ${before}% after: ${after}%`];
+  for (const d of res.done.filter((x) => x.step === 'worktree')) L.push(`removed ${d.path}`);
+  for (const r of res.refused) L.push(`refused ${r.path || ''}: ${r.error || r.why || ''}`);
+  return `${L.join('\n')}\n`;
+}
+
+// node scripts/disk-cleanup.js --sweep [--above 85] [--min-age-h 2] [--journal FILE]
+// Sweep = worktrees only (merged, clean, unused, idle > min-age-h; no caches, logs or lane trees), and only when the disk is above
+// --above percent. Same guards as the daily run (never dirty, never a live session / lease / open request), still dry unless live.
 async function main() {
   const argv = process.argv, arg = (k) => { const i = argv.indexOf(k); return i > 0 ? argv[i + 1] : undefined; };
+  const sweep = argv.includes('--sweep');
   const live = isLive() && !argv.includes('--dry-run');
   const policy = loadPolicy(arg('--policy') && expand(arg('--policy')));
-  const res = await runCleanup({ live, policy, noFetch: argv.includes('--no-fetch') });
+  const before = diskUsedPct();
+  if (sweep && arg('--above') != null && before != null && before <= Number(arg('--above'))) {
+    console.log(`disk sweep: / at ${before}%, not above ${arg('--above')}%: nothing to do`); return;
+  }
+  const minAgeH = arg('--min-age-h') != null ? Number(arg('--min-age-h')) : undefined;
+  const res = await runCleanup({ live, policy, noFetch: argv.includes('--no-fetch'), minAgeH, worktreesOnly: sweep });
   const text = report(res.plan, res);
   console.log(text);
-  try { const d = path.join(stateDir(), 'disk-cleanup'); fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, 'last.txt'), `${text}\n`); } catch { /* report only */ }
+  try { const d = path.join(stateDir(), 'disk-cleanup'); fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, sweep ? 'last-sweep.txt' : 'last.txt'), `${text}\n`); } catch { /* report only */ }
+  if (sweep && arg('--journal') && live) {
+    try { fs.mkdirSync(path.dirname(expand(arg('--journal'))), { recursive: true }); fs.appendFileSync(expand(arg('--journal')), journalText({ res, before, after: diskUsedPct() })); } catch { /* report only */ }
+  }
 }
 if (process.argv[1] === fileURLToPath(import.meta.url)) main().catch((e) => { console.error(e); process.exit(1); });

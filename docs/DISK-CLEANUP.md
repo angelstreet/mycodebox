@@ -43,6 +43,12 @@ Home is 75 GB; the rest of the disk is docker, `/var/log` (1.0 GB) and the syste
 `$GHOSTY_STATE_DIR/disk-cleanup.json` contains `{"live": true}`; `--dry-run` always wins. The dry run prints per item
 the size and the reason, the total it would free, and what it skipped, and writes `$GHOSTY_STATE_DIR/disk-cleanup/last.txt`.
 
+**Hourly sweep (2026-11-26).** `systemd/ghosty-disk-sweep.timer` runs `scripts/disk-cleanup.js --sweep --above 85 --min-age-h 2 --journal ~/.local/state/ghosty/disk-sweep-journal.md`
+every hour. It exits at once while `/` is at or below 85 %; above it, only step a runs (worktrees, idle > 2 h instead of 24 h; no caches, logs or lane trees)
+with every guard of the daily run (never dirty, never a live pane / session / lease / open request, no `--force`), and a live run appends the removed paths
+plus before / after disk use to the journal. Same owner switch (`disk-cleanup.json`), `--dry-run` wins; writes `disk-cleanup/last-sweep.txt`.
+Install like the daily timer (`ghosty-disk-sweep.{service,timer}`); rollback: `systemctl --user disable --now ghosty-disk-sweep.timer`.
+
 | Step | Removes | Only when |
 |---|---|---|
 | a worktrees | worktree + merged local branch, through `worktree-prune.js` `plan` + `apply` (`git worktree remove`, never `--force`) | branch merged to `origin/main` (patch-equivalent counts), clean tree, nothing unpushed, no pane/process cwd, no live session, open request or lease, idle > 24 h, no non-cache ignored file (`.env`, keystores) |
