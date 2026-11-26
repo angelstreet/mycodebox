@@ -31,6 +31,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A UI review that does not run no longer blames your branch** — the returned request says whether the reviewer broke or could not review, and the manager is woken the first time, also for a live-page review, which used to fail silently · area: integration
+
 - **The dock shows the effort next to the model** — under the input, `Claude  Fable 5.2 · medium`: the effort is read from the session file (Claude Code does not print it in the footer), refreshed once a minute · area: dock
 
 - **The dock shows the model for a session with many subagents** — the model was read from the last 12 pane lines, so subagent lines under Claude's footer hid it and the label under the input showed only `Claude`; the footer line is now found in the last 40 lines · area: dock

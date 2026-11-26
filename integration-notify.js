@@ -85,6 +85,22 @@ const notReviewed = (n) => {
   return u ? ` UI review: NOT fully reviewed, not a pass: ${one(u.summary)}.` : '';
 };
 
+// a review that did not run judged nothing: the session must not go looking for a fault in its branch (2026-11-26)
+const cannotNext = (u) => (u.broke
+  ? 'The reviewer itself broke: this is not your branch, do not change it for this. The manager is told; run integrate request again once the reviewer is fixed.'
+  : 'The review judged nothing. If the reason names your code (the preview does not build), fix that; if not, leave your branch as it is and run integrate request again. The manager is told.');
+
+// The manager's event for a review that did not run, before the merge or on the live pages, else null. The key and the body
+// hold no request id, so the event file keeps the first one and drops its repeats (manager-events.js dedupe).
+export function reviewCannotEvent(r) {
+  const before = r?.state === 'returned' && r.uiReview?.verdict === 'cannot';
+  const u = before ? r.uiReview : r?.uiReviewLive?.verdict === 'cannot' ? r.uiReviewLive : null;
+  if (!u) return null;
+  return { key: 'ui-review:ui-review-cannot', priority: 'high', url: '/?integration=1',
+    title: u.broke ? 'The UI reviewer is broken' : 'A UI review could not run',
+    body: `${before ? 'before a merge' : 'on the live pages'}: ${one(u.summary)}`.slice(0, 300) };
+}
+
 // -> the line for the session (and the own-job wake), or null when the state is not final
 export function integrationText(r) {
   if (!r || !isFinal(r.state)) return null;
@@ -109,7 +125,8 @@ export function integrationText(r) {
       return `Integration ${id}: merged ${where(n)} and deployed, then returned to you: ${reason.replace(/[.\s]+$/, '')}. The merge stays live: fix it on a new commit and run integrate request again.\n${tailLines(n.tail, UI_LINES)}`;
     case 'returned': {
       const t = tailLines(n.tail, n.outcome === 'ui_review' ? UI_LINES : undefined);
-      return `Integration ${id} (${one(n.branch) || '?'}) returned: ${reason.replace(/[.\s]+$/, '')}. Fix it on your branch and run integrate request again.${t ? `\n${t}` : ''}`;
+      const next = n.outcome === 'ui_review' && n.uiReview?.verdict === 'cannot' ? cannotNext(n.uiReview) : 'Fix it on your branch and run integrate request again.';
+      return `Integration ${id} (${one(n.branch) || '?'}) returned: ${reason.replace(/[.\s]+$/, '')}. ${next}${t ? `\n${t}` : ''}`;
     }
     case 'merged_ci_red': return `Integration ${id}: merged ${where(n)} but CI is red (${reason.replace(/[.\s]+$/, '')}). The merge stays on ${one(n.target) || 'the target'}; the manager decides, do not revert it yourself.`;
     case 'merged_ci_superseded': return `Integration ${id}: merged ${where(n)}, but its CI run was superseded by ${sha12(n.supersededBy) || 'a newer commit'} on ${one(n.target) || 'the target'}. CI runs on the newer tip: nothing to fix, do not branch again.${n.deployHeld ? ' The deploy you asked for waits for the newer tip CI.' : ''}`;
@@ -166,6 +183,8 @@ export function createIntegrationNotify({ liveTruth = async () => null, status =
         // what the UI review sends back is the session's to fix: the owner is not woken for it
         if (quiet(request.state) || request.outcome === 'ui_review') digest(item); else feed(item);
       } catch (e) { log({ type: 'integration_feed_failed', id: request.id, error: e.message }); }
+      const cannot = reviewCannotEvent(request);
+      if (cannot) await Promise.resolve(managerEvent(cannot)).catch((e) => log({ type: 'integration_event_failed', id: request.id, error: e.message }));
       const managerEventOf = (handled) => ({ key: `integration:${request.id}:${request.state}`, title: n.title, body: n.body, url, priority: n.priority, ...(session ? { session } : {}), ...(handled ? { handled } : {}) });
       // Who is told: the session named by `--for` (forSession) first, then the requester, once each. Without --for it is the requester only.
       const forSession = request.forSession ? String(request.forSession) : '';
