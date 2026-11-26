@@ -106,6 +106,14 @@ done
   const token = readFileSync(join(state, 'reporter.token'), 'utf8').trim();
   const typed = (text) => post('/api/reporter/event', { v: 1, event: 'prompt', session: 'worker-session', text }, { 'x-ghosty-reporter-token': token });
   await typed('The lane merged your branch.');   // what the server typed is not the owner's
+  // a session started with no goal takes the first real task the owner types (not the server's own lines, not steering)
+  const goal = () => { try { return JSON.parse(readFileSync(join(state, 'goals.json'), 'utf8'))['worker-session']; } catch { return undefined; } };
+  await typed('continue');
+  await sleep(1000);
+  assert.equal(goal(), undefined);
+  await typed('show the model and the effort in the dock for every session');
+  await until(() => goal()?.source === 'first-owner-prompt', 'the goal comes from the owner\'s first task');
+  assert.deepEqual([goal().goal, goal().parts], ['show the model and the effort in the dock for every session', []]);
   assert.equal((await record()).items[0].answer, undefined);
   assert.equal((await typed('no 1')).status, 200);
   await until(async () => (await record()).clear?.how === 'answered', 'the typed answer is recorded');
