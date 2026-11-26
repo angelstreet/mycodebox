@@ -3,6 +3,8 @@
 The release note of this repo (owner 2026-11-13). Every merged code change (not docs-only) adds one entry at the top of
 `## Unreleased`; the done-check reads the merged diff for this file (REFERENCE "Closing review"). Entry form: one line,
 
+- **A health-watch tick no longer burns 2 to 6 minutes of CPU** — every 5-min tick spent about 156 s inside one regular expression (`isStuckNodeTest`, backtracking on long process command lines), investigation or not: 26 ticks of 2026-11-26 averaged 153 s of CPU. It is now a token walk with the same meaning, and the worktree liveness check resolves each path once per tick (27 s of `realpath` per investigation before). `du` was not the cause: it was already niced and cached for 60 min · area: health watch
+
 - **A deploy's server-restart warning no longer wakes the manager** — each queued server deploy raised it twice ("waiting up to 10 min", "restarting now") with nothing to do; it is still in the event file and the owner views, and a failed deploy still wakes urgently · area: manager
 
 - **Open tabs pick up the play-on-tap change, and a late render stays silent** — a tab reloads only when `sw.js` changes, so tabs opened earlier kept rendering every reply; the shell cache version is bumped. Audio no longer starts if you left the reply while it rendered · area: voice

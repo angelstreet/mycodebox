@@ -64,6 +64,14 @@ test('isStuckNodeTest: bare node --test only', () => {
   assert.equal(isStuckNodeTest('/usr/local/bin/node --test'), true);
   assert.equal(isStuckNodeTest('node --test test/a.test.js'), false);
   assert.equal(isStuckNodeTest('node server.js'), false);
+  assert.equal(isStuckNodeTest('/usr/bin/node --test-concurrency=3 --test'), true);
+  assert.equal(isStuckNodeTest('nice node --test'), false);
+  assert.equal(isStuckNodeTest('/usr/bin/node run.js --test'), false);
+  // a long command line of flag-like tokens must not backtrack (156 s of CPU per tick, 2026-11-26)
+  const long = '/usr/bin/node ' + Array.from({ length: 4000 }, (_, i) => `--opt-${i}=a-b-c-d-e-f`).join(' ') + ' x/node file.js';
+  const t0 = process.hrtime.bigint();
+  for (let i = 0; i < 50; i++) assert.equal(isStuckNodeTest(long), false);
+  assert.ok(Number(process.hrtime.bigint() - t0) / 1e6 < 500, 'linear on a long command line');
 });
 
 test('resolveOwner: walks the parent chain to tmux pane and claude session', () => {

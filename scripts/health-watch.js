@@ -64,8 +64,17 @@ export function evalLoad(samples, now, cores, perCore, minutes) {
   return { tripped: over, limit };
 }
 
+// Token walk, not one regex: `(\s+--?[\w-]+(=\S+)?)*` backtracked on long command lines (156 s of CPU per tick over
+// 600 processes, 2026-11-26). Same meaning: a `node` (or `<path>/node`), then flags only, the last one `--test`.
+const FLAG_TOKEN = /^--?[\w-]+(=\S+)?$/;
 export function isStuckNodeTest(args) {
-  return /(^|\/)node(\s+--?[\w-]+(=\S+)?)*\s+--test\s*$/.test(String(args || '').trim());
+  const tok = String(args || '').trim().split(/\s+/);
+  if (tok[tok.length - 1] !== '--test') return false;
+  for (let i = tok.length - 2; i >= 0; i--) {
+    if (tok[i].endsWith('/node') || (i === 0 && tok[i] === 'node')) return true;
+    if (!FLAG_TOKEN.test(tok[i])) return false;
+  }
+  return false;
 }
 
 // A test run whose parent is gone: node --test / test files, vitest and its tinypool workers, the fake git/tmux bins the
@@ -211,7 +220,16 @@ export function classifyWorktree(info) {
 // under it: the session is alive, but the plain path comparison misses it (2026-10-23, ui-sunrise).
 export const DELETED_SUFFIX = ' (deleted)';
 export function stripDeletedSuffix(p) { return String(p || '').trim().replace(/ \(deleted\)$/, ''); }
-export function safeRealpath(p) { try { return realpathSync(p); } catch { return null; } }
+// One tick asks for the same paths thousands of times (every process argument against every worktree: 27 s of
+// realpath per investigation, 2026-11-26). run() turns the memo on for its own lifetime; off elsewhere (tests move paths).
+let realCache = null;
+export function safeRealpath(p) {
+  if (realCache?.has(p)) return realCache.get(p);
+  let r = null;
+  try { r = realpathSync(p); } catch {}
+  realCache?.set(p, r);
+  return r;
+}
 // p is inside dir (dir itself or a sub-directory of it); '/' is the root of everything.
 export function pathInside(dir, p) {
   if (!dir || !p) return false;
@@ -1083,7 +1101,8 @@ export function gitHygiene({ cfg, state, now, dryRun = false, log = [], exec = s
 
 // ---------------------------------------------------------------- main
 
-export async function run({ home = homedir(), argv = process.argv.slice(2), now = Date.now(), out = console.log } = {}) {
+export async function run(opts) { realCache = new Map(); try { return await runTick(opts); } finally { realCache = null; } }
+async function runTick({ home = homedir(), argv = process.argv.slice(2), now = Date.now(), out = console.log } = {}) {
   const force = argv.includes('--force'), dryRun = argv.includes('--dry-run');
   const stateDir = join(home, '.local/state/ghosty');
   mkdirSync(stateDir, { recursive: true });
