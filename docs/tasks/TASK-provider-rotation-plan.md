@@ -47,7 +47,7 @@ and a **Move** button on every dashboard session (provider / seat / model / effo
 
 | Kind | When | How | Context |
 |---|---|---|---|
-| `in-place` | same seat, other model / effort | Claude: `/model <m>` typed in the idle pane (+ effort, see Phase 0 spike); Codex: `/model`; else falls back to `resume` | Same conversation, same pid |
+| `in-place` | same seat, other model | Claude: `/model <m>` typed in the idle pane; Codex: `/model`; else falls back to `resume` | Same conversation, same pid |
 | `resume` | same provider, other seat (Claude A → B), or a model change that needs a restart | Existing park + `--resume <id>` (`swapClaudeAccount`, `codexResumeCommand`) with `--model` | Same conversation |
 | `handover` | other provider (claude ↔ codex ↔ minimax) | Park old (kept resumable) → write **handover pack** → `cbsession -N -n <same name> -d <same worktree> -p <prov> -m <model> -H <pack>` | New conversation, pack carries goal + state |
 
@@ -105,7 +105,7 @@ Ghosty itself (node server, systemd) needs no LLM; its guarantee is that every A
 
 `providers.js` exports `limitOf(provider, paneLines) -> { limited, window?, resetsAt?, credentials? }`, wrapping
 `scanClaudeLimit`, the quota-resume MiniMax regex, and a new Codex scanner ("You've hit your usage limit" / rate-limit
-error lines; exact strings gathered in Phase 1 from real panes, `docs/v2/RUNTIME_FORMATS.md`). One tick
+error lines: Codex prints "You've hit your usage limit … try again at <local time>" (`docs/v2/RUNTIME_FORMATS.md`), which the `scanClaudeLimit` pattern "you've hit your … limit" already matches; the reset is a local wall-clock string). One tick
 (`providerLimitTick`) replaces `claudeLimitTick` + quota-resume dispatch, keeping their caps and journals.
 
 ## 4. Move-session button: API + UI sketch
@@ -116,7 +116,7 @@ error lines; exact strings gathered in Phase 1 from real panes, `docs/v2/RUNTIME
 GET  /api/sessions/:name/move-options
   -> { current: { seat:"claude:team1", provider:"claude", model:"opus", effort:"high", state:"idle", limited:false },
        targets: [ { seat:"claude:team2", provider:"claude", headroom:{h5:12, week:40}, models:["fable","opus","sonnet","haiku"],
-                    efforts:["low","medium","high","max"], kind:"resume", ok:true },
+                    efforts:["low","medium","high","xhigh","max"], kind:"resume", ok:true },
                   { seat:"codex:main", provider:"codex", headroom:{h5:0, week:32}, models:[...], kind:"handover", ok:true },
                   { seat:"api:angelstreet", ok:false, why:"API keys run headless only (claude -p)" } ],
        resumable: [ { provider:"claude", sessionId:"…", seat:"claude:team1", at:"…" } ] }   // earlier conversations of this name
@@ -169,7 +169,7 @@ POST /api/sessions/:name/move
 | Handover loses context (cross-provider) | Deterministic pack with verbatim last prompt + git facts; old conversation stays resumable; "move back" resumes, not re-hands |
 | Codex / MiniMax sessions have no ghosty-reporter plugin, no Remote Control | Board falls back to pane parsing (as today for those agents); the card marks them; brief preamble carries AGENTS.md rules |
 | API-key spend runaway (manager L3, judges) | Off by default; owner switch; daily cap; every call logged with cost; this is a **money** item for the owner |
-| Effort control differs per CLI / version | Phase 0 spike; effort chips only shown for providers where it is verified |
+| Effort control differs per CLI / version | Checked 2026-11-26: Claude Code takes `--effort low|medium|high|xhigh|max` at launch, Codex takes `-c model_reasoning_effort=<level>`; MiniMax has none (no effort chips). An effort change is therefore a `resume` (restart with the flag, same conversation), not `in-place` |
 | Moving a session that holds a lease | Leases listed in the result, never released (today's rule); `when: idle` default |
 | Tests touching live state | Temp `GHOSTY_STATE_DIR`, throw-away tmux sessions, no live cards at phone width (memory rules) |
 | MiniMax / Codex login expired | A rung with an expired login is skipped (`credentials` from the scanner), feed item, never answered automatically |
@@ -180,7 +180,7 @@ Sizes: S ≤ ½ day, M 1–2 days, L 3+ days. Each phase ships through the lane 
 
 | # | Size | Step | Tests |
 |---|---|---|---|
-| 0 | S | **Quick wins, no new model.** (a) Claude limit with no seat left: one `continue` at the earliest reset (extend `quota-resume.js` to Claude panes, same caps). (b) Failover reads the three-account view, not the default file. (c) Re-enable `ghosty-manager-failover` (needs sudo: owner / manager action). (d) Spike: how the installed Claude Code / Codex set effort and model in a live pane (record in RUNTIME_FORMATS.md). | `test/quota-resume.test.js` Claude cases (limit + reset, replay not resumed, paused not resumed); `test/manager-failover.test.js` with three rate files |
+| 0 | S | **Quick wins, no new model.** (a) Claude limit with no seat left: one `continue` at the earliest reset (extend `quota-resume.js` to Claude panes, same caps). (b) Failover reads the three-account view, not the default file. (c) Re-enable `ghosty-manager-failover` (needs sudo: owner / manager action). (d) Effort / model flags (checked 2026-11-26, see Risks): pass `--effort` / `-c model_reasoning_effort` through `resumeCommand` / `codexResumeCommand`. | `test/quota-resume.test.js` Claude cases (limit + reset, replay not resumed, paused not resumed); `test/manager-failover.test.js` with three rate files |
 | 1 | M | `providers.js`: seat registry (wraps `claude-accounts.js`, adds codex / minimax / api seats from existing quota readers and `~/.config/anthropic/*.key` names, never contents), `limitOf()`, `providers.json` policy with defaults; read-only `GET /api/providers`. | `test/providers.test.js`: seat list from fixtures, interactive=false for API seats, chain resolution skips no-login / ≥ 95 % / off, Codex + MiniMax limit scanners on captured panes incl. replay |
 | 2 | M | Handover pack builder (`move-handover.js`) + `GET move-options` + `POST move {dryRun:true}`. | Fixture transcripts (Claude jsonl, Codex rollout, MiniMax), temp git repo → pack snapshot test; options for each current/target pair; no secrets in pack (key file contents never read) |
 | 3 | M | Move executor: `in-place`, `resume` (wraps `swapClaudeAccount`, `codexResumeCommand`), `handover` (park → `cbsession -N` same name / worktree). History `session.moved`, manager event, alias for `/claude-account`, `scripts/session-move`. | Unit with fake tmux / exec (like `test/parking.test.js`); one real e2e on a throw-away tmux session in a temp worktree: claude → codex → resume claude back; refusal when park fails |
