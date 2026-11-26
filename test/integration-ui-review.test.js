@@ -5,7 +5,8 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createIntegrationLane, validateConfig } from '../integration-lane.js';
 import { createNightlyUiReview, parseUiReview, touchesVisual } from '../ui-review-lane.js';
-import { createIntegrationNotify, integrationText } from '../integration-notify.js';
+import { createIntegrationNotify, integrationText, reviewCannotEvent } from '../integration-notify.js';
+import { createManagerEvents } from '../manager-events.js';
 import { makeWorld } from './helpers-lane.js';
 import { tmp } from './helpers-tmp.js';
 
@@ -82,6 +83,31 @@ test('a review that cannot run is not a pass', async () => {
   const w = world(); w.branch('feat', { 'frontend/src/Page.tsx': 'CANNOT\n' });
   const r = await go(mk(w), { branch: 'feat', session: 's1' });
   assert.equal(r.state, 'returned'); assert.match(r.reason, /could not run, so nothing was merged/);
+  assert.ok(!r.uiReview.broke, 'the reviewer said cannot itself');
+  assert.match(integrationText(r), /judged nothing\. If the reason names your code/);
+  assert.doesNotMatch(integrationText(r), /Fix it on your branch/);
+});
+
+test('a reviewer that crashes is said to be broken, not the branch, and the manager hears of it once', async () => {
+  const w = world('raise ModuleNotFoundError("No module named \'x\'")\n'); w.branch('feat', { 'frontend/src/Page.tsx': 'fine\n' });
+  const r = await go(mk(w), { branch: 'feat', session: 's1' });
+  assert.equal(r.uiReview.broke, true, JSON.stringify(r.uiReview));
+  assert.match(integrationText(r), /The reviewer itself broke: this is not your branch/);
+  assert.doesNotMatch(integrationText(r), /Fix it on your branch/);
+  const stateDir = tmp('events-'), store = createManagerEvents({ stateDir });
+  const notify = createIntegrationNotify({ status: () => ({ state: 'idle' }), canSend: () => true, managerEvent: (e) => store.record(e) });
+  await notify(r);
+  await notify({ ...r, id: 'int-again', session: 's2' });
+  const lines = readFileSync(join(stateDir, 'manager-events.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  const told = lines.filter((e) => e.kind === 'ui-review-cannot');
+  assert.equal(told.length, 1, JSON.stringify(lines));
+  assert.equal(told[0].title, 'The UI reviewer is broken');
+  assert.ok(!told[0].handled, 'it wakes the manager');
+});
+
+test('a live review that cannot run reaches the manager although the request is deployed; other verdicts do not', () => {
+  assert.match(reviewCannotEvent({ state: 'deployed', uiReviewLive: { verdict: 'cannot', broke: true, summary: 'boom' } }).body, /on the live pages: boom/);
+  for (const verdict of ['pass', 'fail', 'partial']) assert.equal(reviewCannotEvent({ state: 'returned', uiReview: { verdict } }), null);
 });
 
 test('a part the review cannot sign in to goes on, and every message says it was not reviewed', async () => {

@@ -83,10 +83,12 @@ export function createUiReview({ stateDir, git, run, log = () => {} }) {
       const said = { 0: 'pass', 1: 'fail', 2: 'skip', 4: 'partial' }[x.code];
       const verdict = !x.timedOut && said && last?.[1] === said ? said : 'cannot';
       const summary = x.timedOut ? `no answer in ${cfg.timeoutMin} min` : (last?.[2] || x.out.trim().split('\n').at(-1) || `exit ${x.code}`).slice(0, 400);
-      return { verdict, summary, table: readText(path.join(dir, 'table.md'), 6000), dir };
+      // broke: no `cannot` of its own, so the reviewer crashed or hung; its own `cannot` may be the branch's doing (no preview)
+      const broke = verdict === 'cannot' && (x.timedOut || last?.[1] !== 'cannot');
+      return { verdict, ...(broke ? { broke } : {}), summary, table: readText(path.join(dir, 'table.md'), 6000), dir };
     } catch (e) {
       log('ui review', id, e.message);
-      return { verdict: 'cannot', summary: e.message.slice(0, 300), table: '', dir };
+      return { verdict: 'cannot', broke: true, summary: e.message.slice(0, 300), table: '', dir };
     } finally { if (home) fs.rmSync(home, { recursive: true, force: true }); }
   }
   return { review, exportReviewer };

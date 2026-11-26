@@ -828,7 +828,7 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
     });
     r.uiReview = u; persist(r);
     if (u.verdict === 'fail') throw new Ret(`UI review before the merge: ${u.summary}`, uiReviewLines(u), { outcome: 'ui_review' });
-    if (u.verdict === 'cannot') throw new Ret(`UI review could not run, so nothing was merged: ${u.summary}. Request again; if it repeats, ask the manager`, uiReviewLines(u), { outcome: 'ui_review' });
+    if (u.verdict === 'cannot') throw new Ret(`UI review could not run, so nothing was merged: ${u.summary}`, uiReviewLines(u), { outcome: 'ui_review' });
   }
 
   // The second net: the deployed pages, once the frontend is live. A fail hands the request back to its session; the merge stays.

@@ -1638,6 +1638,11 @@ out of the way (`absent`). The export is a short fixed list (`EXPORT`: data and 
 `importlib` / subprocess by path (such a file must be under `EXPORT`). Third-party packages come from the service's
 `python3`. `test/ui-review-closure.test.js` also imports the real exported reviewer where a product clone exists.
 
+**A review that did not run** (`cannot`) returns the request without "Fix it on your branch". No `cannot` line from the
+reviewer (crash, timeout, failed export; `broke`) reads "not your branch"; its own `cannot` (no preview, no data) reads
+"fix your code only if the reason names it". Either one, before the merge or on the live pages, records the manager event
+`ui-review:ui-review-cannot` (urgent, no request id in it, so the same reason within the event dedupe window is told once).
+
 | Where | What | A fail |
 |---|---|---|
 | lane, after tests, before the push | request diff touches `uiReview.paths` (tests and `.md` do not count) | `returned`, `outcome: ui_review`; the table goes to the session; digest only, the owner is not told |
