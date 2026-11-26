@@ -9,6 +9,8 @@
 #   MANAGER_FRESH_SESSION     tmux session to restart (default manager)
 #   MANAGER_FRESH_WAIT_TRIES  idle checks 30 s apart before giving up (default 120 = 60 min); the context cap passes 1
 #   MANAGER_FRESH_REASON      why, named in the kickoff (default "nightly restart")
+#   MANAGER_FRESH_ACCOUNT     Claude account to relaunch on (default: the active one)
+#   MANAGER_FRESH_LIMIT=1     the pane is stopped on a usage limit (manager-rotation.js): no idle wait; close the limit menu, then /exit
 #   MANAGER_FRESH_KICK        whole kickoff text instead of the manager's (a throw-away session must not start managing)
 # Exit 3 = the session was never idle, nothing was touched (the context cap retries later); 1 = any other failure.
 set -euo pipefail
@@ -57,10 +59,15 @@ dead=0; pane_has_claude "$pane" || dead=1
 if [ "$NOW" = 1 ] && [ "$dead" = 1 ]; then
   echo "manager pane has no claude process: relaunching now (--now)"
 else
+  if [ "${MANAGER_FRESH_LIMIT:-}" = 1 ]; then
+    # A usage-limit stop is never "idle" on the board (a menu, an error); Escape closes the menu, C-u drops a half-typed line.
+    tmux send-keys -t "=$S:" Escape; sleep 2; tmux send-keys -t "=$S:" C-u
+  else
   # "waiting ok" counts as restartable: the state lives in files, so a manager that ended its turn on a
   # needs-owner question keeps everything it wrote and just needs its loop restored.
   for i in $(seq 1 "$TRIES"); do case "$(state)" in "done ok"|"idle ok"|"waiting ok") break;; esac; if [ "$i" -lt "$TRIES" ]; then sleep 30; fi; done
   case "$(state)" in "done ok"|"idle ok"|"waiting ok") ;; *) echo "manager never idle, not restarted"; exit 3;; esac
+  fi
   # The manual checkout is the manager's: a throw-away session (MANAGER_FRESH_SESSION) must not move it.
   if [ "$S" = manager ]; then git -C "$HOME/vpt-manager" fetch -q origin && git -C "$HOME/vpt-manager" checkout -q --detach origin/task44-ai-manager || true; fi
   curl -s -X POST "$BASE/api/send/$S" "${H[@]}" -d '{"keys":"/exit","enter":true}' >/dev/null

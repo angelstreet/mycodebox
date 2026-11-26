@@ -18,6 +18,9 @@ import { dirname, join, resolve } from 'node:path';
 export const LIMIT_PCT = 95;                 // a window at or above this counts as used up (quota.js CRIT_PCT)
 export const MARK_DEFAULT_MS = 60 * 60e3;    // a limit stop with no known reset blocks the account this long
 export const DEFAULT_ID = 'default';
+export const EARLY_LEFT_PCT = 100;           // early alert: all accounts together hold no more than one fresh account's week
+export const EARLY_REARM_PCT = 120;          // ... and again only after the total was back above this
+const WEEK_MARK_MS = 6 * 60 * 60e3;          // a block that ends later than this is a weekly one, not a 5 h window
 export const ID_RE = /^[a-z0-9][a-z0-9_-]{0,23}$/;
 // Shared with ~/.claude: conversation data and the owner's settings. Never the login.
 export const SHARED = ['settings.json', 'CLAUDE.md', 'projects', 'sessions', 'todos', 'plans', 'file-history', 'shell-snapshots',
@@ -74,6 +77,7 @@ export function normalize(raw, home = homedir()) {
     autoSwapSessions: cfg.autoSwapSessions !== false,
     active: ids.has(cfg.active) ? cfg.active : accounts[0].id,
     accounts, marks,
+    earlyAlerted: cfg.earlyAlerted === true,   // the "all accounts nearly used up" alert went out and has not re-armed
   };
 }
 
@@ -120,13 +124,29 @@ export function launchPrefix(acct) {
   return `CLAUDE_CONFIG_DIR=${shq(acct.configDir)} GHOSTY_CLAUDE_ACCOUNT=${acct.id} `;
 }
 
+export const hasLogin = (a) => !a?.configDir || existsSync(join(a.configDir, '.credentials.json'));   // presence only, never read
+
+// Weekly room left over all logged-in accounts, in points of one account's week up to LIMIT_PCT. A 5 h block refills in hours,
+// so it does not count against the week; a weekly one (it ends more than 6 h from now, or has no known end) leaves 0.
+export function weekLeft(accounts, now) {
+  return accounts.reduce((sum, a) => {
+    if (a.exhausted && (a.reset == null || a.reset - now > WEEK_MARK_MS)) return sum;
+    const week = (a.windows || []).find((w) => w.name === 'week');
+    return sum + Math.max(0, LIMIT_PCT - (week?.usedPercent || 0));
+  }, 0);
+}
+export function nextReset(accounts, now) {
+  const at = accounts.map((a) => a.reset).filter((r) => Number.isFinite(r) && r > now);
+  return at.length ? Math.min(...at) : null;
+}
+
 // The account a launch outside the server starts on (the manager, scripts/manager-command.js): the ACTIVE one, the rule
 // scripts/cbsession follows. null = the default account (also for an account without a login: only the file's presence is checked).
-export function activeAccount(stateDir, { home = homedir(), hasLogin = (dir) => existsSync(join(dir, '.credentials.json')) } = {}) {
+export function activeAccount(stateDir, { home = homedir(), id = null } = {}) {
   let cfg;
   try { cfg = normalize(JSON.parse(readFileSync(join(stateDir, 'claude-accounts.json'), 'utf8')), home); } catch { return null; }
-  const a = cfg.accounts.find((x) => x.id === cfg.active);
-  return a?.configDir && hasLogin(a.configDir) ? a : null;
+  const a = cfg.accounts.find((x) => x.id === (id || cfg.active));
+  return a?.configDir && hasLogin(a) ? a : null;
 }
 
 // The account a running claude process was started on (its environment). Default when unset or unreadable.
@@ -206,6 +226,18 @@ export function createClaudeAccounts({ file, stateDir, home = homedir(), now = D
       return refresh();
     },
     // Another usable account than `id`, or null (none left: the session waits for its reset).
+    // Once per episode: true when the early alert is due now.
+    async earlyAlert() {
+      const c = load();
+      if (c.accounts.length < 2) return null;
+      const list = this.view().accounts.filter((a) => hasLogin(a));
+      const left = Math.round(weekLeft(list, now()));
+      const due = left <= EARLY_LEFT_PCT && !c.earlyAlerted, rearm = left > EARLY_REARM_PCT && c.earlyAlerted;
+      if (!due && !rearm) return null;
+      c.earlyAlerted = due;
+      await save();
+      return due ? { left, accounts: list, nextReset: nextReset(list, now()) } : null;
+    },
     nextFor(id) { return pickAccount({ ...load(), auto: true }, states, { exclude: [id] }); },
     view() {
       const c = load();

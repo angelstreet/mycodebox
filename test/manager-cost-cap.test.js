@@ -276,6 +276,15 @@ test('manager-fresh.sh: one idle try and a busy manager -> exit 3, no /exit, no 
   assert.ok(!r.calls.some(([c, a]) => c === 'sleep' && a === '30'), 'one try does not wait 30 s');
 });
 
+test('manager-fresh.sh: a usage-limit stop closes the menu and restarts although the board is never idle', () => {
+  const r = freshRun({ state: 'error', env: { MANAGER_FRESH_LIMIT: '1' } });
+  assert.equal(r.status, 0, r.stderr);
+  const keys = r.calls.filter(([c, ...a]) => c === 'tmux' && a[0] === 'send-keys').map((c) => c.at(-1));
+  assert.deepEqual(keys.slice(0, 2), ['Escape', 'C-u']);
+  assert.ok(r.calls.some(([c, ...a]) => c === 'curl' && a.includes('{"keys":"/exit","enter":true}')));
+  assert.match(r.sent.at(-1), /^Fresh start of the AI manager/);
+});
+
 test('manager-fresh.sh: the cap reason is named in the kickoff, which still points at the open items; the restart is stamped', () => {
   const r = freshRun({ env: { MANAGER_FRESH_WAIT_TRIES: '1', MANAGER_FRESH_REASON: 'context cap restart: the context reached 512k, over the 300k cap' } });
   assert.equal(r.status, 0, r.stderr);
