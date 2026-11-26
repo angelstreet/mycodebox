@@ -1847,7 +1847,9 @@ next real turn:
   shared-checkout note thus arrives before the commit. Subagent tool calls take nothing. Still no turn is started.
 - **No hook** (Codex, MiniMax, OpenCode, a Claude process whose plugin never asked): the note is appended to the end of the next real
   message ghosty types (`sendKeys`): at least 12 characters with a space, not a `/` / `!` / `#` command, no menu on screen. Appended,
-  so the prompt's sender is still matched on its start. A prompt typed straight into such a terminal does not carry it.
+  so the prompt's sender is still matched on its start. A prompt typed straight into such a terminal does not carry it. The notes
+  are claimed before typing and put back if the send fails or stays unsubmitted. A "has the hook" flag counts only while the pane
+  runs Claude.
 
 | Harness message | Starts a turn? | Why |
 |---|---|---|
