@@ -31,6 +31,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A result the manager accepted as final is left alone** — after the manager accepted a partial review, the harness still sent a time-box wake and a "blocked lacks tried/need" check and woke the manager with new `asks` events. The manager now records the acceptance (`accept_final: true` on the decision message, or `POST /api/manager/accept-final/<session>`); the done-check, time box, stop handling and asks stay quiet until a new owner or manager task message. No failed row becomes a pass · area: harness
+
 - **The needs-owner hold now really holds** — it listened on the `waiting` alert (a prompt on screen), but a `STATUS: needs-owner` stop reaches the owner as the manager's `asks` alert, so it never fired. `test/ui-review-wire.test.js` drives a real server with a stand-in agent pane; it fails on the old wiring · area: harness
 
 - **A server the UI review cannot sign in to is reported as not reviewed** — the lane takes the new `partial` verdict: the request goes on and its message says "NOT fully reviewed, not a pass" · area: harness

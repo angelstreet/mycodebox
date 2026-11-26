@@ -132,7 +132,10 @@ const today = () => new Date().toISOString().slice(0, 10);
 export const stopKey = (text) => String(text || '').replace(/\s+/g, '').slice(-400);
 const hash = (s) => createHash('sha1').update(s).digest('hex').slice(0, 10);
 
-export async function initManager({ onJudgeDown, managerSessions, credits, onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context, onHandoff = () => {}, onMergeDecision: mergeHook, onMergeCancelled: cancelHook, mergeJev: mergeJevFn, decideContext: decideCtx, onDigest: digestHook, onNotice, leaseView, onStatus, onManagerItem, hasOpenAsk, onAskMovedOn, ownJobs: ownJobsDep, integration: integrationDep, readyStore, stopFacts: stopFactsDep } = {}) {
+// the manager / owner accepted this session's result as final (final-accept.js): its stops are logged, then nothing is sent, parked or escalated
+let finalAccepted = () => false;
+export async function initManager({ onJudgeDown, managerSessions, credits, onOwnerNeeded, sendKey, sendKeys, paused, policy, heldStore, onHold, context, onHandoff = () => {}, onMergeDecision: mergeHook, onMergeCancelled: cancelHook, mergeJev: mergeJevFn, decideContext: decideCtx, onDigest: digestHook, onNotice, leaseView, onStatus, onManagerItem, hasOpenAsk, onAskMovedOn, ownJobs: ownJobsDep, integration: integrationDep, readyStore, stopFacts: stopFactsDep, finalAccepted: finalAcceptedDep } = {}) {
+  finalAccepted = finalAcceptedDep || (() => false);
   await mkdir(STATE_DIR, { recursive: true });
   try {
     const saved = JSON.parse(await readFile(CONFIG_FILE, 'utf8'));
@@ -428,6 +431,7 @@ const escalatedTargetOf = (id) => (id == null ? null : managerStops.has(id) ? 'm
 // A merge or push in the stop keeps it with the owner when the policy escalated it; a deploy (queue, approval, lease) goes to the manager.
 function escalate(name, state, final, id, reason, aiLine = null) {
   if (isManagerSession(name)) return;   // never an owner stop, never pushed
+  if (finalAccepted(name)) return;   // accepted while this stop was still being decided
   const firstEscalation = !escalatedStops.has(id);
   // "STATUS: needs-manager: <what the manager must do>": the agent addressed the manager itself, so this is always its item --
   // no topic guard (a push/merge word in the ask must not hand it back to the owner), and no owner fallback at all.
@@ -598,6 +602,7 @@ export function reevaluateHolds() {
 
 function schedule(name, w, a) {
   cancelAuto(name, 'superseded', true);
+  if (finalAccepted(name)) return;
   // remote (Mac hook) stop: the hook gave the stop a loop-guard flag -> never answered, the owner gets it; the countdown must end before the hook stops waiting
   if (isRemoteSession(name) && remoteHooks.noAnswer(name)) { escalate(name, w.last?.state, w.stall || { case: a.case }, a.id, 'the Stop hook was already continuing (loop guard): not answered automatically'); hookSafe(remoteHooks.cancelled, name, 'loop guard', a.id); return; }
   // the countdown must end (with a margin) before the hook gives up, counted from NOW (the decision is ready); no time left = the owner gets it
@@ -1520,6 +1525,7 @@ export function observe(s) {
     });
     if (!isManagerSession(s.name) && /^(?:done|ok|complete|completed|finished|running|waiting)$/i.test(final.status || '')) { try { askMovedHook(s.name, final.status, String(final.question || '').slice(0, 300)); } catch (e) { console.error('[manager] ask moved on', e.message); } }
     if (/^(?:waiting|running|blocked)$/i.test(final.status || '')) { try { statusHook(s.name, String(final.status).toLowerCase(), String(final.question || '').slice(0, 300)); } catch (e) { console.error('[manager] onStatus', e.message); } }
+    if (finalAccepted(s.name)) { logLater({ type: 'final_accepted_quiet', id, session: s.name, case: final.case }); return; }
     // a session that waits on a job of its own is woken when the job ends (own-jobs.js); a deploy it queued is followed the same way
     // a blocked STATUS that names a job in words only: it is the session's own when the agent has a live child process at the stop
     if (ownJobs?.hasLiveChild && final.jobNoun && final.case === 'owner_decision' && !isRemoteSession(s.name) && !isManagerSession(s.name)) {
@@ -1594,11 +1600,13 @@ export function observe(s) {
   return w.stall;
 }
 
+// Called when a result is accepted as final: the countdown, the own-job wake and the park already armed for the session are dropped.
+export function quietAccepted(name) { cancelAuto(name, 'final result accepted', true); const w = watch.get(name); if (w) w.heldStall = null; try { ownJobs?.forget(name); } catch {} }
 export function forget(name) { cancelAuto(name, 'session removed'); const p = watch.get(name)?.pending; if (p) settleRoundtrip(name, p, 'removed', Date.now()); watch.delete(name); try { ownJobs?.forget(name); } catch {} }
 // For the own-jobs watcher: is `session` still stopped at the stop `stopId` (so a wake is still wanted), and may text be typed into it now?
 export const stillStopped = (session, stopId) => { const w = watch.get(session); return !!(w && w.pending?.id === stopId && w.last && (w.last.state === 'done' || w.last.state === 'waiting')); };
 // The same gates as a decided reply (decisionBlock: pause, autoSend, hourly cap, draft) plus enabled / sessionOn; a wake counts in the hourly cap (countSent).
-export const canType = (session) => { const w = watch.get(session); return !!w && w.last?.state === 'done' && config.enabled && sessionOn(session) && !decisionBlock(session, {}); };
+export const canType = (session) => { const w = watch.get(session); return !!w && !finalAccepted(session) && w.last?.state === 'done' && config.enabled && sessionOn(session) && !decisionBlock(session, {}); };
 export const countSent = (session) => { sentLog.set(session, [...(sentLog.get(session) || []), Date.now()]); };
 export function prune(live) { for (const k of [...watch.keys()]) if (!live.has(k)) forget(k); }
 

@@ -1660,6 +1660,42 @@ sessions are not seen (docs/MAC-HOOK.md "Ship rule for Mac sessions"). The rule 
 `AGENTS.md` and of every `cbsession` prompt, because Claude Code's built-in "commit only when asked" default beats a rule
 that is deep in a long file.
 
+## Accepted final result (2026-11-26)
+
+When the manager accepts a session's partial, failed or blocked result as final, it **records** the acceptance. The harness never
+guesses it from message text: "accepted as final" written in a message or in a STATUS line records nothing (`final-accept.js`).
+
+**How the manager records it** (`by` is `manager-agent`; the owner may do it too; any other actor gets 403):
+
+| Case | Call |
+|---|---|
+| With the decision message (usual) | `POST /api/send/<session> {"keys": "<decision>", "by": "manager-agent", "accept_final": true}`. Recorded before the text is typed, so the stop it causes is already quiet; dropped again if the send fails. Not with `when`, `key` or `/api/send-many` (400) |
+| Without a message (already sent; a `mac:` session answered by `SendMessage`) | `POST /api/manager/accept-final/<session> {"by": "manager-agent", "note": "<why>"}` |
+| List | `GET /api/manager/accept-final` |
+| Reopen without a message | `DELETE /api/manager/accept-final/<session>?by=manager-agent` |
+
+**While the record stands** the harness sends the session nothing of the checks below and raises no ask for it:
+
+- done-check, all of it: status-format check, closing review, Verification block, leftovers, goal question, time-box wake and
+  the `time-box:` / `done-check*` manager events; the Mac Stop hook's refusals;
+- a stop is still logged in `stalls.jsonl` (`final_accepted_quiet`), but there is no auto answer, no own-job wake or park, no
+  `asks` / `waiting` / `needs-manager` event and no owner push; an armed countdown or wake is dropped;
+- no `leftovers` / `push` / `bug-unreported` event, no rules-watch or overlap message.
+
+Not covered: results of requests the session itself made (integration lane, lease grants and nudges about a lease it holds).
+
+**It changes nothing about the result.** No Verification row, STATUS or goal check is marked passed; a failed row stays failed.
+The session is not closed.
+
+**Reopen:** a later text sent to the session through `/api/send`, `/api/send-many` or the send queue by `owner` (the
+dashboard's default), `owner-*` or `manager-agent`, without `accept_final: true`, drops the record and every check resumes. So a
+manager follow-up that is **not** a new task carries `accept_final: true` again. Menu key taps, TUI commands (`/exit`,
+`/compact`, ...) and harness actors (`integration`, `lease-nudge`, ...) do not reopen. A new session started under the same name
+starts without the record. Text typed outside ghosty (`tmux attach`, Claude Remote Control, a Mac) is not seen: use `DELETE`.
+
+State: `<state>/accepted-final.json`; journal `accepted-final.jsonl`. Tests: `test/final-accept.test.js`,
+`test/final-accept-wire.test.js`.
+
 ## Sessions are never auto-closed (owner, 2026-10-30)
 
 A session is closed only by the owner or by the agent that spawned it (`DELETE /api/sessions/<s>?confirm=<s>`); the manager closes one only

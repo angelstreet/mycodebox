@@ -33,6 +33,7 @@
 //   POST /api/manager           → {enabled?, autoSend?, autoCases?, minConfidence?, delayMs?, maxPerSessionPerHour?}
 //                                 global settings, {session, sessionEnabled} per session
 //   POST /api/manager/cancel/:s → cancel the pending auto answer of a session
+//   GET/POST/DELETE /api/manager/accept-final[/:s] → accepted-final results (final-accept.js)
 //   POST /api/manager/label     → {id, label: no_reason|legit|wrong_case, note?, correctCase?} owner label on a stall
 //   POST /api/manager/triage    → {id, action: sent|edited|dismissed} what the owner did with the AI reviewer's proposal (dismissed hides it)
 //   POST /api/manager/choice    → {id, session, kind:<yesno|menu|either|open>, owner:<button|reply>, ownerText?, ai:<button|null>, aiConfidence?, jev?:<choice>, jevProbabilities?}
@@ -128,6 +129,7 @@ import { createSharedCheckoutGuard, expandHome } from './shared-checkout-guard.j
 import { createFoundBugs, sessionOfRequest, unreportedBugOf, sendBackOf, sendBackText, sweepGroups, equivalentFreeOf } from './found-bugs.js';
 import { goalOf as goalOfPrompt, blockedOrUnknownStatus } from './status-honesty.js';
 import { createGoalGate, createGoalStore } from './goal-check.js';
+import { createFinalAccept, isTaskActor, isTaskMessage } from './final-accept.js';
 import { createDoneCheck, closingTextOf, DEFAULT_IGNORE_BRANCHES, shipOfferOf, unconfirmedStatusOf, waitingOnLeaseStatus } from './done-check.js';
 import { createLeftovers, pushableItems } from './done-leftovers.js';
 import { scanTaskDocs, withHomeDirs, computeUnfinished, docLeftoversFor, createUnfinished, taskRe } from './unfinished.js';
@@ -175,7 +177,7 @@ import { createPromptSenders } from './prompt-senders.js';
 import { createTts, parseRange } from './tts.js';
 import { publicLinks, loadAssetlinks } from './assetlinks.js';
 import { revertPlan } from './decided.js';
-import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, todayCounts, managerConfig, setManagerConfig, labelStall, unlabelStall, logOwnerChoice, reviewDeck, triageOf, triageAction, aiSummary, jevAiTab, decisionsView, policyConfig, releaseHold, heldOf, reevaluateHolds, deployRunnerOn, wakeAnnotate, wakeOutcomeTick, LOG_FILE, jevBreaker, readJournal, decidedView, decidedItem, logRevert, decidedDigestTick, revertedIds, stillStopped, canType, countSent, roundtripsView, noteAnswerer } from './manager.js';
+import { initManager, logEvent, observe, forget as managerForget, prune as pruneManager, stallOf, autoOf, cancelAuto, quietAccepted, todayCounts, managerConfig, setManagerConfig, labelStall, unlabelStall, logOwnerChoice, reviewDeck, triageOf, triageAction, aiSummary, jevAiTab, decisionsView, policyConfig, releaseHold, heldOf, reevaluateHolds, deployRunnerOn, wakeAnnotate, wakeOutcomeTick, LOG_FILE, jevBreaker, readJournal, decidedView, decidedItem, logRevert, decidedDigestTick, revertedIds, stillStopped, canType, countSent, roundtripsView, noteAnswerer } from './manager.js';
 import { cachedScorecard } from './scorecard.js';
 import { createDeployRunner, defaultRegistry as defaultDeployRegistry } from './deploy-runner.js';
 import { quotaLine, leasesLine, deploysLine } from './triage.js';
@@ -1157,6 +1159,19 @@ function hostPressure() {
   return { loadPerCore: loadavg()[0] / cpus().length, ramAvailPct: m ? (Number(m[2]) / Number(m[1])) * 100 : 100 };
 }
 
+// Accepted final (final-accept.js): the manager / owner accepted a session's partial or failed result; the harness then sends it nothing and raises no ask.
+const finalAccept = createFinalAccept({ stateDir: STATE_DIR });
+const finalAccepted = (name) => finalAccept.has(name);
+function acceptFinal(session, by, note) {
+  const rec = finalAccept.accept(session, { by, note });
+  quietAccepted(session);
+  logEvent({ type: 'final-accepted', session, by });
+  return rec;
+}
+function reopenFinal(session, by, why) {
+  if (finalAccept.reopen(session, { by, why })) logEvent({ type: 'final-reopened', session, by });
+}
+
 // Goal check (goal-check.js, owner 2026-11-11): the goal is captured at session start (cbsession / dashboard prompt, Mac first prompt) in
 // <state>/goals.json; the gate asks the owner's "did you reach the goal?" once per done and bounces a reply without the goal or evidence.
 const goals = createGoalStore({ stateDir: STATE_DIR });
@@ -1208,6 +1223,7 @@ const stopStateMode = () => { try { const m = JSON.parse(readFileSync(managerCon
 const deployLive = createDeployLive({ dir: join(STATE_DIR, 'deploys'), deploys: () => (deployRunner.snapshot().ok ? deployRunner.snapshot().deploys : null),
   leases: async () => (await leaseSource.view(false))?.leases || [] });
 const doneCheck = createDoneCheck({
+  finalAccepted,
   stopFacts: (n, o) => stopFactsImpl(n, o), stateMode: stopStateMode,
   draftNow: async (n) => { try { return !!inputBox((await capturePane(n, 30)).split('\n')).draft; } catch { return true; } },
   goalEntryOf: (n) => goals.get(n), timeBoxMode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).timeBox; return m === 'live' || m === 'off' ? m : 'dry'; } catch { return 'dry'; } },
@@ -1274,7 +1290,7 @@ const leftovers = createLeftovers({
     for (const b of await foundBugs.list({ limit: 500 })) if (Date.now() - Date.parse(b.at) < 3600 * 1000) foundBugsRecent.add(b.session);
     const panes = await listPanes(), mgrs = new Set(loadManagerSessions()), out = [];
     for (const [name, p] of panes) {
-      if (p.dead) continue;
+      if (p.dead || finalAccepted(name)) continue;   // accepted final: no leftovers / push event asks the manager to send it back
       const st = latest?.status?.[name], ex = st?.stall?.excerpt;
       const kind = ex && statusLine(String(ex).split('\n'))?.kind;
       if (!kind || !(kind === 'done' || (PUSH_STATUSES.has(kind) && ownerPushOn()))) continue;
@@ -1410,7 +1426,7 @@ async function rulesWatchTargets() {
 const rulesWatch = createRulesWatch({
   stateDir: STATE_DIR,
   git: async (cwd, args) => (await exec('git', ['-C', cwd, ...args], { timeout: 60000 })).stdout,
-  listTargets: () => rulesWatchTargets(),
+  listTargets: async () => (await rulesWatchTargets()).filter((t) => !finalAccepted(t.name)),
   send: (name, text) => harnessSend(name, text),
   pressure: hostPressure,
   record: (e) => managerEvents.record(e),
@@ -1421,7 +1437,7 @@ const rulesWatch = createRulesWatch({
 const overlapGuard = createOverlapGuard({
   stateDir: STATE_DIR,
   git: async (cwd, args) => (await exec('git', ['-C', cwd, ...args], { timeout: 30000 })).stdout,
-  listTargets: () => rulesWatchTargets(),
+  listTargets: async () => (await rulesWatchTargets()).filter((t) => !finalAccepted(t.name)),
   send: (name, text) => harnessSend(name, text),
   pressure: hostPressure,
   record: (e) => managerEvents.record(e),
@@ -1488,6 +1504,7 @@ const askReview = createAskReview({ stateDir: STATE_DIR, run: uiReviewRun,
 const askFold = createAskFold({ file: join(STATE_DIR, 'manager-owner-asks.jsonl') });
 askFold.refresh();
 function notifySession(session, kind, body, meta, stateHint = null, reviewed = false) {
+  if ((kind === 'waiting' || kind === 'asks') && finalAccepted(session)) return;   // accepted final: no new ask, no push
   if ((kind === 'waiting' || kind === 'asks') && loadOwnerHiddenSessions().includes(session)) return;   // the manager's own session (and the shadow standby) never pushes the owner
   // a needs-owner stop on something to look at is reviewed by ghosty before the owner hears of it (ui-review-ask.js)
   if (!reviewed && askReviewOn() && askReview.takeAlert(session, { kind, state: stateHint, status: meta?.status, text: meta?.closing || closingTextOf(latest?.status?.[session]?.stall) },
@@ -2008,6 +2025,7 @@ async function createSession({ name, agent, cwd, priority, model, prompt, handov
     await exec(TMUX, ['send-keys', '-t', `=${real}:`, 'Enter']);
   }
   await historyLog({ kind: 'session.started', name: real, provider: agent, model: model ?? null, cwd: dir, started_by: 'dashboard', prompt_ref: promptFile ?? prompt ?? null, handover_ref: handover ?? null, tmux_created: await tmuxCreated(real) });
+  reopenFinal(real, 'dashboard', 'a new session took the name');
   goals.forget(real); if (prompt || handover) captureGoal(real, prompt || handover, 'dashboard');   // goal check: the goal as given at start
   sessionMeta.reset(real);
   sessionMeta.sync([real]);   // a new session starts at P2 (or the chosen priority), not paused
@@ -2314,6 +2332,8 @@ async function harnessSend(name, text) {
   return r;
 }
 function logSend(session, by, payload) {
+  // a later owner / manager task message reopens an accepted final result; the send that records the acceptance does not
+  if (payload.key === undefined && payload.accept_final !== true && isTaskMessage(by, payload.keys)) reopenFinal(session, by, String(payload.keys));
   if (payload.key === undefined) promptSenders.note(session, by, String(payload.keys || ''));
   noteAnswerer(session, by);   // round 9: who answered, for owner-roundtrips.jsonl
   logEvent({ type: 'send', session, by, ...(payload.key !== undefined ? { key: String(payload.key).slice(0, 40) } : { text: String(payload.keys || '').slice(0, 200) }) });
@@ -2340,6 +2360,7 @@ async function guardedSend(session, payload) {
 
 async function sendMany(sessions, payload) {
   const by = actorOf(payload);
+  if (payload.accept_final !== undefined) throw httpError(400, 'accept_final is per session: use POST /api/send/:session or /api/manager/accept-final/:session');
   if (!Array.isArray(sessions) || !sessions.length || sessions.length > 50) throw httpError(400, 'sessions must be a non-empty array (max 50)');
   if (payload.key === undefined && typeof payload.keys !== 'string') throw httpError(400, 'keys (string) or key required');
   const list = [...new Set(sessions.map(String))];
@@ -2613,7 +2634,7 @@ async function handleHttp(req, res) {
       // records 'owner' itself; cbsession is the default when the caller forgot both (legacy cbsession, manual run).
       const sb = typeof b.started_by === 'string' && b.started_by ? b.started_by : 'cbsession';
       const r = await history.append({ ...b, kind: 'session.started', started_by: sb, tmux_created: typeof b.name === 'string' ? await tmuxCreated(b.name) : null });
-      if (typeof b.name === 'string' && b.name) { goals.forget(b.name); captureGoal(b.name, b.prompt_ref || b.handover_ref, 'cbsession'); }   // goal check: the goal as given at start
+      if (typeof b.name === 'string' && b.name) { reopenFinal(b.name, sb, 'a new session took the name'); goals.forget(b.name); captureGoal(b.name, b.prompt_ref || b.handover_ref, 'cbsession'); }   // goal check: the goal as given at start
       if (typeof b.name === 'string' && b.name) {
         try { sessionMeta.setStartedBy(b.name, sb); } catch (e) { console.error('[history] setStartedBy', e.message); }
       }
@@ -2805,6 +2826,10 @@ async function handleHttp(req, res) {
       const when = payload.when === undefined || payload.when === null ? null : String(payload.when);
       if (!(await sessionExists(session))) throw httpError(404, 'no such session');
       await assertAgentPane(session, by);
+      // accept_final: true — this message IS the acceptance. Recorded before typing, so the stop it causes is already quiet.
+      const accepting = payload.accept_final === true;
+      if (accepting && !isTaskActor(by)) throw httpError(403, 'accept_final needs by: "manager-agent" or the owner');
+      if (accepting && (when !== null || payload.key !== undefined || typeof payload.keys !== 'string' || !payload.keys.trim())) throw httpError(400, 'accept_final goes with a text message sent now (no when, no key); record without a message with POST /api/manager/accept-final/:session');
       // when:'idle' and the pane cannot take free text right now (working, a draft typed, held, paused): park the
       // message instead. The poll loop's tick delivers it at the next idle moment. No `when`: unchanged, typed now.
       if (planSend({ when, ctx: sendCtxOf(session) }).mode === 'queue') {
@@ -2813,9 +2838,14 @@ async function handleHttp(req, res) {
         logEvent({ type: 'send-queued', session, by, id: entry.id, ...(payload.key !== undefined ? { key: String(payload.key).slice(0, 40) } : { text: String(payload.keys || '').slice(0, 200) }) });
         return json(res, 200, { ok: true, queued: true, id: entry.id, session, pending: entry.pending, expiresAt: entry.expiresAt });
       }
-      const out = payload.key !== undefined
-        ? await sendKey(session, String(payload.key))
-        : await sendKeys(session, payload.keys || '', payload.enter !== false);
+      const hadFinal = accepting && finalAccept.has(session);
+      if (accepting) acceptFinal(session, by, payload.keys);
+      let out;
+      try {
+        out = payload.key !== undefined
+          ? await sendKey(session, String(payload.key))
+          : await sendKeys(session, payload.keys || '', payload.enter !== false);
+      } catch (e) { if (accepting && !hadFinal) reopenFinal(session, by, `the accepting message was not sent: ${e.message}`); throw e; }
       logSend(session, by, payload);
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify(out));
@@ -3073,6 +3103,24 @@ async function handleHttp(req, res) {
     }
   }
   if (req.method === 'GET' && p === '/api/quota') return json(res, 200, quota.get());
+  // Accepted final: GET lists; POST /:session {by, note?} records (no message typed, so it also covers a mac: session); DELETE /:session?by= reopens.
+  if (req.method === 'GET' && p === '/api/manager/accept-final') return json(res, 200, { ok: true, accepted: finalAccept.list() });
+  if ((req.method === 'POST' || req.method === 'DELETE') && p.startsWith('/api/manager/accept-final/')) {
+    try {
+      const session = decodeURIComponent(p.slice('/api/manager/accept-final/'.length));
+      if (req.method === 'DELETE') {
+        const by = actorOf({ by: url.searchParams.get('by') });
+        if (!isTaskActor(by)) throw httpError(403, 'only the owner or the manager reopens');
+        if (!finalAccept.has(session)) throw httpError(404, 'no accepted final result for this session');
+        reopenFinal(session, by, 'reopened');
+        return json(res, 200, { ok: true, session });
+      }
+      const body = await readJsonBody(req);
+      if (typeof body.by !== 'string') throw httpError(400, 'by is required: "manager-agent" or "owner"');
+      if (!remote.owns(session) && !(await sessionExists(session))) throw httpError(404, 'no such session');
+      return json(res, 200, { ok: true, session, accepted: acceptFinal(session, actorOf(body), body.note) });
+    } catch (err) { return json(res, err.status || 500, { ok: false, error: err.message }); }
+  }
   if (req.method === 'POST' && p.startsWith('/api/manager/cancel/')) {
     const name = decodeURIComponent(p.slice('/api/manager/cancel/'.length));
     if (!cancelAuto(name)) return json(res, 404, { ok: false, error: 'no pending auto answer' });
@@ -3372,7 +3420,7 @@ const integrationRoutes = createIntegrationRoutes({ deployLive, lane: integratio
 // start() is called below, once the hooks are assigned: a resumed request notifies / deploys at once
 // ===== END INTEGRATION BLOCK =====
 
-const remote = createRemoteStops({ manager: managerApi, dir: join(STATE_DIR, 'leases'), stateDir: STATE_DIR, goalGate, goals,
+const remote = createRemoteStops({ manager: managerApi, dir: join(STATE_DIR, 'leases'), stateDir: STATE_DIR, goalGate, goals, finalAccepted,
   stopFacts: (n, o) => stopFactsImpl(n, o), stateMode: stopStateMode, timeBoxMode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).timeBox; return m === 'live' || m === 'off' ? m : 'dry'; } catch { return 'dry'; } },
   blockedMode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).blockedCheck; return m === 'live' || m === 'off' ? m : 'dry'; } catch { return 'dry'; } },
   viaServe: (req) => ['x-forwarded-for', 'forwarded'].some((h) => req.headers[h] !== undefined) });   // POST /api/remote/v1/stops from the Mac Stop hook (token of a `remote` client)
@@ -3609,6 +3657,7 @@ server.listen(PORT, HOST, async () => {
   integrationOwnJobs = ownJobs;
   setInterval(() => ownJobs.tick().catch((e) => console.error('[own-jobs] tick', e.message)), 20000).unref?.();
   await initManager({
+    finalAccepted,
     onJudgeDown: (a) => push.record({ title: a.title, body: a.body, url: '/', tag: `judge-down-${a.kind}`, priority: 'high' }),
     ownJobs, integration: integrationLane,
     // stop-state.js: the facts behind a stop, from what the harness already knows (own-jobs live child, lane, lease view, session history, the line's time)

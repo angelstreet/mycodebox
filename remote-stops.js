@@ -85,7 +85,7 @@ export function stopText(v) {
 // manager: { observe, sessionOn, setRemoteHooks, cancelAuto, forget, stallOf, triageOf, autoOf, REMOTE_PREFIX }
 // goalGate / goals: goal-check.js createGoalGate / createGoalStore (optional). A done stop the gate questions or bounces is answered with the
 // gate's text at once (no countdown); the manager journals the stop but schedules no answer of its own for it.
-export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goals = null, blockedMode = () => 'dry', stopFacts = null, stateMode = () => 'dry', timeBoxMode = () => 'dry', cidrs = process.env.LEASE_ALLOW_CIDRS, viaServe = () => false, now = Date.now, graceMs = GRACE_MS, pollWaitMs = POLL_WAIT_MS } = {}) {
+export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goals = null, blockedMode = () => 'dry', stopFacts = null, stateMode = () => 'dry', timeBoxMode = () => 'dry', finalAccepted = () => false, cidrs = process.env.LEASE_ALLOW_CIDRS, viaServe = () => false, now = Date.now, graceMs = GRACE_MS, pollWaitMs = POLL_WAIT_MS } = {}) {
   const allow = parseCidrs([...DEFAULT_CIDRS, ...String(cidrs || '').split(',')].join(','));
   const clientsFile = join(dir, 'clients.json');
   const configFile = join(stateDir, 'remote.json');   // { waitS, checkouts: { "<project>": "/abs/path/of/the/local/checkout" } }
@@ -165,6 +165,9 @@ export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goa
   }
   const deliverKey = (name, key, mid = null) => deliver(name, `Go with option ${String(key).slice(0, 8)}.`, mid);
 
+  // an accepted final result (final-accept.js): no check answers this session's stops; the manager keeps the stop quiet itself
+  const checksOn = (name) => manager.sessionOn(name) && !finalAccepted(name);
+
   async function ingest(v, client) {
     const t = now();
     { try { const f = join(stateDir, 'remote-hooks-seen.json'); let o = {}; try { o = JSON.parse(fs.readFileSync(f, 'utf8')); } catch {} o[v.machine] = { hook_sha: v.hook_sha || null, at: new Date(t).toISOString() }; fs.writeFileSync(f, JSON.stringify(o)); } catch { /* best effort */ } }
@@ -182,7 +185,7 @@ export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goa
     // Deterministic done check (harness-done-honest 2026-11-11, the same words as done-check.js (F)): a done line that says the work is not done, or
     // lacks `goal: achieved` + evidence, is answered at once through the hook; it only refuses a done line, so it is live. Once per done line.
     let refusal = null;
-    if (!v.stop_hook_active && manager.sessionOn(name)) {
+    if (!v.stop_hook_active && checksOn(name)) {
       const stx = stopText(v), line = lastStatus(stx)?.line || '';
       const goal = (() => { try { return goals?.get(name)?.goal || ''; } catch { return ''; } })();
       const f = doneButFailedOf(stx, goal);
@@ -191,12 +194,12 @@ export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goa
     }
     // done only with nothing open (owner 2026-11-12): a done line whose closing review lists leftovers or anything unverified is refused once per line
     // (two or more filed ids alone are left to the fix-first push of the goal check, which names each bug's reason)
-    if (!refusal && !v.stop_hook_active && manager.sessionOn(name)) {
+    if (!refusal && !v.stop_hook_active && checksOn(name)) {
       const stx = stopText(v), od = doneWithOpenOf(stx), sig = createHash('sha1').update(lastStatus(stx)?.line || '').digest('hex').slice(0, 12);
       if (od && !(od.ids >= 2 && od.open.length === 1) && s.openSig !== sig) { s.openSig = sig; refusal = { kind: 'done-with-open', message: doneWithOpenMessage(od) }; }
     }
     // blocked is not a wait (owner 2026-11-11 evening): once per line; dry (journal only) until manager.json blockedCheck is live
-    if (!refusal && !v.stop_hook_active && manager.sessionOn(name)) {
+    if (!refusal && !v.stop_hook_active && checksOn(name)) {
       const stx = stopText(v), ff = failedHonestyOf(stx), bf = ff ? { running: [], missing: ff.missing, text: ff.text } : blockedHonestyOf(stx), sig = createHash('sha1').update(lastStatus(stx)?.line || '').digest('hex').slice(0, 12);
       if (bf && s.blockedSig !== sig) {
         s.blockedSig = sig;
@@ -209,7 +212,7 @@ export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goa
     // (server.js stopFacts). Journal said / computed to stop-state.jsonl; live: a done / blocked / failed line that is really running / waiting is answered
     // through the hook with the restate message (once per line) and the goal question is not asked of it.
     let stateWaiting = false;
-    if (stopFacts && stateMode() !== 'off' && !v.stop_hook_active && manager.sessionOn(name)) {
+    if (stopFacts && stateMode() !== 'off' && !v.stop_hook_active && checksOn(name)) {
       try {
         const stx = stopText(v), ls = lastStatus(stx), said = ls?.kind || '';
         const c = computeStopState({ said, facts: await stopFacts(name, { text: ls?.text || '' }) });
@@ -224,7 +227,7 @@ export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goa
     // Goal first, verification last (docs/GOAL-RULE.md): a done line needs a `Verification:` block with one row per stored Done-when line, every row pass
     // (rows journalled to verification.jsonl); a Mac session past its time box is told once at its next stop (dry: journal only).
     let verified = false;
-    if (goals && !v.stop_hook_active && manager.sessionOn(name)) {
+    if (goals && !v.stop_hook_active && checksOn(name)) {
       try {
         const entry = goals.get(name), stx = stopText(v), ls = lastStatus(stx), vj = (o) => { try { fs.appendFileSync(join(stateDir, 'verification.jsonl'), JSON.stringify({ at: new Date(t).toISOString(), session: name, ...o }) + '\n'); } catch {} };
         const sig = createHash('sha1').update(ls?.line || stx.slice(-200)).digest('hex').slice(0, 12);
@@ -238,9 +241,9 @@ export function createRemoteStops({ manager, dir, stateDir, goalGate = null, goa
       } catch (e) { console.error('[remote] verification', e.message); }
     }
     let gate = null;
-    if (goalGate && !refusal && !stateWaiting && !verified && manager.sessionOn(name)) { try { gate = await goalGate.evaluate({ name, text: stopText(v), doneAt: t, remote: true, canAnswer: !v.stop_hook_active }); } catch (e) { console.error('[remote] goal gate', e.message); } }
+    if (goalGate && !refusal && !stateWaiting && !verified && checksOn(name)) { try { gate = await goalGate.evaluate({ name, text: stopText(v), doneAt: t, remote: true, canAnswer: !v.stop_hook_active }); } catch (e) { console.error('[remote] goal gate', e.message); } }
     // the goal check had nothing to say (not wired, or this done turn was already handled): a done line without `goal: achieved` + evidence is still refused, once per line
-    if (!refusal && !gate && !v.stop_hook_active && manager.sessionOn(name)) {
+    if (!refusal && !gate && !v.stop_hook_active && checksOn(name)) {
       const stx = stopText(v), g = doneWithoutGoalOf(stx), sig = createHash('sha1').update(lastStatus(stx)?.line || '').digest('hex').slice(0, 12);
       if (g && s.honestSig !== sig) { s.honestSig = sig; refusal = { kind: 'done-without-goal', message: doneWithoutGoalMessage(g) }; }
     }

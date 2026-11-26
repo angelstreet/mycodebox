@@ -243,16 +243,19 @@ export function uncommittedOf(porcelain) {
 }
 
 export function createDoneCheck({
-  stateDir, git, listDone, send: sendRaw, record = async () => {}, equivalentOf = async () => null, goalOf = async () => '', mode = () => 'live', home = process.env.HOME || '',
+  stateDir, git, listDone: listDoneAll, send: sendRaw, record = async () => {}, equivalentOf = async () => null, goalOf = async () => '', mode = () => 'live', home = process.env.HOME || '',
   pressure = () => ({ loadPerCore: 0, ramAvailPct: 100 }), now = Date.now, pollMs = POLL_MS, log = console, ignoreBranches = () => DEFAULT_IGNORE_BRANCHES,
   pendingLiveOf = async () => [],   // (P) the session's deployed integrations that are not live yet: [{ id, deployId, truth }] (deploy-live.js)
   integrationsOf = async () => [],   // (O) the session's merged lane requests: [{ id, repo, branch, files, subjects }]
   goalGate = null,   // goal-check.js createGoalGate: (H) below
-  goalEntryOf = () => null, listSessions = async () => [], timeBoxMode = () => 'dry', draftNow = async () => false,   // (K) Verification block per stored Done-when line; (L) time box wake (dry first)
+  goalEntryOf = () => null, listSessions: listSessionsAll = async () => [], timeBoxMode = () => 'dry', draftNow = async () => false,   // (K) Verification block per stored Done-when line; (L) time box wake (dry first)
   stopFacts = null, stateMode = () => 'dry',   // (J) a done line while the harness sees a running / waiting fact: not accepted as done (stop-state.js); dry until manager.json stopState is live
+  finalAccepted = () => false,   // (final-accept.js) the manager / owner accepted this session's result as final: no check sends or records anything for it
   proofMode = () => 'live', proofStat,   // (P) proof by risk (proof-risk.js): headless e2e on the deployed URL for a UI fix / feature; manager.json proofRisk
-  listBlocked = async () => [], blockedMode = () => 'dry',   // (I) blocked is not a wait: dry (journal only) until the owner switches manager.json blockedCheck to live
+  listBlocked: listBlockedAll = async () => [], blockedMode = () => 'dry',   // (I) blocked is not a wait: dry (journal only) until the owner switches manager.json blockedCheck to live
 } = {}) {
+  const unaccepted = (list) => async () => (await list()).filter((s) => !finalAccepted(s.name));
+  const listDone = unaccepted(listDoneAll), listBlocked = unaccepted(listBlockedAll), listSessions = unaccepted(listSessionsAll);
   const stFile = join(stateDir, 'done-check.json');
   const journal = join(stateDir, 'done-check.jsonl');
   const fetchedAt = new Map();   // repo common dir -> ms
