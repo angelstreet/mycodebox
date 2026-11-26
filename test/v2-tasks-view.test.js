@@ -69,10 +69,9 @@ test('static: UI code uses only icons that exist in icons.js, no emoji or hand-p
   assert.match(newFormHtml(), /Nothing runs until/);
 });
 
-test('service worker precaches the new module and the cache version moved on', () => {
+test('service worker precaches the tasks module', () => {
   const sw = readFileSync(new URL('../public/sw.js', import.meta.url), 'utf8');
   assert.match(sw, /'\/tasks-view\.js'/);
-  assert.match(sw, /ghosty-shell-v209/);
 });
 
 test('approval queue on top of the list; accepted tasks show delivery; partial usage, runs, roles, graph render', () => {

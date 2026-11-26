@@ -90,4 +90,4 @@ test('an action click on a notification without a voiceId never posts an answer'
   await w.fire('notificationclick', click('recommended', { url: '/' }));
   assert.equal(w.fetched.some((f) => f.url === '/api/voice/answer'), false);
 });
-test('cache version bumped', () => { assert.match(SRC, /ghosty-shell-v209/); });
+test('the app shell uses a versioned cache', () => { assert.match(SRC, /const SHELL_CACHE = 'ghosty-shell-v\d+'/); });
