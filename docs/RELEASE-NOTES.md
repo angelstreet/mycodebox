@@ -31,6 +31,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The dock shows the model for a session with many subagents** — the model was read from the last 12 pane lines, so subagent lines under Claude's footer hid it and the label under the input showed only `Claude`; the footer line is now found in the last 40 lines · area: dock
+
 - **The harness sees real background tasks, also after a restart** — the parked wake and the stop facts asked the reporter for a count it never returned, and a server restart forgot every session's background tasks and scheduled wakeups. Both are fixed; the count never overrules a turn that ended on `done`, `needs-owner`, `blocked` or another hand-over line · area: manager
 
 - **An accepted done is no longer woken by its time box** — a finished session that answered a notice with `STATUS: acknowledged` was told its time box had run out, because only the latest STATUS word was read. A done that passed the checks now closes that task's box, on codebox and Mac sessions · area: harness

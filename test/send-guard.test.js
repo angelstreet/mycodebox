@@ -100,7 +100,7 @@ test('agentFromArgs: shells and sleep do not match any agent', () => {
 // Display-only signals for the green "working" badge: MiniMax/Codex footers that don't
 // go through the Claude Stop hook, and script-wrapped `claude -p` / `sleep` children.
 
-import { paneBackgroundOf, scriptBusyOf, interactiveAgentOf } from '../api-extras.js';
+import { footerModelOf, paneBackgroundOf, scriptBusyOf, interactiveAgentOf } from '../api-extras.js';
 
 test('paneBackgroundOf: a MiniMax "Tasks · 1 background active" footer counts', () => {
   const lines = [
@@ -321,4 +321,11 @@ test('shouldRefuse: non-owner on a pane with an interactive agent + background m
 test('paneBackgroundOf: Claude footer "1 shell still running" / "1 shell · ↓ to manage" counts', () => {
   assert.equal(paneBackgroundOf(['✻ Cooked for 6m 57s · done 10:50 PM · 1 shell still running', '❯ ', '  ⏵⏵ bypass permissions on · 1 shell · ↓ to manage']), true);
   assert.equal(paneBackgroundOf(['❯ ', '  ⏵⏵ bypass permissions on (shift+tab to cycle) · ⧉ 3']), false);
+});
+
+test('footerModelOf: finds the Claude footer model line under many subagent lines, ignores prose', () => {
+  const sub = Array.from({ length: 15 }, (_, i) => `  ◯ general-purpose  task ${i}`);
+  assert.equal(footerModelOf(['  Fable 5.2 wk 80%', ...sub, '  ⏵⏵ bypass permissions on']), 'Fable 5.2');
+  assert.equal(footerModelOf(['  Opus 5.5 5h 2% wk 0%']), 'Opus 5.5');
+  assert.equal(footerModelOf(['Opus 5.5 is the model I use here', 'plain']), null);
 });
