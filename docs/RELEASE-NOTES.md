@@ -35,6 +35,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A session that says done with suggestions still open is told to end on the question** — ghosty's closing STATUS line wrapped over 8 pane rows (one cut short before a long URL); `statusLine` followed at most 6 rows of at least 60 characters, so the stop read as "no STATUS line", the done check skipped it, and the push that makes a session with open suggestions end on `STATUS: needs-owner: improvement suggestions ...` never went out: the pane said done, the LED was red. A wrapped STATUS line is now followed for up to 12 rows, and a row cut short because the next word (a URL, a path) did not fit counts as wrapped · area: stall
+
 - **A manager-started session's startup prompt no longer reaches you** — the server learned who started a session only once its agent was up, so a confirmation prompt in those seconds was queued in your digest; `cbsession` now records a manager start before the tmux session exists · area: manager harness
 
 - **"do 1 and 2" answers a second round of suggestions by the numbers the session showed** — ghosty listed two new suggestions as "1." and "2."; the ledger keeps one numbering per session, so they were items 5 and 6, and the owner's "ok do 1 and 2" read as items 1 and 2 (1 already answered) and recorded nothing: the finished session stayed red. The ledger now remembers the numbers of the latest list: a reply that reads only one way takes it, one that reads both ways differently records nothing and asks the owner in the feed · area: suggestions

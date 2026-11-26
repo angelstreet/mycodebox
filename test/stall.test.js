@@ -623,3 +623,23 @@ test('the stop carries the STATUS word the owner-asks resolver reads (bug-71b3ff
   assert.equal(classify(claude('Waiting.\n\nSTATUS: waiting: integration int-1')).status, 'waiting');
   assert.equal(classify(claude('Finished the work, tests pass.')).status, undefined, 'no STATUS: nothing resolves an ask');
 });
+
+test('a STATUS line wrapped over 8 rows, one cut short before a long URL, is still the verdict (2026-11-26)', () => {
+  const rows = [
+    '  tests exceed 6 cores. The dashboard still answers in 5-20 ms.',
+    '  STATUS: done — image link opens, tesseract runs 1 thread, the lane UI review is under the cap, and the placer self-heals a failed',
+    '  scope · goal: achieved · evidence: int-aaaaaaaaaaaaaaaaa at 1111111111, int-bbbbbbbbbbbbbbbbb at 2222222222,',
+    '  int-ccccccccccccccccc at 3333333333, headless Playwright on',
+    '  https://<tailscale-ip>:7443/files/tmp/example-shots/tablet-example-device-latest.jpg (screenshot',
+    '  /tmp/example/shots/tmp-image-link.png), tests slice 2.3 cores, wrapper 1 thread · closing review: docs RELEASE-NOTES.md,',
+    '  ~/EXAMPLE_TROUBLESHOOTING.md · leftovers none · unverified: a click on the link inside the reader itself, since the reply that',
+    '  held it has scrolled away (I checked the URL the reader builds and the served file) · bugs: none — found and fixed inside their',
+    '  own tasks',
+  ];
+  const v = statusLine(rows);
+  assert.equal(v?.kind, 'done');
+  assert.match(v.text, /^image link opens/);
+  assert.match(v.text, /bugs: none/);
+  // a short row that is a paragraph end (the next word would have fit) still stops the walk
+  assert.equal(statusLine(['STATUS: done — old verdict of an earlier turn, quoted at full pane width for this test', 'Short end.', 'Then a new paragraph that is not a status line at all, written at the full pane width,', 'and its second row, also long enough to look like a wrapped row of it.', 'Last row.']), null);
+});

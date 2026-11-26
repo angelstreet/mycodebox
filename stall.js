@@ -959,13 +959,22 @@ const DONE_ALIASES = new Set(['acknowledged', 'ack', 'noted', 'ok', 'shipped', '
 const TODO_PANEL_END_RE = /\b\d+\/\d+ done\b[^\n]*(?:pending|Ctrl\+T)|^\s*…\s*\+\d+ more\b/;
 // A long STATUS line wraps in the pane: "STATUS: done — ... deployed to" / "the frontend, ..." / "appear · bugs: none".
 // Read from the last 3 rows only, it was missed and the heuristics made "Reload the page." above it an owner action (2026-10-31).
-// A row continues the one above when that row is pane-wide (a short row ends its paragraph).
-const WRAP_MIN = 60, MAX_WRAP_ROWS = 6;
+// A row continues the one above when that row is pane-wide (a short row ends its paragraph), or ended early because the next row's first
+// word (a URL, a path) did not fit on it. 2026-11-26: a closing review with evidence wrapped over 8 rows, one of them cut short before a
+// URL; read as no STATUS line, the done check skipped the session and its open suggestions were never asked (done text, red LED).
+const WRAP_MIN = 60, MAX_WRAP_ROWS = 12;
+const wrapsInto = (row, next, width) => {
+  const r = row.trim();
+  if (r.length >= WRAP_MIN) return true;
+  const word = String(next || '').trim().split(/\s+/)[0] || '';
+  return r.length >= 20 && word.length >= 20 && r.length + 1 + word.length > width;
+};
 export function statusLine(lines) {
   const panel = lines.slice(-4).some((l) => TODO_PANEL_END_RE.test(l));   // the STATUS line sits above the panel (and its "◐ Tasks · 1 agent active" line)
   const rows = lines.slice(panel ? -14 : -3);
   if (!panel) {
-    for (let i = lines.length - 1, n = 0; i > 0 && n < MAX_WRAP_ROWS && lines[i - 1].trim().length >= WRAP_MIN; i--, n++) {
+    const width = Math.max(WRAP_MIN, ...lines.slice(-(MAX_WRAP_ROWS + 1)).map((l) => l.trim().length));
+    for (let i = lines.length - 1, n = 0; i > 0 && n < MAX_WRAP_ROWS && wrapsInto(lines[i - 1], lines[i], width); i--, n++) {
       if (!STATUS_LINE_RE.test(lines[i - 1])) continue;
       if (i - 1 < lines.length - 3) rows.unshift(lines.slice(i - 1).map((l) => l.trim()).join(' '));
       break;
