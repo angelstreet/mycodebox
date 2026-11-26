@@ -35,6 +35,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The lane's UI review is capped with the tests, and OCR runs one thread per tesseract** — vite, esbuild and the headless Chrome of the UI review gate ran uncapped in `ghosty-sessions.service` (1.7 cores while the tests slice was empty); the placer now moves them to `cb-lane.scope` (tests slice, 4-core cap). `scripts/codebox-tesseract` (installed as `~/.local/bin/tesseract`) sets `OMP_THREAD_LIMIT=1`, so two OCR runs no longer mean eight runnable threads · area: codebox cpu
+
 - **A picture an agent saved in /tmp opens from the reader** — the link to `/tmp/vpt-shots/…jpg` answered 403 (only the home folder and the Claude scratchpads were served); media files this user owns under `/tmp` are served too, never through a hidden folder or a non-media type · area: reader
 
 - **A new Claude session no longer loses its first turn's report** — the reporter plugin's first send can take over 800 ms on a cold start, which it read as "ghosty is down" and stayed silent for 30 s, dropping the first prompt and turn end. A send that answers late now ends the silence. Also documented: on Team / Enterprise accounts Claude Code's `cc-plugin-sec-default` skips every `classic.*` plugin hook (organisation policy, not changed here); the done check works there from `turn.end` (`test/team-account-reporter.test.js`), what is missing and the one admin setting are in REFERENCE "Session reporter" · area: reporter
