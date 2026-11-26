@@ -4825,7 +4825,7 @@ function syncDock() {
 // provider · model of the send target, bottom right under the input like the Claude Code app (owner 2026-11-06)
 const PROVIDER_LABEL = { claude: 'Claude', codex: 'Codex', minimax: 'MiniMax' };
 function syncDockModel(n) {
-  const a = n ? agentOf(n) : '', m = n ? (state.status[n] || {}).model || '' : '';
+  const a = n ? agentOf(n) : '', st = n ? state.status[n] || {} : {}, m = [st.model, st.effort].filter(Boolean).join(' \u00b7 ');   // "Fable 5.2 · medium"
   const html = PROVIDER_LABEL[a] ? `<span class="dp ${a}">${PROVIDER_LABEL[a]}</span>${m ? `<span class="dm">${escapeHtml(m)}</span>` : ''}` : '';
   if (dk.dmodel.dataset.h === html) return;
   dk.dmodel.dataset.h = html;

@@ -329,3 +329,16 @@ test('footerModelOf: finds the Claude footer model line under many subagent line
   assert.equal(footerModelOf(['  Opus 5.5 5h 2% wk 0%']), 'Opus 5.5');
   assert.equal(footerModelOf(['Opus 5.5 is the model I use here', 'plain']), null);
 });
+
+import { effortOf } from '../conversation.js';
+import { writeFileSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join as pjoin } from 'node:path';
+test('effortOf: the last "effort" in the session file tail, null without one', async () => {
+  const d = mkdtempSync(pjoin(tmpdir(), 'eff-')), f = pjoin(d, 's.jsonl');
+  writeFileSync(f, '{"type":"x","effort":"low"}\n{"shape":{"effort":"high"}}\n{"type":"y"}\n');
+  assert.equal(await effortOf(f), 'high');
+  writeFileSync(f, '{"type":"y"}\n');
+  assert.equal(await effortOf(f), null);
+  assert.equal(await effortOf(pjoin(d, 'missing.jsonl')), null);
+});
