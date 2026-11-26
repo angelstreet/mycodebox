@@ -35,6 +35,10 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A session with open suggestions is told first, and nothing else** — the push that makes a session with unanswered suggestions end on `STATUS: needs-owner: improvement suggestions ...` sat behind the proof, closing-review and load gates of the done check and reached ghosty 7 min late. It now runs first, without the load gate, and while items are open no other done check types into the session (owner 2026-11-26: "if there is suggestion open we cannot be on done") · area: done check
+
+- **A finished turn keeps its exact text after 10 quiet minutes** — the reporter counted as live only within 10 min of its last event, so a finished (silent) session fell back to the pane scrape, where a long STATUS line wraps and was missed (ghosty read done at 12:32 and "no STATUS line" later). `turnForStop` now holds the turn until a newer prompt, the session's end or the stop ending; other reporter reads keep the 10 min window · area: reporter
+
 - **A manager that could not update its manual now says so, and mockups of manager-started sessions go to the manager** — `manager-fresh.sh` ignored a failed manual checkout (and skipped it for a dead manager): it now raises `manual:update-failed` and warns in the kickoff, which also no longer says "never close a session". A manager-started session's mockup is no longer put in your feed; the manager can object · area: manager harness
 
 - **A session that says done with suggestions still open is told to end on the question** — ghosty's closing STATUS line wrapped over 8 pane rows (one cut short before a long URL); `statusLine` followed at most 6 rows of at least 60 characters, so the stop read as "no STATUS line", the done check skipped it, and the push that makes a session with open suggestions end on `STATUS: needs-owner: improvement suggestions ...` never went out: the pane said done, the LED was red. A wrapped STATUS line is now followed for up to 12 rows, and a row cut short because the next word (a URL, a path) did not fit counts as wrapped · area: stall

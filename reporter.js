@@ -178,13 +178,17 @@ export function createReporter({ stateDir, now = () => Date.now(), saveMs = SAVE
   }
 
   const liveOf = (s) => !!s && s.live && now() - s.reporterSeenAt < LIVE_MS;
+  const attached = (s) => !!s && s.live;   // no session.end seen, however long it has been quiet
 
   // The newest finished turn of this session if it belongs to the current stop. `stopSince` = when the
   // manager first saw the session stopped. A newer prompt than the turn, or a turn that ended long before
   // the stop began, belongs to something else.
+  // Not liveOf: a finished session is silent by nature, and after LIVE_MS its turn fell back to the pane scrape, where a long STATUS line
+  // wraps and was missed (2026-11-26 ghosty: no_status, its open suggestions never pushed). The turn stays until a newer prompt, the
+  // session's end, or the manager ending the stop (the pane worked again).
   function turnForStop(name, stopSince) {
     const s = sessions.get(name);
-    if (!liveOf(s) || !s.lastTurn) return null;
+    if (!attached(s) || !s.lastTurn) return null;
     const lt = s.lastTurn;
     if (s.lastPrompt && s.lastPrompt.at > lt.at) return null;
     if (stopSince && lt.at < stopSince - 20000) return null;
@@ -268,5 +272,5 @@ export function createReporter({ stateDir, now = () => Date.now(), saveMs = SAVE
   // true = the agent's own hook delivers parked notes, so ghosty never appends them to a message
   const takesNotes = (name) => !!sessions.get(name)?.takesNotes;
 
-  return { init, flush, tokenOk, ingest, takesNotes, summary, detail, meterOf, turnForStop, waitingNow, promptSince, activityOf, prune, lastActivity, liveOf: (n) => liveOf(sessions.get(n)), tokenFile };
+  return { init, flush, tokenOk, ingest, takesNotes, summary, detail, meterOf, turnForStop, waitingNow, promptSince, activityOf, prune, lastActivity, liveOf: (n) => liveOf(sessions.get(n)), attached: (n) => attached(sessions.get(n)), tokenFile };
 }
