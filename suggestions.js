@@ -29,9 +29,22 @@ const END_HEAD = /^\s*(?:recommendation|should i\b|leftovers?\b|verification\b|s
 // Pure. `no suggestions` on a line of its own (the only answer that leaves a session done).
 export const saysNoSuggestions = (text) => unmark(text).split('\n').some((l) => /^\s*(?:[-•>⏺●]\s*)?(?:\(b\)\s*|suggestions?\s*:\s*)?no suggestions\s*\.?\s*$/i.test(l));
 
+// A pane's closing text can still hold tool calls and their output (a command that printed a list was read as the agent's own, 2026-11-26): only what
+// follows the last one is the agent speaking. Same rule as stall.js agentTextStart; a collapsed call shows its mark in the middle of a line.
+const TOOL_CALL = /^\s*(?:[⏺●•]\s+)?(?:Bash|Read|Edit|Write|MultiEdit|Update|Grep|Glob|Search|List|Task|Agent|WebFetch|WebSearch|TodoWrite|NotebookEdit|Skill|Monitor|mcp__[\w-]+)\(/;
+export function agentWords(text) {
+  const lines = String(text || '').split('\n');
+  let k = -1;
+  lines.forEach((l, i) => { if (TOOL_CALL.test(l) || l.includes('⎿')) k = i; });
+  if (k < 0) return lines.join('\n');
+  let i = k + 1;
+  if (lines[k].includes('⎿')) while (i < lines.length && /^\s{4,}\S/.test(lines[i])) i++;
+  return lines.slice(i).join('\n');
+}
+
 // Pure. text: a closing text -> [{ num, tier, text }] for every suggestion listed in it.
 export function suggestionsIn(text) {
-  const lines = unmark(text).split('\n');
+  const lines = unmark(agentWords(text)).split('\n');
   const out = [];
   let open = null;   // { tier, blank, base }
   const push = (num, t) => { const s = t.replace(/\s+/g, ' ').trim(); if (s && !NOTHING.test(s)) out.push({ num, tier: open.tier, text: s.slice(0, 300) }); };
@@ -180,6 +193,7 @@ export function createSuggestions({ stateDir, now = Date.now, active = () => tru
   // The harness sent (or relayed) the reflection question after an accepted done; sig: the text of that done turn.
   function asked(name, text) {
     const r = ensure(name);
+    for (const i of r.items) if (i.answer === 'yes') i.built = true;   // the question follows an accepted done: the approved work is finished
     r.asked = { at: now(), sig: textSig(text) };
     delete r.clear;
     seen.delete(name);
@@ -197,12 +211,10 @@ export function createSuggestions({ stateDir, now = Date.now, active = () => tru
     }
     if (!answered.length) return { answered, open: openOf(r).length, approved: [] };
     note({ session: name, answered: answered.map((i) => ({ n: i.n, answer: i.answer })), via });
-    let approved = [];
-    if (!openOf(r).length) {
-      approved = r.items.filter((i) => i.answer === 'yes' && !i.round);
-      for (const i of approved) i.round = true;
-      r.clear = { at: now(), how: 'answered' };
-    }
+    // a new yes starts its work at once, together with the approved items not finished yet (so none drops out of the Done-when list)
+    const unbuilt = r.items.filter((i) => i.answer === 'yes' && !i.built);
+    const approved = answered.some((i) => i.answer === 'yes') ? unbuilt : [];
+    if (!openOf(r).length) { if (unbuilt.length) delete r.clear; else r.clear = { at: now(), how: 'answered' }; }
     save();
     if (r.clear) resolved(name, 'answered');
     return { answered, open: openOf(r).length, approved };

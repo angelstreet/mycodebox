@@ -20,7 +20,7 @@ function run(bin, args, env) {
 }
 async function boot({ tamper = false, lane = {} } = {}) {
   const state = tmp('cs-state-'), served = tmp('cs-served-');
-  for (const n of ['integrate', 'found-bug']) copyFileSync(join(SCRIPTS, n), join(served, n));
+  for (const n of ['integrate', 'found-bug', 'mac-stop-hook.sh']) copyFileSync(join(SCRIPTS, n), join(served, n));
   const mf0 = manifest(served);   // the manifest sha is of the real file; a tampered body then fails the client's check
   mkdirSync(join(state, 'leases'), { recursive: true });
   writeFileSync(join(state, 'leases', 'clients.json'), JSON.stringify({ clients: [{ name: 'mac-t', sha256: hashToken(TOKEN), exemptAgents: [], integrate: true }] }));
@@ -108,3 +108,24 @@ test('found-bug prints ONE drift line after filing when its version is older', a
     assert.doesNotMatch(cur.stdout, /client scripts are old/);
   } finally { await b.close(); }
 });
+
+// the Stop hook was copied by hand (2026-11-26): self-update now refreshes an installed copy, with a backup, and installs none where there is none
+for (const [tool, args] of [['integrate', ['self-update']], ['found-bug', ['--self-update']]]) {
+  test(`${tool} self-update refreshes an installed Stop hook and leaves a machine without one alone`, async () => {
+    const b = await boot(), c = client();
+    try {
+      const without = await run(join(SCRIPTS, tool), args, c.env(b.url));
+      assert.equal(without.code, 0, without.stderr);
+      assert.ok(!existsSync(join(c.home, 'bin', 'mycodebox-stop-hook.sh')) || c.bin !== join(c.home, 'bin'));
+      const hook = join(c.home, 'hooks', 'stop.sh');
+      mkdirSync(dirname(hook), { recursive: true }); writeFileSync(hook, '#!/bin/sh\n# an old copy\n');
+      const r = await run(join(SCRIPTS, tool), args, { ...c.env(b.url), MYCODEBOX_HOOK_PATH: hook });
+      assert.equal(r.code, 0, r.stderr);
+      assert.match(r.stdout, /updated the Stop hook/);
+      assert.equal(readFileSync(hook, 'utf8'), readFileSync(join(SCRIPTS, 'mac-stop-hook.sh'), 'utf8'));
+      assert.match(readFileSync(`${hook}.bak`, 'utf8'), /an old copy/);
+      assert.doesNotMatch((await run(join(SCRIPTS, tool), args, { ...c.env(b.url), MYCODEBOX_HOOK_PATH: hook })).stdout, /updated the Stop hook/);
+    } finally { await b.close(); }
+  });
+}
+

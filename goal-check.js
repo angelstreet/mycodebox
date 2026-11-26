@@ -20,7 +20,7 @@ import { createHash } from 'node:crypto';
 import { lastStatus, goalOf, timeBoxOf, MACHINE_TEXT_RE, doneButFailedOf, proofWithoutEvidenceOf, doneWithOpenOf, verificationOf } from './status-honesty.js';
 import { leftoverItemsOf } from './done-check.js';
 import { reflectionQuestion, openSuggestionsMessage, missingReplyMessage } from './reflection.js';
-import { createSuggestions } from './suggestions.js';
+import { createSuggestions, answersOf } from './suggestions.js';
 
 export const BOUNCES_PER_DAY = 2;
 const DONE_KINDS = new Set(['done', 'ok', 'complete', 'completed', 'finished', 'shipped']);
@@ -173,10 +173,16 @@ export async function approvedRound({ goals, gate, ledger, name, approved }) {
   if (!approved?.length) return null;
   const list = approved.slice(0, 8);
   goals.forget(name);
-  const entry = goals.capture(name, `Goal: build the improvement suggestions the owner approved (${list.map((i) => i.n).join(', ')}): ${list.map((i) => i.text).join(' / ')}\nDone when:\n${list.map((i, k) => `${k + 1}. suggestion ${i.n}: ${i.text.replace(/:/g, ' -')}`).join('\n')}`, 'suggestions');
+  const entry = goals.capture(name, `Goal: build the improvement suggestions the owner approved (${list.map((i) => i.n).join(', ')}): ${list.map((i) => i.text).join(' / ')}\nDone when:\n${list.map((i, k) => `${k + 1}. suggestion ${i.n} - ${i.text.replace(/:/g, ' -')}`).join('\n')}`, 'suggestions');
   await gate.drop(name);
   ledger.newRound(name);
   return entry;
+}
+
+// Pure. Is this prompt a task a goal check can quote? Not a command, a yes / no, or a few words of steering ("continue", "ok do it").
+export function worthAGoal(text) {
+  const t = String(text || '').trim();
+  return t.length >= 25 && !/^[/!#]/.test(t) && !MACHINE_TEXT_RE.test(t) && t.split(/\s+/).length >= 5 && !answersOf(t, [1, 2, 3, 4, 5, 6, 7, 8, 9]);
 }
 
 // ---- the goal store: captured at session start ----
@@ -188,14 +194,15 @@ export function createGoalStore({ stateDir, now = Date.now } = {}) {
     file,
     get: (name) => load()[name] || null,
     // prompt: the first prompt / handover text. -> the stored entry or null.
-    capture(name, prompt, source = 'prompt') {
+    // goalOnly: no Done-when parts from it (a prompt typed mid-session is not a brief: its numbered lines must not demand a Verification block)
+    capture(name, prompt, source = 'prompt', { goalOnly = false } = {}) {
       if (!name || !prompt) return null;
       const goal = goalOf(prompt);
       if (!goal) return null;
       const all = load(), prev = all[name];
       const explicit = /^\s*(?:[*_#>\s]*)goal\s*:/im.test(String(prompt));
       if (prev && !MACHINE_TEXT_RE.test(String(prev.goal || '')) && !(explicit && !prev.explicit)) return prev;   // a stored machine message is replaced by the first real prompt
-      all[name] = { goal, parts: taskPartsOf(prompt), timeBoxMs: timeBoxOf(prompt), source, explicit, at: new Date(now()).toISOString() };
+      all[name] = { goal, parts: goalOnly ? [] : taskPartsOf(prompt), timeBoxMs: goalOnly ? null : timeBoxOf(prompt), source, explicit, at: new Date(now()).toISOString() };
       const keys = Object.keys(all);
       for (const k of keys.slice(0, Math.max(0, keys.length - 2000))) delete all[k];   // bounded
       try { mkdirSync(stateDir, { recursive: true }); writeFileSync(file, JSON.stringify(all)); } catch { /* best effort */ }

@@ -128,7 +128,7 @@ import { createProgressWatch } from './progress-watch.js';
 import { createSharedCheckoutGuard, expandHome } from './shared-checkout-guard.js';
 import { createFoundBugs, sessionOfRequest, unreportedBugOf, sendBackOf, sendBackText, sweepGroups, equivalentFreeOf } from './found-bugs.js';
 import { goalOf as goalOfPrompt, blockedOrUnknownStatus, lastStatus } from './status-honesty.js';
-import { createGoalGate, createGoalStore, approvedRound } from './goal-check.js';
+import { createGoalGate, createGoalStore, approvedRound, worthAGoal } from './goal-check.js';
 import { createSuggestions, createTypedLog, isOwnerTyped, answersOf } from './suggestions.js';
 import { createFinalAccept, isTaskActor, isTaskMessage } from './final-accept.js';
 import { createDoneCheck, closingTextOf, DEFAULT_IGNORE_BRANCHES, shipOfferOf, unconfirmedStatusOf, waitingOnLeaseStatus } from './done-check.js';
@@ -1218,6 +1218,11 @@ function promptTextOf(ref) {
   return r;
 }
 function captureGoal(name, ref, source) { try { const t = promptTextOf(ref); if (name && t) goals.capture(name, t, source); } catch (e) { console.error('[goals] capture', e.message); } }
+// A session started without a prompt had no goal for the goal check to quote ("ghosty", 2026-11-26): the first task the owner types becomes it.
+async function goalFromOwner(name, text) {
+  if (!name || !worthAGoal(text) || loadOwnerHiddenSessions().includes(name) || await goalForSession(name)) return;
+  if (!goals.get(name)) goals.capture(name, text, 'first-owner-prompt', { goalOnly: true });
+}
 // The goal of a session: captured at start, else the cbsession prompt file, else the history's prompt / handover, else the task doc title.
 async function goalForSession(name) {
   const g = goals.get(name);
@@ -1828,6 +1833,9 @@ async function pollOnce() {
     const stallNow = isAgent && !offline ? stallOf(s.name) : null;
     if (stallNow && state === 'done') noteSuggestions(s.name, closingTextOf(stallNow), t.doneAt);
     const held = isAgent && !offline && state !== 'working' ? suggestionHold(s.name, stallNow ? closingTextOf(stallNow) : doneText, t.doneAt) : null;
+
+    // a finished turn that waits for its question: the done check runs early instead of at its next 5-minute tick
+    if (held?.state === 'pending' && stallNow && t.askedSoon !== t.doneAt) { t.askedSoon = t.doneAt; doneCheck.soon(); }
 
     status[s.name] = {
       state, agent, agentCmd, waitReason,
@@ -2632,8 +2640,11 @@ async function handleHttp(req, res) {
     try {
       const body = await readJsonBody(req);
       const r = reporter.ingest(body);
-      if (r?.ok !== false && body?.event === 'prompt' && body.synthetic !== true && typeof body.text === 'string' && suggestions.openOf(body.session).length
-        && isOwnerTyped(body.text, [...typedByServer.of(body.session), ...promptSenders.of(body.session)])) ownerAnswered(body.session, body.text, 'typed');
+      if (r?.ok !== false && body?.event === 'prompt' && body.synthetic !== true && typeof body.text === 'string'
+        && isOwnerTyped(body.text, [...typedByServer.of(body.session), ...promptSenders.of(body.session)])) {
+        if (suggestions.openOf(body.session).length) ownerAnswered(body.session, body.text, 'typed');
+        goalFromOwner(body.session, body.text).catch((e) => console.error('[goals] owner prompt', e.message));
+      }
       if (r && r.peer) logEvent(r.peer);
       // the session's turn ended (not a subagent's): deliver the wakes kept for it, once the pane has settled
       if (body?.event === 'turn.end' && !body.agentId && typeof body.session === 'string' && pendingWakes.has(body.session)) {
@@ -2940,7 +2951,11 @@ async function handleHttp(req, res) {
       await assertAgentPane(session, by);
       const asked = payload;
       payload = guardOwnerChoice(req, session, by, payload);
-      const answering = () => { if (fromOwnerUi(req, by) && asked.key === undefined) ownerAnswered(session, String(asked.keys || ''), 'dashboard'); };
+      const answering = () => {
+        if (!fromOwnerUi(req, by) || asked.key !== undefined) return;
+        ownerAnswered(session, String(asked.keys || ''), 'dashboard');
+        goalFromOwner(session, String(asked.keys || '')).catch((e) => console.error('[goals] owner prompt', e.message));
+      };
       // accept_final: true — this message IS the acceptance. Recorded before typing, so the stop it causes is already quiet.
       const accepting = payload.accept_final === true;
       if (accepting && !isTaskActor(by)) throw httpError(403, 'accept_final needs by: "manager-agent" or the owner');

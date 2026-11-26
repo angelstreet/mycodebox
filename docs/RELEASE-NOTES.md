@@ -31,6 +31,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **Suggestion follow-ups** — the reflection question goes out soon after a session finishes (not only every 5 minutes, and not held back by a moderately busy host); each `yes` starts that work at once; a session started without a prompt takes its goal from your first task; `integrate self-update` now updates the Mac Stop hook too (run it twice the first time); output of a command is no longer read as a suggestion · area: harness
+
 - **A session that said `STATUS: done` no longer stays green while the reflection question waits** — the dot read working until the question was asked and answered, which could be an hour; it now reads done, goes green only while the question is really being answered, and red when suggestions need you · area: status dot
 
 - **A `STATUS: done` line outranks the "1 shell" footer** — a session that said done while Claude's footer still listed a background shell stayed green; the shell footer is now its own signal and the done line wins, like it does over the reporter's task count · area: status dot

@@ -20,6 +20,9 @@ export const POLL_MS = 5 * 60 * 1000;
 const FETCH_EVERY_MS = 30 * 60 * 1000;
 const MAX_NUDGES_PER_TICK = 2;
 const MAX_LOAD_PER_CORE = 1.5, MIN_RAM_AVAIL_PCT = 20;
+// The goal / reflection questions go to sessions that have finished, and a done is not final until they are answered (owner 2026-11-26: "ask the question
+// sooner"): their own cap, a looser load line, and an early check when a session has just finished (soon()). Bounces keep the limits above.
+export const MAX_ASKS_PER_TICK = 4, ASK_MAX_LOAD_PER_CORE = 3, SOON_MS = 30 * 1000, SOON_GAP_MS = 60 * 1000;
 const IGNORED = ['VERSION.txt'];   // build stamps a hook rewrites on every commit
 
 // Pure. facts: one checkout's { branch, notOnMain: [{sha, subject}], uncommitted: [path], where? }, or a list of them
@@ -668,6 +671,8 @@ export function createDoneCheck({
         (st.toldBox[name] ||= {}).accepted = e.at;
         await note({ session: name, timeBox: 'closed-by-accepted-done' });
       };
+      const askQuiet = pr.loadPerCore <= ASK_MAX_LOAD_PER_CORE && pr.ramAvailPct >= MIN_RAM_AVAIL_PCT;
+      let asks = 0;
       if (goalGate) {
         // forget only sessions that are gone: `live` holds the done ones, and a session busy writing its reply lost its state and was asked again
         let panes = null; try { panes = await liveNames(); } catch {}
@@ -680,14 +685,15 @@ export function createDoneCheck({
           if (leftoverItemsOf(s.text).length || closingReviewOf(s.text)?.missing || doneButFailedOf(s.text) || proofWithoutEvidenceOf(s.text)) continue;   // (B)/(C)/(F)/(G) first
           if (rowsPass) await closeBox(s.name);
           if (m === 'dry') continue;
-          if (!quiet || nudged >= MAX_NUDGES_PER_TICK) continue;   // nothing is recorded until it is sent: a later tick asks
+          const room = quiet && nudged < MAX_NUDGES_PER_TICK, askRoom = askQuiet && asks < MAX_ASKS_PER_TICK;
+          if (!room && !askRoom) continue;   // nothing is recorded until it is sent: a later tick asks
           let d = null;
           try { d = await goalGate.evaluate(rowsPass ? { ...s, verified: true } : s); } catch (e) { log.error?.('[done-check] goal gate', s.name, e.message); }
           if (!d) continue;
           if (d.kind === 'accepted') { goalCheck.accepted.push(s.name); await closeBox(s.name); }
           if (d.kind === 'capped') { goalCheck.capped.push(s.name); continue; }
-          if (!d.message || d.dry) continue;
-          try { await send(s.name, d.message); await goalGate.sent(s.name, d); nudged++; (d.reflect ? goalCheck.reflected : d.bounce ? goalCheck.bounced : d.kind === 'ask' ? goalCheck.asked : goalCheck.suggestions).push(s.name); }
+          if (!d.message || d.dry || (d.bounce && !room)) continue;
+          try { await send(s.name, d.message); await goalGate.sent(s.name, d); if (d.bounce || !askRoom) nudged++; else asks++; (d.reflect ? goalCheck.reflected : d.bounce ? goalCheck.bounced : d.kind === 'ask' ? goalCheck.asked : goalCheck.suggestions).push(s.name); }
           catch (e) { log.error?.('[done-check] send goal check', s.name, e.message); }
         }
       }
@@ -699,10 +705,18 @@ export function createDoneCheck({
     } finally { busy = false; }
   }
 
+  // a session has just finished and waits for its question: one early check, never closer than SOON_GAP_MS to the last one
+  let soonTimer = null;
+  function soon(delayMs = SOON_MS) {
+    if (soonTimer) return;
+    soonTimer = setTimeout(() => { soonTimer = null; tick(); }, Math.max(delayMs, (last.at || 0) + SOON_GAP_MS - now()));
+    soonTimer.unref?.();
+  }
   return {
     tick,
+    soon,
     snapshot: () => last,
     start(firstDelayMs = 4 * 60 * 1000) { if (timer) return; setTimeout(() => tick(), firstDelayMs).unref?.(); timer = setInterval(() => tick(), pollMs); timer.unref?.(); },
-    stop() { clearInterval(timer); timer = null; },
+    stop() { clearInterval(timer); clearTimeout(soonTimer); timer = null; soonTimer = null; },
   };
 }
