@@ -191,7 +191,7 @@ import { createIntegrationRoutes, PREFIX as INTEGRATION_API } from './integratio
 import { createPeerSession } from './peer-session.js';
 import { createHostAllow } from './host-allow.js';
 import { createClaudeIndex, claudeOfPane, minimaxOfPane, codexOfPane, busyChildren, lastActivityOf, leasesOfSession, capView, createParking, readManualNotes, autoParkArchived, transcriptFile, SESSION_CAP, ownChildTree, isDescendant } from './parking.js';
-import { footerModelOf, actorOf, agentFromArgs, createAlertApi, DEFAULT_ACTOR, interactiveAgentOf, paneBackgroundOf, scriptBusyOf, shouldRefuse } from './api-extras.js';
+import { footerModelOf, actorOf, agentFromArgs, createAlertApi, DEFAULT_ACTOR, interactiveAgentOf, paneBackgroundOf, paneShellOf, scriptBusyOf, shouldRefuse } from './api-extras.js';
 import { gitCleanOf } from './git-facts.js';
 import { callerOf, deleteVerdict } from './session-delete-guard.js';
 import { appendJsonLine } from './jsonl-append.js';
@@ -1860,7 +1860,8 @@ async function pollOnce() {
       // Display-only loop-wait signals (isLoopWaiting in public/state.js): MiniMax/Codex footers that don't go through
       // the Claude Stop hook, and script-wrapped `claude -p` / `sleep` children. status.state stays raw for the
       // manager / auto-answer logic; these fields flip a done session to working (green) in the UI only.
-      paneBackground: !offline && state === 'done' ? paneBackgroundOf(plain) : false,
+      paneBackground: !offline && state === 'done' ? paneBackgroundOf(plain, { shell: false }) : false,
+      paneShell: !offline && state === 'done' ? paneShellOf(plain) : false,
       scriptBusy, apiKeyBilling,
       cols: p.cols, rows: p.rows,
       attached: s.attached, windows: s.windows, cmd: p.cmd,

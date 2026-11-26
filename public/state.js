@@ -39,6 +39,7 @@ export function isLoopWaiting(status) {
     (r && (r.backgroundWork > 0 || r.crons > 0) && !saidDone(status.stall) && !stop) ||
     (!stop && status.stall && (status.stall.case === 'background_wait' || status.stall.case === 'own_job_wait' || isOwnWait(status.stall))) ||
     status.paneBackground ||
+    (status.paneShell && !saidDone(status.stall) && !stop) ||   // Claude's "1 shell" footer: a STATUS: done line outranks it (owner 2026-11-26: artifacts said done and stayed green)
     status.scriptBusy
   );
 }
@@ -56,11 +57,11 @@ export function displayState(status) {
   // (a finished turn waiting on a cron is still not actively working).
   else if (s === 'idle' && status && status.scriptBusy) s = 'working';
   // A suggestion the owner has not answered, or the reflection question not answered yet (status.suggestions, suggestions.js): never shown as done.
-  // Open ones are the owner's turn (red); until the question is answered the session still reads as working.
+  // Open ones are the owner's turn (red).
   const held = status?.suggestions?.state;
   if (held && s !== 'waiting' && s !== 'offline') {
     if (held === 'open' && status.state !== 'working') return 'waiting';
-    if (held === 'pending' && s === 'done') return 'working';
+    // 'pending' (the reflection question not asked or answered yet) is not shown as working: a session that said STATUS: done reads done (owner 2026-11-26, again: four finished sessions stayed green for an hour); once the question is typed in it really works and turns green by itself
   }
   // 'waiting deploy' (violet) only for a deploy that is really queued or has a waiter in the lease registry; a session that merely
   // SAID it waits for one (a regex on its own text, kind 'said') keeps its real state, so it cannot flip purple <-> red

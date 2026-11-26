@@ -204,3 +204,10 @@ test('displayState: a closing STATUS: needs-owner / blocked / failed outranks a 
   assert.equal(displayState({ state: 'done', reporter: bg, stall, lastTurn: turn('running') }), 'working');   // running / waiting keep the old rule
   assert.equal(displayState({ state: 'done', reporter: bg, stall, lastTurn: turn('needs-owner'), paneBackground: true }), 'working');
 });
+
+test('displayState: a "1 shell" footer keeps a finished turn green, but not over a STATUS: done line', () => {
+  const saidDone = { case: 'done', source: 'rule', no_status: false };
+  assert.equal(displayState({ state: 'done', paneShell: true }), 'working');
+  assert.equal(displayState({ state: 'done', paneShell: true, stall: saidDone }), 'done');
+  assert.equal(displayState({ state: 'done', paneShell: true, lastTurn: { status: 'done', source: 'reporter' } }), 'done');
+});
