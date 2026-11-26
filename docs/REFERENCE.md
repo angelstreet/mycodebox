@@ -2209,6 +2209,9 @@ repository, run by the server in its own clone, one request at a time per repo (
   (an entry whose id main already shipped or already has in Unreleased is skipped), so every shipped `## build N` section stays byte for byte main's.
   A branch that edited a shipped section is returned with `release note conflict with main: ...` naming the line. A red test whose output says a shipped
   section differs from its tag is returned as `release note conflict with main: merge origin/main and keep main's shipped sections`, not as a branch failure.
+  **mycodebox** (`unionFiles: ["docs/RELEASE-NOTES.md"]`, owner 2026-11-26): the same file is one flat list. The branch's new whole entries go on top
+  of the target's, matched by full text only (never by id), each once; a branch that edits, removes or moves a line, adds anything but whole `- ` entries
+  (with indented continuations), or changes the text above `## Unreleased` is returned with `release note conflict with main: ...`.
   Other union files keep the plain line union; generated indexes (`docs/bugs/README.md` via `scripts/docs/build_bug_index.py`) belong in `regenerate`.
 - **Telling the session** (`integration-notify.js`, `notify(request, event)`): on a final state a feed notice (`kind: integration`) and a manager event;
   a codebox session that is stopped (done, no draft, no menu) also gets one line through the guarded send (`by: 'integration'`):

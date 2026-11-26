@@ -175,6 +175,24 @@ test('union conflict: both sides entries are kept and the merge goes through', a
   assert.match(git(w.remote, 'log', '-1', '--format=%s', 'main').trim(), /; resolved docs\/release_note\/README\.md \(union\)$/);
 });
 
+// 2026-11-26: two mycodebox branches each adding at the top of the flat list came back three times in a row
+test('flat release note (docs/RELEASE-NOTES.md): two branches adding at the top both merge, each entry once; an edit is returned', async () => {
+  const F = 'docs/RELEASE-NOTES.md';
+  const rn = (...e) => `# notes\n\n## Unreleased\n\n${e.join('\n\n')}\n`;
+  const w = makeWorld({ base: { 'src.js': 'a\n', 'VERSION.txt': '1\n', [F]: rn('- old (TASK-44)') } });
+  w.branch('feat', { [F]: rn('- mine (TASK-44)', '- old (TASK-44)') });
+  w.branch('edits', { [F]: rn('- other', '- old, rewritten') });
+  w.moveMain({ [F]: rn('- theirs (TASK-44)', '- old (TASK-44)') });
+  const { lane } = mk(w, { cfg: { unionFiles: [F] } });
+  const r = await go(lane, { branch: 'feat' });
+  assert.equal(r.state, 'merged', JSON.stringify(r));
+  assert.equal(w.show('main', F), rn('- mine (TASK-44)', '- theirs (TASK-44)', '- old (TASK-44)'));
+  const before = w.main();
+  const bad = await go(lane, { branch: 'edits' });
+  assert.equal(bad.state, 'returned', JSON.stringify(bad)); assert.match(bad.reason, /does more than add entries/);
+  assert.equal(w.main(), before);
+});
+
 test('release note: main promoted entries to a shipped build next to the branch addition: shipped sections stay main\'s, no duplicates', async () => {
   const rn = (un, shipped) => `# Release Notes\n\n## Unreleased\n\n### Bug fixes\n${un}\n${shipped}`;
   const old = '## build 5\n\n### Bug fixes\n- **old** ([BUG-1](x))\n';

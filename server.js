@@ -1276,7 +1276,7 @@ function ownerAnswered(name, text, via) {
   const open = suggestions.openOf(name).map((i) => i.n), amb = ambiguousAnswer(text, open);
   if (amb) {   // "do the 4" of 4 items: all four or only item 4? Nothing is recorded; the owner is asked, in the feed
     logEvent({ type: 'suggestions-ambiguous', session: name, via, text: String(text).slice(0, 80), open });
-    alert(`${name}:suggestions-ambiguous`, { title: `${name}: all ${amb} suggestions, or only item ${amb}?`, priority: 'high', ntfyTags: 'question',
+    alert(`${name}:suggestions-ambiguous`, { title: `${name}: all ${amb} suggestions, or only item ${amb}?`, priority: 'high', tier: 'interrupt', ntfyTags: 'question',
       body: `Your reply "${String(text).trim().slice(0, 60)}" can mean all ${amb} items or only item ${amb}. Nothing was recorded. Reply "yes ${open.join(' ')}" for all, or "yes ${amb}, no ${open.filter((n) => n !== amb).join(' ')}" for item ${amb} only.`, url: `/?s=${encodeURIComponent(name)}`, tag: `ghosty-${name}` });
     return;
   }
