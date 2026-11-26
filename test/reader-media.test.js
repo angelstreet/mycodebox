@@ -83,7 +83,7 @@ test('findInFolder: <cwd>/<rel> first, else a bounded search for a file ending i
 });
 
 test('files route: a media file this user owns under /tmp is served; a hidden folder, another owner and a non-media type are not', () => {
-  const tmp = mkdtempSync(join(tmpdir(), 'ft-')), home = mkdtempSync(join(tmpdir(), 'fh-'));
+  const tmp = mkdtempSync(join(tmpdir(), 'reader-media-t-')), home = mkdtempSync(join(tmpdir(), 'reader-media-h-'));
   mkdirSync(join(tmp, 'vpt-shots')); mkdirSync(join(tmp, '.secret'));
   writeFileSync(join(tmp, 'vpt-shots', 'a.jpg'), 'x'); writeFileSync(join(tmp, '.secret', 'b.png'), 'x'); writeFileSync(join(tmp, 'vpt-shots', 'c.txt'), 'x');
   const opt = { home, tmpDir: tmp };
