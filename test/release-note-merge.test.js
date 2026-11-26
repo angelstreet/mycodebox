@@ -51,3 +51,31 @@ test('a new section and a notes file without Unreleased', () => {
   assert.equal(r.ok, true); assert.match(r.text, /### Upgrade\n\n- \*\*do x\*\*/);
   assert.equal(mergeReleaseNote('# R\n- a\n', '# R\n- b\n', '# R\n- c\n'), null);   // no Unreleased: caller falls back to the union
 });
+
+// mycodebox docs/RELEASE-NOTES.md: one flat list (2026-11-26: three returns in a row on two branches adding at the top)
+const flat = (...e) => `# notes\n\nEntry form: one line.\n\n## Unreleased\n\n${e.join('\n\n')}\n`;
+const merge = (b, o, t) => mergeReleaseNote(b, o, t, { flat: true });
+
+test('flat: both new entries are kept once, the branch\'s on top, also when they cite the same TASK id', () => {
+  const old = '- **old** (TASK-44)\n  continued · area: x';
+  const r = merge(flat(old), flat('- **main** (TASK-44)', old), flat('- **mine** (TASK-44)\n  second line', old));
+  assert.deepEqual([r.ok, r.added], [true, 1]);
+  assert.equal(r.text, flat('- **mine** (TASK-44)\n  second line', '- **main** (TASK-44)', old));
+});
+
+test('flat: an entry main already has is not repeated, and an empty list takes both', () => {
+  assert.equal(merge(flat('- o'), flat('- same', '- o'), flat('- same', '- o')).text, flat('- same', '- o'));
+  assert.equal(merge(flat(), flat('- main'), flat('- mine')).text, flat('- mine', '- main'));
+});
+
+test('flat: anything but new whole entries is returned', () => {
+  const base = flat('- one\n  more', '- two'), ours = flat('- main', '- one\n  more', '- two');
+  for (const [what, theirs] of [
+    ['edit', flat('- mine', '- one\n  more', '- two, edited')], ['removal', flat('- mine', '- two')], ['reorder', flat('- two', '- one\n  more')],
+    ['continuation of an old entry', flat('- one\n  more\n  even more', '- two')], ['stray line', flat('loose text', '- one\n  more', '- two')],
+    ['new heading', flat('### Fixes', '- one\n  more', '- two')], ['text above Unreleased', base.replace('one line.', 'two lines.')], ['heading gone', base.replace('## Unreleased', '## Next')],
+  ]) {
+    const r = merge(base, ours, theirs);
+    assert.equal(r.ok, false, what); assert.match(r.error, /merge the target yourself/, what);
+  }
+});

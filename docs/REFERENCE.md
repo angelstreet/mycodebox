@@ -1137,7 +1137,8 @@ Agents cannot measure their own tokens or time, so ghosty does and shows one lin
 `claude-plugin/ghosty-reporter/` is a Claude Code plugin (function hooks, Claude Code >= 2.1.288) that every
 Claude session on the box loads. It is an **observer** (one exception: [session notes](#session-notes-owner-2026-11-26)): every hook awaits `next(e)` and returns its result
 untouched, reports after that with an 800 ms bound, swallows every error and prints nothing. If ghosty is
-down the session behaves as without the plugin (one failed try, then 30 s of silence).
+down the session behaves as without the plugin (one failed try, then 30 s of silence; a send that only answered late ends that silence,
+so a slow cold start does not lose the first turn).
 
 **Install for all sessions** (owner action, one line in `~/.claude/settings.json`; the plugin is not part of the
 settings otherwise):
@@ -1188,6 +1189,37 @@ The NEEDS YOU strip, the top counts, the filters and the tab title use that same
 The status payload carries a small `reporter` object per live Claude session (`seenAt`, `turnAt`, `backgroundWork`,
 `waiting`, `agents {count, by}`, `agentList`); the session cards show a ⚡ (not the left list rows, owner 2026-11-20) (with the subagent count) whose tooltip lists them.
 `GET /api/reporter/:session` returns everything held for one session (latest turn, prompt, waiting, agents).
+
+**Team and Enterprise accounts: no `classic.*` hook** (bug-81f093be). Claude Code's built-in `cc-plugin-sec-default` is seated outermost when the
+account's organisation is Team or Enterprise (or the machine has managed settings) and sends every `classic.*` event past plugins a person installed.
+A `max` account is not seated, so the same plugin runs whole there. The pane says `ghosty-reporter: its classic.Stop hook was skipped`; the debug
+log (`--debug-file`) says `cc-plugin-sec-default@builtin seated outermost: the organization is team`. `turn.complete`, `prompt.submit`,
+`session.start` and `session.end` still reach the plugin, so the closing text, working / idle, the turn meter and the done check work
+(`test/team-account-reporter.test.js`). Missing on such a session:
+
+| lost hook | what is missing | what still covers it |
+|---|---|---|
+| `classic.Stop` | the one re-prompt for a missing STATUS line | the manager's `no_status` stall case |
+| `classic.Stop` | background task count and scheduled wakeups (`backgroundWork`, `crons`: read as 0) | background jobs: the pane footer and own-jobs' process tree. Wakeups: **nothing**, so after 10 min of silence a sleeping loop can show as done, and the lease reaper cannot see its cron |
+| `classic.PermissionRequest` / `Notification` | the `waiting` event | the pane scan (sessions start with permission prompts skipped) |
+| `classic.PostToolUse(Failure)` | parked notes during a long turn | the same notes at the next prompt |
+| `classic.SubagentStart` / `SubagentStop` / `TeammateIdle` | some subagent snapshots | the snapshot after each turn |
+
+Do not get around it (no settings-file copy of the hooks, no faked managed settings): it is the organisation's policy. Only its admin can change it,
+in the claude.ai admin console under Claude Code managed settings. To keep the guard and let this one plugin run before it, add (path = this
+checkout's `claude-plugin/`, which has the marketplace file):
+
+```json
+{
+  "extraKnownMarketplaces": { "mycodebox": { "source": { "source": "directory", "path": "/home/<user>/ghosty-sessions/claude-plugin" } } },
+  "enabledPlugins": { "ghosty-reporter@mycodebox": true },
+  "prependPlugins": ["ghosty-reporter@mycodebox", "sec-default@builtin"]
+}
+```
+
+Managed settings apply to every member of the organisation, also on machines without that folder. This block comes from the 2.1.332 setting
+descriptions and has **not been tried** on a real organisation. Keep `sec-default@builtin` in the list: a managed `prependPlugins` without it
+removes the guard. After applying it, run one turn and check that the pane shows no skipped-hook line and `GET /api/reporter/<session>` has a `stopAt`.
 
 **Saved across restarts** (2026-11-26): the last turn (with its background tasks and wakeups), turn meter, last prompt, session id, cwd and
 seen time are written to `<state>/reporter-sessions.json` (0600, written 500 ms after an event and on shutdown) and restored before the server
@@ -2177,6 +2209,9 @@ repository, run by the server in its own clone, one request at a time per repo (
   (an entry whose id main already shipped or already has in Unreleased is skipped), so every shipped `## build N` section stays byte for byte main's.
   A branch that edited a shipped section is returned with `release note conflict with main: ...` naming the line. A red test whose output says a shipped
   section differs from its tag is returned as `release note conflict with main: merge origin/main and keep main's shipped sections`, not as a branch failure.
+  **mycodebox** (`unionFiles: ["docs/RELEASE-NOTES.md"]`, owner 2026-11-26): the same file is one flat list. The branch's new whole entries go on top
+  of the target's, matched by full text only (never by id), each once; a branch that edits, removes or moves a line, adds anything but whole `- ` entries
+  (with indented continuations), or changes the text above `## Unreleased` is returned with `release note conflict with main: ...`.
   Other union files keep the plain line union; generated indexes (`docs/bugs/README.md` via `scripts/docs/build_bug_index.py`) belong in `regenerate`.
 - **Telling the session** (`integration-notify.js`, `notify(request, event)`): on a final state a feed notice (`kind: integration`) and a manager event;
   a codebox session that is stopped (done, no draft, no menu) also gets one line through the guarded send (`by: 'integration'`):

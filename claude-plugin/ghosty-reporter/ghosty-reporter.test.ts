@@ -14,7 +14,7 @@ const settle = () => new Promise<void>((r) => setTimeout(r, 30))
 type Sent = { url: string; headers: Record<string, string>; body: any }
 
 // The world beneath the plugin: env, clock, tmux, token file, ghosty. Returns what ghosty received.
-function world(on: any, opts: { down?: boolean; env?: Record<string, string>; noToken?: boolean; notes?: { id: string; text: string }[]; tmux?: string; receiveOk?: (e: any) => any } = {}) {
+function world(on: any, opts: { down?: boolean; env?: Record<string, string>; noToken?: boolean; notes?: { id: string; text: string }[]; tmux?: string; receiveOk?: (e: any) => any; slow?: Promise<void> } = {}) {
   const sent: Sent[] & { attempts?: number; clock?: any } = []
   sent.attempts = 0
   mock.env(on, { ...ENV, ...(opts.env ?? {}) })
@@ -34,6 +34,7 @@ function world(on: any, opts: { down?: boolean; env?: Record<string, string>; no
   on('http.fetch', async (_$: any, e: any) => {
     sent.attempts = (sent.attempts ?? 0) + 1
     if (opts.down) throw new Error('ECONNREFUSED')
+    if (sent.attempts === 1 && opts.slow) await opts.slow
     sent.push({ url: e.url, headers: e.init?.headers ?? {}, body: JSON.parse(e.init?.body) })
     const take = JSON.parse(e.init?.body).event === 'notes.take'
     return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ ok: true, ...(take ? { notes: opts.notes ?? [] } : {}) }) } }
@@ -191,6 +192,20 @@ test('ghosty down: the hook still passes through, silently, and stops trying for
   await settle()
   expect(p.text).toBe('unchanged')
   expect(sent.attempts).toBe(1)   // one failed try, then quiet
+})
+
+test('a slow first send that still arrives does not silence the next reports', async ($, on) => {
+  let arrive = () => {}
+  const sent = world(on, { slow: new Promise<void>((r) => { arrive = r }) })
+  await $.session.start({ cwd: '/w', surface: 'cli', isInteractive: true } as any)
+  await settle()
+  await sent.clock!.advance(900)   // past the 800 ms bound
+  await settle()
+  arrive()
+  await settle()
+  await $.turn.complete({ answer: 'pong', durationMs: 5, isAborted: false, turnId: 't1', reason: 'answer' } as any)
+  await settle()
+  expect(sent.map(s => s.body.event)).toContain('turn.end')
 })
 
 test('no token file: nothing sent, nothing breaks', async ($, on) => {

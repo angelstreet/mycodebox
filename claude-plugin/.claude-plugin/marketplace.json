@@ -1,0 +1,8 @@
+{
+  "name": "mycodebox",
+  "owner": { "name": "ghosty-sessions" },
+  "description": "mycodebox plugins, for an organisation that must name them in managed settings (docs/REFERENCE.md, Session reporter).",
+  "plugins": [
+    { "name": "ghosty-reporter", "source": "./ghosty-reporter", "description": "Reports session events to the mycodebox dashboard on this machine." }
+  ]
+}
