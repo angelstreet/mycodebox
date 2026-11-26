@@ -88,6 +88,14 @@ export function holdingsOf(session, leases, deploys, sessionNames, machines) {
 
 // "pi1/stb4" for "vpt-pi1/stb4"; the env name stands for "*"
 export const shortResource = (l) => (l.resource === '*' ? l.env : l.resource.replace(/^(vpt-|host-)/, ''));
+// a commit id is cut to 7 characters in the alert row (the full one stays in the tooltip); branch names pass through
+export const shortRef = (ref) => (/^[0-9a-f]{12,40}$/i.test(String(ref || '')) ? String(ref).slice(0, 7) : String(ref || ''));
+// the collapsed LEASES summary: one entry per host, "mf1 ×2 · pi1", in first-seen order
+export function leaseHostSummary(leases) {
+  const n = new Map();
+  for (const l of leases || []) { const h = shortResource(l).split('/')[0]; n.set(h, (n.get(h) || 0) + 1); }
+  return [...n].map(([h, c]) => (c > 1 ? `${h} \u00d7${c}` : h)).join(' \u00b7 ');
+}
 export function ttlText(min) {
   if (min == null || isNaN(min)) return '';
   if (min < 1) return '<1m';

@@ -3010,3 +3010,30 @@ body.fv-page{ margin:0; background:var(--bg); }
 .parkbox .prow .pclr:hover{ color:var(--waiting); }
 .parkbox .prow.park:hover .pclr, .parkbox .prow.park:focus-within .pclr{ display:inline-flex; }
 @media (hover:none){ .parkbox .prow.park .pclr{ display:inline-flex; } }
+
+/* owner 2026-11-26 (layout A): one row; LEASES folds to a count + hosts with the detail in a popover, NEEDS YOU gets the free width,
+   a section that still scrolls fades at its right edge, an idle block reads as one dim word ("DEPLOY —", "LEASES 0") */
+.lsum{ display:inline-flex; align-items:center; gap:6px; min-width:0; max-width:100%; background:none; color:var(--ink-2); border:1px solid rgba(232,154,74,.55); border-radius:999px; padding:3px 10px; font:inherit; font-size:11.5px; cursor:pointer; white-space:nowrap; }
+.lsum .lbl{ margin:0; }
+.lsum b{ color:var(--ink); font-weight:700; font-variant-numeric:tabular-nums; }
+.lsum .ico{ flex-shrink:0; color:var(--accent); }
+.lsum .lhosts{ min-width:0; overflow:hidden; text-overflow:ellipsis; color:var(--ink-2); }
+.lsum.blocks{ background:rgba(232,154,74,.12); border-color:var(--accent); }
+.lsum[aria-expanded="true"]{ background:rgba(232,154,74,.16); }
+.leasebar.idle .dnone, .deployban.idle .dnone{ font-variant-numeric:tabular-nums; }
+.deployban.ov, .leasebar.ov{ -webkit-mask-image:linear-gradient(to right,#000 calc(100% - 36px),transparent); mask-image:linear-gradient(to right,#000 calc(100% - 36px),transparent); }
+.attnpop.leasepop{ min-width:220px; max-width:min(380px, calc(100vw - 16px)); max-height:60vh; overflow-y:auto; gap:2px; padding:6px; }
+.attnpop.leasepop .lrow{ display:flex; flex-direction:column; gap:1px; width:100%; background:none; color:var(--ink-2); border:0; border-radius:7px; padding:6px 8px; font-size:12px; font-weight:400; text-align:left; white-space:normal; cursor:pointer; }
+.attnpop.leasepop .lrow:hover{ background:var(--bg-3); }
+.attnpop.leasepop .lrow.blocks{ box-shadow:inset 2px 0 0 var(--accent); }
+.attnpop.leasepop .lr1{ display:flex; gap:10px; align-items:baseline; }
+.attnpop.leasepop .lr1 b{ color:var(--ink); font-weight:600; }
+.attnpop.leasepop .lr1 i{ margin-left:auto; font-style:normal; color:var(--ink-3); font-variant-numeric:tabular-nums; }
+.attnpop.leasepop .lr2{ color:var(--ink-3); font-size:11px; overflow-wrap:anywhere; }
+.leasebar{ overflow:hidden; }
+@media (min-width: 901px){
+  .alertrow .attention{ flex:1 1 auto; max-width:none; }
+  .alertrow .deployban{ flex:0 1 auto; max-width:40%; }
+  .alertrow .leasebar{ flex:0 0 auto; max-width:34%; margin-left:auto; }   /* already compact: never squeezed by the others */
+  .alertrow .attention{ min-width:30%; }
+}
