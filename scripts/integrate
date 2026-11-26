@@ -17,7 +17,7 @@
 # `lease-token.js add <name> --integrate`), as for the Mac Stop hook; on the codebox with neither: loopback + the reporter token.
 # Exit: 0 merged / deployed / CI superseded, 1 error, 3 returned (reason printed) or cancelled, 4 merged but CI red / deploy failed, 5 service unreachable.
 
-CLIENT_SCRIPTS_VERSION=8   # bump with every change to scripts/integrate or scripts/found-bug (same number in both); the server compares it
+CLIENT_SCRIPTS_VERSION=9   # bump with every change to scripts/integrate or scripts/found-bug (same number in both); the server compares it
 
 CFG_DIR="${MYCODEBOX_CONFIG_DIR:-$HOME/.config/mycodebox}"
 cfg() { [ -r "$CFG_DIR/config" ] && sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$CFG_DIR/config" | tail -n 1 | sed 's/[[:space:]]*$//; s/^"\(.*\)"$/\1/'; }
@@ -86,6 +86,16 @@ self_update() {
     cp "$TMP/$_n.new" "$_bin/.$_n.new.$$" && chmod 755 "$_bin/.$_n.new.$$" && mv -f "$_bin/.$_n.new.$$" "$_bin/$_n" || { rm -f "$_bin/.$_n.new.$$"; die "cannot install $_n into $_bin"; }
     printf 'updated %s in %s (previous copy: %s.bak)\n' "$_n" "$_bin" "$_n"; _chg=1
   done
+  # the Claude Code Stop hook (docs/MAC-HOOK.md), only where it is already installed: it was copied by hand
+  _hook=${MYCODEBOX_HOOK_PATH:-$HOME/bin/mycodebox-stop-hook.sh}
+  _want=$(sed -n 's/^mac-stop-hook\.sh\.sha256=//p' "$TMP/manifest" | head -n 1)
+  if [ -n "$_want" ] && [ -f "$_hook" ] && [ "$(sha_of "$_hook")" != "$_want" ]; then
+    api GET "/api/integration/client-scripts/mac-stop-hook.sh"; [ "$CODE" = 200 ] || fail_http
+    cp "$OUT" "$TMP/hook.new" || die "cannot stage the Stop hook"
+    [ "$(sha_of "$TMP/hook.new")" = "$_want" ] || die "checksum mismatch for the Stop hook: it was not installed"
+    cp -p "$_hook" "$_hook.bak"; cp "$TMP/hook.new" "$_hook.new.$$" && chmod 755 "$_hook.new.$$" && mv -f "$_hook.new.$$" "$_hook" || { rm -f "$_hook.new.$$"; die "cannot install $_hook"; }
+    printf 'updated the Stop hook %s (previous copy: .bak)\n' "$_hook"; _chg=1
+  fi
   [ "$_chg" = 1 ] || printf 'client scripts are current (version %s)\n' "$_ver"
   case ":$PATH:" in *":$_bin:"*) ;; *) printf 'note: %s is not on PATH\n' "$_bin" ;; esac
 }

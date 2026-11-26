@@ -26,7 +26,7 @@
 # Session defaults to the tmux session, else FOUND_BUG_SESSION, else `mac` on a Mac, else `unknown`. Secrets are redacted server-side.
 # Exit: 0 filed; 2 refused (the rule is printed: no proof, no reason, or a reason that is no reason); 3 claim held by another; 5 manager unreachable (report queued, not lost); 1 error.
 
-CLIENT_SCRIPTS_VERSION=8   # bump with every change to scripts/integrate or scripts/found-bug (same number in both); the server compares it
+CLIENT_SCRIPTS_VERSION=9   # bump with every change to scripts/integrate or scripts/found-bug (same number in both); the server compares it
 
 CFG_DIR="${MYCODEBOX_CONFIG_DIR:-$HOME/.config/mycodebox}"
 STATE_DIR="${GHOSTY_STATE_DIR:-$HOME/.local/state/ghosty}"
@@ -118,6 +118,16 @@ self_update() {
     cp "$TMP/$_n.new" "$_bin/.$_n.new.$$" && chmod 755 "$_bin/.$_n.new.$$" && mv -f "$_bin/.$_n.new.$$" "$_bin/$_n" || { rm -f "$_bin/.$_n.new.$$"; die "cannot install $_n into $_bin"; }
     echo "updated $_n in $_bin (previous copy: $_n.bak)"; _chg=1
   done
+  # the Claude Code Stop hook (docs/MAC-HOOK.md), only where it is already installed: it was copied by hand
+  _hook=${MYCODEBOX_HOOK_PATH:-$HOME/bin/mycodebox-stop-hook.sh}
+  _want=$(sed -n 's/^mac-stop-hook\.sh\.sha256=//p' "$TMP/want" | head -n 1)
+  if [ -n "$_want" ] && [ -f "$_hook" ] && [ "$(sha_of "$_hook")" != "$_want" ]; then
+    api GET "/api/integration/client-scripts/mac-stop-hook.sh"; [ "$CODE" = 200 ] || die "HTTP $CODE fetching the Stop hook"
+    cp "$OUT" "$TMP/hook.new" || die "cannot stage the Stop hook"
+    [ "$(sha_of "$TMP/hook.new")" = "$_want" ] || die "checksum mismatch for the Stop hook: it was not installed"
+    cp -p "$_hook" "$_hook.bak"; cp "$TMP/hook.new" "$_hook.new.$$" && chmod 755 "$_hook.new.$$" && mv -f "$_hook.new.$$" "$_hook" || { rm -f "$_hook.new.$$"; die "cannot install $_hook"; }
+    echo "updated the Stop hook $_hook (previous copy: .bak)"; _chg=1
+  fi
   [ "$_chg" = 1 ] || echo "client scripts are current (version $_ver)"
 }
 # one line when the server's scripts are newer; silent on any failure (never blocks a report)

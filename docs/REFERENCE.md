@@ -2245,7 +2245,8 @@ reflection reply.
 - **Items leave only by the owner's answer.** Dropping the list, or writing `no suggestions` later, removes nothing. `no suggestions` counts
   only as the reply to the question, with no open item.
 - **Held** (`status.suggestions` in the status map): `{state: "pending"}` from the done line until the question is answered, `{state: "open",
-  open, items}` while any item has no answer. Pending reads as **working** on the dashboard, open as **needs you** (red, NEEDS YOU strip),
+  open, items}` while any item has no answer. Pending reads as **done** on the dashboard (owner 2026-11-26: finished sessions had stayed
+  green for an hour; it turns working once the question is typed in), open as **needs you** (red, NEEDS YOU strip),
   for workers too. While held there is no "is done" push, no done toast and no "finished a turn" line in the voice digest; the push goes out
   when nothing is left to answer. A list under another status line is pushed to the owner at once, and a done turn with open items is told
   once to end `needs-owner`. A reply that answers neither way is asked once more. The manager's own sessions are not held; an accepted-final
@@ -2262,8 +2263,16 @@ reflection reply.
   are open; their other messages arrive with a note that they are not the owner's answer. `manager.js` makes no automatic answer (rules, AI
   triage, menu, merge, ready window; checked again when the countdown fires) while items are open or the question is unanswered, whatever the
   closing line says.
-- **Approved items are a new task** (`approvedRound`): once every item has an answer, the yes ones become the session's goal and `Done when`
-  lines, so that work gets its own goal check, Verification block and reflection. With only `no`, the session can end done.
+- **Approved items are a new task** (`approvedRound`), started with each `yes`, also while other items are open: the approved items not
+  finished yet become the session's goal and `Done when` lines, so that work gets its own goal check, Verification block and reflection.
+  While items stay open the session cannot be done. With only `no`, it can end done.
+- **Asked soon:** a session that has just finished triggers an early done check (`soon()`, 30 s later, never within 60 s of the last one)
+  instead of waiting up to 5 minutes. The goal and reflection questions have their own cap (4 per tick, `MAX_ASKS_PER_TICK`) and go out up
+  to a load of 3 per core (`ASK_MAX_LOAD_PER_CORE`); bounces keep 2 per tick and 1.5.
+- **Only the agent's words are read** (`agentWords`): everything up to the last tool call or tool output in a pane's closing text is
+  ignored (a command that printed a list was recorded as a suggestion on 2026-11-26).
+- **A session without a goal** (started with no prompt) takes the first real task the owner types (dashboard or terminal; `worthAGoal`: not
+  a command, a yes / no or a few words of steering), as the goal only, with no `Done when` lines.
 - **Limits:** there is no login, so a process on the host that fakes a browser request, or types into the tmux pane itself, passes as the
   owner. A peer message sent with Claude's `SendMessage` cannot be refused; it is only never recorded. Codex and MiniMax sessions have no
   reporter prompt event: answer from the dashboard. A suggestion written as plain prose, with no heading and no list, is only caught by the

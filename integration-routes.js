@@ -127,7 +127,7 @@ export function createIntegrationRoutes({ deployLive = null, lane, stateDir, isL
     const fail = (code, error) => send(res, STATUS[code] || 400, { ok: false, code, error }, fmt);
     try {
       let m;
-      if (req.method === 'GET' && (sub === '/client-scripts' || (m = /^\/client-scripts\/([\w-]{1,32})$/.exec(sub)))) {
+      if (req.method === 'GET' && (sub === '/client-scripts' || (m = /^\/client-scripts\/([\w][\w.-]{0,31})$/.exec(sub)))) {
         if (m) {
           const buf = clientScripts.read(m[1], scriptsDir);
           if (!buf) { fail('E_NOT_FOUND', 'no such client script'); return true; }

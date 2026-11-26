@@ -1,12 +1,12 @@
 // The Mac/cloud client scripts (scripts/integrate, scripts/found-bug) served by the dashboard host so a client can update itself
 // (`integrate self-update`, docs/MAC-HOOK.md). The files come from the running checkout; the version is the `CLIENT_SCRIPTS_VERSION=N`
-// line both scripts carry (bump it on every change to either one; test/client-scripts.test.js keeps them equal).
+// line integrate and found-bug carry (bump it on every change to one of the three; test/client-scripts.test.js keeps them equal).
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const NAMES = ['integrate', 'found-bug'];
+export const NAMES = ['integrate', 'found-bug', 'mac-stop-hook.sh'];   // the Stop hook too (2026-11-26): it was copied by hand
 const DEFAULT_DIR = join(dirname(fileURLToPath(import.meta.url)), 'scripts');
 export const versionOf = (text) => Number(/^CLIENT_SCRIPTS_VERSION=(\d+)\b/m.exec(text)?.[1] || 0);
 
