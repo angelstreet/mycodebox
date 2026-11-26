@@ -5,11 +5,14 @@
 //
 // Per session: { sessionId, cwd, reporterSeenAt, live, lastTurn {text, at, reason, backgroundWork, ...},
 //                waiting {message, kind, at}, lastPrompt {text, at}, agents[] }
+// The facts are saved to <state>/reporter-sessions.json (0600) and restored by init(), so a ghosty restart does not forget a session's
+// background tasks and scheduled wakeups. A pending permission prompt and the subagent list are not: they may have changed while it was down.
 
-import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { normalizeUsage, addTokens } from './turn-meter.js';
+import { endsHandedOver } from './stall.js';
 
 export const TOKEN_HEADER = 'x-ghosty-reporter-token';
 export const TEXT_MAX = 8 * 1024;
@@ -17,6 +20,9 @@ const PEER_TEXT_MAX = 2000;           // peer messages are capped before they hi
 const PEER_RING_MAX = 50;             // last 50 sent texts remembered for the dedupe ring
 const PEER_DEDUPE_MS = 120_000;       // a recv that repeats a send within 2 min is the same one
 const LIVE_MS = 10 * 60 * 1000;       // a reporter that was silent this long is not "live" (turns can be long: any event refreshes it)
+const SAVE_MS = 500;                  // events come in bursts (turn.end + stop + agents): one write per burst
+const RESTORE_MAX_MS = 24 * 3600 * 1000;   // an older saved session is dropped: its tmux name may belong to something else by now
+const SAVED = ['sessionId', 'cwd', 'reporterSeenAt', 'live', 'lastTurn', 'meter', 'lastPrompt'];
 const MERGE_MS = 15000;               // turn.end (turn.complete) and stop (Stop hook) of the same turn arrive within this
 
 // Claude Code lists its own artifact live-update monitors as background tasks. They never end and nobody waits on them, so they are not
@@ -25,8 +31,10 @@ const isPassiveTask = (t) => t?.type === 'monitor' && /^live updates for artifac
 
 export const isLoopback = (addr) => /^(?:127\.\d+\.\d+\.\d+|::1|::ffff:127\.\d+\.\d+\.\d+)$/.test(String(addr || ''));
 
-export function createReporter({ stateDir, now = () => Date.now() } = {}) {
+export function createReporter({ stateDir, now = () => Date.now(), saveMs = SAVE_MS } = {}) {
   const tokenFile = join(stateDir, 'reporter.token');
+  const sessionsFile = join(stateDir, 'reporter-sessions.json');
+  let saveTimer = null, writing = Promise.resolve();
   let token = '';
   const sessions = new Map();
 
@@ -38,8 +46,31 @@ export function createReporter({ stateDir, now = () => Date.now() } = {}) {
       await writeFile(tokenFile, token + '\n', { mode: 0o600 });
     }
     try { await chmod(tokenFile, 0o600); } catch {}
+    await restore();
     return tokenFile;
   }
+
+  async function restore() {
+    let saved;
+    try { saved = JSON.parse(await readFile(sessionsFile, 'utf8')); } catch { return; }   // none yet, or damaged: start empty
+    const obj = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : null);
+    for (const [name, v] of Object.entries(obj(saved?.sessions) || {})) {
+      if (sessions.has(name) || !obj(v) || !(now() - v.reporterSeenAt < RESTORE_MAX_MS)) continue;   // an event that already arrived is newer
+      const s = slot(name);
+      for (const k of SAVED) if (v[k] !== undefined) s[k] = v[k];
+      for (const k of ['lastTurn', 'meter', 'lastPrompt']) s[k] = obj(s[k]);
+    }
+  }
+  // Write what is pending now (shutdown, tests). Never throws: a full disk must not stop the intake.
+  function flush() {
+    if (!saveTimer) return writing;
+    clearTimeout(saveTimer); saveTimer = null;
+    const data = JSON.stringify({ v: 1, sessions: Object.fromEntries([...sessions].map(([n, s]) => [n, Object.fromEntries(SAVED.map((k) => [k, s[k]]))])) });
+    writing = writing.then(async () => { await writeFile(`${sessionsFile}.tmp`, data, { mode: 0o600 }); await rename(`${sessionsFile}.tmp`, sessionsFile); })
+      .catch((e) => console.error('[reporter] save', e.message));
+    return writing;
+  }
+  const save = () => { if (!saveTimer) { saveTimer = setTimeout(flush, saveMs); saveTimer.unref?.(); } };
 
   function tokenOk(given) {
     if (!token || typeof given !== 'string') return false;
@@ -140,6 +171,7 @@ export function createReporter({ stateDir, now = () => Date.now() } = {}) {
       }
       default: return { ok: true, ignored: 'unknown event' };
     }
+    save();
     return { ok: true };
   }
 
@@ -215,18 +247,21 @@ export function createReporter({ stateDir, now = () => Date.now() } = {}) {
   }
 
   // Activity for lease binding: the last finished turn (turn.complete) and whether a newer prompt means a turn is running.
-  // { turnAt, promptAt, working } or null when the reporter never reported this session (then nobody may act on idleness).
+  // { turnAt, promptAt, working, backgroundWork } or null when the reporter never reported this session (then nobody may act on idleness).
+  // backgroundWork is what may be called "still running": none for a turn that ended on a hand-over STATUS line, so no reader of it can
+  // overrule a done / needs-owner / blocked line. summary() keeps the raw count (a real job still protects its leases).
   function activityOf(name) {
     const s = sessions.get(name);
     if (!s || (!s.lastTurn && !s.lastPrompt)) return null;
     const turnAt = s.lastTurn?.at ?? 0, promptAt = s.lastPrompt?.at ?? 0;
-    return { turnAt, promptAt, working: promptAt > turnAt };
+    const n = s.lastTurn?.backgroundWork ?? 0;
+    return { turnAt, promptAt, working: promptAt > turnAt, backgroundWork: n && !endsHandedOver(String(s.lastTurn.text || '').split('\n')) ? n : 0 };
   }
 
   // Newest event time of a session that was a turn end or a prompt (ms), or 0.
   const lastActivity = (name) => { const s = sessions.get(name); return s ? Math.max(s.lastTurn?.at || 0, s.lastTurn?.stopAt || 0, s.lastPrompt?.at || 0) : 0; };
 
-  const prune = (liveNames) => { for (const k of [...sessions.keys()]) if (!liveNames.has(k)) sessions.delete(k); };
+  const prune = (liveNames) => { for (const k of [...sessions.keys()]) if (!liveNames.has(k)) { sessions.delete(k); save(); } };
 
-  return { init, tokenOk, ingest, summary, detail, meterOf, turnForStop, waitingNow, promptSince, activityOf, prune, lastActivity, liveOf: (n) => liveOf(sessions.get(n)), tokenFile };
+  return { init, flush, tokenOk, ingest, summary, detail, meterOf, turnForStop, waitingNow, promptSince, activityOf, prune, lastActivity, liveOf: (n) => liveOf(sessions.get(n)), tokenFile };
 }
