@@ -104,6 +104,7 @@ const HOLD_RE = /^(holding lease \S+ on |restart of .* only: no lease needed|Win
 const DEFAULT_MAX_MS = 3 * 60 * 60 * 1000;
 // Progress, not wall time (owner 2026-11-01): the hold clock (timeoutMs) restarts every time a host reports health ok|skipped, so a
 // long rollout of healthy hosts is not killed at 11 min; a stuck host still is. HOLD_CEILING_MS is the hard limit for the whole hold.
+export const RESTART_WAIT_MARGIN_MS = 5 * 60 * 1000;
 export const DEFAULT_HOLD_CEILING_MS = 45 * 60 * 1000;
 const PROGRESS_DONE_RE = /^VPT_PROGRESS (\{.*"phase":"health".*\})\s*$/;
 export const isHostDone = (line) => {
@@ -437,9 +438,12 @@ export function createDeployRunner({
       const warn = (runs, phase) => { onLine(`# ${riskLine(runs)}${phase}`); alert(`deploy:${d.id}:warning`, { title: `deploy ${d.env} ${d.scope}: ${riskLine(runs)}`, body: `holders: ${runs.map((r) => r.agent).join(', ')}${phase}`, priority: 'high', ntfyTags: 'warning', tag: `ghosty-deploy-${d.id}`, url: '/?deploys=1' }, 0); };
       let runs = await read();
       if (runs.length) {
-        warn(runs, runs.some((r) => r.progressing) ? ` — waiting up to ${Math.round(restartWaitMs / 60000)} min for them to end` : '');
-        const until = Date.now() + restartWaitMs;
-        while (runs.some((r) => r.progressing) && Date.now() < until) { await nap(Math.min(restartPollMs, Math.max(1, until - Date.now()))); runs = await read(); }
+        // The wait runs inside the deploy's lease: it must leave RESTART_WAIT_MARGIN_MS of the hold ceiling for update_core itself
+        // (deploy c232ce31 waited the whole 10 min ceiling, the registry closed the lease, update_core found it gone), and each poll renews it.
+        const waitMs = Math.max(0, Math.min(restartWaitMs, holdCeilingMs - RESTART_WAIT_MARGIN_MS));
+        warn(runs, runs.some((r) => r.progressing) ? ` — waiting up to ${Math.round(waitMs / 60000)} min for them to end` : '');
+        const until = Date.now() + waitMs;
+        while (runs.some((r) => r.progressing) && Date.now() < until) { await nap(Math.min(restartPollMs, Math.max(1, until - Date.now()))); await reg(['deploy', 'progress', d.id]).catch(() => {}); runs = await read(); }
         if (runs.length) warn(runs, ' — restarting now');
         else onLine('# the runs ended: restarting the server');
       }
