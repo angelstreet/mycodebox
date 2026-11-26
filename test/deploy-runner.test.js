@@ -984,3 +984,13 @@ test('a run that ends during the wait lets the restart go with no second warning
   await r2.tick(); await until(() => reg2.deploys[0].state === 'done');
   assert.equal(a2.filter((k) => k.endsWith(':warning')).length, 0);
 });
+
+test('the pre-restart wait is capped below the hold ceiling and renews the deploy lease (deploy c232ce31)', async () => {
+  const reg = fakeRegistry({ leases: [runLease()], deploys: [dep('1', { scope: 'server' })] });
+  const alerts = [], t0 = Date.now();
+  let waited = 0;
+  const runner = createDeployRunner({ stateDir: mkTmp('ghosty-dep-'), registry: reg.fn, isEnabled: () => true, holdCeilingMs: 5 * 60 * 1000 + 200, restartWaitMs: 5000, restartPollMs: 30, log: { error() {} },
+    alert: (k, p) => alerts.push([k, p.title]), run: async (env, o) => { waited = Date.now() - t0; o.onLine('deploying'); return { code: 0 }; } });
+  await runner.tick(); await until(() => reg.deploys[0].state === 'done');
+  assert.ok(waited < 2000, `waited ${waited} ms: the wait must stop at holdCeilingMs - margin, not restartWaitMs`);
+}) ;
