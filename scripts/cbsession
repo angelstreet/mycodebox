@@ -14,6 +14,8 @@
 #       workspace id a user key (sk-ant-usr) needs. ANTHROPIC_API_KEY from the environment is always dropped.
 #       Note: the API refuses interactive Claude Code (entrypoint cli) on credit that excludes it ("Credit balance too
 #       low") while claude -p on the same key works: run API-key agents headless with claude -p.
+#       So -b NAME is refused (exit 2) unless CBSESSION_API_INTERACTIVE=1 says this key is known to allow interactive
+#       Claude Code (manager 2026-11-26: the session used to start and die on its first turn).
 #   -H  handover file: the session reads it, summarises state and open items, then does the work (owner autonomy rule)
 #   -W  with -H: review only — summarise, propose the next step, then wait for the owner
 #   -f  prompt file, used verbatim;  -t  prompt text
@@ -48,6 +50,9 @@ KF="$HOME/.config/anthropic/$BILL.key"
 if [ "$BILL" != sub ]; then
   [ "$PROV" = claude ] || { echo "cbsession: -b applies to -p claude only" >&2; exit 2; }
   [ -s "$KF" ] || { echo "cbsession: billing key $KF not found (one line, chmod 600)" >&2; exit 2; }
+  if [ "${CBSESSION_API_INTERACTIVE:-}" != 1 ]; then
+    echo "cbsession: refused: -b $BILL would start an INTERACTIVE Claude Code session on an API key, and the API refuses that (\"Credit balance too low\" on the first turn); only headless claude -p works on the key. Run the job with claude -p instead, use the subscription (-b sub), or set CBSESSION_API_INTERACTIVE=1 if this key is known to allow interactive Claude Code." >&2; exit 2
+  fi
 fi
 # Claude account rotation (claude-accounts.js, owner 2026-11-06): a new Claude session starts on the ACTIVE account, like the
 # dashboard's create path does (CLAUDE_CONFIG_DIR + GHOSTY_CLAUDE_ACCOUNT). Without it every session started here ran on the

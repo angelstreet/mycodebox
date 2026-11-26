@@ -19,10 +19,13 @@
 //
 // Thresholds (a finding only above them): ONE session's owner asks > 3 (the limit is a per-session budget, so parallel
 // topic sessions each get their own), lane returned > 5 (a return that a later request for the same repo+branch landed is
-// resolved and does not count), CI red > 120 min, disk > 90 %, MemAvailable < 2 GB, any approvalRefused.
+// resolved and does not count), CI red > 120 min, disk > 90 %, MemAvailable < 2 GB, any approvalRefused, and the manager's
+// failover unit (ghosty-manager-failover: wakes the MiniMax standby when every Claude seat is out) not active.
+// HARNESS_FAILOVER_UNIT names another unit; set it empty to turn that check off (a box without the standby).
 // Registered by the manager in the private <stateDir>/daily-checks.json (id "harness-health"); this repo never edits it.
 import { readFileSync, statfsSync, readdirSync, statSync } from 'node:fs';
 import { appendFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { FLOORS } from '../owner-asks.js';
@@ -250,10 +253,23 @@ export function hiddenAgentStats({ dir = managerTranscriptDir(), now = Date.now(
   return { count, names };
 }
 
+// ---- manager failover unit (io, injectable) ---------------------------------------------------------------------------
+// Owner/manager 2026-11-26: the unit was found inactive with nobody told, so the MiniMax standby could never take over.
+// `systemctl is-active` prints one word (active, inactive, failed, activating, ...) and exits non-zero when not active; a
+// unit that is not installed also reads "inactive". No systemctl or no answer = "unknown", which is not a finding.
+export const FAILOVER_UNIT = 'ghosty-manager-failover';
+export const FAILOVER_OK = ['active', 'activating', 'reloading', 'unknown'];
+export const failoverUnit = () => String(process.env.HARNESS_FAILOVER_UNIT ?? FAILOVER_UNIT).trim();
+export function unitState(unit, execImpl = execFileSync) {
+  if (!unit) return null;   // check turned off
+  try { return String(execImpl('systemctl', ['is-active', unit], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] })).trim().split(/\s+/)[0] || 'unknown'; }
+  catch (e) { return String(e?.stdout || '').trim().split(/\s+/)[0] || 'unknown'; }
+}
+
 // ---- collect (io) ---------------------------------------------------------------------------------------------------
 const readLines = (p) => { try { return { lines: readFileSync(p, 'utf8').split('\n').filter(Boolean), ok: true }; } catch { return { lines: [], ok: false }; } };
 
-export function collect({ stateDir: dir = stateDir(), now = Date.now(), hours = HOURS, box = boxStats(), transcriptDir } = {}) {
+export function collect({ stateDir: dir = stateDir(), now = Date.now(), hours = HOURS, box = boxStats(), transcriptDir, failover } = {}) {
   const win = { now, hours };
   const notFound = [];
   const src = (name) => { const r = readLines(join(dir, name)); if (!r.ok) notFound.push(name); return r.lines; };
@@ -262,7 +278,9 @@ export function collect({ stateDir: dir = stateDir(), now = Date.now(), hours = 
   const lane = laneStats(src(join('integration', 'requests.jsonl')), win);
   const ci = ciStats(src('ci-watch.jsonl'), win);
   const h = hiddenAgentStats({ dir: transcriptDir, now, hours });
-  return { date: new Date(now).toISOString().slice(0, 10), ...asks, decisions, ...lane, ci, box, hiddenAgentWork: h.count, hiddenAgentNames: h.names, notFound };
+  const unit = failoverUnit();
+  const fo = failover !== undefined ? failover : (unit ? { unit, state: unitState(unit) } : null);
+  return { date: new Date(now).toISOString().slice(0, 10), ...asks, decisions, ...lane, ci, box, hiddenAgentWork: h.count, hiddenAgentNames: h.names, failover: fo, notFound };
 }
 
 // ---- summarize (pure) -----------------------------------------------------------------------------------------------
@@ -293,6 +311,8 @@ export function summarize(today, prev) {
   if (today.box?.diskPct != null && today.box.diskPct > DISK_PCT_MAX) add('disk', `root disk ${today.box.diskPct} %`, `Above ${DISK_PCT_MAX} % on /. health-watch cleans its share; the rest is worktrees, tmp and caches.`);
   if (today.box?.memAvailableMb != null && today.box.memAvailableMb < MEM_MIN_MB) add('memory', `${today.box.memAvailableMb} MB MemAvailable`, `Below ${MEM_MIN_MB} MB. New sessions and parking both need headroom; load 1 min was ${n(today.box?.load1)}.`);
   if ((today.hiddenAgentWork || 0) > 0) add('hidden-agent-work', `hidden-agent-work: ${today.hiddenAgentWork}`, `${today.hiddenAgentWork} manager Agent-tool subagent(s) returned fix/recommend results with no cbsession start in the same turn: ${(today.hiddenAgentNames || []).join(', ')}. Work that changes something must be a named session on the dashboard (manual §5).`);
+  const fo = today.failover;
+  if (fo?.unit && fo.state && !FAILOVER_OK.includes(fo.state)) add('manager-failover', `${fo.unit} is ${fo.state}`, `With every Claude account used up, the MiniMax standby (mm-manager) cannot take over: the manager waits for the reset. Fix: sudo systemctl enable --now ${fo.unit} (REFERENCE "Manager failover").`);
   if ((today.approvalRefused || 0) > 0) add('approval-refused', `${today.approvalRefused} lane approval(s) refused`, `${today.approvalRefused} integration request(s) carried approvalRefused: the lane was asked to push or deploy and stopped. A refusal is a floor stop, not a bug — but a day with several means the autonomy switches disagree with the requesters.`);
 
   const p = prev || null;
@@ -309,6 +329,7 @@ export function summarize(today, prev) {
     ['MemAvailable', `${n(today.box.memAvailableMb)} MB`, p ? `${n(p.box?.memAvailableMb)} MB` : 'n/a'],
     ['disk /', `${n(today.box.diskPct)} %`, p ? `${n(p.box?.diskPct)} %` : 'n/a'],
     ['hidden-agent-work', n(today.hiddenAgentWork), p ? n(p.hiddenAgentWork) : 'n/a'],
+    ['manager failover unit', today.failover ? `${today.failover.unit} ${n(today.failover.state)}` : 'not checked', p ? (p.failover ? n(p.failover.state) : 'not checked') : 'n/a'],
     ['sessions (needs you)', `${n(today.sessions)} (${n(today.needsYou)})`, p ? `${n(p.sessions)} (${n(p.needsYou)})` : 'n/a'],
   ];
   const report = ['| metric | today (24 h) | previous day |', '| --- | --- | --- |',

@@ -3,6 +3,8 @@
 The release note of this repo (owner 2026-11-13). Every merged code change (not docs-only) adds one entry at the top of
 `## Unreleased`; the done-check reads the merged diff for this file (REFERENCE "Closing review"). Entry form: one line,
 
+- **The daily harness check flags an inactive manager failover unit, and cbsession refuses an API-key session it cannot run** — `ghosty-manager-failover` sat inactive with nobody told, so the MiniMax standby could never replace a used-up Claude manager: `harness-health-check.js` now has a `manager failover unit` row and a `harness-health:manager-failover` finding when it is `inactive` / `failed`. `cbsession -b <key>` started an interactive Claude Code session that the API refuses on its first turn ("Credit balance too low"); it now exits 2 with a `claude -p` hint unless `CBSESSION_API_INTERACTIVE=1` (2026-11-26). Tests: `test/harness-health-check.test.js`, `test/cbsession.test.js` · area: harness
+
 - **A lease reservation keeper holds several resources for one agent for a fixed time** — `scripts/lease-reserve-keeper.js` claims one exclusive multi-resource lease for a named agent, heartbeats it, renews it, re-claims at once at the 60-min hold cap or after a loss, and releases + runs an on-end command at the end time or on `stop` (2026-11-26, owner order: all STBs reserved for `userinterface-audit` for 24 h); tests in `test/lease-reserve-keeper.test.js`.
 
 - **A session that hit "You hit your weekly limit" is now moved to another Claude account** — the stop scan required "You've", so artifact never swapped (2026-11-26); it also reads "You're out of usage credits", retries a failed swap, and resumes a Fable session on opus. Tests: `test/claude-accounts.test.js`.
