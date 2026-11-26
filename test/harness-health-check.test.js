@@ -8,8 +8,12 @@ import { join } from 'node:path';
 import {
   askStats, laneStats, ciStats, loadAvgs, memAvailableMb, diskPct, inWindow,
   fetchSessions, collect, summarize, prevLine, run, FINAL_STATES, MEM_MIN_MB, hiddenAgentWork, hiddenAgentStats,
+  unitState, FAILOVER_UNIT,
 } from '../scripts/harness-health-check.js';
 import { tmp } from './helpers-tmp.js';
+
+// Never ask the real systemd: the failover-unit check is off unless a test injects a state.
+process.env.HARNESS_FAILOVER_UNIT = '';
 
 const NOW = Date.UTC(2026, 9, 21, 6, 0, 0);          // 2026-10-21 06:00 UTC
 const ago = (ms) => new Date(NOW - ms).toISOString();
@@ -411,4 +415,40 @@ test('hiddenAgentStats + summarize: count line and a finding; missing dir is n/a
   assert.ok(s.report.includes('| hidden-agent-work | 1 |'));
   assert.equal(hiddenAgentStats({ dir: join(dir, 'nope') }).count, null);
   assert.ok(!summarize({ ...base, hiddenAgentWork: 0 }, null).findings.some((f) => /hidden/.test(f.key)));
+});
+
+// ---- manager failover unit -------------------------------------------------------------------------------------------
+test('unitState: reads the one word of systemctl is-active, also from a non-zero exit; off and no answer', () => {
+  const calls = [];
+  assert.equal(unitState('u', (cmd, args) => { calls.push([cmd, ...args]); return 'active\n'; }), 'active');
+  assert.deepEqual(calls, [['systemctl', 'is-active', 'u']]);
+  const fail = (stdout) => () => { throw Object.assign(new Error('exit 3'), { stdout }); };
+  assert.equal(unitState('u', fail('inactive\n')), 'inactive', 'is-active exits 3 for an inactive unit');
+  assert.equal(unitState('u', fail('failed\n')), 'failed');
+  assert.equal(unitState('u', fail('')), 'unknown', 'no systemctl / no answer is unknown');
+  assert.equal(unitState('', () => { throw new Error('never called'); }), null, 'empty unit name = check off');
+});
+
+test('summarize: an inactive or failed failover unit is a finding; active, unknown and not checked are not', () => {
+  const base = summarize({ date: 'd', states: {}, ci: {}, box: {}, asked: 0, answered: 0, open: 0, decisions: 0, approvalRefused: 0 }, null);
+  assert.ok(!base.findings.some((f) => f.key === 'harness-health:manager-failover'));
+  assert.match(base.report, /manager failover unit \| not checked/);
+  const day = (state) => summarize({ date: 'd', states: {}, ci: {}, box: {}, asked: 0, answered: 0, open: 0, decisions: 0, approvalRefused: 0, failover: { unit: FAILOVER_UNIT, state } }, null);
+  for (const state of ['inactive', 'failed']) {
+    const s = day(state);
+    const f = s.findings.find((x) => x.key === 'harness-health:manager-failover');
+    assert.ok(f, state);
+    assert.equal(f.title, `${FAILOVER_UNIT} is ${state}`);
+    assert.match(f.body, /systemctl enable --now ghosty-manager-failover/);
+    assert.ok(f.body.length <= 300);
+  }
+  for (const state of ['active', 'activating', 'unknown']) assert.deepEqual(day(state).findings, [], state);
+  assert.match(day('inactive').report, /manager failover unit \| ghosty-manager-failover inactive/);
+});
+
+test('collect: an injected failover state is recorded; the env switch off records null', () => {
+  const dir = tmp('harness-health-fo-');
+  const box = { load1: 1, memAvailableMb: 4096, diskPct: 50 };
+  assert.deepEqual(collect({ stateDir: dir, now: NOW, box, failover: { unit: 'x', state: 'inactive' } }).failover, { unit: 'x', state: 'inactive' });
+  assert.equal(collect({ stateDir: dir, now: NOW, box }).failover, null, 'HARNESS_FAILOVER_UNIT empty: not checked');
 });

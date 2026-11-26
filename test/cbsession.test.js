@@ -11,7 +11,9 @@ const SCRIPT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 
 const home = tmp('cbs-');
 const work = path.join(home, 'work'); fs.mkdirSync(work);
 fs.writeFileSync(path.join(home, 'handover.md'), '# h\nGoal: do it.\nDone when:\n1. the check passes with a run id\n');
-const run = (...args) => spawnSync('bash', [SCRIPT, ...args], { encoding: 'utf8', env: { PATH: process.env.PATH, HOME: home, MCODE_NODE_DIR: '/opt/fake-node/bin', GHOSTY_STATE_DIR: path.join(home, 'state') } });
+const runEnv = (extra, ...args) => spawnSync('bash', [SCRIPT, ...args], { encoding: 'utf8', env: { PATH: process.env.PATH, HOME: home, MCODE_NODE_DIR: '/opt/fake-node/bin', GHOSTY_STATE_DIR: path.join(home, 'state'), ...extra } });
+const run = (...args) => runEnv({}, ...args);
+const API_OK = { CBSESSION_API_INTERACTIVE: '1' };   // -b NAME is refused without it (interactive Claude Code on an API key)
 const launch = (name) => fs.readFileSync(path.join(home, 'handovers', `${name}.launch.sh`), 'utf8');
 
 test('dry run per provider writes the launch file and starts nothing', () => {
@@ -42,7 +44,12 @@ test('billing: sub drops env keys, -b NAME points apiKeyHelper at the key file',
   const kd = path.join(home, '.config', 'anthropic'); fs.mkdirSync(kd, { recursive: true });
   fs.writeFileSync(path.join(kd, 'team.key'), 'sk-ant-secret\n', { mode: 0o600 });
   fs.writeFileSync(path.join(kd, 'team.workspace'), 'wrkspc_abc\n');
-  r = run('-x', '-n', 'cb-team', '-d', work, '-b', 'team', '-t', 'x');
+  r = run('-x', '-n', 'cb-refused', '-d', work, '-b', 'team', '-t', 'x');
+  assert.equal(r.status, 2, 'an interactive session on an API key is refused');
+  assert.match(r.stderr, /refused: -b team would start an INTERACTIVE Claude Code session on an API key/);
+  assert.match(r.stderr, /claude -p/);
+  assert.ok(!fs.existsSync(path.join(home, 'handovers', 'cb-refused.launch.sh')), 'nothing written for a refused start');
+  r = runEnv(API_OK, '-x', '-n', 'cb-team', '-d', work, '-b', 'team', '-t', 'x');
   assert.equal(r.status, 0, r.stderr);
   const sj = path.join(home, 'handovers', 'cb-team.settings.json');
   assert.match(launch('cb-team'), new RegExp(`claude --settings ${sj} --dangerously`));
@@ -50,8 +57,8 @@ test('billing: sub drops env keys, -b NAME points apiKeyHelper at the key file',
   assert.equal(st.apiKeyHelper, `cat "${path.join(kd, 'team.key')}"`);
   assert.equal(st.env.ANTHROPIC_CUSTOM_HEADERS, 'anthropic-workspace-id: wrkspc_abc');
   assert.ok(!launch('cb-team').includes('sk-ant-secret') && !fs.readFileSync(sj, 'utf8').includes('sk-ant-secret'));
-  assert.equal(run('-x', '-n', 'cb-nokey', '-d', work, '-b', 'missing', '-t', 'x').status, 2);
-  assert.equal(run('-x', '-n', 'cb-mmb', '-d', work, '-p', 'minimax', '-b', 'team', '-t', 'x').status, 2);
+  assert.equal(runEnv(API_OK, '-x', '-n', 'cb-nokey', '-d', work, '-b', 'missing', '-t', 'x').status, 2);
+  assert.equal(runEnv(API_OK, '-x', '-n', 'cb-mmb', '-d', work, '-p', 'minimax', '-b', 'team', '-t', 'x').status, 2);
 });
 
 test('argument errors', () => {
@@ -137,7 +144,7 @@ test('a claude session starts on the active Claude account (the rotation reaches
   const kd = path.join(home, '.config', 'anthropic'); fs.mkdirSync(kd, { recursive: true });
   fs.writeFileSync(path.join(kd, 'acckey.key'), 'sk-ant-fake\n', { mode: 0o600 });
   fs.writeFileSync(accountsFile, JSON.stringify({ active: 'team1', accounts: [{ id: 'default' }, { id: 'team1', configDir: acct }] }));
-  r = run('-x', '-n', 'cb-key', '-d', work, '-b', 'acckey', '-t', 'x');
+  r = runEnv(API_OK, '-x', '-n', 'cb-key', '-d', work, '-b', 'acckey', '-t', 'x');
   assert.equal(r.status, 0, r.stderr);
   assert.ok(!launch('cb-key').includes('CLAUDE_CONFIG_DIR'), 'the API key billing keeps the default account');
   // another provider is not a Claude session
