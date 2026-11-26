@@ -77,14 +77,15 @@ const PANE_RUNNING_RE = /\bRunning\s+\d+(?:[hms])/i;
 // Inline spinner glyphs (Codex uses ⠇ ⠋ ⠙ …).
 const PANE_SPINNER_RE = /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+\S/;
 
-export function paneBackgroundOf(plain) {
+// opts.shell false: leave Claude's own "1 shell" footer out (it has its own flag, paneShellOf, which a STATUS: done line outranks)
+export function paneBackgroundOf(plain, { shell = true } = {}) {
   if (!Array.isArray(plain) || plain.length === 0) return false;
   // Strip ANSI, look at the last ~6 non-blank lines. NOISE has already been removed by
   // plainLines() upstream, so spinners and the footer are still here.
   const tail = plain.filter((l) => String(l || '').trim()).slice(-6);
   for (const l of tail) {
     if (PANE_BG_COUNT_RE.test(l)) return true;
-    if (PANE_RUNNING_RE.test(l) || PANE_SHELL_RE.test(l)) return true;
+    if (PANE_RUNNING_RE.test(l) || (shell && PANE_SHELL_RE.test(l))) return true;
     if (PANE_SPINNER_RE.test(l)) return true;
   }
   return false;
@@ -206,4 +207,10 @@ export function footerModelOf(lines) {
   let found = null;
   for (const l of lines.slice(-40)) { const m = FOOTER_MODEL_RE.exec(String(l)); if (m) found = m[1]; }
   return found;
+}
+
+// Claude Code's footer says a background shell is still running ("1 shell · ↓ to manage"): shown as working, but never over a STATUS: done line.
+export function paneShellOf(plain) {
+  if (!Array.isArray(plain) || plain.length === 0) return false;
+  return plain.filter((l) => String(l || '').trim()).slice(-6).some((l) => PANE_SHELL_RE.test(l));
 }
