@@ -1491,7 +1491,7 @@ Usage records contain numbers and identifiers; evaluation/dataset features can a
   and per session `today`, `days`, `activeHours` for the usage view.
 - **Session history** (`session-history.js`, `history-view.js`): `$GHOSTY_STATE_DIR/session-history.jsonl`, append-only,
   one JSON object per line, `schema_version: 1`; a torn or invalid last line is skipped on read.
-  `{kind:'session.started', name, provider, model|null, cwd, started_by:'dashboard'|'cbsession'|'v2'|'manager'|'unknown',
+  `{kind:'session.started', name, provider, model|null, cwd, started_by:'dashboard'|'cbsession'|'v2'|'manager'|'unknown', parent? (the starting session's name),
   prompt_ref, handover_ref, remote_control_url?, ts}` and `{kind:'session.ended', name, ts, reason:'killed'|'exited'|'vanished'}`.
   `prompt_ref` is a file path or at most 200 sanitized characters of prompt text. A session instance is a start plus the
   next end for the same name (names are reused). Writers: dashboard create/kill, the tick (a live tmux session with no
@@ -1797,7 +1797,7 @@ State: `<state>/accepted-final.json`; journal `accepted-final.jsonl`. Tests: `te
 
 ## Sessions are never auto-closed (owner, 2026-10-30)
 
-A session is closed only by the owner or by the agent that spawned it (`DELETE /api/sessions/<s>?confirm=<s>`); the manager closes one only
+A session is closed only by the owner or by the agent that spawned it (`DELETE /api/sessions/<s>?confirm=<s>`); the manager closes a [session it started](#sessions-the-manager-started-owner-2026-11-26) once it is really done, and any other only
 when the owner asks for that session (owner, 2026-11-01). One rule text: [CONTRACT "Who may do what"](CONTRACT.md#who-may-do-what-one-rule-text).
 No ghosty tick sends `/exit` or `/quit` or kills a tmux session on its own. (The manager's own fresh restart, nightly or by the context cap, is a restart of the same tmux session, not a close: `/exit` then relaunch, see "Context cap".) This replaces "Worker auto-close" (owner,
 2026-10-18, a done + idle + git-clean worker closed after `workerIdleMin`): `worker-auto-close.js` `shouldClose()` always
@@ -2247,7 +2247,7 @@ success flags. Canonical rule text (AGENTS.md of mycodebox and VirtualPyTest, `c
 | 2 | `running` | Work **of yours** is still going: your background job, a worker session you started. You will be woken and continue | Nothing is actually running | Nobody; the harness wakes you |
 | 3 | `waiting` | You depend on something **not yours** that ends by itself: a lane request, a deploy, a lease ticket, another session's work, a named time | You could work on something else meanwhile, or nothing will ever end it | Nobody; the harness wakes you |
 | 4 | `needs-manager` | You need a decision or an answer (technical, merge, deploy, lease, design) | You have a recommendation and the choice is reversible: decide | Manager |
-| 5 | `needs-owner` | Money, customers, deleting shared data, a credential only the owner holds, a physical action, or your yes / no on an improvement suggestion the session listed | Anything else | Owner |
+| 5 | `needs-owner` | Money, customers, deleting shared data, a credential only the owner holds, a physical action, or your yes / no on an improvement suggestion the session listed | Anything else, and any session the manager started (it ends `needs-manager`) | Owner |
 | 6 | `blocked` | You **cannot work** and nothing running will fix it: someone must act (a device is dead, an access is missing) | Something is running or queued (that is `running` or `waiting`) | Manager |
 | 7 | `failed` | You stopped and the goal is **not** reached after you tried what you could, **and you investigated**: the line names the cause and the next plan | You have not tried, work is still running, or you have no cause and no plan yet | Manager |
 
@@ -2291,7 +2291,7 @@ Goal first, verification last (owner 2026-11-11; `docs/GOAL-RULE.md`, kept equal
 
 ### Reflection after an accepted done (owner, 2026-11-26)
 
-**Reflection after an accepted done** (owner 2026-11-26): suggestions for improvement (anything beyond the task's goal) are not leftovers: do not build or file them unasked, do not list them in the closing review. A session with a suggestion the owner has not answered is never done: any turn that lists one, in any words, asked or not, ends `STATUS: needs-owner: improvement suggestions above, nothing built — should I do <numbers>?`, workers too. When a done is accepted with the goal met, the harness asks once: (a) leftovers of this task: fix them now; (b) the suggestions under `Suggestions:`, split `Worth doing` / `Smaller` with one recommendation, or the single line `no suggestions`, the only answer that leaves the session done. Only the owner answers, yes or no per item (`yes 1 3, no 2`, `no all`); a manager, a peer or an automatic answer never does. Approved items are a new task with their own `Done when` lines.
+**Reflection after an accepted done** (owner 2026-11-26): suggestions for improvement (anything beyond the task's goal) are not leftovers: do not build or file them unasked, do not list them in the closing review. A session with a suggestion the owner has not answered is never done: any turn that lists one, in any words, asked or not, ends `STATUS: needs-owner: improvement suggestions above, nothing built — should I do <numbers>?`, workers too. When a done is accepted with the goal met, the harness asks once: (a) leftovers of this task: fix them now; (b) the suggestions under `Suggestions:`, split `Worth doing` / `Smaller` with one recommendation, or the single line `no suggestions`, the only answer that leaves the session done. Only the owner answers, yes or no per item (`yes 1 3, no 2`, `no all`); a manager, a peer or an automatic answer never does. The one exception is a session the manager started: it ends `needs-manager`, never `needs-owner`, and the manager answers its suggestions (a peer or an automatic answer still never does). Approved items are a new task with their own `Done when` lines.
 
 Why: after a done with a closing review and a goal check, the owner still had to type "any leftover, suggestion of improvements"
 (2026-11-26, 06:10 UTC, session `artifacts`) to get the useful answer: a ranked list of seven things noticed during the checks, "worth
@@ -2322,7 +2322,7 @@ reflection reply.
   `Possible improvements`, `Ideas`, or any line naming improvements / suggestions that ends in `:`) in a turn that ends `done`, `needs-owner`
   or `needs-manager` (`suggestionsIn`; 15 of 2,875 past hand-over turns matched on 2026-11-26). A heading about improvements already made (shipped, built, merged, release note) is not one. Running
   and waiting turns and turns from before the rule are not read. An item listed again is the same item.
-- **Items leave only by the owner's answer.** Dropping the list, or writing `no suggestions` later, removes nothing. `no suggestions` counts
+- **Items leave only by the owner's answer** (for a session the manager started, the manager's too: [below](#sessions-the-manager-started-owner-2026-11-26)). Dropping the list, or writing `no suggestions` later, removes nothing. `no suggestions` counts
   only as the reply to the question, with no open item.
 - **Held** (`status.suggestions` in the status map): `{state: "pending"}` from the done line until the question is answered, `{state: "open",
   open, items}` while any item has no answer. Pending reads as **done** on the dashboard (owner 2026-11-26: finished sessions had stayed
@@ -2339,7 +2339,7 @@ reflection reply.
   answer, or is typed into the session (terminal or Remote Control: a reporter prompt this server did not type, not a peer message, hook or
   notification; Mac: the Stop hook's `last_prompt`). A Mac row has no pane: a dashboard yes / no is recorded (nothing is typed) and the
   manager gets `suggestions-answered:<session>` to pass your words on with `SendMessage`.
-- **Nobody else answers.** `POST /api/send` and `/api/send-many` from any other actor get **409** for a yes / no or a menu key while items
+- **Nobody else answers** (owner-started sessions). `POST /api/send` and `/api/send-many` from any other actor get **409** for a yes / no or a menu key while items
   are open; their other messages arrive with a note that they are not the owner's answer. `manager.js` makes no automatic answer (rules, AI
   triage, menu, merge, ready window; checked again when the countdown fires) while items are open or the question is unanswered, whatever the
   closing line says.
@@ -2358,6 +2358,33 @@ reflection reply.
   reporter prompt event: answer from the dashboard. A suggestion written as plain prose, with no heading and no list, is only caught by the
   question's reply being `no suggestions` or a list.
 - **State** `<state>/suggestions.json`, journal `suggestions.jsonl` (`listed`, `asked`, `reply: "none"`, `answered`); `GET /api/suggestions`.
+
+### Sessions the manager started (owner, 2026-11-26)
+
+Owner, to the manager: "there is 2 sessiosn that you opened those should not ask me since you opened you need to handle them ... if there is things
+i need to answer it has to come from your session". And: "it is your session if done you have to close it". Rule text: AGENTS.md "Sessions the manager
+started answer to the manager". Owner-started sessions behave as before.
+
+- **Who** (`manager-owned.js`): the recorded starter is a manager session (`managerSessions`) or `manager-agent`, or is itself such a session (the
+  chain is followed). With no recorded starter (`unknown`, `cbsession`) a line in `manager-children.jsonl` counts, unless it is more than a day older than
+  the running instance (a reused name). `dashboard`, `owner` and `v2` starts are never the manager's. A starter that is a session name is stored in
+  `session-history.jsonl` as `parent` (`started_by: "cbsession"`); before this, `POST /api/history/started` refused it and nothing was recorded.
+- **Told:** `cbsession` adds the rule to the brief; the reflection, open-suggestions and missing-reply messages say `needs-manager`; every other harness
+  text that names `needs-owner` (done-check, goal-check, UI review) is rewritten on send (`forManagerSession`).
+- **No owner ask:** `waiting` / `asks` alerts become the manager event `<session>:needs-manager` instead of a push; a stop the rules would have
+  escalated to the owner is a manager item (`manager.js` `escalate`); no "is done" push for a turn that ends `needs-*`; the status row carries
+  `managerStarted`, so it is never in NEEDS YOU, the answer popup or the voice queue and shows as **manager**. Health, bug and hold notices are unchanged.
+- **Suggestions:** `POST /api/send/<s>` (or `/api/send-many`) with `by: "manager-agent"` and a yes / no records it with `by: "manager"`
+  (`suggestions.json`, `suggestions.jsonl`, "Decided for you"). "do the N" of N items gets 400, a menu key 409. For an owner-started session, and for any
+  other sender, the 409 of [No done while a suggestion has no yes / no](#no-done-while-a-suggestion-has-no-yes--no-owner-2026-11-26-suggestionsjs) stands. The owner can still answer.
+- **Owner-only items:** `scripts/manager-ask.js --source <s>` (also `owner-ask.js`) files the ask under `manager:<s>` with `source`, so the source
+  session's later turns do not close it; the owner reads "(from session <s>)". `--session <s>` of such a session is treated the same. Run from such a
+  session itself (`CBSESSION_PARENT`), both commands refuse.
+- **Ready to close:** when the reflection is cleared (`no suggestions` on a done line, or every item answered with nothing approved left to build) the
+  manager gets `<s>:ready-to-close` once per round. The manager checks the done line, then closes with `DELETE /api/sessions/<s>?confirm=<s>`; the delete
+  guard is unchanged and nothing closes by itself. With `reflection` or `goalCheck` off there is no such event.
+- **Limits:** `by` is declared by the caller (no login), as for every manager send. Mac sessions are never the manager's. A mockup a session posts still
+  reaches the owner's feed.
 
 ### Goal check (owner, 2026-11-11)
 

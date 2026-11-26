@@ -6,7 +6,7 @@
 // Usage:
 //   node scripts/owner-ask.js ask --session <s> --question "<plain words>" \
 //          --what "<2-4 lines: what it is, where, what each option does>" \
-//          --options "1 ...|2 ..." --recommend <n> --floor <floor> --why "<why you>"
+//          --options "1 ...|2 ..." --recommend <n> --floor <floor> --why "<why you>" [--source <session the manager started>]
 //   node scripts/owner-ask.js decide --session <s> --decision "<what was decided>" --why "<reason>" --undo "<how to revert>"
 //   node scripts/owner-ask.js help
 //
@@ -44,6 +44,7 @@ import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { FLOORS, fileAsk, fileDecision } from '../owner-asks.js';
+import { createManagerOwned, ownerAskRoute } from '../manager-owned.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const STATE_DIR = process.env.GHOSTY_STATE_DIR || join(homedir(), '.local', 'state', 'ghosty');
@@ -101,8 +102,10 @@ async function main() {
   const f = args.flags;
 
   if (cmd === 'ask') {
+    const route = ownerAskRoute(createManagerOwned({ stateDir: STATE_DIR }), { session: f.session, source: f.source, caller: process.env.CBSESSION_PARENT });
+    if (route.refuse) fail(route.refuse);
     const r = await fileAsk(ASKS_FILE, {
-      session: f.session, question: f.question, what: f.what, options: opts(f),
+      session: route.session, source: route.source, question: f.question, what: f.what, options: opts(f),
       recommend: f.recommend || f.recommendation, recommendation: f.recommendation || f.recommend,
       floor: f.floor, why: f.why, supersedes: f.supersedes,
     });

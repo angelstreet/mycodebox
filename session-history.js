@@ -44,6 +44,7 @@ export function validateRecord(r, now = Date.now()) {
   if (!STARTED_BY.includes(r.started_by)) throw new TypeError(`unknown started_by: ${r.started_by}`);
   const out = { schema_version: SCHEMA_VERSION, kind: r.kind, name: r.name, provider: strOrNull(r.provider, 40), model: strOrNull(r.model, 120),
     cwd: strOrNull(r.cwd), started_by: r.started_by, prompt_ref: sanitizePromptRef(r.prompt_ref), handover_ref: strOrNull(r.handover_ref), ts };
+  if (typeof r.parent === 'string' && NAME_RE.test(r.parent)) out.parent = r.parent;   // the session that started it (manager-owned.js follows the chain)
   if (Number.isFinite(Number(r.tmux_created)) && Number(r.tmux_created) > 0) out.tmux_created = Number(r.tmux_created);   // tmux #{session_created}: tells a reused name from the same session
   const rc = strOrNull(r.remote_control_url, 300);
   if (rc && /^https:\/\/[^\s]+$/.test(rc)) out.remote_control_url = rc;
@@ -62,12 +63,13 @@ export function createFolder() {
         Object.assign(cur, { provider: r.provider ?? cur.provider, model: r.model ?? cur.model, cwd: r.cwd ?? cur.cwd, started_by: r.started_by,
           prompt_ref: r.prompt_ref, handover_ref: r.handover_ref, remote_control_url: r.remote_control_url ?? cur.remote_control_url ?? null,
           tmux_created: cur.tmux_created ?? r.tmux_created ?? null, start: Math.min(cur.start, r.ts) });
+        if (r.parent) cur.parent = r.parent;
         return;
       }
       if (cur) { cur.end = r.ts; cur.end_reason = 'superseded'; }
       const inst = { name: r.name, provider: r.provider ?? null, model: r.model ?? null, cwd: r.cwd ?? null, started_by: r.started_by,
         prompt_ref: r.prompt_ref ?? null, handover_ref: r.handover_ref ?? null, remote_control_url: r.remote_control_url ?? null, tmux_created: r.tmux_created ?? null,
-        start: r.ts, end: null, end_reason: null };
+        start: r.ts, end: null, end_reason: null, ...(r.parent ? { parent: r.parent } : {}) };
       open.set(r.name, inst); out.push(inst);
     } else if (r.kind === 'session.ended') {
       const cur = open.get(r.name);

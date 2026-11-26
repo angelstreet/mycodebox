@@ -142,3 +142,13 @@ test('cbsession: a repo whose AGENTS.md carries the harness rules gets a pointer
     assert.match(p, /\| 7 \| `failed` \|/); assert.match(p, /\*\*Goal first, verification last \(owner/); assert.match(p, /cause: <what you found> · plan: <next approach, who does it>/);
   }
 });
+
+test('a brief for a session the manager started says needs-manager; an owner-started one does not (manager-owned.js)', () => {
+  const brief = (name, by) => {
+    const r = spawnSync('bash', [SCRIPT, '-x', '-n', name, '-d', work, '-H', handover], { encoding: 'utf8', env: { ...env, CBSESSION_BY: by } });
+    assert.equal(r.status, 0, r.stderr);
+    return promptOf(name);
+  };
+  assert.match(brief('cbp-mgr', 'manager'), /The manager started your session.*never end `STATUS: needs-owner`/);
+  assert.doesNotMatch(brief('cbp-own', 'dashboard'), /The manager started your session/);
+});

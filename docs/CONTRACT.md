@@ -74,13 +74,13 @@ committed"). Verify UI yourself with headless Playwright. Every turn ends with a
 | Answer a merge / push / deploy / recommended-option question | The manager, evaluated and journaled; the owner corrects afterwards (owner 2026-10-14, OWNER_DECISIONS §14, §15) | Answering a hard-floor item for the owner |
 | Restart `ghosty-sessions` | The lane after a server deploy; anyone else only through `scripts/safe-restart.sh` (it refuses during a deploy) | `systemctl restart ghosty-sessions` or `kill` on the service |
 | Restart a lab `vpt-*` unit | The session holding the host (or `<host>/<device>`) lease, allowlisted units only (owner 2026-10-27, widened 2026-10-31; [REFERENCE](REFERENCE.md#autonomy-by-default-push-deploy-and-recommended-options-owner-2026-10-14)) | `stop`, `enable`, `disable`, `mask`, `daemon-reload`, unit files, non-allowlisted units, production hosts |
-| Close a session (`DELETE /api/sessions/<s>?confirm=<s>`) | The owner; the agent that started the session (`startedBy`) for its own child; the manager only when the owner asks for that session (owner 2026-11-01) | Any automatic close: no tick sends `/exit` or kills a session (owner 2026-10-30). The delete guard refuses a session with an open ask, a lease or unmerged work unless `by=owner` or the spawner (2026-11-11) |
+| Close a session (`DELETE /api/sessions/<s>?confirm=<s>`) | The owner; the agent that started the session (`startedBy`) for its own child; the manager for a session it started once it is really done (`ready-to-close` event, owner 2026-11-26), for any other only when the owner asks for that session (owner 2026-11-01) | Any automatic close: no tick sends `/exit` or kills a session (owner 2026-10-30). The delete guard refuses a session with an open ask, a lease or unmerged work unless `by=owner` or the spawner (2026-11-11) |
 | Park or rotate a session | Explicit park, `autoParkArchived` (the owner archived it in the Claude app: API `status: archived` or the 4090 line; a `mac:` row is removed; owner 2026-11-25), or account rotation on a usage limit (owner 2026-11-06): not a close | — |
 | Kill a process | Your own only (`kill <pid>`, `pkill -P <your pid>`, a pattern naming your worktree) | `killall`, broad `pkill -f` patterns |
 
 ### Hard floor
 
-Only the owner decides these; nobody, the manager included, answers them on the owner's behalf (owner 2026-10-14, every verb
+Only the owner decides these; nobody, the manager included, answers them on the owner's behalf (a session the manager started sends them to the manager, which asks the owner with `manager-ask.js --source <session>`) (owner 2026-10-14, every verb
 form, [REFERENCE](REFERENCE.md#autonomy-by-default-push-deploy-and-recommended-options-owner-2026-10-14)):
 deleting data; credentials and secrets (new, revoked, rotated, printed); money; customers; sudoers; units on hosts; reboots;
 destructive or unreadable database migrations and database resets; force-push and history rewrites (`--force-with-lease`,
@@ -121,7 +121,7 @@ Opus says**. Where it shows, and the example call: [REFERENCE](REFERENCE.md#in-d
 | Done with leftovers, "not fully confirmed", `partial` | At most 3 a day (`LEFT_PUSHES_PER_DAY`), then the manager is told |
 | Done line without `bugs:` | Once per 12 h (`BUGS_COOLDOWN_MS`) |
 | Reflection question after a done accepted with the goal met (leftovers, suggestions; nothing built unasked) | Once per session and task ([REFERENCE](REFERENCE.md#reflection-after-an-accepted-done-owner-2026-11-26)) |
-| Done turn while a suggestion has no yes / no from the owner; or a reply that answers the question neither way | Once per done turn; once. Only the owner answers a suggestion, never the manager or an automatic answer |
+| Done turn while a suggestion has no yes / no from the owner; or a reply that answers the question neither way | Once per done turn; once. Only the owner answers a suggestion, never the manager or an automatic answer; for a session the manager started, the manager answers ([REFERENCE](REFERENCE.md#sessions-the-manager-started-owner-2026-11-26)) |
 | `STATUS: waiting: lease` while a healthy equivalent is free | Once; the manager is told on the second stop |
 
 All kinds together: at most 2 sessions per check (every 5 min), none while the host is busy.
@@ -138,6 +138,7 @@ once** (owner 2026-11-10; `VPT_LEASE_SWITCH_AFTER` delays it); the lease watchdo
 |---|---|---|
 | 2026-10-14 "merge your own work, push to `main` yourself" (§15 wording, `ci-watch.js` brief, `scripts/cbsession` step 3) | 2026-10-18 integration lane, 2026-11-11 ship rule | Push your branch, `integrate request`; the lane merges and deploys |
 | 2026-10-22 "close finished children" (nightly kick); 2026-10-30 "the manager may close" | 2026-11-01 "stop closing them" | The manager closes only on the owner's request |
+| 2026-11-01 "stop closing them", for sessions the manager started | 2026-11-26 "it is your session if done you have to close it" | The manager closes its own session once really done; never automatic; others only on the owner's request |
 | 2026-11-01 auto-equivalent "after 2 minutes" | 2026-11-10 "at once" | At once |
 | 2026-10-25 unit install on a CI runner or helper VM only (OWNER_DECISIONS §20) | 2026-10-26 codebox and helper database hosts too | The wider 2026-10-26 list |
 | 2026-10-04 manager on Opus (manager manual) | 2026-10-21 Sonnet, not Opus (`MANAGER_MODEL`) | Sonnet |

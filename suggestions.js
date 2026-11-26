@@ -1,6 +1,6 @@
 // Suggestions the owner has not answered (owner, 2026-11-26): "if a user say done i ll archive and miss the fact that he suggest improvements, we should
 // not say done until i say yes or no for the improvements". Every suggestion a session lists, in the reflection reply or anywhere else in a hand-over
-// turn, is an item here until the OWNER says yes or no to it. While one is open, or the reflection question is not answered, the session is not done:
+// turn, is an item here until the OWNER says yes or no to it (for a session the manager started: the MANAGER, owner 2026-11-26, manager-owned.js). While one is open, or the reflection question is not answered, the session is not done:
 // the dashboard does not show it as done (public/state.js), no "is done" push goes out, and nothing answers for the owner (manager.js, server.js).
 // Items leave only by the owner's answer: a session that drops the list, or writes `no suggestions` later, clears nothing.
 // State: <state>/suggestions.json, journal suggestions.jsonl.
@@ -164,7 +164,7 @@ export function createSuggestions({ stateDir, now = Date.now, active = () => tru
   const note = (e) => { try { appendFileSync(journal, JSON.stringify({ at: new Date(now()).toISOString(), ...e }) + '\n'); } catch {} };
   const rec = (name) => (Object.hasOwn(st.s, name) ? st.s[name] : null);
   const ensure = (name) => rec(name) || (st.s[name] = { items: [] });
-  const resolved = (name, how) => { try { onResolved(name, how); } catch (e) { log.error?.('[suggestions] resolved', e.message); } };
+  const resolved = (name, how, info) => { try { onResolved(name, how, info); } catch (e) { log.error?.('[suggestions] resolved', e.message); } };
   const seen = new Map();   // session -> sig of the last text read (the poll reads the same turn over and over)
 
   // A turn the session ended. text: its closing text; at: when it ended. -> { added: [items] }
@@ -193,10 +193,11 @@ export function createSuggestions({ stateDir, now = Date.now, active = () => tru
       delete r.clear;
     }
     const r = rec(name);
+    if (added.length) delete r.closeTold;   // a new list: not ready to close again until it is answered
     if (added.length) { note({ session: name, listed: added.map((i) => ({ n: i.n, tier: i.tier, text: i.text.slice(0, 120) })), status: ls.kind }); save(); return { added }; }
     // the answer to the question: `no suggestions`, in a turn written after it was asked
     if (r?.asked && !r.clear && (later ?? sig !== r.asked.sig) && !listed.length && !openOf(r).length && saysNoSuggestions(text)) {
-      r.clear = { at: now(), how: 'none' }; note({ session: name, reply: 'none', status: ls.kind }); save(); resolved(name, 'none');
+      r.clear = { at: now(), how: 'none' }; note({ session: name, reply: 'none', status: ls.kind }); save(); resolved(name, 'none', { done: DONE_WORDS.has(ls.kind) });
     }
     return { added };
   }
@@ -209,24 +210,25 @@ export function createSuggestions({ stateDir, now = Date.now, active = () => tru
     seen.delete(name);
     note({ session: name, asked: true }); save();
   }
-  // The OWNER's yes / no. answers: { n: 'yes'|'no' }. Callers are the only judges of who the owner is. -> { answered: [items], open: n, approved: [items] }
-  function answer(name, answers, { via = 'dashboard' } = {}) {
+  // The yes / no. answers: { n: 'yes'|'no' }; by: 'owner', or 'manager' for a session the manager started. Callers are the only judges of who is who.
+  // -> { answered: [items], open: n, approved: [items] }
+  function answer(name, answers, { via = 'dashboard', by = 'owner' } = {}) {
     const r = rec(name);
     const answered = [];
     for (const i of openOf(r)) {
       const a = answers?.[i.n];
       if (a !== 'yes' && a !== 'no') continue;
-      Object.assign(i, { answer: a, by: 'owner', via, answeredAt: now() });
+      Object.assign(i, { answer: a, by, via, answeredAt: now() });
       answered.push(i);
     }
     if (!answered.length) return { answered, open: openOf(r).length, approved: [] };
-    note({ session: name, answered: answered.map((i) => ({ n: i.n, answer: i.answer })), via });
+    note({ session: name, answered: answered.map((i) => ({ n: i.n, answer: i.answer })), by, via });
     // a new yes starts its work at once, together with the approved items not finished yet (so none drops out of the Done-when list)
     const unbuilt = r.items.filter((i) => i.answer === 'yes' && !i.built);
     const approved = answered.some((i) => i.answer === 'yes') ? unbuilt : [];
     if (!openOf(r).length) { if (unbuilt.length) delete r.clear; else r.clear = { at: now(), how: 'answered' }; }
     save();
-    if (r.clear) resolved(name, 'answered');
+    if (r.clear) resolved(name, 'answered', { done: true });
     return { answered, open: openOf(r).length, approved };
   }
   // A message that reached the session and was typed by the owner: records it when it reads as an answer. -> answer() result or null
@@ -244,11 +246,13 @@ export function createSuggestions({ stateDir, now = Date.now, active = () => tru
     return { state: 'pending' };
   }
   // a new round of work (approved suggestions): its done is asked again
-  function newRound(name) { const r = rec(name); if (r) { delete r.clear; delete r.asked; delete r.missing; seen.delete(name); save(); } }
+  function newRound(name) { const r = rec(name); if (r) { delete r.clear; delete r.asked; delete r.missing; delete r.closeTold; seen.delete(name); save(); } }
+  // true once per round: the done was accepted (the question was asked) and nothing is left to answer or build -> the session is really done
+  function claimReadyToClose(name) { const r = rec(name); if (!r?.asked || !r.clear || r.closeTold) return false; r.closeTold = now(); save(); return true; }
   // a new session took the name: its predecessor's record is journalled and dropped
   function drop(name) { const r = rec(name); seen.delete(name); if (!r) return; note({ session: name, dropped: true, open: openOf(r).map((i) => i.text.slice(0, 120)) }); delete st.s[name]; save(); }
   // the one nudge for a reply that answers neither way
   function claimMissing(name, text) { const r = rec(name); if (!r?.asked || r.clear || openOf(r).length || r.missing || textSig(text) === r.asked.sig) return false; r.missing = now(); save(); return true; }
 
-  return { file, observe, asked, answer, ownerMessage, hold, newRound, drop, claimMissing, get: rec, openOf: (n) => openOf(rec(n)), awaiting: (n) => { const r = rec(n); return !!r && (openOf(r).length > 0 || (!!r.asked && !r.clear)); }, list: () => ({ since: st.since, sessions: st.s }) };
+  return { file, observe, asked, answer, ownerMessage, hold, newRound, drop, claimMissing, claimReadyToClose, get: rec, openOf: (n) => openOf(rec(n)), awaiting: (n) => { const r = rec(n); return !!r && (openOf(r).length > 0 || (!!r.asked && !r.clear)); }, list: () => ({ since: st.since, sessions: st.s }) };
 }

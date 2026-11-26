@@ -22,7 +22,7 @@ export function openAsksFromRecords(records) {
       prev.open = true;
       // floor, what and why travel with the ask: the floor is the evidence that the ask passed the gate
       // (a record without one is a defect, never shown to the owner) and the owner reads what and why.
-      for (const k of ['at', 'session', 'question', 'recommendation', 'floor', 'what', 'why', 'jev']) if (r[k]) prev[k] = r[k];
+      for (const k of ['at', 'session', 'source', 'question', 'recommendation', 'floor', 'what', 'why', 'jev']) if (r[k]) prev[k] = r[k];
       if (Array.isArray(r.options) && r.options.length) prev.options = r.options;
     }
     byId.set(r.id, prev);
@@ -417,6 +417,7 @@ export async function fileAsk(file, ask, { now = new Date() } = {}) {
       options: ask.options.map((o) => String(o).trim()), recommendation: String(ask.recommendation || ask.recommend),
       floor: ask.floor, what: String(ask.what).trim(), why: String(ask.why).trim(), state: 'open',
     };
+    if (ask.source) record.source = String(ask.source).trim();   // the manager asks for a session it started (manager-owned.js)
     if (ask.jev) record.jev = String(ask.jev).slice(0, 400);
     await appendFile(file, JSON.stringify(record) + '\n');
     return { id, record };

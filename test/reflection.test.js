@@ -391,7 +391,7 @@ test('approved items are a new task: its goal and Done-when lines are the approv
   r.turn(ANSWER); r.read(ANSWER);
   const res = r.ledger.ownerMessage('a', 'only 2');
   const entry = await approvedRound({ goals, gate: r.gate, ledger: r.ledger, name: 'a', approved: res.approved });
-  assert.match(entry.goal, /^build the improvement suggestions the owner approved \(2\): add a test for two catch-ups/);
+  assert.match(entry.goal, /^build the approved improvement suggestions \(2\): add a test for two catch-ups/);
   assert.equal(entry.parts.length, 1);
   assert.match(entry.parts[0], /suggestion 2/);
   assert.deepEqual(r.hold(DONE), { state: 'pending' }, 'the new work is not done until it is asked and answered');
