@@ -27,7 +27,8 @@ export function isManagerOperationalStop(st) {
 }
 export function isOwnersTurn(st) {
   if (!st || st.hidden) return false;   // a standby manager in shadow (failover state claude) is invisible
-  if (st.managerStarted) return false;   // the manager started it, so the manager answers it; what only the owner may decide comes as the manager's own ask (manager-owned.js)
+  if (st.managerStarted) return false;
+  if (st.suggestions?.state === 'triaging' && st.state !== 'waiting') return false;   // Opus is answering its suggestions (suggestion-triage.js)   // the manager started it, so the manager answers it; what only the owner may decide comes as the manager's own ask (manager-owned.js)
   if (st.suggestions?.state === 'open' && st.state !== 'working' && st.state !== 'offline') return true;   // only the owner says yes / no (suggestions.js)
   if (isManagerOperationalStop(st)) return false;
   if (st.stall?.escalatedTo === 'manager') return false;   // a lease or deploy stop is the manager's, never the owner's (ops-ask.js)

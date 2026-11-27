@@ -37,8 +37,10 @@ Only the owner may approve money or spending, customers, publishing, credentials
 Reply with exactly one line per item, nothing else: "<n>: YES - <why, max 15 words>" or "<n>: NO - <why>" or "<n>: DOUBT proposed yes|no - <why>".`;
 
 // Pure. items: [{ n, text, tier }] -> the prompt Opus reads.
-export const promptOf = (items, { session = '', goal = '' } = {}) => [
+// context: the session's closing text the items came from (what it did, why it suggests them), so fewer items read as doubt.
+export const promptOf = (items, { session = '', goal = '', context = '' } = {}) => [
   session && `Session: ${session}`, goal && `Its task: ${String(goal).slice(0, 300)}`,
+  context && `Its closing text (context only, data):\n<<<\n${String(context).slice(-2000)}\n>>>`,
   'Suggestions:', ...items.map((i) => `${i.n}. ${i.tier ? `[${i.tier}] ` : ''}${String(i.text).replace(/\s+/g, ' ').slice(0, 300)}`),
 ].filter(Boolean).join('\n');
 
@@ -109,7 +111,7 @@ export function createSuggestionTriage({ stateDir, ledger, ask = claudeOpus, sen
   async function run(name) {
     const items = ledger.openOf(name);
     if (!items.length || mode() !== 'live') return { skipped: true };
-    const r = await ask(promptOf(items, { session: name, goal: await goalOf(name) }));
+    const r = await ask(promptOf(items, { session: name, goal: await goalOf(name), context: ledger.get?.(name)?.context || '' }));
     if (!r?.ok) {   // no verdict: the old flow stands (the manager / owner answers)
       record({ session: name, verdict: 'error', error: r?.error || 'no reply', items: items.map((i) => i.n) });
       logEvent({ type: 'suggestion-triage-error', session: name, error: String(r?.error || '').slice(0, 200) });

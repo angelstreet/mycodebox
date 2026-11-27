@@ -50,6 +50,8 @@ export function displayState(status) {
   // "STATUS: needs-manager: <what the manager must do>": the turn is finished but the next step belongs to the AI manager,
   // so it reads as 'manager' (its own LED) instead of the blue 'done'. A live 'waiting' prompt and 'offline' still win.
   if (s !== 'waiting' && s !== 'offline' && status && status.stall && status.stall.case === 'needs_manager') s = 'manager';
+  // Opus is answering its suggestions (suggestion-triage.js, owner 2026-11-27): it reads as working, not stuck and not the owner's turn; it is told within minutes.
+  if (status?.suggestions?.state === 'triaging' && s !== 'offline' && status.state !== 'waiting') return 'working';
   // A session the manager started never needs the owner (manager-owned.js): its prompt, needs-owner line or open suggestions read as the manager's turn.
   if (status?.managerStarted && s !== 'offline' && (s === 'waiting' || (s !== 'working' && (status.suggestions?.state === 'open' || status.stall?.status === 'needs-owner')))) return 'manager';
   // A finished turn that still waits on a scheduled wakeup (/loop, ScheduleWakeup) or on background tasks is not "done": it shows as working (green)
