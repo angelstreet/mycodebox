@@ -31,7 +31,10 @@ async function readStdin() {
 }
 
 const payload = JSON.parse((await readStdin()) || '{}');
-const { app, token, servers = [], platformServers = [], perCardTimeoutMs = 8000, budgetSeconds = 1800, evidenceDir = null } = payload;
+const { app, token, servers = [], platformServers = [], perCardTimeoutMs = 8000, budgetSeconds = 1800, evidenceDir = null, proof: proofList = [] } = payload;
+// the tiles whose frame is kept even when they play (the night's rows need the proof: a dark snapshot, a live video)
+const proofTiles = new Set((proofList || []).map((p) => `${p.host}/${p.capture}`));
+const proof = { has: (key) => proofTiles.has(key) };
 const req = createRequire(import.meta.url);
 let chromium;
 try {
@@ -137,13 +140,19 @@ for (const srv of servers) {
           r = { name, host: null, capture: null, readyState: -1, dt: null, bright: null, plays: false, error: String(e.message).slice(0, 80) };
         }
         if (r) {
-          if (r.plays === false && evidenceDir) {
-            // The frame of a tile that does not play: the night's evidence, next to the report.
-            try {
-              const file = `${evidenceDir}/tile-${String(r.host || 'host').replace(/\W+/g, '_')}-${String(r.capture || 'cap').replace(/\W+/g, '_')}.png`;
-              await card.screenshot({ path: file });
-              r.shot = file;
-            } catch (e) { /* the frame is a nicety: the verdict stands without it */ }
+          if (evidenceDir) {
+            // The frame of a tile that does not play is the night's evidence; the frame of a tile that DOES play is
+            // kept for the tiles the night's rows need the proof for (a dark snapshot with a live video: the note),
+            // so the folder holds both sides of the rule "a fixed tile also plays live on hover, not black".
+            const wanted = r.plays === false || (r.plays === true && proof.has(`${r.host}/${r.capture}`));
+            if (wanted) {
+              try {
+                const suffix = r.plays === true ? '-plays' : '';
+                const file = `${evidenceDir}/tile-${String(r.host || 'host').replace(/\W+/g, '_')}-${String(r.capture || 'cap').replace(/\W+/g, '_')}${suffix}.png`;
+                await card.screenshot({ path: file });
+                r.shot = file;
+              } catch (e) { /* the frame is a nicety: the verdict stands without it */ }
+            }
           }
           results.push(r);
           out.tiles.push(r);        // kept as it is: a page that dies later must not lose the tiles already read
@@ -159,8 +168,17 @@ for (const srv of servers) {
           const card = page.locator('.MuiCard-root').filter({ hasText: t.name }).first();
           if (await card.count()) {
             const again = await probe(page, card, t.name, reqs, bad);
-            if (again && again.plays) { t.plays = true; t.reprobe = 'plays on its own'; t.readyState = again.readyState; t.dt = again.dt; t.bright = again.bright; }
-            else if (again) { t.reprobe = 'still broken on its own'; }
+            if (again && again.plays) {
+              t.plays = true; t.reprobe = 'plays on its own'; t.readyState = again.readyState; t.dt = again.dt; t.bright = again.bright;
+              // a tile that plays on its own is a playing tile: its frame is the proof, when the row needs it
+              if (evidenceDir && proof.has(`${t.host}/${t.capture}`)) {
+                try {
+                  const file = `${evidenceDir}/tile-${String(t.host || 'host').replace(/\W+/g, '_')}-${String(t.capture || 'cap').replace(/\W+/g, '_')}-plays.png`;
+                  await card.screenshot({ path: file });
+                  t.shot = file;
+                } catch (e) { /* the frame is a nicety: the verdict stands without it */ }
+              }
+            } else if (again) { t.reprobe = 'still broken on its own'; }
           } else { t.reprobe = 'the card was not found again'; }
         } catch (e) { if (isDead(e)) throw e; t.reprobe = `the re-probe failed: ${String(e.message).slice(0, 60)}`; }
       }

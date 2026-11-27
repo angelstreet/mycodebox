@@ -245,6 +245,16 @@ def load_pool(path=None):
         return json.load(f)
 
 
+def error_name(e):
+    """-> the error's name for the report, with the HTTP status when there is one.
+
+    A host read that answers 503 is a blip the night retries; a 404 or a 403 is a refusal. The bare name
+    'HTTPError' says nothing about which, and a night that reports one leaves the reader guessing (2026-11-27:
+    'ERROR pi4/vpt-lenovo4: HTTPError', gone on the next night)."""
+    code = getattr(e, 'code', None)
+    return f'{type(e).__name__} {code}' if code else type(e).__name__
+
+
 def inventory(servers, pool):
     """-> (entries, errors, hosts). entries carry the raw url in memory only (key 'url'); use public_entry() to print.
     hosts: how much was looked at ('walked' hosts listed, 'read' hosts that answered), so a night with no rtsp
@@ -256,14 +266,14 @@ def inventory(servers, pool):
             token = server_token()
             names = host_names(server, token)
         except Exception as e:
-            errors.append(f'{env}: {type(e).__name__}')
+            errors.append(f'{env}: {error_name(e)}')
             continue
         walked += len(names)
         for host in names:
             try:
                 devs = host_config(server, token, host).get('devices') or {}
             except Exception as e:
-                errors.append(f'{env}/{host}: {type(e).__name__}')
+                errors.append(f'{env}/{host}: {error_name(e)}')
                 continue
             read += 1
             for dev, f in sorted(devs.items()):
@@ -591,12 +601,13 @@ def _find_node():
     return None
 
 
-def tile_sweep(entries, servers, enabled=False, evidence_dir=None):
+def tile_sweep(entries, servers, enabled=False, evidence_dir=None, proof=None):
     """What the app shows, read in the app's own browser: every tile of the stream devices, opened once.
 
-    -> the tiles block of the report: {status, checked, playing, not_playing, tiles, not_checked, why}.
+    -> the tiles block of the report: {status, checked, playing, not_playing, no_video, tiles, not_checked, why}.
     A sweep that could not run says so. The block is never a false 'ok': a tile that was not read is not
-    a tile that plays, and a tile that reads broken is probed again on its own before it is called broken."""
+    a tile that plays, and a tile that reads broken is probed again on its own before it is called broken.
+    proof: the tiles whose frame is kept even when they play (a dark snapshot with a live video: the note)."""
 
     def skipped(why):
         return {'status': 'skipped', 'why': why, 'checked': 0, 'playing': 0, 'not_playing': 0, 'tiles': [], 'not_checked': []}
@@ -624,6 +635,7 @@ def tile_sweep(entries, servers, enabled=False, evidence_dir=None):
         'perCardTimeoutMs': TILE_SWEEP_CARD_MS,
         'budgetSeconds': TILE_SWEEP_MAX_SECONDS,
         'evidenceDir': evidence_dir,          # the frame of a tile that does not play: the night's evidence
+        'proof': [p for p in (proof or []) if p.get('host') and p.get('capture')],   # the tiles whose frame is kept even when they play
     }
     try:
         p = subprocess.run([node, TILE_SWEEP_SCRIPT], input=json.dumps(payload), capture_output=True,

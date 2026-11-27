@@ -584,8 +584,10 @@ whenever the page dies; the verdict itself lives in `scripts/agent/rtsp_tile_ver
 (`tile`); a tile that does not play while its source plays is reported as a host-capture fault (`vpt-stream`) and **nothing is replaced**;
 a file is measured against its own picture instead (never blamed on the capture side). A card with no live player at all (a drone, a PC screen)
 is not a stream tile: it is counted apart (`no_video`), never judged, never a fault of a device. Without node or playwright the block says the layer
-was **skipped**, never that the tiles played. A "dark snapshot but the live video plays" note moved out of the action column into its own
-`note` field (the report, the journal's `check` event and a line under the table carry it).
+was **skipped**, never that the tiles played. The night's evidence folder holds the frame of a tile that does not play and, for the rows that need
+the proof (a dark snapshot with a live video), the frame of a tile that plays. A "dark snapshot but the live video plays" note moved out of the action column into its own
+`note` field (the report, the journal's `check` event and a line under the table carry it). An inventory error names the HTTP status the server
+answered (`ERROR <server>/<host>: HTTPError 503`), so a blip and a refusal are told apart.
 The report also
 carries the pool's own probe status (a `pool` block, one row per entry: `id`, `vetted`, `status`, the vantage it was probed from),
 so a broken pool source is visible in the night's evidence without a hand probe; the pool file itself is never edited by the

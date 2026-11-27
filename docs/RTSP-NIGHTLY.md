@@ -30,6 +30,8 @@ the live mediamtx smoke stream (found while building this).
 
 An inventory error (a server, or one of its hosts, that does not answer the host-config GET) skips that host for the night and is
 reported, never retried in a loop: it is in the run's stdout (`ERROR <server>/<host>: <Error>`) and in the report's `errors` array.
+An HTTP answer carries its status (`ERROR pi4/vpt-lenovo4: HTTPError 503`): a 503 is a blip the night retries, a 404 or a 403 is a
+refusal, and the bare name said nothing about which (2026-11-27: a host read that failed once and answered fine the next night).
 The journal keeps the per-stream check events, not the inventory errors, so a night's report file is where the errors are read.
 
 ## Policy (`rtsp_replace.py`, data in `config/rtsp-pool.json`)
@@ -243,6 +245,11 @@ folder (`<state>/rtsp-nightly/evidence-<day>/tile-<host>-<capture>.png`).
 carry no live player at all: the sweep has no verdict for them, so they are neither playing nor broken (the first whole
 night counted a drone card and a PC screen as broken tiles, 2026-11-27). They are counted apart in the report
 (`no_video`) and in the night's summary line, and they never become a device's fault.
+
+**The evidence folder holds both sides of the rule.** The frame of a tile that **does not play** is the night's evidence
+(`tile-<host>-<capture>.png`), and the frame of a tile that **plays** is kept for the rows that need the proof — a dark
+snapshot with a live video, the note (`tile-<host>-<capture>-plays.png`). So "a fixed tile also plays live on hover, and
+its picture is not black" has a picture next to it, not only the two numbers of the note.
 
 The layer needs `node` and playwright (the VirtualPyTest checkout's, `RTSP_PLAYWRIGHT_PATH`, default
 `~/virtualpytest/tests/e2e/playwright/node_modules/playwright`); without them the report says the layer was **skipped**,
