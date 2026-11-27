@@ -576,7 +576,8 @@ After it installed a replacement it also reads back the title the app shows for 
 **Two more layers (owner, 2026-11-27).** The capture column reads the *segment*; the browser reads the *player*, and a segment can be
 bright while the tile is black: BFM2's republished segment carried its audio **5572.473 s** away from its video and the column called it
 `ok`. The job now reads the audio and video start times of the segment it already downloads (`av` per device; an offset beyond
-`RTSP_AV_DRIFT_SECONDS` is reported as a capture-side fault, below it mux jitter says nothing) and `rtsp_replace.py --tiles` opens every
+`RTSP_AV_DRIFT_SECONDS` is reported as a capture-side fault, below it mux jitter says nothing; the report also carries the drift **rate**
+(`av.rate`, s/h) against the offsets of the last night's report, so a growing delay says so) and `rtsp_replace.py --tiles` opens every
 tile of the device-control grid **once** in a headless browser (`scripts/agent/rtsp_tiles.mjs`: readyState, how far the clock moved (over the last two seconds and over the whole time the tile was watched), the
 brightest pixel of the picture, whether the picture changes, the tile's own HLS failures; a tile that reads broken is probed again on its own; the browser is relaunched per page and
 whenever the page dies; the verdict itself lives in `scripts/agent/rtsp_tile_verdict.mjs`). The verdict lands in the report as a `tiles` block
@@ -587,12 +588,16 @@ is not a stream tile: it is counted apart (`no_video`), never judged, never a fa
 carries the auto-sign token: Playwright quotes the URL it was given in its error text, and every message the sweep leaves
 (`why`, `not_checked`, a tile's `error`) is masked (`auto_signed=***`), in the sweep and again in the Python that writes
 the report. Without node or playwright the block says the layer
-was **skipped**, never that the tiles played. The night's evidence folder holds the frame of a tile that does not play and, for the rows that need
+was **skipped**, never that the tiles played. The page load is retried once before the layer gives up (a single slow page
+cost the night its whole browser layer on 2026-11-27): the navigation and the wait for the cards are the retried unit, and
+after the second try the layer says what happened. The night's evidence folder holds the frame of a tile that does not play and, for the rows that need
 the proof (a dark snapshot with a live video), the frame of a tile that plays. A "dark snapshot but the live video plays" note moved out of the action column into its own
 `note` field (the report, the journal's `check` event and a line under the table carry it). An inventory error names the HTTP status the server
 answered (`ERROR <server>/<host>: HTTPError 503`), so a blip and a refusal are told apart.
 The seven empty slots (`no_source`) get a **suggestion**: a channel from the free lists that plays, probed from the host, written in the row's
-`suggestion` field and in the report's `suggestions` array, **never applied** (an empty source is the owner's call). A pool entry the owner marked
+`suggestion` field and in the report's `suggestions` array, **never applied** (an empty source is the owner's call). The proposal of the
+last night is tried first for that slot and kept as long as it plays (`sticky`), so it does not move from night to night; a kept channel
+that stopped playing is dropped like any other candidate. A pool entry the owner marked
 (`"probe": false` in `config/rtsp-pool.json`) is not probed any more and reads `skipped` with its reason, so a known-blocked candidate stops costing
 the night its timeout. The report carries a `delta` block: what changed since the last night's report (`newly_black`, `recovered`, `still_black`, the
 same for the browser layer, `changed_rows`).

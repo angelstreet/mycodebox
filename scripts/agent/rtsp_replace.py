@@ -355,6 +355,8 @@ def run(mode, timeout=10, tiles=False):
     suggestions = []
     slot_catalog = None
     probed = {}          # what a candidate answered on a host: probed once, not once per slot
+    today = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d')
+    sticky = previous_suggestions(today)   # the proposal of the last night: it stays as long as it plays
     for e in entries:
         if e.get('kind') != 'no_source':
             continue
@@ -363,7 +365,8 @@ def run(mode, timeout=10, tiles=False):
             errors.extend(cat_errors)
         used = [x.get('url') for x in entries if x.get('host') == e['host']]
         used += [s['url'] for s in suggestions if s['host'] == e['host']]
-        s = suggest_channel(e, slot_catalog or [], used, ssh_map, timeout, probed=probed)
+        s = suggest_channel(e, slot_catalog or [], used, ssh_map, timeout, probed=probed,
+                            sticky=sticky.get((e['host'], e['device'])))
         if s:
             s.update({'host': e['host'], 'device': e['device']})
             suggestions.append(s)
@@ -418,6 +421,8 @@ def run(mode, timeout=10, tiles=False):
         row['action'] = (f"report: the apply step failed ({res.get('reason', 'see the journal')}), nothing replaced"
                          if res['outcome'] == 'apply_failed' else f"{res['outcome']} ({s['how']}: '{s['label']}')")
         return res['outcome']
+    # The A/V drift rate needs the offsets of the last night: they are read before the rows are built.
+    prev_av, prev_hours = previous_av_offsets(today)
     for e, r, cap in zip(entries, results, caps):
         row = rc.public_entry(e, r)
         row.update({k: v for k, v in cap.items() if k != 'detail'})
@@ -428,6 +433,12 @@ def run(mode, timeout=10, tiles=False):
             row['tile'] = tile
         tile_bad = bool(tile) and tile.get('plays') is False
         av = cap.get('av')
+        if av and av.get('offset') is not None:
+            # The drift rate: how fast the offset grows since the last night (the capture side republishes with a
+            # growing delay). Two measurements are needed, so there is no rate on the first night.
+            rate = av_drift_rate(av['offset'], prev_av.get((e['host'], e['device'])), prev_hours)
+            if rate is not None:
+                av['rate'] = rate
         drift = bool(av) and abs(av['offset']) >= AV_DRIFT_SECONDS
         file_black = src_ok and cap['capture'] == 'black' and e['kind'] == 'file'
         if src_ok and cap['capture'] == 'black' and e['kind'] == 'hls':
@@ -507,9 +518,12 @@ def run(mode, timeout=10, tiles=False):
             drift_part = ''
             if drift:
                 off = av['offset']
+                rate = av.get('rate')
                 drift_part = (f"the host's republished segment carries the audio {abs(off):.3f} s "
                               f"{'behind' if off > 0 else 'ahead of'} the video (audio at {av['audio']:.3f} s, "
-                              f"video at {av['video']:.3f} s): the browser's player cannot sync the two")
+                              f"video at {av['video']:.3f} s): the browser's player cannot sync the two"
+                              + (f"; the offset {'grows' if rate > 0 else 'shrinks'} {abs(rate):.1f} s/h since the last night"
+                                 if rate is not None else ''))
             if e['kind'] == 'file' and tile_bad:
                 # A file is never blamed on the capture side: its own picture decides (bug-59664715, owner 2026-11-13).
                 fl = rc.file_luma(e['url'], 20, ssh_map.get(e['host']))
@@ -650,17 +664,23 @@ def run(mode, timeout=10, tiles=False):
             'delta': delta_since_last_night(rows, datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d'))}
 
 
-def suggest_channel(entry, catalog, used_urls, ssh_map, timeout, tries=8, probed=None):
+def suggest_channel(entry, catalog, used_urls, ssh_map, timeout, tries=8, probed=None, sticky=None):
     """A channel an EMPTY slot could take, from the free lists: the first that plays, probed from the host.
 
     Suggested only, never applied: an empty source is the owner's call (owner 2026-11-27). The owner was picking
     the same seven slots by hand every night; the night can propose one that plays, from the same lists the
     replacement path uses. Our verified list comes first, so the proposal is the same from one night to the next.
-    probed: what an earlier slot already probed on that host (a candidate is probed once, not once per slot)."""
+    probed: what an earlier slot already probed on that host (a candidate is probed once, not once per slot).
+    sticky: the channel proposed for this slot the last night. It is tried first and kept as long as it plays, so the
+    proposal does not move from night to night (owner 2026-11-27: a proposal that changes every night is not a
+    decision aid). A sticky channel that stopped playing is dropped like any other candidate."""
     ssh = ssh_map.get(entry['host'])
     used = {sc.base_url(u) for u in used_urls if u}
     pool = [c for c in catalog if not c.get('ua') and sc.base_url(c['url']) not in used]
     pool.sort(key=lambda c: c.get('list') != 'repo')      # verified list first, then the upstream: stable
+    if sticky:
+        # The proposal of the last night comes first. The sort is stable, so the verified list stays first inside it.
+        pool.sort(key=lambda c: sc.base_url(c['url']) != sc.base_url(sticky))
     for n, c in enumerate(pool):
         if n >= tries:
             break
@@ -673,7 +693,8 @@ def suggest_channel(entry, catalog, used_urls, ssh_map, timeout, tries=8, probed
                 probed[key] = ok
         if ok:
             return {'name': c['name'], 'url': c['url'], 'group': c.get('group', ''), 'how': 'suggest',
-                    'probed': 'ok', 'from': entry['host'], 'list': c.get('list', '')}
+                    'probed': 'ok', 'from': entry['host'], 'list': c.get('list', ''),
+                    'sticky': bool(sticky) and sc.base_url(c['url']) == sc.base_url(sticky)}
     return None
 
 
@@ -712,6 +733,53 @@ def previous_report(today):
     except (OSError, ValueError):
         rows = []
     return path, rows
+
+
+def previous_suggestions(today):
+    """-> {(host, device): the channel proposed for that slot the last night before today}.
+
+    The proposal sticks: it stays the same until that channel stops playing (2026-11-27: the same slot was proposed
+    one night as Africa 24 Sport and the next as ADN TV+, so the proposal moved from night to night and stopped
+    being a stable decision aid)."""
+    path, prev = previous_report(today)
+    if path is None:
+        return {}
+    out = {}
+    for r in prev:
+        sug = r.get('suggestion') or {}
+        if sug.get('url'):
+            out[(r.get('host'), r.get('device'))] = sug['url']
+    return out
+
+
+def previous_av_offsets(today):
+    """-> (the A/V offsets of the last night before today, the hours since that report was written).
+
+    The drift rate needs two measurements: the offset alone says how far the audio and the video sit apart, not how
+    fast that distance grows (BFM2: 5572.473 s at 05:48, 6591.384 s at 17:22 on 2026-11-27)."""
+    path, prev = previous_report(today)
+    if path is None:
+        return {}, 0.0
+    try:
+        hours = (time.time() - os.path.getmtime(path)) / 3600.0
+    except OSError:
+        hours = 0.0
+    offs = {}
+    for r in prev:
+        av = r.get('av') or {}
+        if av.get('offset') is not None:
+            offs[(r.get('host'), r.get('device'))] = av['offset']
+    return offs, hours
+
+
+def av_drift_rate(now, was, hours):
+    """-> the A/V offset's change since the last night (s/h), or None when it cannot be said.
+
+    A growing rate points at the capture side: it republishes with a delay that grows (the host's segment, not the
+    channel)."""
+    if now is None or was is None or not hours or hours <= 0:
+        return None
+    return round((now - was) / hours, 1)
 
 
 def delta_since_last_night(rows, today):
@@ -811,7 +879,8 @@ def main(argv):
     # A suggestion is not an action either: an empty slot with a channel proposed for it, never applied.
     for s in rep.get('suggestions') or []:
         print(f"suggestion: {s['host']}/{s['device']} - {s['name']} ({s['url']}), probed from {s['from']}: plays"
-              f" (not applied: an empty source is the owner's call)")
+              f" (not applied: an empty source is the owner's call)"
+              + (', kept from the last night' if s.get('sticky') else ''))
     d = rep.get('delta') or {}
     if d.get('since'):
         print(f"since {d['since']}: {len(d['newly_black'])} newly black, {len(d['recovered'])} recovered,"
@@ -819,6 +888,12 @@ def main(argv):
               f" {len(d['recovered_broken'])} recovered, {d['changed_rows']} row(s) changed")
     elif d:
         print('since the last night: no earlier report to compare with')
+    # The A/V drift rate: the offset says how far the two streams sit apart, the rate says how fast that grows
+    for r in rep.get('streams') or []:
+        av = r.get('av') or {}
+        if av.get('rate') is not None and abs(av['rate']) >= 1:
+            print(f"a/v drift: {r['host']}/{r['device']} - the offset is {av['offset']:.3f} s and"
+                  f" {'grows' if av['rate'] > 0 else 'shrinks'} {abs(av['rate']):.1f} s/h since the last night")
     tb = rep.get('tiles') or {}
     # The cards that carry no live player (a drone, a PC screen) are named apart: they are not stream tiles.
     extra = (f", {tb.get('no_video', 0)} card(s) without a live player (not stream tiles)"
