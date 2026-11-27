@@ -37,7 +37,7 @@ else {
 chmodSync(FAKE, 0o755);
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 const calls = () => (existsSync(LOG) ? readFileSync(LOG, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
-const decider = (mode, o = {}) => createFallbackDecider({ bin: FAKE, env: { PATH: process.env.PATH, HOME: work, MCODE_FAKE_MODE: mode, MCODE_FAKE_LOG: LOG, ...(o.nolight ? { MCODE_FAKE_NOLIGHT: '1' } : {}), JEV_API_KEY: 'must-not-leak', OPENROUTER_TOKEN: 'x' }, ...(({ nolight, ...rest }) => rest)(o) });   // leak-scan: allow (fake values)
+const decider = (mode, o = {}) => createFallbackDecider({ bin: FAKE, env: { PATH: process.env.PATH, HOME: work, MCODE_FAKE_MODE: mode, MCODE_FAKE_LOG: LOG, ...(o.nolight ? { MCODE_FAKE_NOLIGHT: '1' } : {}), JEV_API_KEY: 'must-not-leak', OPENROUTER_TOKEN: 'x' }, tmpRoot: work, ...(({ nolight, ...rest }) => rest)(o) });   // leak-scan: allow (fake values)
 const BODY = { state: '{"x":1}', questions: { choice: { type: 'choice', instructions: 'What next?', criteria: { continue: 'carry on', take_recommended: 'take it', ask_owner: 'owner decides' } } } };
 const FACTS = { session: 's', agent: 'claude', project: 'p', priority: 'P2', state: 'done', case: 'owner_decision', source: 'rule', flags: [], text: 'Redis or Postgres for the cache?' };
 
@@ -89,7 +89,7 @@ test('choice(): a Jev-shaped reply; an invalid choice, a failure and a hang are 
   const t0 = Date.now();
   const h = await decider('hang', { timeoutMs: 400 }).choice(BODY);
   assert.match(h.error, /timeout/); assert.ok(Date.now() - t0 < 3000);
-  const leftover = readdirSync(tmpdir()).filter((f) => f.startsWith('mcode-fallback-'));
+  const leftover = readdirSync(work).filter((f) => f.startsWith('mcode-fallback-'));
   assert.deepEqual(leftover, [], 'temp dirs are cleaned up, also after a kill');
 });
 
