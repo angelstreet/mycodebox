@@ -139,7 +139,7 @@ import { createLeftovers, pushableItems } from './done-leftovers.js';
 import { scanTaskDocs, withHomeDirs, computeUnfinished, docLeftoversFor, createUnfinished, taskRe } from './unfinished.js';
 import { pushOf, replyFor } from './owner-push.js';
 import { createWorkerAutoClose, shouldClose as shouldCloseWorker, politeClose, LEFTOVERS_WINDOW_MS } from './worker-auto-close.js';
-import { statusLine, inputBox, endsHandedOver, closingLines } from './stall.js';
+import { statusLine, inputBox, endsHandedOver, closingLines, stoppedBehindAgents } from './stall.js';
 import { verifyDelivered, confirmDelivered, waitSettled, settleBudgetMs, pasteTextOf } from './send-verify.js';
 import { machinesOf, holdingsOf, deployWaitOf, agentSession, agentSessionCandidates, holderSession } from './public/platforms.js';
 import { createHash, randomBytes } from 'node:crypto';
@@ -1875,6 +1875,7 @@ async function pollOnce() {
     let waitReason = null;
     let reportedWait = null;
     let spinning = false;   // the live spinner / WORK_RE signal this tick: real work, not just a repaint
+    let behindAgents = false;   // a hand-over STATUS turn under a pane that only spins for background subagents (stoppedBehindAgents)
     if (offline) state = 'offline';
     else if (agent !== 'bash' && (waitReason = findWaitReason(tail)) !== null) state = 'waiting';
     // Claude with a live reporter: a permission request / notification it reported still stands (the pane
@@ -1882,8 +1883,14 @@ async function pollOnce() {
     else if (agent === 'claude' && (reportedWait = reporter.waitingNow(s.name, t.changeAt))) { state = 'waiting'; waitReason = reportedWait.message || 'needs input'; }
     else {
       spinning = agent !== 'bash' && WORK_RE.test(tail.filter((l) => !/⏵⏵|bypass permissions|accept edits/.test(l)).join('\n'));
-      if (spinning) t.realWork = true;
-      if (now - t.changeAt < WORKING_HOLD_MS || spinning) state = 'working';
+      const handed = agent === 'claude' ? reporter.handedOverTurn(s.name) : null;
+      if (handed && stoppedBehindAgents(tail, handed.text)) {
+        // only background subagents spin under a hand-over STATUS turn: a finished turn (stall, push, red dot), not work
+        spinning = false; behindAgents = true; state = 'done'; t.doneGuess = handed.at || now;
+      } else {
+        if (spinning) t.realWork = true;
+        if (now - t.changeAt < WORKING_HOLD_MS || spinning) state = 'working';
+      }
     }
     if (state !== 'waiting') waitReason = null;
     if (state === 'waiting') t.realWork = true;
@@ -1993,7 +2000,7 @@ async function pollOnce() {
       // Display-only loop-wait signals (isLoopWaiting in public/state.js): MiniMax/Codex footers that don't go through
       // the Claude Stop hook, and script-wrapped `claude -p` / `sleep` children. status.state stays raw for the
       // manager / auto-answer logic; these fields flip a done session to working (green) in the UI only.
-      paneBackground: !offline && state === 'done' ? paneBackgroundOf(plain, { shell: false }) : false,
+      paneBackground: !offline && state === 'done' && !behindAgents ? paneBackgroundOf(plain, { shell: false }) : false,   // the subagent spinner is what that stop already weighed
       paneShell: !offline && state === 'done' ? paneShellOf(plain) : false,
       scriptBusy, apiKeyBilling,
       cols: p.cols, rows: p.rows,

@@ -993,6 +993,16 @@ export function statusLine(lines) {
 export const HANDOVER_STATUSES = new Set(['done', 'needs-owner', 'needs-manager', 'blocked', 'failed', 'handoff']);
 // Does the pane still end on such a verdict? (the owner's next prompt below it ends the closing lines)
 export const endsHandedOver = (plain) => HANDOVER_STATUSES.has(statusLine(closingLines(plain, 16))?.kind);
+// Claude's footer while only background subagents run after the turn ended ("✻ Waiting for 1 background agent to finish").
+export const BG_AGENT_WAIT_RE = /\bWaiting for \d+ background (?:agents?|tasks?)\b[^\n]*\bto finish\b/i;
+// The main turn ended on a hand-over STATUS line and the pane only spins for its background subagents: that is a stop, not work
+// (owner 2026-11-27: userinterface-audit said STATUS: needs-owner, a subagent kept the pane spinning, the row stayed green, no push).
+// tail = the pane's last lines; turnText = the reporter's finished turn with no newer prompt (turnForStop). A new turn (a prompt, or the
+// subagent's result) removes the footer or brings a newer prompt, and the pane reads as working again.
+export function stoppedBehindAgents(tail, turnText) {
+  if (!turnText || !Array.isArray(tail) || !tail.some((l) => BG_AGENT_WAIT_RE.test(String(l || '')))) return false;
+  return endsHandedOver(String(turnText).split('\n'));
+}
 // "STATUS: done — branch x pushed": the text after the verdict loses its leading separator (— – - : ·). A hyphen only
 // counts when a space follows ("--server" and "-> x" are text, not separators).
 export function stripSeparator(text) {
