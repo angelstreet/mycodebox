@@ -48,7 +48,7 @@ process.stdin.on('data', (d) => { inp += d; }).on('end', () => {
   console.log('<think>hmm {x}</think>{"proposed_reply":"Yes, continue.","reasoning":"ok","confidence":0.9,"owner_needed":false,"owner_needed_why":"","options":[]}');
 });
 `); chmodSync(bin, 0o755);
-  const d = createFallbackDecider({ provider: 'claude', bin, env: { PATH: process.env.PATH, HOME: dir, JEV_API_KEY: 'must-not-leak' } });   // leak-scan: allow (fake value)
+  const d = createFallbackDecider({ provider: 'claude', bin, env: { PATH: process.env.PATH, HOME: dir, JEV_API_KEY: 'must-not-leak' }, tmpRoot: dir });   // leak-scan: allow (fake value)
   const r = await d.reviewer({ facts: { session: 's', agent: 'claude', case: 'question', text: 'Continue?' } });
   assert.equal(r.ai.proposed_reply, 'Yes, continue.'); assert.equal(r.cost, 0); assert.match(r.model, /claude/);
   const seen = JSON.parse(readFileSync(log, 'utf8'));
