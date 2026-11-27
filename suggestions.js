@@ -208,6 +208,8 @@ export function createSuggestions({ stateDir, now = Date.now, active = () => tru
       r.items.push(item); added.push(item);
       delete r.clear;
     }
+    // the turn the items came from, for the Opus triage (suggestion-triage.js): what the session did and why it suggests them
+    if (added.length) rec(name).context = unmark(agentWords(text)).replace(/\n{3,}/g, '\n\n').trim().slice(-2000);
     // the numbers the session showed in its latest list -> item numbers: a second round's "1. 2." are items 5 and 6 here (2026-11-26: "do 1 and 2" recorded nothing)
     if (Object.keys(shown).length) { const r = ensure(name); if (JSON.stringify(r.shown) !== JSON.stringify(shown)) { r.shown = shown; if (!added.length) save(); } }
     const r = rec(name);

@@ -110,6 +110,7 @@ button{ font-family:inherit; cursor:pointer; }
 .summary .chip.waiting{ color:var(--waiting); border-color:rgba(255,95,95,0.4); background:rgba(255,95,95,0.08); }
 .summary .chip.working{ color:var(--working); }
 .summary .chip.done{ color:var(--done); border-color:rgba(106,168,255,0.4); background:rgba(106,168,255,0.08); }
+.summary .chip.parked{ color:var(--accent); border-color:var(--accent); }   /* suggestions parked with the owner (parked-view.js) */
 .summary .chip.deploy{ color:var(--deploy); border-color:rgba(160,112,255,0.4); background:rgba(160,112,255,0.08); }
 .summary .chip.manager{ color:var(--manager); border-color:rgba(79,214,200,0.4); background:rgba(79,214,200,0.08); }
 .summary .chip.on{ border-color:var(--ink-2); }
@@ -2574,6 +2575,11 @@ body:not(.res-hidden) .fgrp{ display:none; }
 .qpop .qopts{ display:flex; flex-direction:column; gap:1px; color:var(--ink-2); padding:2px 0 0 14px; }
 .qpop .qwhy{ color:var(--ink-2); padding-left:14px; }
 .qpop .qrec{ color:var(--working); padding-left:14px; }
+/* suggestions parked with the owner by the Opus triage (parked-view.js): Yes / No per item */
+.qpop .prkbtns{ display:flex; gap:8px; padding:6px 0 0 14px; }
+.qpop .prkbtns button{ background:var(--bg-3); color:var(--ink); border:1px solid var(--line-2); border-radius:8px; padding:6px 12px; font-size:12px; font-weight:600; min-height:32px; }
+.qpop .prkbtns .prk-yes{ border-color:var(--working); color:var(--working); }
+.qpop .prkbtns button:disabled{ opacity:.5; }
 .attnpop .qgo{ background:var(--bg-3); color:var(--ink); border:1px solid var(--line-2); border-radius:8px; padding:6px 10px; font-size:12px; font-weight:600; }
 
 .attention .qask{ display:none; }   /* the old amber '<n> questions' chip: every task is now one plain red chip */

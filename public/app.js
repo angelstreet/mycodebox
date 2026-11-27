@@ -32,6 +32,7 @@ import '/tip.js';
 import { mountAskPopup } from '/ask-popup.js';
 import { isOwnersTurn, unattachedAsks } from '/ask-model.js';
 import { askSummary, askLine } from '/manager-ask.js';
+import { parkedChipHtml, parkedRowsHtml } from '/parked-view.js';
 import { reloadGuard } from '/sw-update.js';
 import { listHtml, detailHtml, newFormHtml, scorecardHtml } from '/tasks-view.js';
 import * as hv from '/history-view.js';
@@ -1585,11 +1586,13 @@ function renderSummary() {
   const html = chips
     .filter(([k, n]) => n > 0 || k === 'working')
     .map(([k, n, t]) => `<button class="chip ${k}${state.filter.includes(k) ? ' on' : ''}" data-filter="${k}" title="${t}" aria-label="${n} ${t}">${k === 'deploy' ? icon('timer', 13, 'sticon') : `<i class="dot ${k}"></i>`}${n}</button>`)
-    .join('');
+    .join('')
+    // suggestions the Opus triage parked with the owner: the phone hides the NEEDS YOU strip, so they get a chip here too (parked-view.js)
+    + ((state.parked || []).length ? `<button class="chip parked" data-parked-chip="1" title="${state.parked.length} suggestion(s) for you" aria-label="${state.parked.length} suggestions for you">${icon('note', 13, 'sticon')}${state.parked.length}</button>` : '');
   if (els.summary.innerHTML !== html) {
     els.summary.innerHTML = html;
     for (const b of els.summary.querySelectorAll('.chip')) {
-      b.onclick = () => setFilter(toggleIn(state.filter, b.dataset.filter));
+      b.onclick = b.dataset.parkedChip ? (e) => { e.stopPropagation(); showParked(b); } : () => setFilter(toggleIn(state.filter, b.dataset.filter));
     }
   }
   // tab title badge so the PWA / browser tab shows how many need you
@@ -1632,7 +1635,7 @@ function markAttentionOverflow() {
     for (const b of pop.querySelectorAll('button')) b.onclick = () => { pop.remove(); hidden[Number(b.dataset.i)].click(); };
   };
 }
-document.addEventListener('pointerdown', (e) => { if (!e.target.closest('#attnPop, .anmore')) document.getElementById('attnPop')?.remove(); });
+document.addEventListener('pointerdown', (e) => { if (!e.target.closest('#attnPop, .anmore')) document.getElementById('attnPop')?.remove(); if (!e.target.closest('#parkPop, [data-parked], [data-parked-chip]')) document.getElementById('parkPop')?.remove(); });
 if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => markAttentionOverflow()).observe(els.attention);
 function renderAttention() {
   // the same predicate as the answer popup and the red rows (ask-model.js)
@@ -1649,7 +1652,8 @@ function renderAttention() {
   // manager's own questions about finished sessions, so the strip said "none" with 5 open.)
   const entries = names;
   const mgrAsks = unattachedAsks(state.ownerAsks, state.status, state.sessions);
-  const total = names.length + mgrAsks.length;
+  const parked = state.parked || [];
+  const total = names.length + mgrAsks.length + (parked.length ? 1 : 0);
   const line = (n) => { const a = state.status[n]?.triage?.ai; return a ? (a.proposed_reply ? `AI: \u201c${a.proposed_reply}\u201d` : 'AI: needs you') : ''; };
   const label = (k) => (k === 'owner-direct' || k === 'owner' ? 'for you' : displayName(k));
   // TTS text for the chip (Q94=2, every surface gets the audio chip). Reads aloud what the
@@ -1663,14 +1667,14 @@ function renderAttention() {
     const a = state.status[k]?.triage?.ai;
     return a && a.proposed_reply ? `${displayName(k)}: AI suggests "${a.proposed_reply}"` : `${displayName(k)} needs your answer.`;
   };
-  const key = state.filter.join() + '#' + waiting.map((s) => s.name + displayName(s.name) + prioOf(s.name) + line(s.name)).join('|') + '#' + (state.ownerAsksKey || '');
+  const key = state.filter.join() + '#' + waiting.map((s) => s.name + displayName(s.name) + prioOf(s.name) + line(s.name)).join('|') + '#' + (state.ownerAsksKey || '') + '#' + (state.parkedKey || '');
   if (els.attention.dataset.key === key) return;
   els.attention.dataset.key = key;
   els.attention.classList.toggle('none', !total);
   // Strip is one-line overview; audio chip lives on the dialog popup (showOwnerAsks below) —
   // chat-raised 2026-10-08: 'keep that on the dialogue not the alert top not enough space'.
   const chip = (k) => `<button data-session="${escapeHtml(k)}"${groups.has(k) ? ' data-hasq="1"' : ''} title="${escapeHtml(groups.has(k) ? groups.get(k).map((q) => `${q.id}: ${q.question}`).join('\n') : line(k))}">${escapeHtml(label(k))}</button>`;
-  els.attention.innerHTML = `<button class="lbl${state.filter.includes('waiting') ? ' on' : ''}" data-needs title="Show only the sessions that need you">NEEDS YOU${total ? ` <b>${total}</b>` : ''}</button>${total ? '' : '<span class="dnone">none</span>'}` + entries.map(chip).join('') + (mgrAsks.length ? `<button data-mgr="1" title="${escapeHtml(mgrAsks.map((q) => askLine(q)).join('\n'))}">manager \u00b7 ${mgrAsks.length} question${mgrAsks.length === 1 ? '' : 's'}</button>` : '');
+  els.attention.innerHTML = `<button class="lbl${state.filter.includes('waiting') ? ' on' : ''}" data-needs title="Show only the sessions that need you">NEEDS YOU${total ? ` <b>${total}</b>` : ''}</button>${total ? '' : '<span class="dnone">none</span>'}` + entries.map(chip).join('') + (mgrAsks.length ? `<button data-mgr="1" title="${escapeHtml(mgrAsks.map((q) => askLine(q)).join('\n'))}">manager \u00b7 ${mgrAsks.length} question${mgrAsks.length === 1 ? '' : 's'}</button>` : '') + parkedChipHtml(parked);
   els.attention.querySelector('[data-needs]').onclick = () => setFilter(toggleIn(state.filter, 'waiting'));
   for (const b of els.attention.querySelectorAll('button[data-session]')) {
     b.onclick = (e) => {
@@ -1681,8 +1685,39 @@ function renderAttention() {
   }
   const mb = els.attention.querySelector('button[data-mgr]');
   if (mb) mb.onclick = (e) => { e.stopPropagation(); showOwnerAsks(mb, 'manager', mgrAsks, `The manager has ${mgrAsks.length} open question${mgrAsks.length === 1 ? '' : 's'} for you. ${mgrAsks.map((q) => { const s = askSummary(q); return `${s.id}: ${s.what}${s.why ? ` Why you: ${s.why}` : ''}${s.rec ? ` My view: ${s.rec}` : ''}`; }).join('. ')}`); };
+  const pb = els.attention.querySelector('button[data-parked]');
+  if (pb) pb.onclick = (e) => { e.stopPropagation(); showParked(pb); };
   markAttentionOverflow();
   syncAlertRowVisibility();
+}
+// Suggestions the Opus triage parked with the owner (suggestion-triage.js): a yes / no each, sent to POST /api/suggestions/owner
+function showParked(anchor) {
+  document.getElementById('attnPop')?.remove(); document.getElementById('parkPop')?.remove();
+  const pop = document.createElement('div');
+  pop.id = 'parkPop'; pop.className = 'attnpop qpop';   // its own id: a strip redraw (markAttentionOverflow) must not close it between two answers
+  pop.innerHTML = parkedRowsHtml(state.parked || [], { name: displayName });
+  const r = anchor.getBoundingClientRect();
+  pop.style.top = `${r.bottom + 4}px`; pop.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - 440))}px`;
+  document.body.appendChild(pop);
+  for (const b of pop.querySelectorAll('.prkbtns button')) {
+    b.onclick = async (e) => {
+      e.stopPropagation();
+      const row = b.closest('.prk');
+      row.querySelectorAll('button').forEach((x) => { x.disabled = true; });
+      try {
+        const res = await fetch('/api/suggestions/owner', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ session: row.dataset.s, n: Number(row.dataset.n), answer: b.dataset.a }) });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok || j.ok === false) throw new Error(j.error || `HTTP ${res.status}`);
+        row.remove();
+        toast(`${displayName(row.dataset.s)} ${row.dataset.n}: ${b.dataset.a === 'yes' ? 'approved, the session is told' : 'declined'}`, 2500);
+        // drop it here (the next poll then sees no change, so the strip is not redrawn under the open popup); the last one closes it
+        state.parked = (state.parked || []).filter((i) => !(i.session === row.dataset.s && String(i.n) === row.dataset.n));
+        state.parkedKey = JSON.stringify(state.parked.map((i) => [i.session, i.n]));
+        if (!pop.querySelector('.prk')) { pop.remove(); els.attention.dataset.key = ''; renderAttention(); renderSummary(); }
+        else if (anchor.dataset.parked) anchor.textContent = `suggestions \u00b7 ${state.parked.length}`;
+      } catch (err) { row.querySelectorAll('button').forEach((x) => { x.disabled = false; }); toast(`Not recorded: ${err.message}`, 4000); }
+    };
+  }
 }
 
 // On mobile, hide the alert-row entirely when NEEDS YOU is empty AND leases are empty AND no
@@ -1694,7 +1729,8 @@ function syncAlertRowVisibility() {
   // The previous version had a complex query that returned false-positive when NEEDS YOU was empty
   // (the 'NEEDS YOU' label button was not the only child because the 'none' span was alongside it),
   // so the row kept showing even with zero alerts. The real signal is the count of session chips.
-  const attEmpty = !att || att.querySelectorAll('button[data-session]').length === 0;
+  // the manager's questions and the parked suggestions are chips too (the row was hidden on a phone with only those)
+  const attEmpty = !att || att.querySelectorAll('button[data-session], button[data-mgr], button[data-parked]').length === 0;
   const leaseEmpty = !lease || lease.classList.contains('idle');
   // deployBanner gets .hidden when nothing is queued; .run / .wait are active
   const depEmpty = !dep || dep.classList.contains('hidden') || dep.classList.contains('idle');
@@ -5409,6 +5445,22 @@ async function pollOwnerAsks() {
 }
 setInterval(pollOwnerAsks, 15000);
 setTimeout(pollOwnerAsks, 1500);
+// suggestions parked with the owner by the Opus triage (suggestion-triage.js): one chip in the NEEDS YOU strip
+state.parked = [];
+async function pollParked() {
+  try {
+    const r = await fetch('/api/suggestions/owner');
+    if (!r.ok) return;
+    const items = (await r.json()).items || [];
+    const key = JSON.stringify(items.map((i) => [i.session, i.n]));
+    if (key === state.parkedKey) return;
+    state.parkedKey = key; state.parked = items;
+    els.attention.dataset.key = '';
+    renderAttention(); renderSummary();
+  } catch { /* offline: keep what we had */ }
+}
+setInterval(pollParked, 15000);
+setTimeout(pollParked, 1500);
 function alertTransitions() {
   const fresh = [];
   const finished = [];

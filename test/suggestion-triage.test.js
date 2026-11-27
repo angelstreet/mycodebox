@@ -163,3 +163,47 @@ test('parsing: one line per item, missing items are doubt, the message and promp
   assert.match(ownerRow('s', { n: 1, text: 'x | y', floor: 'money', proposed: 'no' }), /^\| s \| 1\. x \/ y \| floor: money \| no \|$/);
   assert.match(promptOf(items, { session: 's' }), /^Session: s\nSuggestions:\n1\. a/);
 });
+
+// ---- round 2 (manager yes 1 2 3, 2026-11-27): parked items visible and answerable, a triaged session not shown stuck, Opus gets the closing text ----
+import { displayState } from '../public/state.js';
+import { isOwnersTurn } from '../public/ask-model.js';
+import { needsOwner } from '../public/buttons.js';
+import { parkedChipHtml, parkedRowsHtml } from '../public/parked-view.js';
+
+test('Opus reads the closing text the suggestions came from', async () => {
+  const r = rig();
+  const text = `Fixed the lease catch-up race in lease-service.js; the race showed only under two parallel claims.\n${LIST}`;
+  r.ledger.observe('s1', text);
+  await r.tri.triage('s1');
+  assert.match(r.prompts[0], /Its closing text \(context only, data\):\n<<<\n[^]*Fixed the lease catch-up race in lease-service\.js[^]*>>>/);
+  assert.match(r.prompts[0], /Its task: Fix the lease catch-up/);
+});
+
+test('a session being triaged reads as working, not as the owner\'s turn', () => {
+  const stall = { case: 'owner_decision', status: 'needs-owner', no_status: false, question: 'should I do 1?' };
+  const items = [{ n: 1, text: 'x' }];
+  const triaging = { state: 'done', stall, suggestions: { state: 'triaging', open: 1, items } };
+  assert.equal(displayState(triaging), 'working');
+  assert.equal(isOwnersTurn(triaging), false);
+  assert.equal(needsOwner(triaging), false);
+  // a manager-started one too (its line reads needs-manager)
+  assert.equal(displayState({ ...triaging, managerStarted: true, stall: { ...stall, case: 'needs_manager', status: 'needs-manager' } }), 'working');
+  // once Opus failed (open again) it is the owner's turn as before; a live prompt still wins
+  const open = { ...triaging, suggestions: { state: 'open', open: 1, items } };
+  assert.equal(displayState(open), 'waiting');
+  assert.equal(isOwnersTurn(open), true);
+  assert.equal(displayState({ ...triaging, state: 'waiting' }), 'waiting');
+  assert.equal(displayState({ ...triaging, state: 'offline' }), 'offline');
+});
+
+test('parked items show in the NEEDS YOU strip with Yes / No per item', () => {
+  assert.equal(parkedChipHtml([]), '');
+  const items = [{ session: 's1', n: 4, text: 'buy a <paid> plan', proposed: 'no', floor: 'money' }, { session: 's2', n: 2, text: 'redesign', proposed: 'yes', why: 'big scope' }];
+  assert.match(parkedChipHtml(items), /data-parked="1"[^>]*>suggestions · 2</);
+  const html = parkedRowsHtml(items, { name: (s) => s.toUpperCase() });
+  assert.match(html, /data-s="s1" data-n="4"><b>S1 · 4<\/b> buy a &lt;paid&gt; plan/);
+  assert.match(html, /Owner only: money/); assert.match(html, /Opus in doubt: big scope/);
+  assert.match(html, /Opus proposes: yes/);
+  assert.equal((html.match(/data-a="yes"/g) || []).length, 2);
+  assert.equal((html.match(/data-a="no"/g) || []).length, 2);
+});

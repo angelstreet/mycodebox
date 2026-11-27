@@ -1288,6 +1288,7 @@ function noteReadyToClose(name) {
 function suggestionHold(name, text, doneAt = null) {
   if (loadOwnerHiddenSessions().includes(name)) return null;
   const h = suggestions.hold(name, text, { at: doneAt });
+  if (h?.state === 'open' && suggestionTriage.running(name)) return { ...h, state: 'triaging' };   // Opus is answering: not the owner's turn, not stuck
   return h?.state === 'pending' && finalAccept.has(name) ? null : h;
 }
 // Opus triages the suggestions (suggestion-triage.js, owner 2026-11-27): worthy -> yes, unworthy -> no, sent to the session at once; only doubt or an
@@ -1316,6 +1317,24 @@ const suggestionTriage = createSuggestionTriage({ stateDir: STATE_DIR, ledger: s
       await managerEvents.record({ key: `suggestions-triaged:${name}`, title: `${name}: Opus answered its suggestions (pass it on with SendMessage)`, body: text.slice(0, 1800), url: '/', priority: 'default' });
     }
   } });
+// The owner's yes / no to an item the Opus triage parked with the owner (dashboard NEEDS YOU "suggestions" chip). Only the owner's browser answers it.
+// A yes becomes a new round for the session (told at once; a Mac row or a closed session: the manager is told instead).
+async function answerParked(req, body = {}) {
+  const by = actorOf(body), session = String(body.session || ''), n = Number(body.n), a = body.answer;
+  if (!fromOwnerUi(req, by)) throw httpError(403, 'only the owner answers a suggestion parked with the owner (dashboard)');
+  if (!session || !Number.isInteger(n) || (a !== 'yes' && a !== 'no')) throw httpError(400, 'body: { session, n, answer: "yes" | "no" }');
+  if (!suggestions.ownerItems().some((i) => i.session === session && i.n === n)) throw httpError(404, `no parked suggestion ${n} for ${session}`);
+  const r = suggestions.answer(session, { [n]: a }, { by: 'owner', via: 'dashboard' });
+  const it = r.answered[0];
+  logEvent({ type: 'suggestions-answered', session, via: 'dashboard', by: 'owner', answered: [`${n}:${a}`], parked: true });
+  if (a === 'yes' && it) {
+    await approvedRound({ goals, gate: goalGate, ledger: suggestions, name: session, approved: r.approved.length ? r.approved : [it] }).catch((e) => console.error('[suggestions] new round', e.message));
+    const text = `The owner approved your suggestion ${n} (it was parked with the owner): ${it.text.slice(0, 200)}. Build it as a new round, then end with your done line, Verification block and closing review.`;
+    try { await harnessSend(session, text); }
+    catch { await managerEvents.record({ key: `suggestions-owner-yes:${session}`, title: `${session}: the owner approved parked suggestion ${n} (pass it on, or start the work)`, body: text, url: '/', priority: 'default' }).catch(() => {}); }
+  }
+  return { ok: true, session, n, answer: a, parked: suggestions.ownerItems().length };
+}
 const heldLine = (h) => (h.state === 'open' ? `${h.open} improvement suggestion(s) to answer: yes or no each` : 'checking for improvement suggestions');
 // A hand-over turn was read: new suggestions become items; a list under a line that is not needs-owner is pushed to the owner at once.
 function noteSuggestions(name, text, doneAt = null) {
@@ -3499,6 +3518,10 @@ async function handleHttp(req, res) {
     return json(res, 200, { events: await managerEvents.tail({ since, limit }) });
   }
   if (req.method === 'GET' && p === '/api/suggestions/owner') return json(res, 200, { items: suggestions.ownerItems() });   // parked with the owner by the Opus triage
+  if (req.method === 'POST' && p === '/api/suggestions/owner') {
+    try { return json(res, 200, await answerParked(req, await readJsonBody(req))); }
+    catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }
+  }
   if (req.method === 'GET' && p === '/api/suggestions') return json(res, 200, suggestions.list());   // every suggestion and the owner's yes / no (suggestions.js)
   if (req.method === 'GET' && p === '/api/goal-check') return json(res, 200, await goalGate.snapshot());   // bounced dones per session today (goal-check.js)
   if (req.method === 'GET' && p === '/api/done-check') return json(res, 200, doneCheck.snapshot());   // sessions whose STATUS done disagrees with git

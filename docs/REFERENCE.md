@@ -2327,6 +2327,15 @@ Opus call (`claude -p --model opus`, no tools, empty cwd, async; one at a time p
   (`openOf` excludes them) and the goal check does not push "suggestions open" while the triage runs (`triaging`).
 - **Owner rows:** manager event `suggestions-owner:<s>`, a 4-column table `Session | Suggestion | Why you | Opus proposes`;
   `GET /api/suggestions/owner` lists every parked item. Only the owner's answer (dashboard / typed) closes one; the manager's does not.
+- **On the dashboard** (`public/parked-view.js`): a `suggestions · N` chip in the NEEDS YOU strip (desktop) and a note chip in the summary bar
+  (phone, where the strip is hidden) open a popup with `Yes, build it` / `No` per item, why it is the owner's (floor or Opus's doubt) and
+  Opus's proposal. It posts `POST /api/suggestions/owner {session, n, answer}`: owner browser only (403 for `by` other than the owner or a
+  request with no browser origin), recorded `by: owner, via: dashboard`. A yes starts a new round in the session and tells it; with no pane
+  (Mac row, closed session) the manager gets `suggestions-owner-yes:<s>` to pass it on.
+- **Triaging state:** while the Opus call runs, the status row's `suggestions.state` is `triaging`: the session shows as working, is not
+  the owner's turn and gets no answer buttons (a live prompt in the pane still wins). An Opus failure turns it back to `open`.
+- **Context:** Opus reads the closing text the items came from (`context` in the ledger record, the last 2,000 characters, as data), with
+  the session's goal.
 - **Record:** one `manager-asks.jsonl` line per item (`point: suggestion-triage`, verdict, opus, proposed, why, floor, source `opus`), the
   actions log (`suggestion-triage`, `suggestions-answered` by `opus`), `suggestions.jsonl`, and "Decided for you" for the yes / no.
 - **Fallback:** an Opus error is recorded (`verdict: error`) and leaves the items open for the old flow below; the same items are tried
