@@ -356,7 +356,12 @@ def run(mode, timeout=10, tiles=False):
     # are not slowed by the browser's own load, and a tile that reads broken is probed again on its own.
     evidence_dir = os.path.join(STATE, f"evidence-{datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d')}")
     os.makedirs(evidence_dir, exist_ok=True)
-    tiles_block = rc.tile_sweep(entries, servers, enabled=tiles, evidence_dir=evidence_dir)
+    # The tiles whose proof the night's own rows will need: a dark snapshot with a live video (the note). Their
+    # frame is kept next to the frames of the tiles that do NOT play, so the rule "a fixed tile also plays live
+    # on hover, and its picture is not black" has a picture next to it.
+    proof = [{'host': e['host'], 'capture': e.get('capture')} for e, cap in zip(entries, caps)
+             if cap.get('capture') == 'ok' and cap.get('luma') is not None and cap['luma'] < rc.BLACK_LUMA]
+    tiles_block = rc.tile_sweep(entries, servers, enabled=tiles, evidence_dir=evidence_dir, proof=proof)
     verdicts = rc.tile_verdicts(tiles_block, entries)
 
     def choose(e, exclude=()):

@@ -81,7 +81,7 @@ test('rtsp_check: --host probes a loopback source from that host (alias from RTS
 });
 
 // ---- the replacement run ----
-async function world({ devices, pool, leaseBusy = false, leaseMissing = false, leaseBusyFirst = false, leaseGranted = false, leaseGrantedDead = false, hostConfigFails = false, brokenAfterSave = false, flaky502 = null, snapshots = {}, appTitles = null }) {
+async function world({ devices, pool, leaseBusy = false, leaseMissing = false, leaseBusyFirst = false, leaseGranted = false, leaseGrantedDead = false, hostConfigFails = false, hostReadFails = 0, brokenAfterSave = false, flaky502 = null, snapshots = {}, appTitles = null }) {
   const { dir, env } = fakes();
   const posts = []; const restarts = []; let reads = 0; const plReads = {};
   const server = http.createServer((req, res) => {
@@ -96,6 +96,8 @@ async function world({ devices, pool, leaseBusy = false, leaseMissing = false, l
         // hostConfigFails: the inventory read (1st) succeeds, the apply step's read fails: the lease was granted,
         // the apply step died before it wrote a result
         if (hostConfigFails && ++reads > 1) { res.statusCode = 404; return send({ error: 'no such host' }); }
+        // hostReadFails: the inventory read itself answers with a status (a blip or a refusal)
+        if (hostReadFails) { res.statusCode = hostReadFails; return send({ error: 'nope' }); }
         reads++;
         return send({ host: { _stream_profile: 'x' }, devices });
       }
@@ -940,4 +942,41 @@ test('the tile verdict: a black picture, a frozen clock, a failed request of its
   assert.equal(tileVerdict({ readyState: 4, dt: 2.5, bright: 254, hlsFailures: 1 }), false, 'a failed HLS request of its own');
   assert.equal(tileVerdict({ readyState: 0, dt: 0, bright: 0, hlsFailures: 0 }), false, 'a player with nothing');
   assert.equal(tileVerdict({ readyState: -1, dt: null, bright: null, hlsFailures: 0 }), null, 'a card with no live player has no verdict');
+});
+
+test('the inventory error says the HTTP status: a blip and a refusal are not the same', async () => {
+  // The night reported 'ERROR pi4/vpt-lenovo4: HTTPError' and the next night read the host fine: the bare name
+  // says nothing about what the server answered.
+  for (const status of [503, 404]) {
+    const w = await world({ pool: POOL, devices: { DEVICE1: dev('a', 'rtsp://test.example/good-pub') }, hostReadFails: status });
+    const r = await py(CHECK, ['--inventory'], w.E);
+    w.close();
+    assert.match(r.stdout, new RegExp(`ERROR envA/h1: HTTPError ${status}`), r.stdout);
+    assert.doesNotMatch(r.stdout, /ERROR envA\/h1: HTTPError$/m, 'the status is never left out');
+  }
+});
+
+test('the night asks the browser layer for the frame of a tile that plays (a dark snapshot with a live video)', async () => {
+  // The evidence folder holds the frames of the tiles that do NOT play; the rows that say "the tile's snapshot was
+  // dark but the live video plays" need the other side of the rule: a picture of a tile that plays, not black.
+  const w = await world({ pool: POOL, snapshots: { 'cap-a': 'DARKNEWEST' }, devices: { DEVICE1: dev('a', 'rtsp://test.example/good-pub') } });
+  const dir = path.dirname(w.E.RTSP_CHECK_FFPROBE);
+  const payloadFile = path.join(dir, 'payload.json');
+  const tilesFile = path.join(dir, 'tiles.json');
+  writeFileSync(tilesFile, JSON.stringify({ status: 'ok', why: null, not_checked: [], tiles: [
+    { name: 'a', host: 'h1', capture: 'cap-a', readyState: 4, dt: 2.5, dt_total: 2.5, picture_changed: true,
+      bright: 254, size: '320x180', plays: true, kind: 'stream', hls_failures: 0 }] }));
+  sh(dir, 'node', `cat > "${payloadFile}"; cat "${tilesFile}"`);   // the browser layer, faked: it keeps the payload
+  const E = { ...w.E, RTSP_PLAYWRIGHT_PATH: dir };
+  const r = await py(REPLACE, ['--tiles'], E);
+  const day = new Date().toISOString().slice(0, 10);
+  const rep = JSON.parse(readFileSync(path.join(w.state, 'rtsp-nightly', `report-${day}.json`), 'utf8'));
+  w.close();
+  const payload = JSON.parse(readFileSync(payloadFile, 'utf8'));
+  assert.ok(payload.proof.some((p) => p.host === 'h1' && p.capture === 'cap-a'),
+    `the sweep is told which tile needs the proof of a playing tile: ${JSON.stringify(payload.proof)}`);
+  const one = rep.streams.find((s) => s.device === 'DEVICE1');
+  assert.match(one.note, /the tile's snapshot was dark but the live video plays/, 'the row is the note');
+  assert.equal(one.action, 'none');
+  assert.match(r.stdout, /tiles \(the app's own player\): 1 checked, 1 playing, 0 not playing/, r.stdout);
 });
