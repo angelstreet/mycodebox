@@ -2,7 +2,8 @@
 // suggestions (suggestions.js), ONE separate Opus call reads them and picks the worthy ones: worthy -> yes, unworthy -> no, both sent to the session
 // at once so it finishes with its done line. Only an item Opus is in doubt about, or one on an owner floor (money, customers, publishing, credentials,
 // deleting data), goes to the owner, as one short table row with Opus's proposed answer; the session never waits on it: the item is parked with
-// the owner (answer 'owner' in the ledger), recorded once and never asked again. Every verdict is recorded in manager-asks.jsonl (point
+// the owner (answer 'owner' in the ledger), recorded once and never asked again. An item Opus proposes 'no' (NO, or DOUBT proposed no, a floor item too) is answered no and only
+// recorded, never listed for the owner (owner 2026-11-27); the owner sees only proposed-yes items and doubts with no stated proposal. Every verdict is recorded in manager-asks.jsonl (point
 // 'suggestion-triage') and the actions log. Switch: manager.json `suggestionTriage` live (default) | off; off, or an Opus error, leaves the old
 // flow (owner / manager answers). Rule text: AGENTS.md "Reflection after an accepted done".
 import { spawn } from 'node:child_process';
