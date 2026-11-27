@@ -10,10 +10,12 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ownerOnly } from './doubt.js';
+import { saysBuilt, refOf } from './suggestions.js';
 
 // The five owner floors of a suggestion, in plain words. A hit is never approved, whatever Opus says.
 const FLOORS = [
-  ['money', /\b(?:money|paid|pay(?:ing|ment)?|purchas\w*|buy(?:ing)?|subscri(?:be|ption)|billing|invoice|budget|pricing|price|cost(?:s|ing)?\b(?! of (?:a |the )?(?:call|run|test))|upgrade (?:the |our )?plan|credit card|spend\w*|€|\$\d)/i],
+  // spending, not a word about prices: "describe the price (0)" or "that is what cost the A57 its run" are not money decisions (2026-11-27, coc-daily)
+  ['money', /\b(?:buy(?:ing)?|purchas\w*|pay(?:ing)? for|paid (?:plan|tier|account|subscription|service|version|api|key|seat)s?|subscri(?:be|ption)|billing|invoices?|budget|upgrade (?:the |our |a |to a )?(?:plan|tier|subscription)|credit card|spends? (?:money|\$|€)|spending money|costs? (?:money|\$|€)|on the owner'?s (?:anthropic |openai |api )?(?:key|account|card))\b|[€$]\s?\d/i],
   ['customers', /\b(?:customers?|clients?(?! side| ?-side| cert| library| code| lib)|client install|end ?users?|tell (?:the )?users|e-?mail (?:the )?users|notify (?:the )?users)\b/i],
   ['publishing', /\b(?:publish\w*|public(?:ly)? (?:post|release|announce)|announce\w*|post (?:it |this )?(?:on|to) (?:youtube|linkedin|twitter|x|reddit|the blog|social)|youtube|linkedin|tweet|blog post|press release|open[- ]source it|make (?:the )?repo public|app store|play store)\b/i],
   ['credentials', /\b(?:credentials?|passwords?|secrets?|api[- ]?keys?|tokens? (?:rotat|renew|revok|new)|rotat\w* (?:the |a )?(?:key|token|secret)|private keys?|ssh keys?|logins? for|2fa|oauth (?:app|client))\b/i],
@@ -60,8 +62,10 @@ export function parseVerdicts(reply, items) {
 // Pure. items + verdicts -> the decision per item: { n, text, decision: 'yes'|'no'|'owner', proposed, why, floor } (a floor beats Opus).
 export function decide(items, verdicts) {
   return items.map((i) => {
+    // an item the session reports built, or a line pointing at another item, is never the owner's (2026-11-27): no
+    if (saysBuilt(i.text) || refOf(i.text) != null) return { n: i.n, text: i.text, decision: 'no', proposed: 'no', why: saysBuilt(i.text) ? 'the session says it is already built' : `the same item as ${refOf(i.text)}`, opus: verdicts[i.n]?.verdict || 'none' };
     const v = verdicts[i.n] || { verdict: 'doubt', proposed: 'no', why: 'no verdict' };
-    const floor = floorOf(i.text);
+    const floor = floorOf(i.text);   // the item's own words only, never its context
     const decision = floor || v.verdict === 'doubt' ? 'owner' : v.verdict;
     return { n: i.n, text: i.text, decision, proposed: v.proposed, why: v.why, ...(floor ? { floor } : {}), opus: v.verdict };
   });

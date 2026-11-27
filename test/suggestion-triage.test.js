@@ -2,7 +2,7 @@
 // floor -> a row for the owner that never holds the session; every verdict recorded in manager-asks.jsonl. Opus is a fake here: no model is called.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmp } from './helpers-tmp.js';
 import { createSuggestions } from '../suggestions.js';
@@ -238,10 +238,106 @@ test('a list repeated with notes is the same items, so "yes 1 2 3, no 4" reads o
     `STATUS: needs-manager: ${ASK_WORDS} — should I do 1 2 3?`].join('\n');
   ledger.observe('s1', again, { at: t0 + 2 });
   assert.equal(ledger.get('s1').items.length, 4);
+  // the restated "built and merged" items are closed by the session's own report; only 4 ("not built") is open
+  assert.deepEqual(ledger.get('s1').items.map((i) => `${i.n}:${i.answer || 'open'}`), ['1:built', '2:built', '3:built', '4:open']);
   const r = ledger.ownerMessage('s1', 'yes 1 2 3, no 4', { by: 'manager', via: 'send' });
   assert.equal(r.numbering, undefined);
-  assert.deepEqual(r.answered.map((i) => `${i.n}:${i.answer}`), ['1:yes', '2:yes', '3:yes', '4:no']);
+  assert.deepEqual(r.answered.map((i) => `${i.n}:${i.answer}`), ['4:no']);
   // two different items that share a short opening are still two items
   ledger.observe('s2', ['Suggestions:', '1. Add a test. For the parser', '2. Add a test. For the lexer', '', `STATUS: needs-manager: ${ASK_WORDS} — should I do 1?`].join('\n'), { at: t0 + 3 });
   assert.equal(ledger.get('s2').items.length, 2);
+});
+
+// ---- coc-daily-20261127, 2026-11-27: the first live triage sent 6 rows to the owner and only item 1 was real. The turns below are the session's own
+// lines (ledger items 1-5 for its first list, then the stop excerpts of 08:49, 08:53, 09:04 and 09:08 UTC; the top of the 08:53 / 09:08 lists was cut
+// off in the excerpt and is restated from the first list). ----
+const COC = {
+  first: ['Suggestions:', 'Worth doing:',
+    "1. The fleet's model choice during the free plan's quota window — the fleet plays --model_choice flash, and when the quota is out (a 5 h window) the runs now stop at step 0 with the reason named: the village does not play in that window at all. Putting the fleet back on auto (Haiku on the owner's Anthropic key) spends money.",
+    "2. The Town Hall panel, the largest number left in the owner's rule — 31 of the 100 runs of the window never read the panel and 593 steps name it (the read step is 643 of the 3 132 steps), while 42 runs sat at the cap with a free builder.",
+    '3. The resource checker judges the crashed runs as played runs — the 6 crashes of the last 24 h had steps, so coc_resource_check.py measured the owner\'s rule on them and the lane counted 3 of them as played turns.',
+    'Smaller:',
+    '4. The words "unlimited free plan" (shared/src/lib/ai/usages.py, scripts/agent/flash_run_log.py, TASK-164) describe the price (0) but the plan has a 5 h quota window — one clause would stop the next reader from reading "unlimited" as "never throttled".',
+    '5. A CoC host with no data directory refuses every run with the raw OS error ("Permission denied: \'/var/lib/vpt\'"); a check that names it ("this host has no CoC data directory") would say what to do — that is what cost the A57 its 09:27 run and its trace.',
+    'Recommendation: 1 2 3. Should I do them?', '', 'STATUS: needs-owner: improvement suggestions above, nothing built — should I do 1 2 3?'].join('\n'),
+  t0849: ['    Suggestions: none left except 1 — the fleet\'s model choice during the free plan\'s quota window (auto → Haiku on the owner\'s Anthropic key), which spends',
+    '    money, is held by the owner and not filed, and is recorded in TASK-209 as an open owner item.',
+    '    STATUS: done — the 24 h measured (83 runs, 6 api_error crashes) · closing review: docs TASK-209 · leftovers none · unverified none · bugs: fixed the api_error crash'].join('\n'),
+  t0853: ['    Suggestions:',
+    "    1. The fleet's model choice during the free plan's quota window — auto → Haiku on the owner's Anthropic key, an owner",
+    '       decision** (held as an open owner item in TASK-209, not filed).',
+    "    2. The Town Hall panel, the largest number left in the owner's rule — 42 runs sat at the cap with a free builder, 31 of 100 runs never read the panel and",
+    '       593 steps name it. Built and merged on the manager\'s order (int-1a21c2ed95c7fdbb0): the th_zoom meta line now says whether the pinch that finds the',
+    '       panel fires on each phone, so the next session can change the read step with the number behind it. Nothing left to build here.',
+    '    3. The resource checker judged the crashed runs as played runs — the 6 api_error runs of the 24 h sat in the statistics of the owner\'s rule. Built and',
+    '       merged (int-1a21c2ed95c7fdbb0): the report now carries crashed, crashed_by_stop and its own line ("6 of the 91 run(s) that played ended in a crash").',
+    '    4. The words "unlimited free plan" (shared/src/lib/ai/usages.py, scripts/agent/flash_run_log.py, TASK-164) described the price ($0) and were read as',
+    '       "never throttled". **Built and merged**: the price is 0 **and** the quota window exists, in all three places.',
+    '    5. A CoC host with no data directory refused every run with the bare OS error ("Permission denied: \'/var/lib/vpt\'") and left no trace (the A57\'s run of',
+    '       09:27 on 2026-11-26). Built and merged: the refusal now names the directory and what to do with it.',
+    '    6. The same item as 1 (the fleet\'s model choice during the quota window) — listed separately in the reflection because it was the line "none left except',
+    '       1". Not built, held by the owner, not filed.',
+    '    Recommendation: 1 (and 6 is the same item) — it is the only one left. Should I do 1?',
+    '    STATUS: needs-owner: improvement suggestions above, nothing built — should I do 1?'].join('\n'),
+  t0904: ['    Suggestions: none left except 1 (held by the owner) — the fleet\'s model choice during the free plan\'s quota window (auto → Haiku on the owner\'s Anthropic',
+    '    key); it spends money, the owner decides, it is already an open owner item in TASK-209 and it is not filed.',
+    '    STATUS: done — the 24 h measured · closing review: docs TASK-209 · leftovers none · unverified none · bugs: fixed the api_error crash'].join('\n'),
+  t0908: ['    Suggestions:',
+    "    1. The fleet's model choice during the free plan's quota window — auto → Haiku on the owner's Anthropic key. Not built, held by the owner.",
+    "    2. The Town Hall panel, the largest number left in the owner's rule. Built and merged on the manager's order (int-1a21c2ed95c7fdbb0).",
+    '    3. The resource checker judges the crashed runs as played runs — the 6 api_error runs of the 24 h sat in the statistics of the owner\'s rule. Built and',
+    '       merged (int-1a21c2ed95c7fdbb0): the report carries crashed, crashed_by_stop and its own line ("6 of the 91 run(s) that played ended in a crash").',
+    '    4. The words "unlimited free plan" (shared/src/lib/ai/usages.py, scripts/agent/flash_run_log.py, TASK-164) described the price ($0) and were read as',
+    '       "never throttled". **Built and merged**: the price is 0 **and** the quota window exists, in all three places.',
+    '    5. A CoC host with no data directory refuses every run with the raw OS error ("Permission denied: \'/var/lib/vpt\'") and leaves no trace (the A57\'s run of',
+    '       09:27 on 2026-11-26). Built and merged: the refusal now names the directory and what to do with it.',
+    '    6. "none left except 1" — the fleet\'s model choice during the free plan\'s quota window — the same item as 1, listed twice by me across the two lists. Not',
+    '       built, held by the owner, not filed.',
+    '    7. The resource checker judged the crashed runs as played runs — the same item as 3, in the wording of my second list. Built and merged.',
+    '    8. A CoC host with no data directory refused every run with the raw OS error — the same item as 5, in the wording of my second list. Built and merged.',
+    '    9. The Town Hall panel (the wording of my second list) — the same item as 2. Built and merged.',
+    '    10. The quota-window wording (the wording of my second list) — the same item as 4. Built and merged.',
+    '    Recommendation: 1 is the only one left to answer. Should I do 1?',
+    '    STATUS: needs-owner: improvement suggestions above, nothing built — should I do 1?'].join('\n'),
+};
+
+test('coc-daily-20261127 transcript: only item 1 stays open and reaches the owner; references and built items never do', async () => {
+  const r = rig({ reply: { ok: true, text: '1: DOUBT proposed no - spends money on the owner\'s key\n2: YES - x\n3: YES - x\n4: YES - x\n5: YES - x' } });
+  let t = t0;
+  for (const turn of [COC.first, COC.t0849, COC.t0853, COC.t0904, COC.t0908]) r.ledger.observe('coc', turn, { at: (t += 60000) });
+  const items = r.ledger.get('coc').items;
+  assert.equal(items.length, 5, items.map((i) => `${i.n}. ${i.text.slice(0, 50)}`).join('\n'));   // no new item from "none left except 1", "the same item as N" or a reworded built line
+  assert.deepEqual(items.map((i) => `${i.n}:${i.answer || 'open'}`), ['1:open', '2:built', '3:built', '4:built', '5:built']);
+  await r.tri.triage('coc');
+  assert.equal(r.prompts.length, 1);
+  assert.doesNotMatch(r.prompts[0], /^\d+\. .*(?:none left except|same item as)/m);
+  // item 1 reaches the owner on Opus's doubt (its "spends money" lies past the 300 characters the ledger keeps, as live)
+  assert.deepEqual(r.ledger.ownerItems().map((i) => [i.session, i.n, i.proposed]), [['coc', 1, 'no']]);
+  assert.equal(r.owner[0].rows.length, 1);
+});
+
+test('an item the session calls built is never the owner\'s, and the floor reads only the item\'s own words', () => {
+  // the triage's last guard: a built or reference item that reached it anyway is a "no", whatever Opus or a floor word says
+  const ds = decide([{ n: 1, text: 'Buy a paid Sentry plan — built and merged (int-1)' }, { n: 2, text: 'none left except 1 — spends money on the owner\'s key' }, { n: 3, text: 'buy a paid Sentry plan' }],
+    { 1: { verdict: 'doubt', proposed: 'yes', why: '' }, 2: { verdict: 'doubt', proposed: 'no', why: '' }, 3: { verdict: 'yes', proposed: 'yes', why: '' } });
+  assert.deepEqual(ds.map((d) => `${d.n}:${d.decision}`), ['1:no', '2:no', '3:owner']);
+  // the coc-daily items 4 and 5 talk about a price and a cost, they spend nothing
+  assert.equal(floorOf(COC.first.split('\n')[6]), null);
+  assert.equal(floorOf(COC.first.split('\n')[7]), null);
+  assert.equal(floorOf(COC.first.split('\n')[2]), 'money');
+  // context never makes a floor: the triage reads floors from the item text only, the closing text goes to Opus as data
+  const items = [{ n: 1, text: 'add a regression test for the parser' }];
+  assert.equal(decide(items, { 1: { verdict: 'yes', proposed: 'yes', why: '' } })[0].decision, 'yes');
+});
+
+test('the live coc-daily ledger of 2026-11-27 is cleaned at start: only item 1 stays with the owner', () => {
+  const dir = tmp('triage-reconcile-');
+  const rec = JSON.parse(readFileSync(new URL('./fixtures/coc-daily-20261127-suggestions.json', import.meta.url), 'utf8'));
+  writeFileSync(join(dir, 'suggestions.json'), JSON.stringify({ since: 1, s: { 'coc-daily-20261127': rec } }));
+  assert.deepEqual(rec.items.filter((i) => i.answer === 'owner').map((i) => i.n), [1, 4, 5, 6, 9, 10]);   // as the first live triage left it
+  const ledger = createSuggestions({ stateDir: dir, now: () => t0, log: { log() {}, error() {} } });
+  assert.deepEqual(ledger.ownerItems().map((i) => i.n), [1]);
+  const by = Object.fromEntries(ledger.get('coc-daily-20261127').items.map((i) => [i.n, i.answer]));
+  assert.deepEqual([by[4], by[5], by[6], by[9], by[10]], ['built', 'built', 'duplicate', 'duplicate', 'duplicate']);
+  assert.equal(ledger.reconcile(), 0, 'idempotent');
 });

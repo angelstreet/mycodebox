@@ -2321,7 +2321,9 @@ Opus call (`claude -p --model opus`, no tools, empty cwd, async; one at a time p
 - **Verdicts:** `<n>: YES | NO | DOUBT proposed yes|no - why`. YES -> the item is answered `yes` (by `opus`, via `triage`) and becomes a new
   round (`approvedRound`); NO -> `no`; DOUBT, a missing line, or an **owner floor** (`floorOf`: money, customers, publishing, credentials,
   deleting data, plus the hard floor of `doubt.js ownerOnly`) -> the item is parked with the owner (`answer: 'owner'`, `proposed`, `why`,
-  `floor`). A floor wins over an Opus YES.
+  `floor`). A floor wins over an Opus YES. The floor reads the item's own words only, and money means spending (buy, pay for, a paid plan, a
+  subscription, billing, "spends money", the owner's key or card), not a word about a price or a cost. An item reported built or pointing at
+  another item is answered `no` before Opus or a floor counts.
 - **The session is told at once** (`harnessSend`; a Mac row: manager event `suggestions-triaged:<s>` to pass on with SendMessage): what to
   build, what not, what is with the owner ("do not wait, do not ask again"), then the done line. Parked items do not hold the done
   (`openOf` excludes them) and the goal check does not push "suggestions open" while the triage runs (`triaging`).
@@ -2371,7 +2373,11 @@ reflection reply.
   numbers, as the dashboard lists them, or the session's own) takes it; one that reads both ways with different items records nothing and
   is asked back (`suggestions-numbering` alert; the manager's own answer for a session it started is asked back to the manager as an event,
   never to the owner). A list repeated with a note (`1. <item> — built and merged`) is the same item: matched on the item's first clause of at
-  least 4 words (`headOf`), not a new one. It counts when it comes from the dashboard, phone or desktop app (a browser request with no `by`), a voice
+  least 4 words (`headOf`), not a new one. Lines that point at another item ("none left except 1", "the same item as 3", "duplicate of 2":
+  `refOf`) are never items; a reworded line (`sameItem`: the opening clause's word stems) is the same item; an item the session reports
+  "built and merged" / "already built" (`saysBuilt`) is closed as `built` by the session, never open and never the owner's; a reply naming
+  closed items as well ("yes 1 2 3, no 4" with 1-3 built) answers the open ones. At start `reconcile()` applies these rules to items recorded
+  before them (journal `reconciled`). It counts when it comes from the dashboard, phone or desktop app (a browser request with no `by`), a voice
   answer, or is typed into the session (terminal or Remote Control: a reporter prompt this server did not type, not a peer message, hook or
   notification; Mac: the Stop hook's `last_prompt`). A Mac row has no pane: a dashboard yes / no is recorded (nothing is typed) and the
   manager gets `suggestions-answered:<session>` to pass your words on with `SendMessage`.
