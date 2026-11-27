@@ -54,15 +54,21 @@ const read = (card) => card.evaluate((c) => {
   if (!v) return { readyState: -1, t: 0, w: 0, h: 0 };
   return { readyState: v.readyState, t: v.currentTime, w: v.videoWidth, h: v.videoHeight };
 });
-const brightest = (card) => card.evaluate((c) => {
+// the picture of the tile: its brightest pixel and a cheap signature of it (so two reads can tell a moving
+// picture from a frozen slate)
+const picture = (card) => card.evaluate((c) => {
   const v = c.querySelector('video');
-  if (!v || !v.videoWidth) return null;
+  if (!v || !v.videoWidth) return { bright: null, sig: null };
   const cv = document.createElement('canvas'); cv.width = v.videoWidth; cv.height = v.videoHeight;
   const cx = cv.getContext('2d'); cx.drawImage(v, 0, 0);
   const d = cx.getImageData(0, 0, cv.width, cv.height).data;
-  let mx = 0;
-  for (let i = 0; i < d.length; i += 4) { const l = 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2]; if (l > mx) mx = l; }
-  return Math.round(mx);
+  let mx = 0, h = 2166136261;
+  for (let i = 0; i < d.length; i += 4) {
+    const l = 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
+    if (l > mx) mx = l;
+    h = Math.imul(h ^ (d[i] + d[i + 1] * 3 + d[i + 2] * 7), 16777619) >>> 0;   // a hash of the picture
+  }
+  return { bright: Math.round(mx), sig: h };
 });
 const ident = (url) => {
   const m = String(url || '').match(/\/host\/([^/]+)\/stream\/([^/?]+)/);
@@ -188,6 +194,7 @@ async function probe(page, card, name, reqs, bad) {
     const mark = Date.now();
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);   // the live player only loads on hover
     let a = null;
+    let base = null;                            // the first position the player had: the clock from there
     for (let i = 0; i * 500 < perCardTimeoutMs; i++) {
       await page.waitForTimeout(500);
       a = await read(card);
@@ -198,21 +205,24 @@ async function probe(page, card, name, reqs, bad) {
         if (i >= 3 && !reqs.some((r) => r.at >= mark && /output\.m3u8/.test(r.url))) break;
         continue;
       }
+      if (base === null && a.t > 0) base = a.t;
       if (a.readyState >= 2) break;              // the player has the picture
       // A live player can sit at readyState 1 while it shows a bright picture and its clock moves (measured on
       // FR Kids 2 on 2026-11-27: readyState 1 at 4 s, 4 at 6 s, alone; under the grid it never passed 1).
       // Waiting for readyState 2 would read healthy tiles as broken, so the clock decides instead.
       if (i >= 2 && a.t > 0) break;
     }
+    const picA = await picture(card);
     await page.waitForTimeout(2000);
     const z = await read(card);
-    const bright = await brightest(card);
+    const picZ = await picture(card);
     const first = reqs.find((r) => r.at >= mark && /output\.m3u8/.test(r.url));
-    return { a, z, bright, id: ident(first ? first.url : '') };
+    return { a, z, base, picA, picZ, id: ident(first ? first.url : '') };
   };
   let r = await round();
-  const moving = (x) => !!(x && x.a && x.z.t - x.a.t > 0 && x.bright !== null && x.bright > 32);
-  if (!r.id.capture && r.z.readyState >= 0 && !moving(r)) {
+  const alive = (x) => !!(x && x.a && (x.z.t - x.a.t > 0 || (x.base !== null && x.z.t - x.base > 0)
+                                       || (x.picA && x.picZ && x.picA.sig !== x.picZ.sig)));
+  if (!r.id.capture && r.z.readyState >= 0 && !alive(r)) {
     // The player did not start on the first hover (the grid can still be settling): one more round.
     r = await round();
   }
@@ -224,12 +234,16 @@ async function probe(page, card, name, reqs, bad) {
   }
   // Only the failures of this tile count: one broken tile must not condemn the rest of the grid.
   const own = bad.length - before;
+  const dt = r.a ? +(r.z.t - r.a.t).toFixed(2) : null;
+  const dtTotal = r.a && r.base !== null ? +(r.z.t - r.base).toFixed(2) : null;
+  const pictureChanged = !!(r.picA && r.picZ && r.picA.sig !== null && r.picZ.sig !== null && r.picA.sig !== r.picZ.sig);
   // The verdict lives in its own module (scripts/agent/rtsp_tile_verdict.mjs): the clock and the picture decide,
   // readyState 2 is not the bar (FR Kids 2, 2026-11-27).
-  const plays = tileVerdict({ readyState: r.z.readyState, dt: r.a ? +(r.z.t - r.a.t).toFixed(2) : null,
-                              bright: r.bright, hlsFailures: own });
+  const plays = tileVerdict({ readyState: r.z.readyState, dt, moved: dtTotal !== null && dtTotal > 0,
+                              pictureChanged, bright: r.picZ ? r.picZ.bright : null, hlsFailures: own });
   return { name, host: r.id.host, capture: r.id.capture, readyState: r.z.readyState,
-           dt: r.a ? +(r.z.t - r.a.t).toFixed(2) : null, bright: r.bright, size: `${r.z.w}x${r.z.h}`,
+           dt, dt_total: dtTotal, picture_changed: pictureChanged,
+           bright: r.picZ ? r.picZ.bright : null, size: `${r.z.w}x${r.z.h}`,
            plays, kind: 'stream', hls_failures: own };
 }
 

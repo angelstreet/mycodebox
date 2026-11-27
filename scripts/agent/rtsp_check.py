@@ -678,6 +678,7 @@ def tile_verdicts(tiles_block, entries):
             continue
         out[(e.get('host'), e.get('device'))] = {
             'plays': t.get('plays'), 'readyState': t.get('readyState'), 'dt': t.get('dt'),
+            'dt_total': t.get('dt_total'), 'picture_changed': t.get('picture_changed'),
             'bright': t.get('bright'), 'name': e.get('name'), 'reprobe': t.get('reprobe'),
         }
     return out

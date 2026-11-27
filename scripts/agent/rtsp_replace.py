@@ -463,9 +463,20 @@ def run(mode, timeout=10, tiles=False):
             # catches what the capture column cannot see (the capture column reads the segment, not the player).
             tile_part = ''
             if tile_bad:
-                tile_part = (f"the tile does not play in the app's browser (readyState {tile.get('readyState')}, "
-                             f"{'the picture is black' if not tile.get('bright') else 'brightest pixel ' + str(tile.get('bright'))}, "
-                             f"the clock {'does not move' if not tile.get('dt') else 'moves'})")
+                # The evidence of the verdict, in the order the nightly session reads it: the buffer, the picture,
+                # and what moves (the clock over the two seconds, the clock over the whole time it was watched, the
+                # picture itself: a live tile at the live edge nudges its clock backward when it re-syncs).
+                seen = [f"readyState {tile.get('readyState')}"]
+                seen.append('the picture is black' if not tile.get('bright') else f"brightest pixel {tile.get('bright')}")
+                if tile.get('dt'):
+                    seen.append('the clock moves')
+                elif tile.get('dt_total'):
+                    seen.append(f"the clock runs over the whole time it was watched (+{tile.get('dt_total')} s)")
+                else:
+                    seen.append('the clock does not move')
+                if tile.get('picture_changed'):
+                    seen.append('the picture changes')
+                tile_part = "the tile does not play in the app's browser (" + ', '.join(seen) + ')'
             drift_part = ''
             if drift:
                 off = av['offset']
