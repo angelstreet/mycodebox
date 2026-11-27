@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { execFile } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
 import { tileVerdict } from '../scripts/agent/rtsp_tile_verdict.mjs';
 import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -942,6 +942,46 @@ test('the tile verdict: a black picture, a frozen clock, a failed request of its
   assert.equal(tileVerdict({ readyState: 4, dt: 2.5, bright: 254, hlsFailures: 1 }), false, 'a failed HLS request of its own');
   assert.equal(tileVerdict({ readyState: 0, dt: 0, bright: 0, hlsFailures: 0 }), false, 'a player with nothing');
   assert.equal(tileVerdict({ readyState: -1, dt: null, bright: null, hlsFailures: 0 }), null, 'a card with no live player has no verdict');
+});
+
+test('the browser layer: the auto-sign token never leaves the sweep (Playwright quotes the URL it was given)', () => {
+  // Playwright's own error text quotes the URL it was given, and that URL carries the auto-sign token. The report is
+  // read by the owner and pasted into the docs, so the token is masked out of every message the sweep leaves.
+  const dir = mkdtempSync(path.join(tmpdir(), 'rtsp-tiles-'));
+  const secret = 'tok-abc123SECRET';
+  const stub = path.join(dir, 'fake-playwright.cjs');
+  writeFileSync(stub, `module.exports = { chromium: { launch: async () => ({
+  newContext: async () => ({ addInitScript: async () => {}, newPage: async () => ({
+    on: () => {},
+    goto: async (url) => { throw new Error('page.goto: Timeout 30000ms exceeded.\\nCall log:\\n  - navigating to "' + url + '"'); },
+  }) }), close: async () => {} }) } };`);
+  const r = spawnSync(process.execPath, [path.resolve('scripts/agent/rtsp_tiles.mjs')], {
+    input: JSON.stringify({ app: 'https://app.example', token: secret, servers: [{ name: 'h1', url: 'https://h1.example' }],
+      platformServers: [], playwrightPath: stub, perCardTimeoutMs: 1000, budgetSeconds: 20, evidenceDir: null, proof: [] }),
+    encoding: 'utf8', timeout: 30000 });
+  const out = JSON.parse(r.stdout);
+  assert.match(out.why, /the tile sweep failed on page 1/, out.why);
+  assert.ok(!r.stdout.includes(secret), 'the auto-sign token leaked into the sweep result');
+  assert.match(out.why, /auto_signed=\*\*\*/, out.why);
+});
+
+test('the browser layer: the report never keeps a token the sweep quoted', async () => {
+  // The report is read by the owner and pasted into the docs: whatever the sweep said, a signed URL inside it is masked.
+  const w = await world({ pool: POOL, devices: { DEVICE1: dev('a', 'rtsp://test.example/good-pub') } });
+  const tilesFile = path.join(path.dirname(w.E.RTSP_CHECK_FFPROBE), 'tiles.json');
+  const why = 'the tile sweep failed on page 1: navigating to "https://virtualpytest.angelstreet.io/device-control?auto_signed=tok-abc123SECRET"';
+  writeFileSync(tilesFile, JSON.stringify({ status: 'skipped', checked: 0, playing: 0, not_playing: 0, why,
+    not_checked: [{ name: '(page 1 and the rest)', why }], tiles: [] }));
+  sh(path.dirname(w.E.RTSP_CHECK_FFPROBE), 'node', `cat > /dev/null; cat "${tilesFile}"`);
+  const E = { ...w.E, RTSP_PLAYWRIGHT_PATH: path.dirname(w.E.RTSP_CHECK_FFPROBE) };
+  const r = await py(REPLACE, ['--tiles'], E);
+  const day = new Date().toISOString().slice(0, 10);
+  const rep = JSON.parse(readFileSync(path.join(w.state, 'rtsp-nightly', `report-${day}.json`), 'utf8'));
+  w.close();
+  assert.ok(!JSON.stringify(rep).includes('tok-abc123SECRET'), 'the token leaked into the report');
+  assert.ok(!r.stdout.includes('tok-abc123SECRET'), 'the token leaked into the night output');
+  assert.match(rep.tiles.why, /auto_signed=\*\*\*/, rep.tiles.why);
+  assert.match(rep.tiles.not_checked[0].why, /auto_signed=\*\*\*/, rep.tiles.not_checked[0].why);
 });
 
 test('the inventory error says the HTTP status: a blip and a refusal are not the same', async () => {
