@@ -207,3 +207,15 @@ test('parked items show in the NEEDS YOU strip with Yes / No per item', () => {
   assert.equal((html.match(/data-a="yes"/g) || []).length, 2);
   assert.equal((html.match(/data-a="no"/g) || []).length, 2);
 });
+
+test('the claude binary is found outside the service PATH (spawn claude ENOENT, 2026-11-27)', async () => {
+  const { claudeBin, claudeOpus } = await import('../suggestion-triage.js');
+  assert.equal(claudeBin({ env: { CLAUDE_BIN: '/x/claude' }, home: '/h', exists: () => true }), '/x/claude');
+  assert.equal(claudeBin({ env: {}, home: '/h', exists: (p) => p === '/h/.local/bin/claude' }), '/h/.local/bin/claude');
+  assert.equal(claudeBin({ env: {}, home: '/h', exists: () => false }), 'claude');
+  // a failing claude: its own words are in the error (the limit message is printed on stdout)
+  const dir = tmp('triage-bin-'), bin = join(dir, 'claude');
+  (await import('node:fs')).writeFileSync(bin, '#!/bin/sh\necho "You have hit your weekly limit"\nexit 1\n', { mode: 0o755 });
+  const r = await claudeOpus('x', { bin, env: { PATH: '/usr/bin:/bin' }, timeoutMs: 10000 });
+  assert.deepEqual(r, { ok: false, error: 'exit 1: You have hit your weekly limit' });
+});
