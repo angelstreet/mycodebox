@@ -215,8 +215,9 @@ never replaced because of it. Below the threshold the offset is mux jitter and s
 ### The browser layer: what the app really shows (owner, 2026-11-27)
 
 `rtsp_replace.py --tiles` (or `RTSP_TILE_SWEEP=on`) opens every tile of the device-control grid **once** in a headless
-browser and writes the verdict into the report as a `tiles` block: `checked`, `playing`, `not_playing`, and the verdict
-per tile (`readyState`, how far the clock moved, the brightest pixel of the picture). A tile plays when all hold: a
+browser and writes the verdict into the report as a `tiles` block: `checked`, `playing`, `not_playing`, `no_video`, and the
+verdict per tile (`readyState`, how far the clock moved, the brightest pixel of the picture, whether the picture
+changes). A tile plays when all hold: a
 `<video>` inside the card, `readyState >= 1`, its picture is not black, **something about it moves**, and no failed HLS
 request of its own — the conditions of the `vpt-headless-verify` skill, section 2c, with two differences measured on
 2026-11-27:

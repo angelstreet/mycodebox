@@ -577,8 +577,8 @@ After it installed a replacement it also reads back the title the app shows for 
 bright while the tile is black: BFM2's republished segment carried its audio **5572.473 s** away from its video and the column called it
 `ok`. The job now reads the audio and video start times of the segment it already downloads (`av` per device; an offset beyond
 `RTSP_AV_DRIFT_SECONDS` is reported as a capture-side fault, below it mux jitter says nothing) and `rtsp_replace.py --tiles` opens every
-tile of the device-control grid **once** in a headless browser (`scripts/agent/rtsp_tiles.mjs`: readyState, how far the clock moved, the
-brightest pixel, the tile's own HLS failures; a tile that reads broken is probed again on its own; the browser is relaunched per page and
+tile of the device-control grid **once** in a headless browser (`scripts/agent/rtsp_tiles.mjs`: readyState, how far the clock moved (over the last two seconds and over the whole time the tile was watched), the
+brightest pixel of the picture, whether the picture changes, the tile's own HLS failures; a tile that reads broken is probed again on its own; the browser is relaunched per page and
 whenever the page dies; the verdict itself lives in `scripts/agent/rtsp_tile_verdict.mjs`). The verdict lands in the report as a `tiles` block
 (`checked`, `playing`, `not_playing`, `no_video`) and on the device's row
 (`tile`); a tile that does not play while its source plays is reported as a host-capture fault (`vpt-stream`) and **nothing is replaced**;
