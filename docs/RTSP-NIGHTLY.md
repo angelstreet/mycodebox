@@ -713,7 +713,42 @@ this night and nothing else: no `replace`, no `rolled_back`, no `lease_not_grant
   reads an empty grid and reports a present device as absent. The recipe is in the `vpt-headless-verify` skill and in
   `docs/agent/validation/TESTING.md` of the VirtualPyTest repo.
 
-## Private config (not in the repo)
+### Night of 2026-11-27 (live, run by the nightly session) — and the two layers the owner added that day
+
+**The night.** 103 checked, 95 ok, 0 down, **0 replaced**, 0 rolled back, 0 cameras down; 16 hosts walked and read, no
+inventory error. Nothing was really down, so nothing had to be replaced and the pool was never used (the 103 devices:
+67 files, 28 HLS channels, 7 empty slots, 1 YouTube device; no IP camera device in the fleet). Tile snapshots: 95 ok,
+1 black, 6 unknown, 1 missing; two notes (a dark thumbnail with a live video: `lenovo-local-low/DEVICE36` and
+`vpt-nipogi/DEVICE21`). No `multi_audio` tile, so no `vpt-stream` restart was needed.
+
+**The two layers the owner said yes to the same day** (the improvement suggestions of the nightly session, triaged by
+Opus for the owner: build the A/V offset and the browser layer, the note out of the action column; the empty-slot
+suggestion and the pool-candidate skip stay with the owner).
+
+- **The A/V offset** of the host's republished segment (one ffprobe on the segment the job already downloads): BFM2
+  (`vpt-lenovo5/DEVICE1`) carries its audio at 10590.840 s and its video at 5018.367 s — **6171.358 s apart** at 13:20
+  (5572.473 s at 05:48: the drift grows), which is why the tile is black while the source plays (bug-c54ea30f).
+  `FR Kids 1` (`vpt-nipogi/DEVICE25`) reads +5.13 s, **`FR Movie 1 — Cine 666`** (`vpt-nipogi/DEVICE7`) **+10.163 s** (the
+  drift of bug-16d06d74 reproduced: the tile shows the channel's own slate and its clock does not move), and
+  `FR Regional 5 — TV3V` (`vpt-nipogi/DEVICE36`) **+0.016 s** — in sync, and it plays in the browser tonight.
+- **The browser layer**: every tile of the grid opened once (`scripts/agent/rtsp_tiles.mjs`). Measured live: 31 of 31
+  tiles identified by the stream their player asked for, and 94 of the 96 stream tiles of the pi4 grid play. The two that
+  do not are BFM2 (black, the drift above) and Cine 666 (a frozen slate).
+
+**The traps of the new layer, all found and fixed on the day it was written:**
+
+- The HLS failures of a tile are **its own**: the first version counted them over the whole sweep, and one broken tile
+  condemned every tile after it.
+- The browser **dies with a grid of a hundred players**: the layer relaunches it per page of the grid and whenever the
+  page dies, and it keeps the tiles it already read.
+- hls.js plays through a **blob URL**: the card's DOM carries no stream path, so a tile is matched by the stream its
+  player asks for **after the hover** (the previous tile's player is stopped by moving the mouse off the grid first).
+- A **file's own dark frame reads as a black tile**: a file is measured against its own picture, never blamed on the
+  capture side.
+- The **grid loads late** (0 cards while the page reads "Checking authentication…") and is paginated (24 cards a page,
+  5 pages): the layer waits for the cards and walks the pages.
+
+
 
 `~/.config/rtsp-nightly/env`, sourced by the session: `RTSP_CHECK_SERVERS="<label>=<server url>,..."` (one per backend server), `RTSP_LEASE_ENV` (the `vpt-lease` environment of the hosts, default
 `node1-vpt`: it lists the hosts of every server), `RTSP_CHECK_SSH="<host>=<ssh alias>,..."`, `RTSP_LOOPBACK_HOSTS="<host>,..."` (where the `smoke` source exists), optional `RTSP_CHECK_TOKEN_CMD`
