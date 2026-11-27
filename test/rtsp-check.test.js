@@ -4,6 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { execFile } from 'node:child_process';
+import { tileVerdict } from '../scripts/agent/rtsp_tile_verdict.mjs';
 import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -872,4 +873,62 @@ test('the browser layer: a sweep that read some tiles and could not finish says 
   assert.match(r.stdout, /tiles \(the app's own player\): 1 checked, 1 playing, 0 not playing, the rest not read/, r.stdout);
   const one = rep.streams.find((s) => s.device === 'DEVICE1');
   assert.equal(one.action, 'none', 'the tile it did read still counts');
+});
+
+test('the browser layer: a card with no live player (a drone, a PC screen) is not a broken tile', async () => {
+  // The grid shows cards that are not stream tiles at all: a drone, a PC screen. They carry no <video>, so the
+  // sweep has no verdict for them: they are neither playing nor broken, and they are named apart (2026-11-27:
+  // the first whole night counted a drone and a PC screen as broken tiles).
+  const w = await world({ pool: POOL, devices: { DEVICE1: dev('a', 'rtsp://test.example/good-pub') } });
+  const tilesFile = path.join(path.dirname(w.E.RTSP_CHECK_FFPROBE), 'tiles.json');
+  writeFileSync(tilesFile, JSON.stringify({ status: 'ok', why: null, not_checked: [], tiles: [
+    { name: 'Tello-C5B142', host: null, capture: null, readyState: -1, dt: null, bright: null, size: '0x0', plays: null, kind: 'no-video', hls_failures: 0 },
+    { name: 'a', host: 'h1', capture: 'cap-a', readyState: 1, dt: 0, bright: 0, size: '320x180', plays: false, kind: 'stream', hls_failures: 0 }] }));
+  sh(path.dirname(w.E.RTSP_CHECK_FFPROBE), 'node', `cat > /dev/null; cat "${tilesFile}"`);
+  const E = { ...w.E, RTSP_PLAYWRIGHT_PATH: path.dirname(w.E.RTSP_CHECK_FFPROBE) };
+  const r = await py(REPLACE, ['--tiles'], E);
+  const day = new Date().toISOString().slice(0, 10);
+  const rep = JSON.parse(readFileSync(path.join(w.state, 'rtsp-nightly', `report-${day}.json`), 'utf8'));
+  w.close();
+  assert.equal(rep.tiles.checked, 1, 'the drone card is not a tile to judge');
+  assert.equal(rep.tiles.playing, 0);
+  assert.equal(rep.tiles.not_playing, 1);
+  assert.equal(rep.tiles.no_video, 1, 'the card without a live player is counted apart');
+  assert.match(r.stdout, /tiles \(the app's own player\): 1 checked, 0 playing, 1 not playing, 1 card\(s\) without a live player/, r.stdout);
+  const one = rep.streams.find((s) => s.device === 'DEVICE1');
+  assert.match(one.action, /the tile does not play in the app's browser/, 'the broken stream tile is still reported');
+});
+
+test('the browser layer: a card with no live player never becomes a fault of a device', async () => {
+  // The sweep matches a card to a device by its name when the stream cannot be read: a card with no live player
+  // must never become a device's fault that way.
+  const w = await world({ pool: POOL, devices: { DEVICE1: dev('Tello-C5B142', 'rtsp://test.example/good-pub') } });
+  const tilesFile = path.join(path.dirname(w.E.RTSP_CHECK_FFPROBE), 'tiles.json');
+  writeFileSync(tilesFile, JSON.stringify({ status: 'ok', why: null, not_checked: [], tiles: [
+    { name: 'Tello-C5B142', host: null, capture: null, readyState: -1, dt: null, bright: null, size: '0x0', plays: null, kind: 'no-video', hls_failures: 0 }] }));
+  sh(path.dirname(w.E.RTSP_CHECK_FFPROBE), 'node', `cat > /dev/null; cat "${tilesFile}"`);
+  const E = { ...w.E, RTSP_PLAYWRIGHT_PATH: path.dirname(w.E.RTSP_CHECK_FFPROBE) };
+  const r = await py(REPLACE, ['--tiles'], E);
+  const day = new Date().toISOString().slice(0, 10);
+  const rep = JSON.parse(readFileSync(path.join(w.state, 'rtsp-nightly', `report-${day}.json`), 'utf8'));
+  w.close();
+  const one = rep.streams.find((s) => s.device === 'DEVICE1');
+  assert.equal(one.tile, undefined, 'no verdict, so no tile in the row');
+  assert.equal(one.action, 'none', 'a card without a live player is not a fault of the device');
+  assert.doesNotMatch(r.stdout, /the tile does not play in the app's browser/, r.stdout);
+});
+
+test('the tile verdict: a live player that sits at readyState 1 while it plays is a playing tile', async () => {
+  // Measured on FR Kids 2 (2026-11-27): alone, readyState 1 at 4 s and 4 at 6 s; inside the grid, which keeps the
+  // other cards' pictures loading, it never passed 1 in 15 s. The clock and the picture decide, not the buffer.
+  assert.equal(tileVerdict({ readyState: 1, dt: 3.34, bright: 251, hlsFailures: 0 }), true);
+  assert.equal(tileVerdict({ readyState: 4, dt: 2.5, bright: 254, hlsFailures: 0 }), true);
+});
+
+test('the tile verdict: a black picture, a frozen clock, a failed request of its own and a card without a player', async () => {
+  assert.equal(tileVerdict({ readyState: 1, dt: 3.76, bright: 0, hlsFailures: 0 }), false, 'the black tile of BFM2');
+  assert.equal(tileVerdict({ readyState: 4, dt: -0.42, bright: 238, hlsFailures: 0 }), false, 'the frozen slate of Cine 666');
+  assert.equal(tileVerdict({ readyState: 4, dt: 2.5, bright: 254, hlsFailures: 1 }), false, 'a failed HLS request of its own');
+  assert.equal(tileVerdict({ readyState: 0, dt: 0, bright: 0, hlsFailures: 0 }), false, 'a player with nothing');
+  assert.equal(tileVerdict({ readyState: -1, dt: null, bright: null, hlsFailures: 0 }), null, 'a card with no live player has no verdict');
 });

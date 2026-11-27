@@ -642,6 +642,14 @@ def tile_sweep(entries, servers, enabled=False, evidence_dir=None):
     out.setdefault('tiles', [])
     out.setdefault('not_checked', [])
     out.setdefault('why', None)
+    # The counts are read from the tiles themselves, never trusted from the sweep's own summary: a card that
+    # carries no live player (a drone, a PC screen) is not a stream tile, so it is neither playing nor broken.
+    tiles = [t for t in (out.get('tiles') or []) if isinstance(t, dict)]
+    judged = [t for t in tiles if isinstance(t.get('plays'), bool)]
+    out['checked'] = len(judged)
+    out['playing'] = sum(1 for t in judged if t.get('plays'))
+    out['not_playing'] = sum(1 for t in judged if not t.get('plays'))
+    out['no_video'] = len(tiles) - len(judged)
     return out
 
 
@@ -658,6 +666,10 @@ def tile_verdicts(tiles_block, entries):
             by_name.setdefault(e['name'], []).append(e)
     out = {}
     for t in tiles_block.get('tiles') or []:
+        if not isinstance(t.get('plays'), bool):
+            # A card with no live player (a drone, a PC screen): not a stream tile, so it has no verdict and
+            # it is never a fault of a device.
+            continue
         e = by_cap.get((t.get('host'), t.get('capture')))
         if e is None:
             cand = by_name.get(t.get('name')) or []
