@@ -853,3 +853,23 @@ test('the browser layer: a file whose tile does not play is measured against the
   assert.match(r.stdout, /the tile shows the clip's own frames, not changed/);
   assert.doesNotMatch(r.stdout, /host capture side \(vpt-stream\)/, 'a file is never blamed on the capture side');
 });
+
+test('the browser layer: a sweep that read some tiles and could not finish says partial, not skipped', async () => {
+  // The browser died mid-grid and the relaunched one could not load the grid: what was read stands, the rest is named.
+  const w = await world({ pool: POOL, devices: { DEVICE1: dev('a', 'rtsp://test.example/good-pub') } });
+  const tilesFile = path.join(path.dirname(w.E.RTSP_CHECK_FFPROBE), 'tiles.json');
+  writeFileSync(tilesFile, JSON.stringify({ status: 'partial', checked: 1, playing: 1, not_playing: 0,
+    why: 'the device-control grid never loaded', not_checked: [{ name: '(the whole grid)', why: 'the device-control grid never loaded' }],
+    tiles: [{ name: 'a', host: 'h1', capture: 'cap-a', readyState: 4, dt: 2.5, bright: 254, size: '320x180', plays: true, hls_failures: 0 }] }));
+  sh(path.dirname(w.E.RTSP_CHECK_FFPROBE), 'node', `cat > /dev/null; cat "${tilesFile}"`);
+  const E = { ...w.E, RTSP_PLAYWRIGHT_PATH: path.dirname(w.E.RTSP_CHECK_FFPROBE) };
+  const r = await py(REPLACE, ['--tiles'], E);
+  const day = new Date().toISOString().slice(0, 10);
+  const rep = JSON.parse(readFileSync(path.join(w.state, 'rtsp-nightly', `report-${day}.json`), 'utf8'));
+  w.close();
+  assert.equal(rep.tiles.status, 'partial');
+  assert.equal(rep.tiles.checked, 1);
+  assert.match(r.stdout, /tiles \(the app's own player\): 1 checked, 1 playing, 0 not playing, the rest not read/, r.stdout);
+  const one = rep.streams.find((s) => s.device === 'DEVICE1');
+  assert.equal(one.action, 'none', 'the tile it did read still counts');
+});

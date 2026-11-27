@@ -229,9 +229,10 @@ folder (`<state>/rtsp-nightly/evidence-<day>/tile-<host>-<capture>.png`).
 
 The layer needs `node` and playwright (the VirtualPyTest checkout's, `RTSP_PLAYWRIGHT_PATH`, default
 `~/virtualpytest/tests/e2e/playwright/node_modules/playwright`); without them the report says the layer was **skipped**,
-never that the tiles played. It is bounded (`RTSP_TILE_SWEEP_MAX_SECONDS`, 1800 s; `RTSP_TILE_SWEEP_CARD_MS`, 15 s per
-card) and it runs **after** the probes, so the probes are not slowed by the browser's own load. The nightly prompt runs
-the job with `--tiles`.
+never that the tiles played. A sweep that read some tiles and could not finish (the browser died and the relaunched
+one could not load the grid) is **partial**: what it read stands, the rest is named in `not_checked`. It is bounded
+(`RTSP_TILE_SWEEP_MAX_SECONDS`, 1800 s; `RTSP_TILE_SWEEP_CARD_MS`, 15 s per card) and it runs **after** the probes, so
+the probes are not slowed by the browser's own load. The nightly prompt runs the job with `--tiles`.
 
 The tile's identity comes from the stream the player asks for **after the hover**
 (`/host/<host>/stream/<capture>/segments/output.m3u8`): hls.js plays through a blob URL, so the card's DOM carries no

@@ -102,7 +102,11 @@ for (const srv of servers) {
         if (n > 0) { loaded = true; break; }
         await page.waitForTimeout(3000);
       }
-      if (!loaded) { out.why = out.why || 'the device-control grid never loaded'; break; }
+      if (!loaded) {
+        out.why = out.why || 'the device-control grid never loaded';
+        out.not_checked.push({ name: '(the whole grid)', why: out.why });
+        break;
+      }
       await page.waitForTimeout(4000);            // let the grid's own requests (the snapshots) settle
       for (let p = 1; p < pageNo; p++) {         // walk to this page of the grid
         const next = page.locator('button[aria-label="Go to next page"]');
@@ -160,9 +164,11 @@ for (const srv of servers) {
     } catch (e) {
       if (isDead(e) && restarts < 4) {
         restarts++;
+        await new Promise((r) => setTimeout(r, 5000));   // the app may still be serving the dead browser's streams
         continue;                                // the same page again, with a fresh browser
       }
       out.why = out.why || `the tile sweep failed on page ${pageNo}: ${String(e.message).slice(0, 140)}`;
+      out.not_checked.push({ name: `(page ${pageNo} and the rest)`, why: out.why });
       break;
     } finally {
       if (browser) await browser.close().catch(() => {});
@@ -204,5 +210,7 @@ async function probe(page, card, name, reqs, bad) {
 out.checked = out.tiles.length;
 out.playing = out.tiles.filter((t) => t.plays).length;
 out.not_playing = out.checked - out.playing;
-if (out.why && out.status === 'ok') out.status = 'skipped';
+// A sweep that read some tiles and could not finish is 'partial' (what it read stands, the rest is named);
+// a sweep that read nothing is 'skipped' (the layer did not run: never a false 'ok').
+if (out.why) out.status = out.checked ? 'partial' : 'skipped';
 process.stdout.write(JSON.stringify(out));
