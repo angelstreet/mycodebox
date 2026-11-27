@@ -980,3 +980,63 @@ test('the night asks the browser layer for the frame of a tile that plays (a dar
   assert.equal(one.action, 'none');
   assert.match(r.stdout, /tiles \(the app's own player\): 1 checked, 1 playing, 0 not playing/, r.stdout);
 });
+
+test('a pool entry the owner marked is not probed any more: the known failure stops repeating', async () => {
+  // The three public candidates timed out from codebox for 13 nights (their own note says port 554 is blocked):
+  // the pool marks them, the night does not probe them and says so instead of repeating the failure.
+  const pool = { maxReplacementsPerNight: 3, sources: [
+    { id: 'smoke', kind: 'loopback', url: 'rtsp://127.0.0.1:8554/good-smoke', vetted: '2026-11-11', hostsEnv: 'RTSP_LOOPBACK_HOSTS' },
+    { id: 'blocked', kind: 'public', url: 'rtsp://test.example/dead-blocked', vetted: null, probe: false,
+      skipReason: 'port 554 to it was blocked on 2026-11-11' }] };
+  const w = await world({ pool, devices: { DEVICE1: dev('a', 'rtsp://test.example/good-pub') } });
+  const r = await py(REPLACE, [], w.E);
+  const day = new Date().toISOString().slice(0, 10);
+  const rep = JSON.parse(readFileSync(path.join(w.state, 'rtsp-nightly', `report-${day}.json`), 'utf8'));
+  w.close();
+  const p = rep.pool.find((x) => x.id === 'blocked');
+  assert.equal(p.status, 'skipped', 'the entry is not probed any more');
+  assert.match(p.why, /port 554 to it was blocked on 2026-11-11/);
+  assert.match(r.stdout, /blocked skipped \(port 554 to it was blocked on 2026-11-11\)/, r.stdout);
+});
+
+test('an empty slot gets a channel suggested from the free lists, and nothing is written', async () => {
+  // The owner was picking the same seven slots by hand every night: the night proposes a channel that plays, from
+  // the same lists the replacement path uses, and never applies it.
+  const inf = (name, group, url) => `#EXTINF:-1 tvg-id="${name.replace(/\W/g, '')}.fr" group-title="${group}",${name}\n${url}\n`;
+  const w = await world({ pool: POOL, devices: { DEVICE1: { ...dev('', ''), DEVICE_MODEL: 'rtsp_video' } } });
+  const dir = path.dirname(w.E.RTSP_CHECK_FFPROBE);
+  writeFileSync(path.join(dir, 'repo.m3u'), '#EXTM3U\n' + inf('Suggest FM (720p)', 'Music', 'https://cdn.example/good/suggest.m3u8'));
+  w.E.RTSP_CHANNEL_LISTS = path.join(dir, 'repo.m3u');
+  const r = await py(REPLACE, [], w.E);
+  const day = new Date().toISOString().slice(0, 10);
+  const rep = JSON.parse(readFileSync(path.join(w.state, 'rtsp-nightly', `report-${day}.json`), 'utf8'));
+  w.close();
+  const one = rep.streams.find((s) => s.device === 'DEVICE1');
+  assert.equal(one.status, 'no_source');
+  assert.ok(one.suggestion, `the row carries the proposal: ${JSON.stringify(one)}`);
+  assert.equal(one.suggestion.url, 'https://cdn.example/good/suggest.m3u8');
+  assert.equal(one.suggestion.probed, 'ok', 'the proposal was probed before it was proposed');
+  assert.equal(w.posts.length, 0, 'a suggestion is never applied');
+  assert.match(r.stdout, /suggestion: h1\/DEVICE1 - Suggest FM/, r.stdout);
+});
+
+test('the report says what changed since the last night', async () => {
+  // The nightly session reads a table of a hundred rows: the report says what moved in it.
+  const w = await world({ pool: POOL, snapshots: { 'cap-b': 'BLACKLIVE' }, devices: {
+    DEVICE1: dev('a', 'rtsp://test.example/good-pub'), DEVICE2: dev('b', 'rtsp://test.example/good-pub') } });
+  const day = new Date().toISOString().slice(0, 10);
+  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  const dir = path.join(w.state, 'rtsp-nightly');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(dir, `report-${yesterday}.json`), JSON.stringify({ mode: 'live', streams: [
+    { host: 'h1', device: 'DEVICE1', capture: 'black' }, { host: 'h1', device: 'DEVICE2', capture: 'ok' }] }));
+  const r = await py(REPLACE, [], w.E);
+  const rep = JSON.parse(readFileSync(path.join(dir, `report-${day}.json`), 'utf8'));
+  w.close();
+  assert.equal(rep.delta.since, `report-${yesterday}.json`);
+  assert.deepEqual(rep.delta.newly_black, ['h1/DEVICE2'], 'the device that became black');
+  assert.deepEqual(rep.delta.recovered, ['h1/DEVICE1'], 'the device that plays again');
+  assert.deepEqual(rep.delta.still_black, []);
+  assert.equal(rep.delta.changed_rows, 2);
+  assert.match(r.stdout, /since report-\d{4}-\d{2}-\d{2}\.json: 1 newly black, 1 recovered, 0 still black/, r.stdout);
+});

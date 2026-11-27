@@ -108,6 +108,8 @@ The journal keeps the per-stream check events, not the inventory errors, so a ni
 
 **The night probes the pool itself (bug-c64fb86c, 2026-11-17).** The pool used to be read only when a stream was down and a replacement was chosen, so a broken pool source showed up nowhere in the night's evidence and every night session re-probed the pool by hand. The run now probes each pool entry on every night and writes it into the report: a `pool` block (`id`, `kind`, `vetted`, `status`, `from`, `url`) next to `streams` and `errors`, and one stdout line (`pool: smoke ok (from vpt-pi4), wowza-bbb timeout (from codebox)`). A loopback entry is probed from the host that runs it (through that host's ssh alias, `RTSP_LOOPBACK_HOSTS`); without an alias it reads `unverified`, never `ok`. The public entries are probed from codebox. The entries are probed **in parallel** (bug-5473cd69): the public ones time out, and one after the other they added about 35 s to every night. **The pool file is still never edited by the nightly**: a candidate that is not reachable from the host that would play it stays unvetted, and a probe that fails is reported, not acted on.
 
+**An entry the owner marked is not probed any more (owner, 2026-11-27).** A pool entry can carry `"probe": false` and a `skipReason`: the night does not probe it, the report says `skipped` with the reason, and the pool block stops repeating a failure that is already known (the three public candidates: port 554 to them was blocked from codebox and 3 lab hosts on 2026-11-11 and they timed out every night since — 13 nights to 2026-11-27 — so probing them cost the night its timeout every night for nothing). They stay unvetted and stay in the file: the flag is the owner's to set and to clear.
+
 ## Dead HLS channels: restore, else replace from the free lists (owner, 2026-11-11)
 
 `scripts/agent/stream_catalog.py`. The lists (`RTSP_CHANNEL_LISTS`, comma-separated paths or URLs) default to:
@@ -138,6 +140,17 @@ The channel a device plays is found by its URL in the lists, else by a stream id
 `/manifest/<id>/...` became `/master/<id>/playlist.m3u8`), else by the part of its name after `—`, exact or as a prefix. A device whose channel
 is in no list cannot be repaired (no group known) and is reported. The verified copy should be re-probed about monthly
 (`STREAMS.md`); the nightly does not edit it.
+
+### The empty slots: a channel suggested, never applied (owner, 2026-11-27)
+
+Seven slots of the fleet carry no source at all (`no_source`: `vpt-nipogi/DEVICE4`, `5`, `6`, `17`, `22`, `23`, `24` on
+2026-11-27). The night has never touched them — an empty source is the owner's call — but the owner was picking the same
+slots by hand every night, so the night now **proposes**: for each empty slot it takes the free lists (our verified copy
+first, so the proposal is the same from one night to the next), skips the channels already used on that host and the ones
+needing a special user agent, **probes the candidates from the host** and proposes the first that plays. The proposal is
+written in the report (the row's `suggestion` field, and the report's `suggestions` array) and printed as its own line
+(`suggestion: vpt-nipogi/DEVICE4 - <channel> (<url>), probed from vpt-nipogi: plays`), never applied: the night writes
+nothing for an empty slot, and the owner decides. A slot with no candidate that plays gets no suggestion.
 
 ## What the app shows: the tile snapshot and black pictures (owner, 2026-11-11)
 
@@ -298,6 +311,20 @@ over ssh, or the server's `/server/system/controlHostService` (what `rtsp_replac
 report 05:15), clear of the 00:30 host cron windows and of the CoC hourly tail (`:00` to about `:38`), 45 min before the Pokemon
 review (06:30) and the CoC review (07:30). Mode comes from `<state>/rtsp-nightly/mode` (`dry` unless it holds `live`). The first live
 night is the manager's switch after reading one dry report: `echo live > ~/.local/state/ghosty/rtsp-nightly/mode`; back with `echo dry >`.
+
+### What changed since the last night (owner, 2026-11-27)
+
+The report is a table of a hundred rows, and the nightly session was diffing it against yesterday by hand. The run now
+compares the night with the **last night's report** (`<state>/rtsp-nightly/report-<day>.json`, the most recent one before
+today; a dry report of a day is never the night another one is compared to) and writes a `delta` block:
+
+- `newly_black` / `recovered` / `still_black`: the devices whose tile the capture column reads black, and the ones that play
+  again;
+- `newly_broken` / `still_broken` / `recovered_broken`: the same for the browser layer (the app's own player does not play);
+- `changed_rows`: how many rows moved at all.
+
+One stdout line names it (`since report-2026-11-26.json: 1 newly black, 1 recovered, 2 still black, 0 newly broken in the
+app, 0 recovered, 2 row(s) changed`). With no earlier report, the block is empty and the run says so.
 The mode file held `live` on 2026-11-11 (first live night, done by hand from the `feat/rtsp-nightly-*` worktree) and again on
 2026-11-12, the first night the session ran the job end to end (99 checked, 90 ok, 0 replaced).
 
