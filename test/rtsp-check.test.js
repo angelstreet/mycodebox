@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { execFile, spawnSync } from 'node:child_process';
 import { tileVerdict } from '../scripts/agent/rtsp_tile_verdict.mjs';
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, readFileSync, readdirSync, statSync, existsSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -984,6 +984,29 @@ test('the browser layer: the report never keeps a token the sweep quoted', async
   assert.match(rep.tiles.not_checked[0].why, /auto_signed=\*\*\*/, rep.tiles.not_checked[0].why);
 });
 
+test('the browser layer: the page load is retried once before the layer gives up', () => {
+  // One slow page cost the night its whole browser layer (2026-11-27: the device-control page did not answer within
+  // 30 s at 17:26, while the same code swept the full grid at 17:03): the page is opened once more before the layer
+  // says it could not run.
+  const dir = mkdtempSync(path.join(tmpdir(), 'rtsp-tiles-'));
+  const stub = path.join(dir, 'fake-playwright.cjs');
+  writeFileSync(stub, `let n = 0;
+module.exports = { chromium: { launch: async () => ({
+  newContext: async () => ({ addInitScript: async () => {}, newPage: async () => ({
+    on: () => {},
+    goto: async (url) => { n++; throw new Error('page.goto: Timeout 30000ms exceeded at ' + url + ' (attempt ' + n + ')'); },
+  }) }), close: async () => {} }) } };`);
+  const r = spawnSync(process.execPath, [path.resolve('scripts/agent/rtsp_tiles.mjs')], {
+    input: JSON.stringify({ app: 'https://app.example', token: 'tok-abc123SECRET', servers: [{ name: 'h1', url: 'https://h1.example' }],
+      platformServers: [], playwrightPath: stub, perCardTimeoutMs: 1000, budgetSeconds: 20, evidenceDir: null, proof: [] }),
+    encoding: 'utf8', timeout: 60000 });
+  const out = JSON.parse(r.stdout);
+  assert.match(out.why, /after one retry/, out.why);
+  assert.match(out.why, /\(attempt 2\)/, 'the page was opened twice, not once');
+  assert.equal(out.status, 'skipped', 'a layer that read nothing is skipped, never a false ok');
+  assert.ok(!r.stdout.includes('tok-abc123SECRET'), 'the auto-sign token leaked into the sweep result');
+});
+
 test('the inventory error says the HTTP status: a blip and a refusal are not the same', async () => {
   // The night reported 'ERROR pi4/vpt-lenovo4: HTTPError' and the next night read the host fine: the bare name
   // says nothing about what the server answered.
@@ -1058,6 +1081,83 @@ test('an empty slot gets a channel suggested from the free lists, and nothing is
   assert.equal(one.suggestion.probed, 'ok', 'the proposal was probed before it was proposed');
   assert.equal(w.posts.length, 0, 'a suggestion is never applied');
   assert.match(r.stdout, /suggestion: h1\/DEVICE1 - Suggest FM/, r.stdout);
+});
+
+test('the suggestion of an empty slot stays the one of the last night, as long as it plays', async () => {
+  // The same slot was proposed one night as Africa 24 Sport and the next as ADN TV+ (2026-11-27): a proposal that
+  // moves from night to night is not a decision aid. The proposal of the last night is tried first and kept.
+  const inf = (name, group, url) => `#EXTINF:-1 tvg-id="${name.replace(/\W/g, '')}.fr" group-title="${group}",${name}\n${url}\n`;
+  const w = await world({ pool: POOL, devices: { DEVICE1: { ...dev('', ''), DEVICE_MODEL: 'rtsp_video' } } });
+  const dir = path.dirname(w.E.RTSP_CHECK_FFPROBE);
+  writeFileSync(path.join(dir, 'repo.m3u'), '#EXTM3U\n'
+    + inf('First FM (720p)', 'Music', 'https://cdn.example/good/first.m3u8')
+    + inf('Kept FM (720p)', 'Music', 'https://cdn.example/good/kept.m3u8'));
+  w.E.RTSP_CHANNEL_LISTS = path.join(dir, 'repo.m3u');
+  const day = new Date().toISOString().slice(0, 10);
+  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  const state = path.join(w.state, 'rtsp-nightly');
+  mkdirSync(state, { recursive: true });
+  writeFileSync(path.join(state, `report-${yesterday}.json`), JSON.stringify({ mode: 'live', streams: [
+    { host: 'h1', device: 'DEVICE1', kind: 'no_source', status: 'no_source', capture: 'ok',
+      suggestion: { name: 'Kept FM (720p)', url: 'https://cdn.example/good/kept.m3u8', probed: 'ok', from: 'h1' } }] }));
+  const r = await py(REPLACE, [], w.E);
+  const rep = JSON.parse(readFileSync(path.join(state, `report-${day}.json`), 'utf8'));
+  w.close();
+  const one = rep.streams.find((s) => s.device === 'DEVICE1');
+  assert.equal(one.suggestion.url, 'https://cdn.example/good/kept.m3u8', 'the proposal of the last night is kept');
+  assert.equal(one.suggestion.sticky, true);
+  assert.match(r.stdout, /suggestion: h1\/DEVICE1 - Kept FM .*kept from the last night/, r.stdout);
+});
+
+test('the suggestion of an empty slot moves on when the kept channel stopped playing', async () => {
+  // The kept channel is dropped like any other candidate when it stops playing: the proposal must not stay on a
+  // channel that is dead.
+  const inf = (name, group, url) => `#EXTINF:-1 tvg-id="${name.replace(/\W/g, '')}.fr" group-title="${group}",${name}\n${url}\n`;
+  const w = await world({ pool: POOL, devices: { DEVICE1: { ...dev('', ''), DEVICE_MODEL: 'rtsp_video' } } });
+  const dir = path.dirname(w.E.RTSP_CHECK_FFPROBE);
+  writeFileSync(path.join(dir, 'repo.m3u'), '#EXTM3U\n'
+    + inf('First FM (720p)', 'Music', 'https://cdn.example/good/first.m3u8')
+    + inf('Dead FM (720p)', 'Music', 'https://cdn.example/dead/kept.m3u8'));
+  w.E.RTSP_CHANNEL_LISTS = path.join(dir, 'repo.m3u');
+  const day = new Date().toISOString().slice(0, 10);
+  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  const state = path.join(w.state, 'rtsp-nightly');
+  mkdirSync(state, { recursive: true });
+  writeFileSync(path.join(state, `report-${yesterday}.json`), JSON.stringify({ mode: 'live', streams: [
+    { host: 'h1', device: 'DEVICE1', kind: 'no_source', status: 'no_source', capture: 'ok',
+      suggestion: { name: 'Dead FM (720p)', url: 'https://cdn.example/dead/kept.m3u8', probed: 'ok', from: 'h1' } }] }));
+  const r = await py(REPLACE, [], w.E);
+  const rep = JSON.parse(readFileSync(path.join(state, `report-${day}.json`), 'utf8'));
+  w.close();
+  const one = rep.streams.find((s) => s.device === 'DEVICE1');
+  assert.equal(one.suggestion.url, 'https://cdn.example/good/first.m3u8', 'the dead channel is dropped');
+  assert.equal(one.suggestion.sticky, false);
+});
+
+test('the report carries the A/V drift rate: the offset alone hides how fast it grows', async () => {
+  // BFM2's offset grew 5572.473 s -> 6591.384 s between 05:48 and 17:22 (2026-11-27): the number says how far the
+  // audio and the video sit apart, the rate says the capture side republishes with a growing delay.
+  const w = await world({ pool: POOL, devices: { DEVICE1: dev('a', 'rtsp://test.example/good-pub') } });
+  const dir = path.dirname(w.E.RTSP_CHECK_FFPROBE);
+  const ffprobe = sh(dir, 'ffprobe-av', `case "$*" in *start_time*) echo "0,video,0.000000"; echo "1,audio,6591.384000";; *) echo '{"streams":[{"codec_name":"h264","width":640,"height":360}]}';; esac`);
+  const E = { ...w.E, RTSP_CHECK_FFPROBE: ffprobe };
+  const day = new Date().toISOString().slice(0, 10);
+  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  const state = path.join(w.state, 'rtsp-nightly');
+  mkdirSync(state, { recursive: true });
+  const prev = path.join(state, `report-${yesterday}.json`);
+  writeFileSync(prev, JSON.stringify({ mode: 'live', streams: [
+    { host: 'h1', device: 'DEVICE1', capture: 'ok', av: { audio: 5572.473, video: 0.0, offset: 5572.473 } }] }));
+  const old = new Date(Date.now() - 86400000);
+  utimesSync(prev, old, old);        // the last night was 24 h ago: the rate is the growth over that day
+  const r = await py(REPLACE, [], E);
+  const rep = JSON.parse(readFileSync(path.join(state, `report-${day}.json`), 'utf8'));
+  w.close();
+  const one = rep.streams.find((s) => s.device === 'DEVICE1');
+  assert.equal(one.av.offset, 6591.384, 'the offset is read');
+  assert.ok(Math.abs(one.av.rate - 42.5) < 0.5, `the rate is the growth per hour: ${JSON.stringify(one.av)}`);
+  assert.match(one.action, /the offset grows 42\.\d s\/h since the last night/, one.action);
+  assert.match(r.stdout, /a\/v drift: h1\/DEVICE1 - the offset is 6591\.384 s and grows 42\.\d s\/h/, r.stdout);
 });
 
 test('the report says what changed since the last night', async () => {

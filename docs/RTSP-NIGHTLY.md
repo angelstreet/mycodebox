@@ -152,6 +152,15 @@ written in the report (the row's `suggestion` field, and the report's `suggestio
 (`suggestion: vpt-nipogi/DEVICE4 - <channel> (<url>), probed from vpt-nipogi: plays`), never applied: the night writes
 nothing for an empty slot, and the owner decides. A slot with no candidate that plays gets no suggestion.
 
+**The proposal sticks (owner, 2026-11-27).** The same slot was proposed one night as Africa 24 Sport and the next as
+ADN TV+ (a candidate flaked), so the proposal moved from night to night and stopped being a stable decision aid. The
+proposal of the **last night** is now tried first for that slot and kept as long as it plays: the night reads it from
+the last night's report (`suggestion.url` of the same host and device), probes it from the host like any other
+candidate, and writes it again with `sticky: true` (the stdout line says *kept from the last night*). A kept channel that
+stopped playing is dropped like any other candidate and the proposal moves on — the proposal never sits on a dead
+channel. The other candidates keep their order (our verified copy first), so a slot with no proposal yet behaves exactly as
+before.
+
 ## What the app shows: the tile snapshot and black pictures (owner, 2026-11-11)
 
 The owner still saw a black BFM2 tile while its source played. A source check alone cannot see that, so every device is
@@ -227,6 +236,14 @@ video: the browser's player cannot sync the two: host capture side (vpt-stream),
 never replaced because of it. Below the threshold the offset is mux jitter and says nothing (TV3V measured +0.016 s on
 2026-11-27 while it played): the number stays in the report, the night does not cry wolf.
 
+**The offset grows, and the report says how fast (owner, 2026-11-27).** The offset alone says how far the two streams
+sit apart, not how fast that distance grows: BFM2's was 5572.473 s at 05:48 and 6591.384 s at 17:22 the same day. The
+night therefore reads the offsets of the **last night's report** (the same file the delta uses) and writes the rate next
+to the offset (`av.rate`, in s/h): the row's action says *"the offset grows 42.5 s/h since the last night"* and the night
+prints a line per device (`a/v drift: vpt-lenovo5/DEVICE1 - the offset is 6591.384 s and grows 42.5 s/h since the last
+night`). A rate needs two measurements, so there is none on the first night, and a device whose offset was not read
+last night has none either. A growing rate points at the capture side: it republishes with a delay that grows.
+
 ### The browser layer: what the app really shows (owner, 2026-11-27)
 
 `rtsp_replace.py --tiles` (or `RTSP_TILE_SWEEP=on`) opens every tile of the device-control grid **once** in a headless
@@ -269,6 +286,14 @@ where the process list would show it), and Playwright quotes that URL in its own
 by the owner and pasted into the docs, so every message the sweep leaves (`why`, `not_checked`, a tile's `error`) is
 masked: the value of `auto_signed` — and of any other secret query parameter — becomes `***`. The Python masks it again
 before the text reaches the report.
+
+**The page load is retried once (owner, 2026-11-27).** One slow page cost the night its whole browser layer: at 17:26
+the device-control page did not answer within 30 s, the sweep reported `skipped` and the night said nothing about the
+tiles, while the same code had swept the full grid at 17:03 (101 tiles, 99 playing). The page is therefore opened **once
+more** before the layer gives up — the navigation and the wait for the cards are the retried unit, so a page that answers
+but does not render the grid is retried too (5 s between the tries). A dead browser is not retried on the same page: it
+is relaunched, as before. After the second try the layer says what happened (`the tile sweep failed on page 1: … (after
+one retry)`), and it is still `skipped` or `partial` — never a false `ok`.
 
 The layer needs `node` and playwright (the VirtualPyTest checkout's, `RTSP_PLAYWRIGHT_PATH`, default
 `~/virtualpytest/tests/e2e/playwright/node_modules/playwright`); without them the report says the layer was **skipped**,

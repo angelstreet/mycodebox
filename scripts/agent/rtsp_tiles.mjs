@@ -83,6 +83,29 @@ const ident = (url) => {
   return m ? { host: decodeURIComponent(m[1]), capture: decodeURIComponent(m[2]) } : { host: null, capture: null };
 };
 
+// The grid page can be slow to answer, and one slow page cost the night its whole browser layer (2026-11-27: the
+// device-control page did not answer within 30 s at 17:26, while the same code swept the full grid at 17:03): the
+// page is opened once more before the layer gives up. A dead browser is not retried on the same page: it is
+// relaunched (the page loop below).
+const openGrid = async (page) => {
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      await page.goto(`${app}/device-control?auto_signed=${encodeURIComponent(token)}`);
+      for (let i = 0; i < 25; i++) {
+        const n = await page.evaluate(() => document.querySelectorAll('.MuiCard-root').length);
+        if (n > 0) return true;
+        await page.waitForTimeout(3000);
+      }
+      // the page answered but the grid did not render: one more try
+    } catch (e) {
+      if (isDead(e)) throw e;                       // a dead browser: relaunched, not retried on the same page
+      if (attempt === 2) throw new Error(`${mask(String(e.message).slice(0, 120))} (after one retry)`);
+    }
+    await new Promise((r) => setTimeout(r, 5000));   // the app may be busy: one more try
+  }
+  return false;
+};
+
 for (const srv of servers) {
   let pageNo = 1;
   let restarts = 0;
@@ -110,15 +133,9 @@ for (const srv of servers) {
         if (HLS.test(r.url()) && !/ABORTED/.test(e)) bad.push(`${e} ${r.url()}`);
       });
       // the grid loads late: 0 cards while the page reads "Checking authentication..."
-      let loaded = false;
-      await page.goto(`${app}/device-control?auto_signed=${encodeURIComponent(token)}`);
-      for (let i = 0; i < 25; i++) {
-        const n = await page.evaluate(() => document.querySelectorAll('.MuiCard-root').length);
-        if (n > 0) { loaded = true; break; }
-        await page.waitForTimeout(3000);
-      }
+      const loaded = await openGrid(page);
       if (!loaded) {
-        out.why = out.why || 'the device-control grid never loaded';
+        out.why = out.why || 'the device-control grid never loaded (after one retry)';
         out.not_checked.push({ name: '(the whole grid)', why: out.why });
         break;
       }
