@@ -96,6 +96,9 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
   At most two big test runs share the host: a third waits for a ticket (owner, 2026-10-20; `scripts/test-run.js`).
 - Tests must not touch live state: point `GHOSTY_STATE_DIR` at a temp directory, and never write the live
   `layout.json`.
+- A headless browser never resizes a live pane (2026-11-27): the server refuses `POST /api/resize/<s>` from a `HeadlessChrome` user agent except for
+  throwaway `zz-` sessions (`GHOSTY_HEADLESS_RESIZE=1` on a temp test server). Stubbing `/api/sessions` does not hide live cards: the list comes over
+  the `/ws/status` websocket. Verify UI on a temp-state server, or block `/ws/status` with `route_web_socket`.
 - The service is `ghosty-sessions` (systemd). Restart it with `scripts/safe-restart.sh`, never during a deploy.
   The guard requires a fresh successful deploy snapshot and refuses unknown or active deployment state.
 - Kill only your own processes: `kill <pid>`, `pkill -P <your pid>`, or a pattern naming your own worktree path. Never

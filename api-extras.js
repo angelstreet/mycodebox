@@ -214,3 +214,10 @@ export function paneShellOf(plain) {
   if (!Array.isArray(plain) || plain.length === 0) return false;
   return plain.filter((l) => String(l || '').trim()).slice(-6).some((l) => PANE_SHELL_RE.test(l));
 }
+
+// A headless browser (Playwright / Puppeteer: "HeadlessChrome" in the user agent) never resizes a live session's pane (2026-11-27: a verify run
+// opened the dashboard on the live server and shrank four live panes, the MiniMax manager included, to 60x12; 2026-10-06 one such resize crashed
+// it). Throwaway `zz-` sessions stay resizable for UI repros; GHOSTY_HEADLESS_RESIZE=1 (a temp test server) turns the guard off. Pure.
+export function headlessResizeRefused(userAgent, session, env = process.env) {
+  return /\bHeadless(?:Chrome|Chromium)?\b/i.test(String(userAgent || '')) && !/^zz-/.test(String(session || '')) && env.GHOSTY_HEADLESS_RESIZE !== '1';
+}
