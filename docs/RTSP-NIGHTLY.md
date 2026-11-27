@@ -262,8 +262,9 @@ A tile has **two pictures**, and "fixed" needs both, each with a screenshot look
    `luma` per device and by a headless screenshot of the card (the `capture` column reads both pictures, so `ok` alone
    does not say the snapshot is bright).
 2. **Live video** (`<video>`, `segments/output.m3u8`): what a page with 16 tiles or fewer shows, and any tile on hover.
-   Proven only by hovering the card (`page.mouse.move` to its centre, 15 s), then `video.readyState` 4 and a screenshot
-   that is not black. `readyState` 1 with nothing buffered is the `multi_audio` signature. The nightly reads this layer
+   Proven only by hovering the card (`page.mouse.move` to its centre, 15 s), then a clock that advances and a
+   screenshot that is not black. `readyState` 1 with **nothing** buffered (no picture, no clock) is the `multi_audio`
+   signature; `readyState` 1 with a bright picture and a moving clock is a playing tile. The nightly reads this layer
    too (`live_luma`), but a segment's first frame can be a transition frame: the browser proof is the one that counts.
 
 The 2026-11-11 close checked the snapshot only and called BFM2 fixed; the owner's view (a filtered page, live video) was
