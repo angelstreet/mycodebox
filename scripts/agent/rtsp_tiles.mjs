@@ -24,6 +24,11 @@ import { tileVerdict } from './rtsp_tile_verdict.mjs';
 
 const HLS = /output\.m3u8|segment_\d+\.ts/;
 
+// Nothing that leaves this script carries a secret. Playwright quotes the URL it was given in its own error text,
+// and that URL carries the auto-sign token: every message that becomes a report field goes through here first.
+const SECRET = /([?&](?:auto_signed|token|access_token|auth|key|sig|signature|password|passwd|secret)=)[^&\s"'<>]+/gi;
+const mask = (s) => String(s == null ? '' : s).replace(SECRET, '$1***');
+
 async function readStdin() {
   const chunks = [];
   for await (const c of process.stdin) chunks.push(c);
@@ -40,7 +45,7 @@ let chromium;
 try {
   ({ chromium } = req(payload.playwrightPath));
 } catch (e) {
-  process.stdout.write(JSON.stringify({ status: 'skipped', why: `playwright is not usable: ${e.message}`, checked: 0, playing: 0, not_playing: 0, tiles: [], not_checked: [] }));
+  process.stdout.write(JSON.stringify({ status: 'skipped', why: `playwright is not usable: ${mask(e.message)}`, checked: 0, playing: 0, not_playing: 0, tiles: [], not_checked: [] }));
   process.exit(0);
 }
 
@@ -137,7 +142,7 @@ for (const srv of servers) {
           r = await probe(page, card, name, reqs, bad);
         } catch (e) {
           if (isDead(e)) throw e;                // the page died: this page is done, the grid is relaunched
-          r = { name, host: null, capture: null, readyState: -1, dt: null, bright: null, plays: false, error: String(e.message).slice(0, 80) };
+          r = { name, host: null, capture: null, readyState: -1, dt: null, bright: null, plays: false, error: mask(String(e.message).slice(0, 80)) };
         }
         if (r) {
           if (evidenceDir) {
@@ -180,7 +185,7 @@ for (const srv of servers) {
               }
             } else if (again) { t.reprobe = 'still broken on its own'; }
           } else { t.reprobe = 'the card was not found again'; }
-        } catch (e) { if (isDead(e)) throw e; t.reprobe = `the re-probe failed: ${String(e.message).slice(0, 60)}`; }
+        } catch (e) { if (isDead(e)) throw e; t.reprobe = `the re-probe failed: ${mask(String(e.message).slice(0, 60))}`; }
       }
 
       const next = page.locator('button[aria-label="Go to next page"]');
@@ -192,7 +197,7 @@ for (const srv of servers) {
         await new Promise((r) => setTimeout(r, 5000));   // the app may still be serving the dead browser's streams
         continue;                                // the same page again, with a fresh browser
       }
-      out.why = out.why || `the tile sweep failed on page ${pageNo}: ${String(e.message).slice(0, 140)}`;
+      out.why = out.why || `the tile sweep failed on page ${pageNo}: ${mask(String(e.message).slice(0, 140))}`;
       out.not_checked.push({ name: `(page ${pageNo} and the rest)`, why: out.why });
       break;
     } finally {

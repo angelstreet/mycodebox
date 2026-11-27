@@ -583,7 +583,10 @@ whenever the page dies; the verdict itself lives in `scripts/agent/rtsp_tile_ver
 (`checked`, `playing`, `not_playing`, `no_video`) and on the device's row
 (`tile`); a tile that does not play while its source plays is reported as a host-capture fault (`vpt-stream`) and **nothing is replaced**;
 a file is measured against its own picture instead (never blamed on the capture side). A card with no live player at all (a drone, a PC screen)
-is not a stream tile: it is counted apart (`no_video`), never judged, never a fault of a device. Without node or playwright the block says the layer
+is not a stream tile: it is counted apart (`no_video`), never judged, never a fault of a device. Nothing the layer writes
+carries the auto-sign token: Playwright quotes the URL it was given in its error text, and every message the sweep leaves
+(`why`, `not_checked`, a tile's `error`) is masked (`auto_signed=***`), in the sweep and again in the Python that writes
+the report. Without node or playwright the block says the layer
 was **skipped**, never that the tiles played. The night's evidence folder holds the frame of a tile that does not play and, for the rows that need
 the proof (a dark snapshot with a live video), the frame of a tile that plays. A "dark snapshot but the live video plays" note moved out of the action column into its own
 `note` field (the report, the journal's `check` event and a line under the table carry it). An inventory error names the HTTP status the server

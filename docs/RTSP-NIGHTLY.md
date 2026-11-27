@@ -264,6 +264,12 @@ night counted a drone card and a PC screen as broken tiles, 2026-11-27). They ar
 snapshot with a live video, the note (`tile-<host>-<capture>-plays.png`). So "a fixed tile also plays live on hover, and
 its picture is not black" has a picture next to it, not only the two numbers of the note.
 
+**Nothing the layer writes carries the token.** The auto-sign token travels in the URL of the page (never in argv,
+where the process list would show it), and Playwright quotes that URL in its own error text. The night's report is read
+by the owner and pasted into the docs, so every message the sweep leaves (`why`, `not_checked`, a tile's `error`) is
+masked: the value of `auto_signed` — and of any other secret query parameter — becomes `***`. The Python masks it again
+before the text reaches the report.
+
 The layer needs `node` and playwright (the VirtualPyTest checkout's, `RTSP_PLAYWRIGHT_PATH`, default
 `~/virtualpytest/tests/e2e/playwright/node_modules/playwright`); without them the report says the layer was **skipped**,
 never that the tiles played. A sweep that read some tiles and could not finish (the browser died and the relaunched

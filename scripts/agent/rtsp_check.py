@@ -601,6 +601,16 @@ def _find_node():
     return None
 
 
+# The browser layer's own text never keeps a secret: Playwright quotes the URL it was given in its error text, and
+# that URL carries the auto-sign token. Every message that comes back from the sweep is masked before it is written.
+_SECRET = re.compile(r'([?&](?:auto_signed|token|access_token|auth|key|sig|signature|password|passwd|secret)=)[^&\s"\'<>]+', re.I)
+
+
+def _mask(text):
+    """-> the text with every secret query value replaced by '***' (the name of the parameter stays)."""
+    return _SECRET.sub(r'\1***', str(text or ''))
+
+
 def tile_sweep(entries, servers, enabled=False, evidence_dir=None, proof=None):
     """What the app shows, read in the app's own browser: every tile of the stream devices, opened once.
 
@@ -654,6 +664,12 @@ def tile_sweep(entries, servers, enabled=False, evidence_dir=None, proof=None):
     out.setdefault('tiles', [])
     out.setdefault('not_checked', [])
     out.setdefault('why', None)
+    # A signed URL inside an error message is masked here too: the report is read by the owner and pasted into the
+    # docs, and it never keeps a token.
+    out['why'] = _mask(out.get('why'))
+    for nc in out.get('not_checked') or []:
+        if isinstance(nc, dict):
+            nc['why'] = _mask(nc.get('why'))
     # The counts are read from the tiles themselves, never trusted from the sweep's own summary: a card that
     # carries no live player (a drone, a PC screen) is not a stream tile, so it is neither playing nor broken.
     tiles = [t for t in (out.get('tiles') or []) if isinstance(t, dict)]
