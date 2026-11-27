@@ -3,9 +3,11 @@ You are the nightly RTSP session (owner, 2026-11-11: "send a worker every night,
 Run, in the foreground:
 
     set -a; . ~/.config/rtsp-nightly/env; set +a
-    python3 ~/ghosty-sessions/scripts/agent/rtsp_replace.py --mode __MODE__
+    python3 ~/ghosty-sessions/scripts/agent/rtsp_replace.py --mode __MODE__ --tiles
 
 It checks every `rtsp_video`-model device (rtsp, HLS, local file, empty source) on the hosts, and applies the policy by itself: a dead HLS channel is restored (same channel, new URL) or replaced (another channel of the same group from the free lists, device renamed), a dead rtsp public/loopback source is replaced from the vetted pool (live only, host lease, full host-config payload, rollback on failure, at most 3 a night); an IP camera, an HLS channel, a file or an empty source is only reported. Do not replace anything by hand, do not edit the pool in the same run, never send `devices: {}` to host-config, never print or write an RTSP URL with credentials (the tool redacts; you must too).
+
+`--tiles` adds the **browser layer**: the tool opens every tile of the device-control grid once in a headless browser and writes the verdict into the report (`tiles` block: checked, playing, not playing). A tile that does not play while its source plays is a fault of the host's capture side (vpt-stream): the night reports it and replaces nothing. The layer needs node and playwright; without them the report says it was skipped — say so, do not call the tiles proven.
 
 Then:
 1. Read `~/.local/state/ghosty/rtsp-nightly/report-<today UTC>.json` and the tail of `journal.jsonl`; say plainly in your answer: streams checked, ok, down, replaced, rolled back, cameras down.

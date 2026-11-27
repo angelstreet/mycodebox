@@ -427,45 +427,66 @@ def playlist_segments(body):
 
 
 def _segment_audio_luma(body, timeout=20):
-    """-> (audio track count, brightest frame luma) of one media segment."""
+    """-> (audio track count, brightest frame luma, A/V offset) of one media segment.
+
+    The offset is the audio's start time minus the video's start time, in seconds: how far the two
+    streams of the host's republished segment sit on the timeline. It is the drift the browser's player
+    cannot sync, so the tile stays black while the source plays (bug-c54ea30f on BFM2: the audio 5572 s
+    from the video, measured 2026-11-27; bug-16d06d74 on Cine 666). 0 when both streams start together,
+    None when the segment carries no audio or no video (nothing to compare)."""
     import tempfile
     with tempfile.NamedTemporaryFile(suffix='.ts') as f:
         f.write(body or b''); f.flush()
         try:
-            p = subprocess.run([FFPROBE, '-v', 'error', '-show_entries', 'stream=index,codec_type', '-of', 'csv=p=0', f.name],
+            p = subprocess.run([FFPROBE, '-v', 'error', '-show_entries', 'stream=index,codec_type,start_time', '-of', 'csv=p=0', f.name],
                                capture_output=True, text=True, timeout=timeout)
         except (subprocess.TimeoutExpired, OSError):
             p = None
         # An MPEG-TS lists each stream twice (under its program and on its own): count unique indexes, not lines.
         audio = None
+        starts = {}
         if p is not None:
-            audio = len({line.split(',')[0] for line in p.stdout.split() if line.strip().endswith(',audio')})
-        return audio, luma(f.name, timeout, all_frames=True)
+            rows = [[x.strip() for x in line.split(',')] for line in p.stdout.splitlines() if line.strip()]
+            audio = len({r[0] for r in rows if len(r) >= 2 and r[1] == 'audio'})
+            for r in rows:                          # the first line of a stream wins: the program copy repeats it
+                if len(r) >= 3 and r[0].isdigit() and r[0] not in starts:
+                    try:
+                        starts[r[0]] = (r[1], float(r[2]))
+                    except ValueError:
+                        pass
+        av = None
+        video = next((v for v in starts.values() if v[0] == 'video'), None)
+        audio_st = next((v for v in starts.values() if v[0] == 'audio'), None)
+        if video and audio_st:
+            av = {'audio': audio_st[1], 'video': video[1], 'offset': round(audio_st[1] - video[1], 3)}
+        return audio, luma(f.name, timeout, all_frames=True), av
 
 
 def stream_media(base, timeout=20):
     """What the browser player loads: the host's newest HLS segment.
-    -> (audio_tracks, luma) of that segment, (None, None) when it cannot be read.
+    -> (audio_tracks, luma, av) of that segment, (None, None, None) when it cannot be read.
     audio: hls.js does not play a TS with several audio tracks (bug-ea31641c): the live tile stays black.
     luma: the live layer's brightness (the tile's video, not its thumbnail), judged over a WINDOW of the
     host's recent segments: the newest segment alone can be dark for a moment while the tile plays
-    (bug-37646a38: vpt-nipogi/DEVICE10 read black at 05:48 on 2026-11-15 and played again minutes later)."""
+    (bug-37646a38: vpt-nipogi/DEVICE10 read black at 05:48 on 2026-11-15 and played again minutes later).
+    av: the audio/video start-time offset of the segment: the drift the browser's player cannot sync."""
     st, pl, _ = _fetch(f'{base}/segments/output.m3u8', timeout)
     if st != 'ok':
-        return None, None
+        return None, None, None
     segs = playlist_segments(pl)
     if not segs:
-        return None, None
+        return None, None, None
     st, body, _ = _fetch(f'{base}/segments/{segs[-1][0]}', timeout)
     if st != 'ok':
-        return None, None
-    audio, live = _segment_audio_luma(body, timeout)
+        return None, None, None
+    audio, live, av = _segment_audio_luma(body, timeout)
     if live is None:
         # A slow host can make the ffprobe or the ffmpeg measurement time out under load (bug-c27e2c95): the reading
         # was lost and the tile read as "the live video could not be read". One more try gives the host a second chance.
-        audio2, live2 = _segment_audio_luma(body, timeout)
+        audio2, live2, av2 = _segment_audio_luma(body, timeout)
         if live2 is not None:
             audio, live = (audio2 if audio2 is not None else audio), live2
+            av = av2 or av
     if live is not None and live < BLACK_LUMA:
         # The newest segment is dark: walk back over the host's recent segments and keep the brightest frame.
         # A tile that plays shows it in that window; a tile that is really black stays dark in all of it.
@@ -483,7 +504,7 @@ def stream_media(base, timeout=20):
                 live = y
             if live >= BLACK_LUMA:
                 break
-    return audio, live
+    return audio, live, av
 
 
 def tile_base(e):
@@ -496,17 +517,18 @@ def tile_base(e):
 
 
 def capture_check(e, timeout=20):
-    """-> {capture: ok|black|stale|multi_audio|missing|unreachable|unknown, age, luma, live_luma, audio}. What the app
-    shows of the device: the tile's snapshot (thumbnail luma) and the stream its live player loads (live_luma), read
-    through the device's server."""
+    """-> {capture: ok|black|stale|multi_audio|missing|unreachable|unknown, age, luma, live_luma, audio, av}.
+    What the app shows of the device: the tile's snapshot (thumbnail luma) and the stream its live player loads
+    (live_luma), read through the device's server. av: the audio/video start-time offset of that stream, the
+    drift the browser's player cannot sync (a tile stays black while the source plays)."""
     import email.utils, time
     cap = e.get('capture')
     if not cap or not e.get('server'):
-        return {'capture': 'unknown', 'age': None, 'luma': None, 'live_luma': None, 'audio': None}
+        return {'capture': 'unknown', 'age': None, 'luma': None, 'live_luma': None, 'audio': None, 'av': None}
     base = tile_base(e)
     st, body, last = _fetch(f'{base}/thumbnails/latest.jpg', timeout)
     if st != 'ok':
-        return {'capture': st, 'age': None, 'luma': None, 'live_luma': None, 'audio': None}
+        return {'capture': st, 'age': None, 'luma': None, 'live_luma': None, 'audio': None, 'av': None}
     age = None
     if last:
         try:
@@ -524,7 +546,7 @@ def capture_check(e, timeout=20):
                 y = y2 if y2 is not None else y
                 break
             y = max(y, y2)
-    audio, live = stream_media(base, timeout)
+    audio, live, av = stream_media(base, timeout)
     live_luma = None if live is None else round(live, 1)
     dark = y is not None and y < BLACK_LUMA
     # A tile has two pictures: the thumbnail (what a page with many tiles shows) and the live video (what a page with
@@ -537,12 +559,116 @@ def capture_check(e, timeout=20):
               'black' if dark and live_luma < BLACK_LUMA else
               'multi_audio' if audio is not None and audio > 1 else 'ok')
     return {'capture': status, 'age': age, 'luma': None if y is None else round(y, 1),
-            'live_luma': live_luma, 'audio': audio}
+            'live_luma': live_luma, 'audio': audio, 'av': av}
 
 
 def check_captures(entries):
     with ThreadPoolExecutor(max_workers=6) as ex:
         return list(ex.map(capture_check, entries))
+
+
+# ---- the browser layer: what the app really shows (owner 2026-11-27) ----
+TILE_SWEEP_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'rtsp_tiles.mjs')
+TILE_SWEEP_MAX_SECONDS = int(os.environ.get('RTSP_TILE_SWEEP_MAX_SECONDS', '1800'))
+TILE_SWEEP_CARD_MS = int(os.environ.get('RTSP_TILE_SWEEP_CARD_MS', '15000'))
+APP_URL = os.environ.get('RTSP_APP_URL', 'https://virtualpytest.angelstreet.io')
+PLAYWRIGHT_PATH = os.environ.get('RTSP_PLAYWRIGHT_PATH') or os.path.expanduser(
+    '~/virtualpytest/tests/e2e/playwright/node_modules/playwright')
+
+
+def _find_node():
+    """The node binary of the browser layer. The night's own PATH is a short one (scripts/rtsp-nightly/run.sh), so the
+    node it installs under ~/.local is looked up too: a browser layer that silently skips every night because of a
+    PATH would be worse than one that says it could not run."""
+    import glob
+    import shutil
+    node = shutil.which('node')
+    if node:
+        return node
+    for path in sorted(glob.glob(os.path.expanduser('~/.local/node-*/bin/node')), reverse=True):
+        if os.access(path, os.X_OK):
+            return path
+    return None
+
+
+def tile_sweep(entries, servers, enabled=False, evidence_dir=None):
+    """What the app shows, read in the app's own browser: every tile of the stream devices, opened once.
+
+    -> the tiles block of the report: {status, checked, playing, not_playing, tiles, not_checked, why}.
+    A sweep that could not run says so. The block is never a false 'ok': a tile that was not read is not
+    a tile that plays, and a tile that reads broken is probed again on its own before it is called broken."""
+
+    def skipped(why):
+        return {'status': 'skipped', 'why': why, 'checked': 0, 'playing': 0, 'not_playing': 0, 'tiles': [], 'not_checked': []}
+
+    if not enabled and os.environ.get('RTSP_TILE_SWEEP', 'off').strip().lower() in ('', 'off', '0', 'no'):
+        return skipped('the browser layer is off (--tiles or RTSP_TILE_SWEEP=on turns it on)')
+    node = _find_node()
+    if not node:
+        return skipped('node is not on the PATH and none is installed under ~/.local: the browser layer cannot run')
+    if not os.path.isdir(PLAYWRIGHT_PATH):
+        return skipped(f'playwright is not installed at {PLAYWRIGHT_PATH}')
+    with_server = {}
+    for e in entries:
+        if e.get('server'):
+            with_server.setdefault(e['server'], []).append(e)
+    payload = {
+        'app': APP_URL,
+        'token': server_token(),          # through stdin, never in argv: the process list would show it
+        'platformServers': [{'name': label, 'url': url} for label, url in servers.items()],
+        'servers': [{'name': label, 'url': url,
+                     'tiles': [{'host': e.get('host'), 'device': e.get('device'), 'name': e.get('name'),
+                                'capture': e.get('capture')} for e in with_server.get(url, [])]}
+                    for label, url in servers.items() if url in with_server],
+        'playwrightPath': PLAYWRIGHT_PATH,
+        'perCardTimeoutMs': TILE_SWEEP_CARD_MS,
+        'budgetSeconds': TILE_SWEEP_MAX_SECONDS,
+        'evidenceDir': evidence_dir,          # the frame of a tile that does not play: the night's evidence
+    }
+    try:
+        p = subprocess.run([node, TILE_SWEEP_SCRIPT], input=json.dumps(payload), capture_output=True,
+                           text=True, timeout=TILE_SWEEP_MAX_SECONDS + 180)
+    except subprocess.TimeoutExpired:
+        return skipped(f"the browser layer did not answer within {TILE_SWEEP_MAX_SECONDS + 180}s")
+    except OSError as e:
+        return skipped(f'node could not be run: {e}')
+    try:
+        out = json.loads(p.stdout or '{}')
+    except ValueError:
+        return skipped('the browser layer did not answer with a result')
+    if not isinstance(out, dict):
+        return skipped('the browser layer did not answer with a result')
+    out.setdefault('status', 'skipped')
+    out.setdefault('tiles', [])
+    out.setdefault('not_checked', [])
+    out.setdefault('why', None)
+    return out
+
+
+def tile_verdicts(tiles_block, entries):
+    """-> {(host, device): the tile's verdict} of the report's tiles block, matched to the devices.
+
+    A card is matched by the stream it loads (its host and its capture), and by its device name when the
+    stream cannot be read (a device whose player never started)."""
+    by_cap, by_name = {}, {}
+    for e in entries:
+        if e.get('capture'):
+            by_cap.setdefault((e.get('host'), e.get('capture')), e)
+        if e.get('name'):
+            by_name.setdefault(e['name'], []).append(e)
+    out = {}
+    for t in tiles_block.get('tiles') or []:
+        e = by_cap.get((t.get('host'), t.get('capture')))
+        if e is None:
+            cand = by_name.get(t.get('name')) or []
+            e = cand[0] if len(cand) == 1 else None
+        if e is None:
+            continue
+        out[(e.get('host'), e.get('device'))] = {
+            'plays': t.get('plays'), 'readyState': t.get('readyState'), 'dt': t.get('dt'),
+            'bright': t.get('bright'), 'name': e.get('name'), 'reprobe': t.get('reprobe'),
+        }
+    return out
 
 
 def check_entries(entries, ssh_map, timeout):
