@@ -354,6 +354,7 @@ def run(mode, timeout=10, tiles=False):
     # (owner 2026-11-27: the owner was picking the same seven slots by hand every night).
     suggestions = []
     slot_catalog = None
+    probed = {}          # what a candidate answered on a host: probed once, not once per slot
     for e in entries:
         if e.get('kind') != 'no_source':
             continue
@@ -362,7 +363,7 @@ def run(mode, timeout=10, tiles=False):
             errors.extend(cat_errors)
         used = [x.get('url') for x in entries if x.get('host') == e['host']]
         used += [s['url'] for s in suggestions if s['host'] == e['host']]
-        s = suggest_channel(e, slot_catalog or [], used, ssh_map, timeout)
+        s = suggest_channel(e, slot_catalog or [], used, ssh_map, timeout, probed=probed)
         if s:
             s.update({'host': e['host'], 'device': e['device']})
             suggestions.append(s)
@@ -649,12 +650,13 @@ def run(mode, timeout=10, tiles=False):
             'delta': delta_since_last_night(rows, datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d'))}
 
 
-def suggest_channel(entry, catalog, used_urls, ssh_map, timeout, tries=8):
+def suggest_channel(entry, catalog, used_urls, ssh_map, timeout, tries=8, probed=None):
     """A channel an EMPTY slot could take, from the free lists: the first that plays, probed from the host.
 
     Suggested only, never applied: an empty source is the owner's call (owner 2026-11-27). The owner was picking
     the same seven slots by hand every night; the night can propose one that plays, from the same lists the
-    replacement path uses. Our verified list comes first, so the proposal is the same from one night to the next."""
+    replacement path uses. Our verified list comes first, so the proposal is the same from one night to the next.
+    probed: what an earlier slot already probed on that host (a candidate is probed once, not once per slot)."""
     ssh = ssh_map.get(entry['host'])
     used = {sc.base_url(u) for u in used_urls if u}
     pool = [c for c in catalog if not c.get('ua') and sc.base_url(c['url']) not in used]
@@ -662,7 +664,14 @@ def suggest_channel(entry, catalog, used_urls, ssh_map, timeout, tries=8):
     for n, c in enumerate(pool):
         if n >= tries:
             break
-        if rc.check_stream(c['url'], timeout, ssh).get('status') == 'ok':
+        key = (entry['host'], c['url'])
+        if probed is not None and key in probed:
+            ok = probed[key]
+        else:
+            ok = rc.check_stream(c['url'], timeout, ssh).get('status') == 'ok'
+            if probed is not None:
+                probed[key] = ok
+        if ok:
             return {'name': c['name'], 'url': c['url'], 'group': c.get('group', ''), 'how': 'suggest',
                     'probed': 'ok', 'from': entry['host'], 'list': c.get('list', '')}
     return None
