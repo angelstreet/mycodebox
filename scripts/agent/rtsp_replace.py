@@ -99,6 +99,11 @@ def probe_pool(pool, ssh_map, timeout):
     sources = pool.get('sources', [])
 
     def one(s):
+        if s.get('probe') is False:
+            # The owner marked this entry: it is not probed tonight (the report says so, with the reason), so a
+            # known-blocked candidate does not cost the night its timeout and does not repeat its failure.
+            return {'id': s['id'], 'kind': s.get('kind'), 'vetted': s.get('vetted'), 'status': 'skipped',
+                    'from': 'not probed', 'url': s['url'], 'why': s.get('skipReason') or 'not probed tonight'}
         ssh, where = None, 'codebox'
         hosts = [h.strip() for h in (os.environ.get(s.get('hostsEnv') or '') or '').split(',') if h.strip()]
         if hosts:
@@ -345,6 +350,22 @@ def run(mode, timeout=10, tiles=False):
     results = rc.check_entries(entries, ssh_map, timeout)
     caps = rc.check_captures(entries)  # what the app shows: the tile's snapshot through its server
     pool_state = probe_pool(pool, ssh_map, timeout)  # does the pool still play? (read-only: the pool is never edited here)
+    # The empty slots: a channel from the free lists that plays, proposed for each of them and never applied
+    # (owner 2026-11-27: the owner was picking the same seven slots by hand every night).
+    suggestions = []
+    slot_catalog = None
+    for e in entries:
+        if e.get('kind') != 'no_source':
+            continue
+        if slot_catalog is None:
+            slot_catalog, cat_errors = sc.load()
+            errors.extend(cat_errors)
+        used = [x.get('url') for x in entries if x.get('host') == e['host']]
+        used += [s['url'] for s in suggestions if s['host'] == e['host']]
+        s = suggest_channel(e, slot_catalog or [], used, ssh_map, timeout)
+        if s:
+            s.update({'host': e['host'], 'device': e['device']})
+            suggestions.append(s)
     capture_mode = read_mode('capture-mode')  # the capture-driven repair has its own switch: dry until one clean night
     budget = int(pool.get('maxReplacementsPerNight', 3)) - replaced_today()
     rows = []
@@ -531,6 +552,11 @@ def run(mode, timeout=10, tiles=False):
             row['action'] = 'report: cannot verify from codebox (no ssh alias for the host)'
         elif e['kind'] in ('file', 'no_source'):
             row['action'] = f"report: {e['kind']} source not ok (never replaced automatically: no file pool, and an empty source is the owner's call)"
+            if e['kind'] == 'no_source':
+                sug = next((s for s in suggestions if s['host'] == e['host'] and s['device'] == e['device']), None)
+                if sug:
+                    # Suggested, never applied: the row carries the proposal, the night writes nothing.
+                    row['suggestion'] = sug
         elif e['kind'] == 'ip_camera':
             row['action'] = 'report: camera down (owner hardware, never replaced)'
         elif budget <= 0:
@@ -618,7 +644,94 @@ def run(mode, timeout=10, tiles=False):
             journal({'event': 'verify', 'host': e['host'], 'device': e['device'], 'outcome': f"died_again_{outcome}", 'source': s['url'], 'new': s2['url']})
         for e, s, row in installed:
             journal({'event': 'check', 'host': row['host'], 'device': row['device'], 'kind': row['kind'], 'status': row['status'], 'capture': row.get('capture'), 'luma': row.get('luma'), 'action': row['action'], 'note': row.get('note'), 'source': row['source']})
-    return {'mode': mode, 'streams': rows, 'errors': errors, 'hosts': hosts, 'pool': pool_state, 'tiles': tiles_block}
+    return {'mode': mode, 'streams': rows, 'errors': errors, 'hosts': hosts, 'pool': pool_state, 'tiles': tiles_block,
+            'suggestions': suggestions,
+            'delta': delta_since_last_night(rows, datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d'))}
+
+
+def suggest_channel(entry, catalog, used_urls, ssh_map, timeout, tries=8):
+    """A channel an EMPTY slot could take, from the free lists: the first that plays, probed from the host.
+
+    Suggested only, never applied: an empty source is the owner's call (owner 2026-11-27). The owner was picking
+    the same seven slots by hand every night; the night can propose one that plays, from the same lists the
+    replacement path uses. Our verified list comes first, so the proposal is the same from one night to the next."""
+    ssh = ssh_map.get(entry['host'])
+    used = {sc.base_url(u) for u in used_urls if u}
+    pool = [c for c in catalog if not c.get('ua') and sc.base_url(c['url']) not in used]
+    pool.sort(key=lambda c: c.get('list') != 'repo')      # verified list first, then the upstream: stable
+    for n, c in enumerate(pool):
+        if n >= tries:
+            break
+        if rc.check_stream(c['url'], timeout, ssh).get('status') == 'ok':
+            return {'name': c['name'], 'url': c['url'], 'group': c.get('group', ''), 'how': 'suggest',
+                    'probed': 'ok', 'from': entry['host'], 'list': c.get('list', '')}
+    return None
+
+
+def row_state(row):
+    """-> how a device's tile stands: black (the capture column), broken (the browser's own player) or ok.
+    Two nights are compared on this, so the report can say what changed since the last one."""
+    if row.get('capture') == 'black':
+        return 'black'
+    tile = row.get('tile') or {}
+    if tile.get('plays') is False:
+        return 'broken'
+    return 'ok'
+
+
+def previous_report(today):
+    """-> (the path of the last night's report before today, its rows). The dry reports of a day are ignored:
+    a dry run must not become the night the next one is compared to."""
+    cands = []
+    try:
+        names = os.listdir(STATE)
+    except OSError:
+        return None, []
+    for f in names:
+        if not (f.startswith('report-') and f.endswith('.json')):
+            continue
+        day = f[len('report-'):-len('.json')]
+        if len(day) == 10 and day < today:
+            cands.append((day, os.path.join(STATE, f)))
+    if not cands:
+        return None, []
+    cands.sort()
+    path = cands[-1][1]
+    try:
+        with open(path, encoding='utf-8') as f:
+            rows = json.load(f).get('streams') or []
+    except (OSError, ValueError):
+        rows = []
+    return path, rows
+
+
+def delta_since_last_night(rows, today):
+    """What changed since the last night: the devices that became black, that recovered, that stay black, and the
+    ones whose own player in the app stopped (or started) playing. The nightly session reads a table of a hundred
+    rows; this says what moved in it."""
+    path, prev = previous_report(today)
+    empty = {'since': None, 'newly_black': [], 'recovered': [], 'still_black': [],
+             'newly_broken': [], 'still_broken': [], 'recovered_broken': [], 'changed_rows': 0}
+    if path is None:
+        return empty
+    before = {(r.get('host'), r.get('device')): row_state(r) for r in prev}
+    after = {(r.get('host'), r.get('device')): row_state(r) for r in rows}
+    d = dict(empty)
+    d['since'] = os.path.basename(path)
+    for key, state in after.items():
+        was = before.get(key)
+        name = f"{key[0]}/{key[1]}"
+        if state == 'black':
+            (d['still_black'] if was == 'black' else d['newly_black']).append(name)
+        elif was == 'black':
+            d['recovered'].append(name)
+        if state == 'broken':
+            (d['still_broken'] if was == 'broken' else d['newly_broken']).append(name)
+        elif was == 'broken':
+            d['recovered_broken'].append(name)
+        if was is not None and was != state:
+            d['changed_rows'] += 1
+    return d
 
 
 def report_path(day, mode):
@@ -686,6 +799,17 @@ def main(argv):
     for r in rep['streams']:
         if r.get('note'):
             print(f"note: {r['host']}/{r['device']} - {r['note']}")
+    # A suggestion is not an action either: an empty slot with a channel proposed for it, never applied.
+    for s in rep.get('suggestions') or []:
+        print(f"suggestion: {s['host']}/{s['device']} - {s['name']} ({s['url']}), probed from {s['from']}: plays"
+              f" (not applied: an empty source is the owner's call)")
+    d = rep.get('delta') or {}
+    if d.get('since'):
+        print(f"since {d['since']}: {len(d['newly_black'])} newly black, {len(d['recovered'])} recovered,"
+              f" {len(d['still_black'])} still black, {len(d['newly_broken'])} newly broken in the app,"
+              f" {len(d['recovered_broken'])} recovered, {d['changed_rows']} row(s) changed")
+    elif d:
+        print('since the last night: no earlier report to compare with')
     tb = rep.get('tiles') or {}
     # The cards that carry no live player (a drone, a PC screen) are named apart: they are not stream tiles.
     extra = (f", {tb.get('no_video', 0)} card(s) without a live player (not stream tiles)"
@@ -699,7 +823,9 @@ def main(argv):
     elif tb.get('status') == 'skipped':
         print(f"tiles (the app's own player): skipped ({tb.get('why')})")
     if rep.get('pool'):
-        print('pool: ' + ', '.join(f"{p['id']} {p['status']} (from {p['from']})" for p in rep['pool']))
+        print('pool: ' + ', '.join(
+            (f"{p['id']} {p['status']} ({p.get('why')})" if p.get('why') else f"{p['id']} {p['status']} (from {p['from']})")
+            for p in rep['pool']))
     walked = f"{rep['hosts']['walked']} host(s) walked, {rep['hosts']['read']} read"
     if not rep['streams']:
         print('no stream devices found' + (' (inventory errors above)' if rep['errors'] else '') + f' ({walked})')

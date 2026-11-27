@@ -16,6 +16,8 @@
       "kind": "public",
       "url": "rtsp://wowzaec2demo.streamlock.net/vod/mp4:BigBuckBunny_115k.mp4",
       "vetted": null,
+      "probe": false,
+      "skipReason": "port 554 to it was blocked from codebox and 3 lab hosts on 2026-11-11 and it timed out every night since (13 nights to 2026-11-27): the night does not probe it any more and it stays unvetted",
       "note": "unvetted: port 554 to it was blocked from codebox and 3 lab hosts on 2026-11-11 (stream may be gone)"
     },
     {
@@ -23,6 +25,8 @@
       "kind": "public",
       "url": "rtsp://rtsp.stream/pattern",
       "vetted": null,
+      "probe": false,
+      "skipReason": "port 554 to it was blocked from codebox and 3 lab hosts on 2026-11-11 and it timed out every night since (13 nights to 2026-11-27): the night does not probe it any more and it stays unvetted",
       "note": "unvetted: same, 2026-11-11"
     },
     {
@@ -30,6 +34,8 @@
       "kind": "public",
       "url": "rtsp://rtsp.stream/movie",
       "vetted": null,
+      "probe": false,
+      "skipReason": "port 554 to it was blocked from codebox and 3 lab hosts on 2026-11-11 and it timed out every night since (13 nights to 2026-11-27): the night does not probe it any more and it stays unvetted",
       "note": "unvetted: same, 2026-11-11"
     }
   ]

@@ -588,6 +588,11 @@ was **skipped**, never that the tiles played. The night's evidence folder holds 
 the proof (a dark snapshot with a live video), the frame of a tile that plays. A "dark snapshot but the live video plays" note moved out of the action column into its own
 `note` field (the report, the journal's `check` event and a line under the table carry it). An inventory error names the HTTP status the server
 answered (`ERROR <server>/<host>: HTTPError 503`), so a blip and a refusal are told apart.
+The seven empty slots (`no_source`) get a **suggestion**: a channel from the free lists that plays, probed from the host, written in the row's
+`suggestion` field and in the report's `suggestions` array, **never applied** (an empty source is the owner's call). A pool entry the owner marked
+(`"probe": false` in `config/rtsp-pool.json`) is not probed any more and reads `skipped` with its reason, so a known-blocked candidate stops costing
+the night its timeout. The report carries a `delta` block: what changed since the last night's report (`newly_black`, `recovered`, `still_black`, the
+same for the browser layer, `changed_rows`).
 The report also
 carries the pool's own probe status (a `pool` block, one row per entry: `id`, `vetted`, `status`, the vantage it was probed from),
 so a broken pool source is visible in the night's evidence without a hand probe; the pool file itself is never edited by the
