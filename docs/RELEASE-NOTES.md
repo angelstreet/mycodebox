@@ -3,6 +3,8 @@
 The release note of this repo (owner 2026-11-13). Every merged code change (not docs-only) adds one entry at the top of
 `## Unreleased`; the done-check reads the merged diff for this file (REFERENCE "Closing review"). Entry form: one line,
 
+- **A suggestion list repeated with notes no longer duplicates its items, and the manager's unclear answer is asked back to the manager, not the owner** — a session that restated its list as "1. <item> — built and merged" got two new items, so the manager's "yes 1 2 3, no 4" read two ways, nothing was recorded, and the owner was pushed "which numbers did you mean?" for a session the manager started (2026-11-27). Items now match on their first clause; an ambiguous answer from the manager comes back as a manager event. Tests: `test/suggestion-triage.test.js` · area: harness
+
 - **The Opus suggestion triage now really runs on the live server** — every call failed with `spawn claude ENOENT` (the service's PATH has no `~/.local/bin`), so sessions fell back to waiting on the manager; it now finds `~/.local/bin/claude`, runs on the active Claude account (`CLAUDE_CONFIG_DIR`), logs claude's own words on a failure ("exit 1: You've hit your weekly limit") and no longer risks an EPIPE crash when claude exits before reading (2026-11-27). Tests: `test/suggestion-triage.test.js` · area: harness
 
 - **A headless browser can no longer resize a live session's pane** — a verify run on the live dashboard shrank four live panes (the MiniMax manager among them) to 60x12; `POST /api/resize/<s>` now answers 403 `headless` for a `HeadlessChrome` user agent, except throwaway `zz-` sessions or `GHOSTY_HEADLESS_RESIZE=1` (2026-11-27). Tests: `test/headless-resize.test.js` · area: dashboard

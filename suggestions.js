@@ -154,6 +154,9 @@ export function createTypedLog({ max = 200 } = {}) {
 }
 
 const keyOf = (t) => String(t).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().slice(0, 60);
+// The item's first clause (up to ". ", " — ", " - ", " (" or ":"): a list repeated with a note ("... owner — built and merged (int-...)") is the same
+// item, not a new one (2026-11-27: two such copies made "yes 1 2 3, no 4" read two ways and nothing was recorded). At least 4 words.
+const headOf = (t) => { const h = keyOf(String(t).split(/\.\s|\s[—–-]\s|\s\(|:\s/)[0]); return h.split(' ').length >= 4 ? h : null; };
 const textSig = (t) => createHash('sha1').update(String(t || '').replace(/\s+/g, ' ').trim()).digest('hex').slice(0, 12);
 const openOf = (r) => (r?.items || []).filter((i) => !i.answer);
 // parked with the owner by the Opus triage (suggestion-triage.js): the session does not wait on them; only the owner answers them later
@@ -195,10 +198,12 @@ export function createSuggestions({ stateDir, now = Date.now, active = () => tru
     const listed = suggestionsIn(text);
     const prev = rec(name);
     const known = new Map((prev?.items || []).map((i) => [keyOf(i.text), i.n]));
+    const heads = new Map((prev?.items || []).map((i) => [headOf(i.text), i.n]).filter(([h]) => h));
     const added = [], shown = {};
     for (const it of listed) {
       const k = keyOf(it.text);
-      if (known.has(k)) { if (it.num) shown[it.num] = known.get(k); continue; }
+      const same = known.has(k) ? known.get(k) : headOf(it.text) && heads.get(headOf(it.text));
+      if (same) { if (it.num) shown[it.num] = same; continue; }
       const r = ensure(name), used = new Set(r.items.map((i) => i.n));
       let n = it.num && !used.has(it.num) ? it.num : 1;
       while (used.has(n)) n++;
