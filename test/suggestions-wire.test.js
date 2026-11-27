@@ -79,7 +79,7 @@ done
   assert.equal(card.suggestions.state, 'open');
   assert.equal(card.suggestions.open, 2);
   assert.equal(displayState(card), 'waiting');
-  assert.equal(isOwnersTurn(card), true);
+  assert.equal(isOwnersTurn(card), false, 'open suggestions never open the popup (owner 2026-11-27): a quiet chip');
   assert.doesNotMatch(String(card.lastTurn?.line || ''), /done/i);
 
   // the manager, and a script that sends no `by` without being a browser, cannot say yes or no
