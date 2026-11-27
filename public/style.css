@@ -2381,7 +2381,7 @@ body.res-hidden .topbar .summary{ margin-left:auto; }
   .session-list li:not(.pinned) .edit.pin{ display:none !important; }
   .session-list .edit[hidden]{ display:none !important; }
   .session-list li .edit.park{ opacity:1; }
-  .session-list .edit{ width:32px; height:32px; }
+  .session-list .edit{ width:24px; height:32px; }
 }
 
 /* phones: priority and name on the left, everything else (state, time, pause) pushed to the right edge */
