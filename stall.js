@@ -995,12 +995,19 @@ export const HANDOVER_STATUSES = new Set(['done', 'needs-owner', 'needs-manager'
 export const endsHandedOver = (plain) => HANDOVER_STATUSES.has(statusLine(closingLines(plain, 16))?.kind);
 // Claude's footer while only background subagents run after the turn ended ("✻ Waiting for 1 background agent to finish").
 export const BG_AGENT_WAIT_RE = /\bWaiting for \d+ background (?:agents?|tasks?)\b[^\n]*\bto finish\b/i;
+// Claude's own main-turn marker: its spinner line ends "(12s · ↓ 3k tokens · esc to interrupt)". A subagent's "⠼ Running…" line has none.
+const MAIN_TURN_RE = /\b(?:esc|ctrl\+c) to interrupt\b/i;
 // The main turn ended on a hand-over STATUS line and the pane only spins for its background subagents: that is a stop, not work
 // (owner 2026-11-27: userinterface-audit said STATUS: needs-owner, a subagent kept the pane spinning, the row stayed green, no push).
-// tail = the pane's last lines; turnText = the reporter's finished turn with no newer prompt (turnForStop). A new turn (a prompt, or the
+// tail = the pane's last lines; turnText = the reporter's finished turn with no newer prompt (handedOverTurn). A new turn (a prompt, or the
 // subagent's result) removes the footer or brings a newer prompt, and the pane reads as working again.
-export function stoppedBehindAgents(tail, turnText) {
-  if (!turnText || !Array.isArray(tail) || !tail.some((l) => BG_AGENT_WAIT_RE.test(String(l || '')))) return false;
+// runningAgents = the reporter's count of running subagents: without the footer (Claude Code may reword it) they still make it a stop
+// as long as no main-turn marker is on screen.
+export function stoppedBehindAgents(tail, turnText, runningAgents = 0) {
+  if (!turnText || !Array.isArray(tail)) return false;
+  const lines = tail.map((l) => String(l || ''));
+  const footer = lines.some((l) => BG_AGENT_WAIT_RE.test(l));
+  if (!footer && !(runningAgents > 0 && !lines.some((l) => MAIN_TURN_RE.test(l)))) return false;
   return endsHandedOver(String(turnText).split('\n'));
 }
 // "STATUS: done — branch x pushed": the text after the verdict loses its leading separator (— – - : ·). A hyphen only

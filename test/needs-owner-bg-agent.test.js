@@ -11,6 +11,7 @@ import { verdictOf } from '../turn-meter.js';
 import { displayState } from '../public/state.js';
 import { isOwnersTurn } from '../public/ask-model.js';
 import { paneBackgroundOf } from '../api-extras.js';
+import { liveState } from '../pane-state.js';
 
 const dir = tmp('needsbg-');
 Object.assign(process.env, { GHOSTY_STATE_DIR: dir, STALL_SETTLE_MS: '1000', JEV_URL: '', JEV_API_KEY: '' });
@@ -58,7 +59,9 @@ test('the running-agent + needs-owner row is a stop: the pane state, the reporte
 
   // the /ws/status row: the reporter counts the agent; server.js does not report the subagent spinner as pane background for this stop
   assert.equal(paneBackgroundOf(PANE, { shell: false }), true);
-  assert.match(readFileSync(new URL('../server.js', import.meta.url), 'utf8'), /paneBackground: !offline && state === 'done' && !behindAgents \?/);
+  const live = liveState({ agent: 'claude', tail: PANE.slice(-15), now: 5000, handedTurn: () => rep.handedOverTurn('uia'), runningAgents: () => rep.summary('uia').agents.by.running });
+  assert.equal(live.state, 'done');
+  assert.equal(live.behindAgents, true);   // server.js reports no paneBackground for such a stop
   const row = { name: 'uia', state: 'done', stall: m.stallOf('uia'), triage: m.triageOf('uia'), reporter: rep.summary('uia'), paneBackground: false,
     lastTurn: { ...verdictOf(TEXT.split('\n')), source: 'reporter' } };
   assert.notEqual(displayState(row), 'working');
