@@ -674,6 +674,9 @@ def main(argv):
     if tb.get('status') == 'ok':
         print(f"tiles (the app's own player): {tb.get('checked', 0)} checked, {tb.get('playing', 0)} playing,"
               f" {tb.get('not_playing', 0)} not playing")
+    elif tb.get('status') == 'partial':
+        print(f"tiles (the app's own player): {tb.get('checked', 0)} checked, {tb.get('playing', 0)} playing,"
+              f" {tb.get('not_playing', 0)} not playing, the rest not read ({tb.get('why')})")
     elif tb.get('status') == 'skipped':
         print(f"tiles (the app's own player): skipped ({tb.get('why')})")
     if rep.get('pool'):
