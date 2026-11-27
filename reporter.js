@@ -264,6 +264,17 @@ export function createReporter({ stateDir, now = () => Date.now(), saveMs = SAVE
     return { turnAt, promptAt, working: promptAt > turnAt, backgroundWork: n && !endsHandedOver(String(s.lastTurn.text || '').split('\n')) ? n : 0 };
   }
 
+  // The finished turn when it ended on a hand-over STATUS line (done / needs-owner / needs-manager / blocked / failed) and nothing started since:
+  // no newer prompt, and no newer turn running (a background subagent's result wakes the session with a synthetic prompt, which only opens
+  // a new meter). null otherwise. server.js reads a pane that only spins for background subagents under such a turn as stopped.
+  function handedOverTurn(name) {
+    const s = sessions.get(name);
+    const lt = attached(s) ? s.lastTurn : null;
+    if (!lt || (s.lastPrompt && s.lastPrompt.at > lt.at)) return null;
+    if (s.meter && !s.meter.endAt && s.meter.startAt && s.meter.startAt > lt.at) return null;
+    return endsHandedOver(String(lt.text || '').split('\n')) ? lt : null;
+  }
+
   // Newest event time of a session that was a turn end or a prompt (ms), or 0.
   const lastActivity = (name) => { const s = sessions.get(name); return s ? Math.max(s.lastTurn?.at || 0, s.lastTurn?.stopAt || 0, s.lastPrompt?.at || 0) : 0; };
 
@@ -272,5 +283,5 @@ export function createReporter({ stateDir, now = () => Date.now(), saveMs = SAVE
   // true = the agent's own hook delivers parked notes, so ghosty never appends them to a message
   const takesNotes = (name) => !!sessions.get(name)?.takesNotes;
 
-  return { init, flush, tokenOk, ingest, takesNotes, summary, detail, meterOf, turnForStop, waitingNow, promptSince, activityOf, prune, lastActivity, liveOf: (n) => liveOf(sessions.get(n)), attached: (n) => attached(sessions.get(n)), tokenFile };
+  return { init, flush, tokenOk, ingest, takesNotes, summary, detail, meterOf, turnForStop, handedOverTurn, waitingNow, promptSince, activityOf, prune, lastActivity, liveOf: (n) => liveOf(sessions.get(n)), attached: (n) => attached(sessions.get(n)), tokenFile };
 }
