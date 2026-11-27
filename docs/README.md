@@ -23,7 +23,7 @@ Start here to choose the right guide. Examples use placeholders; replace them lo
 - [Harness pass 2, 2026-11-11](HARNESS-PASS2-2026-11-11.md): STATUS honesty (`failed`, done-but-failed, proof evidence), grant notice, session guard hook, fix claims; design, replay numbers, Mac vs codebox.
 - [Harness review 2026-11-11](HARNESS-REVIEW-2026-11-11.md): why the owner still steps in (codebox and Mac), ten root causes with evidence, floors too wide or too narrow, ranked plan.
 - [Harness review 2026-10-14](v2/reviews/HARNESS-REVIEW-2026-10-14.md): where the owner was stopped, how long sessions waited, ranked fixes (input to V2 rounds 8 and 9).
-| Nightly RTSP check and replacement | [RTSP nightly](RTSP-NIGHTLY.md) | `rtsp_check.py`, the policy (public/loopback replaced, IP camera only reported), schedule, dry/live switch, install and rollback |
+| Nightly RTSP check and replacement | [RTSP nightly](RTSP-NIGHTLY.md) | `rtsp_check.py`, the policy (public/loopback replaced, IP camera only reported), the A/V drift of the host's segment, the browser layer (every tile opened once), schedule, dry/live switch, install and rollback |
 | Scheduled bug drain (every 3 h) | [Bug drain](BUG-DRAIN.md) | `bug-drain-tick.js` policy (what is dropped, ranked, started, quota gates), dry/live switch, journal numbers, install and rollback |
 | Leases (who may deploy or drive a device) | [Lease rules](LEASE-RULES.md), [lease inventory](LEASE-INVENTORY.md), [central lease service](v2/LEASES-CENTRAL.md) | What to claim, waiting instead of asking, the service design and its cut-over |
 | Scrolling a fullscreen session's terminal ("Smooth scroll") | [Scroll design](SCROLL-DESIGN.md) | Options compared with measured numbers, what shipped, the bench in `scripts/scroll-bench/` |

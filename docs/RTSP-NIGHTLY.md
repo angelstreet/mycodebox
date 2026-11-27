@@ -167,7 +167,9 @@ thumbnail alone cannot judge a tile, because a looping clip moves: the thumbnail
 another. So a dark thumbnail alone is reported as a **note** ("the tile's snapshot was dark but the live video plays"), not as a
 broken tile; `black` means both are dark. The note carries the two numbers that prove it — the thumbnail's luma and the live
 layer's ("snapshot luma 27, live luma 94"), so the line the night prints is its own evidence and the reader does not have to
-open the report for them (bug-6c8bbe31). The live layer is read from the host's newest HLS segment (`segments/output.m3u8`),
+open the report for them (bug-6c8bbe31). Since 2026-11-27 the note has its **own field** (`note`) in the report and in the
+journal's check event, and the night prints it under the table: the action column stays a column of actions
+(`ok -> none`), not a column of paragraphs. The live layer is read from the host's newest HLS segment (`segments/output.m3u8`),
 the same bytes the browser's player loads; they are fetched once per device and the audio-track count comes from them too.
 Its luma is the **brightest** picture that segment holds (the 90th percentile over its frames), not its first frame: a
 segment's first frame can be a transition frame and read black while the tile plays. When that segment is dark, the live
@@ -191,9 +193,52 @@ What this still does not see: a tile that is black only in the browser for a rea
 the page itself). The 2026-11-11 BFM2 case had two layers: first, the snapshot was bright and fresh, but the browser could not mint the host-session cookie on the
 other server (CORS refused the new `X-Control-Session` header), virtualpytest BUG-8e34e51d, fixed and deployed the same night (the snapshot now shows); second, its live player stayed black
 because of the 4 audio tracks (`multi_audio` above, bug-ea31641c), fixed 2026-11-12. A browser check of the
-device page is the only proof for that layer (`vpt-headless-verify` skill, section 2c).
+device page is the only proof for that layer (`vpt-headless-verify` skill, section 2c) — and since 2026-11-27 the night
+runs that check itself (`--tiles`, see "The browser layer" above), so the layer is no longer the one thing it cannot see.
 
-### Proving a tile is fixed (lesson of 2026-11-12)
+### The A/V offset of the host's segment (owner, 2026-11-27)
+
+The `capture` column reads the **segment**; the browser reads the **player**. A segment can be bright and still leave the
+tile black, because its audio and its video do not sit on the same timeline: the host's republished segment carries
+each elementary stream with its own PTS base, and the browser's player cannot sync two streams that are minutes apart.
+Measured on BFM2 (`vpt-lenovo5/DEVICE1`) on 2026-11-27: the newest segment held the **video at 5018.367 s and the audio
+at 10590.840 s** — 5572.473 s apart — while the tile was black in the app and the source played (bug-c54ea30f).
+
+The night now reads that offset for every capture (one ffprobe on the segment it already downloads:
+`-show_entries stream=index,codec_type,start_time`) and puts it in the report per device (`av`: `audio`, `video`,
+`offset` = audio − video). An offset beyond `RTSP_AV_DRIFT_SECONDS` (1 s) is reported as a **capture-side** fault, the
+same class as a black snapshot: *"the source plays but the host's republished segment carries the audio N s behind the
+video: the browser's player cannot sync the two: host capture side (vpt-stream), not changed"*. A channel that plays is
+never replaced because of it. Below the threshold the offset is mux jitter and says nothing (TV3V measured +0.016 s on
+2026-11-27 while it played): the number stays in the report, the night does not cry wolf.
+
+### The browser layer: what the app really shows (owner, 2026-11-27)
+
+`rtsp_replace.py --tiles` (or `RTSP_TILE_SWEEP=on`) opens every tile of the device-control grid **once** in a headless
+browser and writes the verdict into the report as a `tiles` block: `checked`, `playing`, `not_playing`, and the verdict
+per tile (`readyState`, how far the clock moved, the brightest pixel of the picture). A tile plays when all hold: a
+`<video>` inside the card, `readyState >= 2`, `currentTime` moves at all (a live tile at the live edge runs slower than
+wall time), no failed HLS request, and a picture that is not black — the conditions of the `vpt-headless-verify` skill,
+section 2c.
+
+A tile that reads broken **inside** the sweep is probed again **on its own** before it is called broken: the sweep's load
+can read a playing tile as black (three tiles of the pi4 grid read broken and played at once on 2026-11-27). A tile that
+still does not play while its source plays is reported as a capture-side fault (`vpt-stream`), exactly like the A/V
+drift: the night **replaces nothing** for it. The frame of a tile that does not play is written in the night's evidence
+folder (`<state>/rtsp-nightly/evidence-<day>/tile-<host>-<capture>.png`).
+
+The layer needs `node` and playwright (the VirtualPyTest checkout's, `RTSP_PLAYWRIGHT_PATH`, default
+`~/virtualpytest/tests/e2e/playwright/node_modules/playwright`); without them the report says the layer was **skipped**,
+never that the tiles played. It is bounded (`RTSP_TILE_SWEEP_MAX_SECONDS`, 1800 s; `RTSP_TILE_SWEEP_CARD_MS`, 15 s per
+card) and it runs **after** the probes, so the probes are not slowed by the browser's own load. The nightly prompt runs
+the job with `--tiles`.
+
+The tile's identity comes from the stream the player asks for **after the hover**
+(`/host/<host>/stream/<capture>/segments/output.m3u8`): hls.js plays through a blob URL, so the card's DOM carries no
+stream path and the tile is matched to its device by that request (the previous tile's player is stopped by moving the
+mouse off the grid before the next hover, so each tile's request is its own).
+
+
 
 A tile has **two pictures**, and "fixed" needs both, each with a screenshot looked at:
 

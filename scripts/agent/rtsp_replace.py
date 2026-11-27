@@ -39,6 +39,10 @@ TITLE_CHECK = int(os.environ.get('RTSP_TITLE_CHECK_SECONDS', '90'))
 # black at 05:48 and the browser played it bright 4 min later (vpt-nipogi/DEVICE13, 2026-11-24). Before the night
 # blames the capture side for a black tile, it reads the tile's live layer once more, this long after the first read.
 TILE_RECHECK = int(os.environ.get('RTSP_TILE_RECHECK_SECONDS', '120'))
+# The A/V drift the browser's player cannot sync: the audio and the video of the host's republished segment sit
+# this many seconds apart on the timeline (bug-c54ea30f on BFM2: the audio 5572 s away from the video). Below it,
+# the offset is mux jitter and says nothing (TV3V measured +0.016 s on 2026-11-27 while it played).
+AV_DRIFT_SECONDS = float(os.environ.get('RTSP_AV_DRIFT_SECONDS', '1'))
 AGENT = 'codebox:rtsp-nightly'
 
 
@@ -136,7 +140,7 @@ def recheck_tile_live(entry, timeout=20):
     if not base:
         return None
     time.sleep(TILE_RECHECK)
-    _, live = rc.stream_media(base, timeout)
+    _, live, _ = rc.stream_media(base, timeout)
     return None if live is None else round(live, 1)
 
 
@@ -333,10 +337,11 @@ def apply_with_lease(e, s, max_wait=None):
     return res, detail, p is None
 
 
-def run(mode, timeout=10):
+def run(mode, timeout=10, tiles=False):
     pool = rc.load_pool()
     ssh_map = rc.parse_pairs(os.environ.get('RTSP_CHECK_SSH'))
-    entries, errors, hosts = rc.inventory(rc.parse_pairs(os.environ.get('RTSP_CHECK_SERVERS')), pool)
+    servers = rc.parse_pairs(os.environ.get('RTSP_CHECK_SERVERS'))
+    entries, errors, hosts = rc.inventory(servers, pool)
     results = rc.check_entries(entries, ssh_map, timeout)
     caps = rc.check_captures(entries)  # what the app shows: the tile's snapshot through its server
     pool_state = probe_pool(pool, ssh_map, timeout)  # does the pool still play? (read-only: the pool is never edited here)
@@ -347,6 +352,12 @@ def run(mode, timeout=10):
     chosen = {}
     deferred = []   # repairs the host lease blocked: retried at the end of the night
     installed = []  # the sources this night put in place: verified again before the night ends
+    # The browser layer: what the app really shows (owner 2026-11-27). It runs after the probes, so the probes
+    # are not slowed by the browser's own load, and a tile that reads broken is probed again on its own.
+    evidence_dir = os.path.join(STATE, f"evidence-{datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d')}")
+    os.makedirs(evidence_dir, exist_ok=True)
+    tiles_block = rc.tile_sweep(entries, servers, enabled=tiles, evidence_dir=evidence_dir)
+    verdicts = rc.tile_verdicts(tiles_block, entries)
 
     def choose(e, exclude=()):
         """The source this device could get tonight: the same channel under a new URL, else another channel of the
@@ -385,6 +396,12 @@ def run(mode, timeout=10):
         row.update({k: v for k, v in cap.items() if k != 'detail'})
         src_ok = r['status'] in rc.OK_STATES
         black_src = False
+        tile = verdicts.get((e['host'], e['device']))
+        if tile:
+            row['tile'] = tile
+        tile_bad = bool(tile) and not tile.get('plays')
+        av = cap.get('av')
+        drift = bool(av) and abs(av['offset']) >= AV_DRIFT_SECONDS
         file_black = src_ok and cap['capture'] == 'black' and e['kind'] == 'file'
         if src_ok and cap['capture'] == 'black' and e['kind'] == 'hls':
             # Judge the channel over a WINDOW of frames, not on its first frame (2026-11-14): the first frame of a
@@ -440,18 +457,46 @@ def run(mode, timeout=10):
                                  + (f" (the live layer was re-read {TILE_RECHECK} s later: still dark, live luma {cap['live_luma']:.0f})"
                                     if cap.get('live_luma') is not None and cap['live_luma'] < rc.BLACK_LUMA
                                     and cap['capture'] == 'black' else ''))
+        elif src_ok and not black_src and (tile_bad or drift):
+            # The source plays but the app's own player does not: the fault is on the host's capture side
+            # (vpt-stream), and a channel that plays is never replaced (owner 2026-11-27). The browser layer
+            # catches what the capture column cannot see (the capture column reads the segment, not the player).
+            tile_part = ''
+            if tile_bad:
+                tile_part = (f"the tile does not play in the app's browser (readyState {tile.get('readyState')}, "
+                             f"{'the picture is black' if not tile.get('bright') else 'brightest pixel ' + str(tile.get('bright'))}, "
+                             f"the clock {'does not move' if not tile.get('dt') else 'moves'})")
+            drift_part = ''
+            if drift:
+                off = av['offset']
+                drift_part = (f"the host's republished segment carries the audio {abs(off):.3f} s "
+                              f"{'behind' if off > 0 else 'ahead of'} the video (audio at {av['audio']:.3f} s, "
+                              f"video at {av['video']:.3f} s): the browser's player cannot sync the two")
+            if e['kind'] == 'file' and tile_bad:
+                # A file is never blamed on the capture side: its own picture decides (bug-59664715, owner 2026-11-13).
+                fl = rc.file_luma(e['url'], 20, ssh_map.get(e['host']))
+                row['source_luma'] = None if fl is None else round(fl, 1)
+                row['action'] = (f"report: {tile_part} and the clip's own picture is luma {row['source_luma']}:"
+                                 " the tile shows the clip's own frames, not changed"
+                                 + (f" ({drift_part})" if drift_part else ''))
+            else:
+                parts = ([tile_part] if tile_bad else []) + ([drift_part] if drift_part else [])
+                row['action'] = ("report: the source plays but " + ' and '.join(parts) +
+                                 ": host capture side (vpt-stream), not changed")
         elif src_ok and not black_src:
             # The thumbnail was dark but the live video plays: the tile is not broken, a looping clip simply moves
             # (2026-11-13, bug-6b227d92). Say so instead of losing it.
             dark_thumb = cap.get('luma') is not None and cap['luma'] < rc.BLACK_LUMA
             moment = 'clip' if e['kind'] == 'file' else 'channel'
             if cap['capture'] == 'ok' and dark_thumb:
-                # the two numbers are the proof of the note (bug-6c8bbe31): the reader must not need the JSON for them
+                # the two numbers are the proof of the note (bug-6c8bbe31): the reader must not need the JSON for them.
+                # A note is not an action: it has its own field, so the action column stays readable (owner 2026-11-27).
                 nums = f"snapshot luma {cap['luma']:.0f}"
                 if cap.get('live_luma') is not None:
                     nums += f", live luma {cap['live_luma']:.0f}"
-                row['action'] = (f"note: the tile's snapshot was dark but the live video plays (a dark moment of the {moment}),"
-                                 f" not changed ({nums})")
+                row['action'] = 'none'
+                row['note'] = (f"the tile's snapshot was dark but the live video plays (a dark moment of the {moment}),"
+                               f" not changed ({nums})")
             else:
                 if cap['capture'] == 'unknown' and dark_thumb:
                     # the live video could not be read: the tile is not proven broken, and it is not blamed either
@@ -498,7 +543,7 @@ def run(mode, timeout=10):
                 elif outcome == 'replaced':
                     installed.append((e, s, row))
         rows.append(row)
-        journal({'event': 'check', 'host': row['host'], 'device': row['device'], 'kind': row['kind'], 'status': row['status'], 'capture': row.get('capture'), 'luma': row.get('luma'), 'action': row['action'], 'source': row['source']})
+        journal({'event': 'check', 'host': row['host'], 'device': row['device'], 'kind': row['kind'], 'status': row['status'], 'capture': row.get('capture'), 'luma': row.get('luma'), 'action': row['action'], 'note': row.get('note'), 'source': row['source']})
     # The night is over: retry the repairs the host lease blocked, with the long wait.
     for e, s, row in deferred:
         if budget <= 0:
@@ -514,7 +559,7 @@ def run(mode, timeout=10):
         elif outcome == 'apply_failed':
             row['action'] = ('report: the lease was granted but the apply step failed at the end of the night (see the journal),'
                              ' the host may be half-changed')
-        journal({'event': 'check', 'host': row['host'], 'device': row['device'], 'kind': row['kind'], 'status': row['status'], 'capture': row.get('capture'), 'luma': row.get('luma'), 'action': row['action'], 'source': row['source']})
+        journal({'event': 'check', 'host': row['host'], 'device': row['device'], 'kind': row['kind'], 'status': row['status'], 'capture': row.get('capture'), 'luma': row.get('luma'), 'action': row['action'], 'note': row.get('note'), 'source': row['source']})
     # Before the night ends: verify what it installed. A source can die minutes after it was put in place (a CDN
     # whose signed segments expire, bug-80678895) and the channel would then stay dead until the next night.
     if mode == 'live' and installed:
@@ -556,8 +601,8 @@ def run(mode, timeout=10):
             row['action'] = f"{before}, but the new source died again: {row['action']}"
             journal({'event': 'verify', 'host': e['host'], 'device': e['device'], 'outcome': f"died_again_{outcome}", 'source': s['url'], 'new': s2['url']})
         for e, s, row in installed:
-            journal({'event': 'check', 'host': row['host'], 'device': row['device'], 'kind': row['kind'], 'status': row['status'], 'capture': row.get('capture'), 'luma': row.get('luma'), 'action': row['action'], 'source': row['source']})
-    return {'mode': mode, 'streams': rows, 'errors': errors, 'hosts': hosts, 'pool': pool_state}
+            journal({'event': 'check', 'host': row['host'], 'device': row['device'], 'kind': row['kind'], 'status': row['status'], 'capture': row.get('capture'), 'luma': row.get('luma'), 'action': row['action'], 'note': row.get('note'), 'source': row['source']})
+    return {'mode': mode, 'streams': rows, 'errors': errors, 'hosts': hosts, 'pool': pool_state, 'tiles': tiles_block}
 
 
 def report_path(day, mode):
@@ -600,11 +645,14 @@ def main(argv):
                     help='dry: probe and report only (default); live: apply the policy')
     ap.add_argument('--apply', nargs=4, metavar=('ENV', 'HOST', 'DEVICE', 'SRC_FILE'), help=argparse.SUPPRESS)
     ap.add_argument('--out', help=argparse.SUPPRESS)
+    ap.add_argument('--tiles', action='store_true',
+                    help='also read the app in a headless browser: every tile opened once, the verdict in the report '
+                         '(owner 2026-11-27). Needs node and playwright; without them the report says it was skipped.')
     a = ap.parse_args(argv)
     if a.apply:
         return apply_one(a.apply[0], a.apply[1], a.apply[2], a.apply[3], a.out)  # pid = the chosen-source JSON file
     mode = a.mode
-    rep = run(mode)
+    rep = run(mode, tiles=a.tiles)
     rep['summary'] = summary(rep['streams'])
     os.makedirs(STATE, exist_ok=True)
     day = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d')
@@ -618,6 +666,16 @@ def main(argv):
     for r in rep['streams']:
         capc[r.get('capture', 'unknown')] = capc.get(r.get('capture', 'unknown'), 0) + 1
     print(f"tile snapshots (what the app shows): {json.dumps(capc)}; capture repairs: {read_mode('capture-mode')}")
+    # A note is not an action: it has its own field, so the action column stays readable (owner 2026-11-27).
+    for r in rep['streams']:
+        if r.get('note'):
+            print(f"note: {r['host']}/{r['device']} - {r['note']}")
+    tb = rep.get('tiles') or {}
+    if tb.get('status') == 'ok':
+        print(f"tiles (the app's own player): {tb.get('checked', 0)} checked, {tb.get('playing', 0)} playing,"
+              f" {tb.get('not_playing', 0)} not playing")
+    elif tb.get('status') == 'skipped':
+        print(f"tiles (the app's own player): skipped ({tb.get('why')})")
     if rep.get('pool'):
         print('pool: ' + ', '.join(f"{p['id']} {p['status']} (from {p['from']})" for p in rep['pool']))
     walked = f"{rep['hosts']['walked']} host(s) walked, {rep['hosts']['read']} read"

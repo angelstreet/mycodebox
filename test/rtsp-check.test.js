@@ -462,7 +462,7 @@ exec "${orig}" "$@"`);
   const one = rep.streams.find((s) => s.device === 'DEVICE1');
   assert.ok(one.live_luma > 32, `the live layer was measured on the second try, got ${one.live_luma}`);
   assert.equal(one.capture, 'ok', 'a lost measurement is not a lost reading');
-  assert.match(r.stdout, /note: the tile's snapshot was dark but the live video plays/, r.stdout);
+  assert.match(r.stdout, /note: h1\/DEVICE1 - the tile's snapshot was dark but the live video plays/, r.stdout);
   assert.doesNotMatch(r.stdout, /could not be read/, 'the live layer was read, it is not unreadable');
 });
 
@@ -546,7 +546,8 @@ test('the tile snapshot is checked too: a black or stale host capture of a playi
   assert.match(r.stdout, /DEVICE2\s+hls\s+ok -> report: the source plays but the tile's snapshot is stale \(\d+ s old\)/);
   assert.match(r.stdout, /DEVICE3\s+hls\s+ok -> report: the source plays but the tile's snapshot is missing/);
   assert.match(r.stdout, /DEVICE4\s+hls\s+ok -> none\s+ok/);
-  assert.match(r.stdout, /DEVICE5\s+hls\s+ok -> note: the tile's snapshot was dark but the live video plays/, r.stdout);
+  assert.match(r.stdout, /DEVICE5\s+hls\s+ok -> none/, r.stdout);
+  assert.match(r.stdout, /note: h1\/DEVICE5 - the tile's snapshot was dark but the live video plays/, r.stdout);
   assert.match(r.stdout, /tile snapshots \(what the app shows\): \{"black": 1, "stale": 1, "missing": 1, "ok": 2\}/);
   assert.equal(w.posts.length, 0);
 });
@@ -559,7 +560,8 @@ test('a black tile needs both layers dark: a dark thumbnail with a live tile tha
   const day = new Date().toISOString().slice(0, 10);
   const rep = JSON.parse(readFileSync(path.join(w.state, 'rtsp-nightly', `report-${day}.json`), 'utf8'));
   w.close();
-  assert.match(r.stdout, /DEVICE1\s+hls\s+ok -> note: the tile's snapshot was dark but the live video plays/, r.stdout);
+  assert.match(r.stdout, /DEVICE1\s+hls\s+ok -> none/, r.stdout);
+  assert.match(r.stdout, /note: h1\/DEVICE1 - the tile's snapshot was dark but the live video plays/, r.stdout);
   assert.match(r.stdout, /DEVICE2\s+hls\s+ok -> report: the source plays but the tile's snapshot and its live video are black: host capture side/, r.stdout);
   assert.match(r.stdout, /tile snapshots \(what the app shows\): \{"ok": 1, "black": 1\}/);
   const one = rep.streams.find((s) => s.device === 'DEVICE1');
@@ -567,7 +569,7 @@ test('a black tile needs both layers dark: a dark thumbnail with a live tile tha
   assert.ok(one.luma < 32, 'the thumbnail was dark');
   assert.ok(one.live_luma > 32, 'the live layer was measured and is bright');
   // the note carries the two numbers that prove it: the reader does not need the JSON for them (bug-6c8bbe31)
-  assert.match(r.stdout, new RegExp(`note: the tile's snapshot was dark but the live video plays[^\\n]*\\(snapshot luma ${Math.round(one.luma)}, live luma ${Math.round(one.live_luma)}\\)`), r.stdout);
+  assert.match(r.stdout, new RegExp(`note: h1/DEVICE1 - the tile's snapshot was dark but the live video plays[^\\n]*\\(snapshot luma ${Math.round(one.luma)}, live luma ${Math.round(one.live_luma)}\\)`), r.stdout);
   const two = rep.streams.find((s) => s.device === 'DEVICE2');
   assert.equal(two.capture, 'black');
   assert.ok(two.live_luma < 32, 'the live layer is black too');
@@ -581,7 +583,8 @@ test('a tile that was black at the check but plays on the re-read is a note, not
   const day = new Date().toISOString().slice(0, 10);
   const rep = JSON.parse(readFileSync(path.join(w.state, 'rtsp-nightly', `report-${day}.json`), 'utf8'));
   w.close();
-  assert.match(r.stdout, /DEVICE1\s+hls\s+ok -> note: the tile's snapshot was dark but the live video plays/, r.stdout);
+  assert.match(r.stdout, /DEVICE1\s+hls\s+ok -> none/, r.stdout);
+  assert.match(r.stdout, /note: h1\/DEVICE1 - the tile's snapshot was dark but the live video plays/, r.stdout);
   assert.doesNotMatch(r.stdout, /host capture side/, 'a tile that plays on the re-read is not blamed on the capture side');
   assert.match(r.stdout, /tile snapshots \(what the app shows\): \{"ok": 1\}/);
   const one = rep.streams.find((s) => s.device === 'DEVICE1');
@@ -635,7 +638,8 @@ test('a tile whose newest live segment is dark but whose recent segments play is
   const one = rep.streams.find((s) => s.device === 'DEVICE1');
   assert.ok(one.live_luma >= 32, `the live layer is bright over the window, got ${one.live_luma}`);
   assert.equal(one.capture, 'ok', 'a dark newest segment does not make the tile black');
-  assert.match(r.stdout, /DEVICE1\s+hls\s+ok -> note: the tile's snapshot was dark but the live video plays/, r.stdout);
+  assert.match(r.stdout, /DEVICE1\s+hls\s+ok -> none/, r.stdout);
+  assert.match(r.stdout, /note: h1\/DEVICE1 - the tile's snapshot was dark but the live video plays/, r.stdout);
   assert.doesNotMatch(r.stdout, /host capture side/);
   assert.equal(w.posts.length, 0);
 });
@@ -725,4 +729,127 @@ test('--help runs nothing, an unknown flag is refused, and a dry run never overw
   assert.ok(existsSync(path.join(repDir, `report-${day}-dry.json`)), 'the dry report has no file of its own');
   assert.equal(JSON.parse(readFileSync(path.join(repDir, `report-${day}-dry.json`), 'utf8')).mode, 'dry');
   w.close();
+});
+
+// ---- the night reads what the app really shows (owner 2026-11-27) ----
+test('the night reads the A/V offset of the host segment: a drifting channel is reported, never replaced', async () => {
+  // The host's republished segment carries the audio 5572 s away from the video (BFM2, 2026-11-27): the browser's
+  // player cannot sync the two, so the tile stays black while the source plays. The night must read that offset
+  // and report it. The channel plays, so it is never replaced.
+  const w = await world({ pool: POOL, devices: { DEVICE1: dev('a', 'rtsp://test.example/good-pub') } });
+  writeFileSync(w.E.RTSP_CHECK_FFPROBE, `#!/bin/sh
+case "$*" in *stream=index,codec_type*) echo "0,video,5018.367289"; echo "1,audio,10590.839933"; echo "0,video,5018.367289"; echo "1,audio,10590.839933"; exit 0;; esac
+for a; do u=$a; done
+case "$u" in *dead*) echo "$u: Connection refused" >&2; exit 1;; *) echo '{"streams":[{"codec_name":"h264","width":640,"height":360}]}';; esac
+`);
+  const r = await py(REPLACE, [], w.E);
+  const day = new Date().toISOString().slice(0, 10);
+  const rep = JSON.parse(readFileSync(path.join(w.state, 'rtsp-nightly', `report-${day}.json`), 'utf8'));
+  w.close();
+  const one = rep.streams.find((s) => s.device === 'DEVICE1');
+  assert.equal(one.av.offset, 5572.473, 'the report carries the measured offset');
+  assert.equal(one.av.audio, 10590.839933);
+  assert.equal(one.av.video, 5018.367289);
+  assert.match(r.stdout, /the host's republished segment carries the audio 5572.473 s behind the video/, r.stdout + r.stderr);
+  assert.match(r.stdout, /host capture side \(vpt-stream\), not changed/);
+  assert.equal(w.posts.length, 0, 'a channel that plays is never replaced');
+});
+
+test('a small A/V offset is mux jitter, not a fault: no report', async () => {
+  // TV3V measured +0.016 s on 2026-11-27 while it played: the night must not cry wolf.
+  const w = await world({ pool: POOL, devices: { DEVICE1: dev('a', 'rtsp://test.example/good-pub') } });
+  writeFileSync(w.E.RTSP_CHECK_FFPROBE, `#!/bin/sh
+case "$*" in *stream=index,codec_type*) echo "0,video,19553.000333"; echo "1,audio,19553.016000"; exit 0;; esac
+for a; do u=$a; done
+case "$u" in *dead*) echo "$u: Connection refused" >&2; exit 1;; *) echo '{"streams":[{"codec_name":"h264","width":640,"height":360}]}';; esac
+`);
+  const r = await py(REPLACE, [], w.E);
+  w.close();
+  assert.doesNotMatch(r.stdout, /republished segment carries the audio/, r.stdout);
+  assert.match(r.stdout, /DEVICE1\s+public\s+ok -> none/);
+});
+
+test('a dark snapshot with a live video is a note in its own field, not an action (owner 2026-11-27)', async () => {
+  // The action column stayed readable: the note moved to the note field, the report and the journal keep it.
+  const w = await world({ pool: POOL, snapshots: { 'cap-a': 'DARKNEWEST' }, devices: { DEVICE1: dev('a', 'rtsp://test.example/good-pub') } });
+  const r = await py(REPLACE, [], w.E);
+  const day = new Date().toISOString().slice(0, 10);
+  const rep = JSON.parse(readFileSync(path.join(w.state, 'rtsp-nightly', `report-${day}.json`), 'utf8'));
+  const j = readFileSync(path.join(w.state, 'rtsp-nightly', 'journal.jsonl'), 'utf8');
+  w.close();
+  const one = rep.streams.find((s) => s.device === 'DEVICE1');
+  assert.equal(one.action, 'none', 'the note is not an action');
+  assert.match(one.note, /the tile's snapshot was dark but the live video plays \(a dark moment of the channel\)/);
+  assert.match(one.note, /snapshot luma 18, live luma 190/, 'the two numbers are the proof of the note');
+  assert.doesNotMatch(r.stdout, /ok -> note:/, r.stdout);
+  assert.match(r.stdout, /note: h1\/DEVICE1 - the tile's snapshot was dark but the live video plays/, r.stdout);
+  assert.match(j, /"note": "the tile's snapshot was dark/, 'the journal keeps the note');
+});
+
+test('the browser layer is off by default and the report says so', async () => {
+  const w = await world({ pool: POOL, devices: { DEVICE1: dev('a', 'rtsp://test.example/good-pub') } });
+  const r = await py(REPLACE, [], w.E);
+  const day = new Date().toISOString().slice(0, 10);
+  const rep = JSON.parse(readFileSync(path.join(w.state, 'rtsp-nightly', `report-${day}.json`), 'utf8'));
+  w.close();
+  assert.equal(rep.tiles.status, 'skipped');
+  assert.match(rep.tiles.why, /the browser layer is off/);
+  assert.match(r.stdout, /tiles \(the app's own player\): skipped/);
+});
+
+test('the browser layer: a tile that does not play while the source plays is reported, never replaced', async () => {
+  // The capture column reads the segment; the browser reads the player. A tile that does not play in the app while
+  // its source plays is a fault of the host's capture side (vpt-stream): the night reports it, it replaces nothing.
+  const w = await world({ pool: POOL, devices: { DEVICE1: dev('a', 'rtsp://test.example/good-pub') } });
+  const tilesFile = path.join(path.dirname(w.E.RTSP_CHECK_FFPROBE), 'tiles.json');
+  writeFileSync(tilesFile, JSON.stringify({ status: 'ok', checked: 1, playing: 0, not_playing: 1, why: null, not_checked: [],
+    tiles: [{ name: 'a', host: 'h1', capture: 'cap-a', readyState: 1, dt: 0, bright: 0, size: '320x180', plays: false, hls_failures: 0 }] }));
+  sh(path.dirname(w.E.RTSP_CHECK_FFPROBE), 'node', `cat > /dev/null; cat "${tilesFile}"`);   // the browser layer, faked
+  const E = { ...w.E, RTSP_PLAYWRIGHT_PATH: path.dirname(w.E.RTSP_CHECK_FFPROBE) };
+  const r = await py(REPLACE, ['--tiles'], E);
+  const day = new Date().toISOString().slice(0, 10);
+  const rep = JSON.parse(readFileSync(path.join(w.state, 'rtsp-nightly', `report-${day}.json`), 'utf8'));
+  w.close();
+  assert.equal(rep.tiles.status, 'ok');
+  assert.equal(rep.tiles.checked, 1);
+  assert.equal(rep.tiles.playing, 0);
+  const one = rep.streams.find((s) => s.device === 'DEVICE1');
+  assert.equal(one.tile.plays, false, 'the report carries the tile verdict');
+  assert.match(one.action, /the tile does not play in the app's browser \(readyState 1, the picture is black, the clock does not move\)/, one.action);
+  assert.match(one.action, /host capture side \(vpt-stream\), not changed/);
+  assert.match(r.stdout, /tiles \(the app's own player\): 1 checked, 0 playing, 1 not playing/, r.stdout);
+  assert.equal(w.posts.length, 0, 'a tile that does not play is not a reason to replace anything');
+});
+
+test('the browser layer: a tile that plays on its own is not called broken (the sweep load reads tiles black)', async () => {
+  // The sweep can read a playing tile as broken: the night probes it again on its own before believing it.
+  const w = await world({ pool: POOL, devices: { DEVICE1: dev('a', 'rtsp://test.example/good-pub') } });
+  const tilesFile = path.join(path.dirname(w.E.RTSP_CHECK_FFPROBE), 'tiles.json');
+  writeFileSync(tilesFile, JSON.stringify({ status: 'ok', checked: 1, playing: 1, not_playing: 0, why: null, not_checked: [],
+    tiles: [{ name: 'a', host: 'h1', capture: 'cap-a', readyState: 4, dt: 2.5, bright: 254, size: '320x180', plays: true, hls_failures: 0 }] }));
+  sh(path.dirname(w.E.RTSP_CHECK_FFPROBE), 'node', `cat > /dev/null; cat "${tilesFile}"`);
+  const E = { ...w.E, RTSP_PLAYWRIGHT_PATH: path.dirname(w.E.RTSP_CHECK_FFPROBE) };
+  const r = await py(REPLACE, ['--tiles'], E);
+  const day = new Date().toISOString().slice(0, 10);
+  const rep = JSON.parse(readFileSync(path.join(w.state, 'rtsp-nightly', `report-${day}.json`), 'utf8'));
+  w.close();
+  const one = rep.streams.find((s) => s.device === 'DEVICE1');
+  assert.equal(one.tile.plays, true);
+  assert.equal(one.action, 'none', 'a tile that plays is not a fault');
+});
+
+test('the browser layer: a file whose tile does not play is measured against the clip, never blamed on the capture side', async () => {
+  // A file is only reported and never blamed on the capture side (owner 2026-11-13): the clip's own picture decides.
+  const w = await world({ pool: POOL, devices: { DEVICE1: { ...dev('clip', '/var/lib/vpt-movies/good.mp4'), DEVICE_MODEL: 'rtsp_video' } } });
+  const tilesFile = path.join(path.dirname(w.E.RTSP_CHECK_FFPROBE), 'tiles.json');
+  writeFileSync(tilesFile, JSON.stringify({ status: 'ok', checked: 1, playing: 0, not_playing: 1, why: null, not_checked: [],
+    tiles: [{ name: 'clip', host: 'h1', capture: 'cap-clip', readyState: 1, dt: 0, bright: 0, size: '320x180', plays: false, hls_failures: 0 }] }));
+  sh(path.dirname(w.E.RTSP_CHECK_FFPROBE), 'node', `cat > /dev/null; cat "${tilesFile}"`);
+  const E = { ...w.E, RTSP_PLAYWRIGHT_PATH: path.dirname(w.E.RTSP_CHECK_FFPROBE) };
+  const r = await py(REPLACE, ['--tiles'], E);
+  w.close();
+  assert.match(r.stdout, /the tile does not play in the app's browser/, r.stdout);
+  assert.match(r.stdout, /the clip's own picture is luma 190/);
+  assert.match(r.stdout, /the tile shows the clip's own frames, not changed/);
+  assert.doesNotMatch(r.stdout, /host capture side \(vpt-stream\)/, 'a file is never blamed on the capture side');
 });
