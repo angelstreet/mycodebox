@@ -139,7 +139,8 @@ import { createLeftovers, pushableItems } from './done-leftovers.js';
 import { scanTaskDocs, withHomeDirs, computeUnfinished, docLeftoversFor, createUnfinished, taskRe } from './unfinished.js';
 import { pushOf, replyFor } from './owner-push.js';
 import { createWorkerAutoClose, shouldClose as shouldCloseWorker, politeClose, LEFTOVERS_WINDOW_MS } from './worker-auto-close.js';
-import { statusLine, inputBox, endsHandedOver, closingLines, stoppedBehindAgents } from './stall.js';
+import { statusLine, inputBox, endsHandedOver, closingLines } from './stall.js';
+import { liveState } from './pane-state.js';
 import { verifyDelivered, confirmDelivered, waitSettled, settleBudgetMs, pasteTextOf } from './send-verify.js';
 import { machinesOf, holdingsOf, deployWaitOf, agentSession, agentSessionCandidates, holderSession } from './public/platforms.js';
 import { createHash, randomBytes } from 'node:crypto';
@@ -245,7 +246,6 @@ const TLS_PORT = Number(process.env.TLS_PORT || (Number(PORT) === 443 ? 443 : 74
 
 const TMUX = process.env.TMUX_BIN || 'tmux';
 const CONCURRENCY = 6;
-const WORKING_HOLD_MS = 4000;
 
 let listOk = true;   // false after a tmux error other than "no server running" (an empty list is then not trusted)
 async function listSessions() {
@@ -504,28 +504,9 @@ async function typeKeys(session, text, enter, keys) {
 const ANSI_RE = /\x1b\[[0-9;?]*[ -\/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][A-Z0-9]/g;
 const stripAnsi = (s) => s.replace(ANSI_RE, '');
 
-// Explicit permission / question prompts only; tested against the LAST lines.
-const WAIT_RE = /Do you want to |Would you like to (?:proceed|allow|run)|^\W*(?:1\.\s*)?Yes,? (?:allow|and|proceed)|^\s*[❯>›]\s*1\.\s*Yes\b|\(y\/n\)|\[y\/n\]|\(y\/N\)|\[Y\/n\]|Allow (?:command|this|once|always)|Allow\?|Approve\?|Esc to cancel|Enter to confirm|Press Enter to (?:continue|confirm|approve)|Run this command\?|Apply (?:this )?(?:patch|changes)\?|Proceed\?/i;
-// Spinner / progress markers (NOT "Thinking On", which is MiniMax's status bar).
-const WORK_RE = /esc to interrupt|ctrl\+c to interrupt|Working \(|Thinking[….]|…\s*\(\d+(?:m \d+)?s\b|[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+\S/;
-
 function tailLines(text, n) {
   const lines = stripAnsi(text).split('\n').map((l) => l.replace(/\s+$/, '')).filter((l) => l.trim());
   return lines.slice(-n);
-}
-
-const TRIM_RE = /^[\s│┃|╭╰─╮╯>❯›]+|[\s│┃|╮╯]+$/g;
-function findWaitReason(lines) {
-  let idx = -1;
-  for (let i = lines.length - 1; i >= 0; i--) {
-    if (WAIT_RE.test(lines[i])) { idx = i; break; }
-  }
-  if (idx < 0) return null;
-  for (let i = idx; i >= Math.max(0, idx - 6); i--) {
-    const l = lines[i].replace(TRIM_RE, '');
-    if (/\?$/.test(l) && !/^\d+\./.test(l)) return l.slice(0, 120);
-  }
-  return lines[idx].replace(TRIM_RE, '').slice(0, 120);
 }
 
 // ---------------------------------------------------------------------------
@@ -1871,27 +1852,13 @@ async function pollOnce() {
     crashResumeStates.set(s.name, { name: s.name, tmuxName: s.name, cwd: p.cwd, lines: plain, agent: agentFromTree(p.pid, table)?.agent || null,
       shellForeground: SHELLS.has(p.cmd), scriptBusy: false, input: '', closed: /(?:^|\s)(?:\/exit|\^C)\s*$/.test(tail.at(-1) || ''), base: known.base || launch.commands[ag?.agent || 'claude'], model: known.model || null, claudeSessionId: known.claudeSessionId || null });
 
-    let state = 'idle';
-    let waitReason = null;
-    let reportedWait = null;
-    let spinning = false;   // the live spinner / WORK_RE signal this tick: real work, not just a repaint
-    let behindAgents = false;   // a hand-over STATUS turn under a pane that only spins for background subagents (stoppedBehindAgents)
-    if (offline) state = 'offline';
-    else if (agent !== 'bash' && (waitReason = findWaitReason(tail)) !== null) state = 'waiting';
-    // Claude with a live reporter: a permission request / notification it reported still stands (the pane
-    // has been still since) even when the pane regex above missed it.
-    else if (agent === 'claude' && (reportedWait = reporter.waitingNow(s.name, t.changeAt))) { state = 'waiting'; waitReason = reportedWait.message || 'needs input'; }
-    else {
-      spinning = agent !== 'bash' && WORK_RE.test(tail.filter((l) => !/⏵⏵|bypass permissions|accept edits/.test(l)).join('\n'));
-      const handed = agent === 'claude' ? reporter.handedOverTurn(s.name) : null;
-      if (handed && stoppedBehindAgents(tail, handed.text)) {
-        // only background subagents spin under a hand-over STATUS turn: a finished turn (stall, push, red dot), not work
-        spinning = false; behindAgents = true; state = 'done'; t.doneGuess = handed.at || now;
-      } else {
-        if (spinning) t.realWork = true;
-        if (now - t.changeAt < WORKING_HOLD_MS || spinning) state = 'working';
-      }
-    }
+    const live = liveState({ offline, agent, tail, changeAt: t.changeAt, now,
+      reportedWait: () => reporter.waitingNow(s.name, t.changeAt), handedTurn: () => reporter.handedOverTurn(s.name),
+      runningAgents: () => reporter.summary(s.name)?.agents?.by?.running || 0 });
+    let { state, waitReason } = live;
+    const { spinning, behindAgents } = live;   // spinning: the live spinner / WORK_RE signal this tick, real work, not just a repaint
+    if (behindAgents) t.doneGuess = live.doneGuess;
+    else if (spinning) t.realWork = true;
     if (state !== 'waiting') waitReason = null;
     if (state === 'waiting') t.realWork = true;
     if (state === 'working') { t.lastWorkAt = now; if (!t.workingSince) t.workingSince = now; }
