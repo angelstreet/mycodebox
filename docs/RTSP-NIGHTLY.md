@@ -798,6 +798,19 @@ suggestion and the pool-candidate skip stay with the owner).
   picture, brightest pixel 14, while the clock runs) — and **7 cards carry no live player at all** (the Windows PC, the
   two drones, three Lenovo hosts and the pi4): they are not stream tiles, so they are counted apart, never judged and
   never a fault of a device.
+- **The empty slots** (owner, 2026-11-27): the seven slots of `vpt-nipogi` (`DEVICE4`, `5`, `6`, `17`, `22`, `23`,
+  `24`) each got a **suggestion** from the free lists, probed from the host: 20 Minutes TV, ADN TV+, Africa 24 Sport,
+  Alerte a Malibu, BFM2 (the CloudFront source, not the host's republished one), Canal+ Sport, Cine Action by Pluto TV —
+  every one of them "plays" when probed from `vpt-nipogi`, and **nothing was applied** (dry run; an empty source is the
+  owner's call). The proposal is taken from our verified copy first, so it is the same from one night to the next
+  unless a candidate stops playing.
+- **The pool** (owner, 2026-11-27): the three public candidates read `skipped` with their reason instead of timing out
+  for 13 nights running: `pool: smoke ok (from vpt-pi4), wowza-bbb skipped (port 554 to it was blocked from codebox and
+  3 lab hosts on 2026-11-11 and it timed out every night since (13 nights to 2026-11-27): the night does not probe it any
+  more and it stays unvetted), rtsp-stream-pattern skipped (…), rtsp-stream-movie skipped (…)`.
+- **The delta** (owner, 2026-11-27): the report says what changed since the last night's report: at 17:03
+  `newly_broken: [lenovo-local-hd/DEVICE12, vpt-lenovo5/DEVICE1]` (the browser's own player stopped on the two
+  devices the sweep read broken), 0 newly black, 0 recovered.
 
 **The traps of the new layer, all found and fixed on the day it was written:**
 
