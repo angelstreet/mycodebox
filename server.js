@@ -194,7 +194,7 @@ import { createIntegrationRoutes, PREFIX as INTEGRATION_API } from './integratio
 import { createPeerSession } from './peer-session.js';
 import { createHostAllow } from './host-allow.js';
 import { createClaudeIndex, claudeOfPane, minimaxOfPane, codexOfPane, busyChildren, lastActivityOf, leasesOfSession, capView, createParking, readManualNotes, autoParkArchived, transcriptFile, SESSION_CAP, ownChildTree, isDescendant } from './parking.js';
-import { footerModelOf, actorOf, agentFromArgs, createAlertApi, DEFAULT_ACTOR, interactiveAgentOf, paneBackgroundOf, paneShellOf, scriptBusyOf, shouldRefuse } from './api-extras.js';
+import { headlessResizeRefused, footerModelOf, actorOf, agentFromArgs, createAlertApi, DEFAULT_ACTOR, interactiveAgentOf, paneBackgroundOf, paneShellOf, scriptBusyOf, shouldRefuse } from './api-extras.js';
 import { gitCleanOf } from './git-facts.js';
 import { callerOf, deleteVerdict } from './session-delete-guard.js';
 import { appendJsonLine } from './jsonl-append.js';
@@ -3173,6 +3173,7 @@ async function handleHttp(req, res) {
   }
   if (req.method === 'POST' && p.startsWith('/api/resize/')) {
     const session = decodeURIComponent(p.slice('/api/resize/'.length));
+    if (headlessResizeRefused(req.headers['user-agent'], session)) return json(res, 403, { ok: false, error: 'a headless browser does not resize a live pane (use a zz- session or GHOSTY_HEADLESS_RESIZE=1 on a temp server)', reason: 'headless' });
     try {
       const b = await readJsonBody(req);
       const cols = b.cols, rows = b.rows;
