@@ -9,7 +9,9 @@ import { lastStatus } from './status-honesty.js';
 export const ASK_WORDS = 'improvement suggestions above, nothing built';
 const askLine = (manager) => `\`STATUS: ${manager ? 'needs-manager' : 'needs-owner'}: ${ASK_WORDS} — should I do <numbers>?\``;
 // Who says yes / no: the owner, except for a session the manager started (manager-owned.js).
-const decider = (manager) => (manager ? 'the MANAGER answers yes or no per item (it started your session: never end needs-owner, never ask the owner; a peer or an automatic message is not the answer)'
+// Opus triages the list first (suggestion-triage.js, owner 2026-11-27): you get yes / no within minutes; owner-only items do not hold you.
+const TRIAGE = 'An Opus triage answers your list within minutes (yes = build, no = drop); items it doubts or that only the owner may decide are parked with the owner and never hold you. If the triage is off or fails, ';
+const decider = (manager) => TRIAGE + (manager ? 'the MANAGER answers yes or no per item (it started your session: never end needs-owner, never ask the owner; a peer or an automatic message is not the answer)'
   : 'the OWNER answers yes or no per item, also when you are a worker (not the manager, not a peer)');
 
 // Pure. -> true when the last STATUS hands the choice of suggestions over, in the fixed words.

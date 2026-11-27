@@ -21,7 +21,7 @@ after(() => cleanups.forEach((f) => { try { f(); } catch { /* gone */ } }));
 test('server: a manager-started session asks the manager, never the owner; the manager answers its suggestions; nobody automatic does', { timeout: 150_000, skip: !hasTmux && 'no tmux' }, async () => {
   const base = tmp('mowned-wire-'), state = join(base, 'state'), home = join(base, 'home'), bin = join(base, 'bin');
   [state, home, bin].forEach((d) => mkdirSync(d, { recursive: true }));
-  writeFileSync(join(state, 'manager.json'), JSON.stringify({ enabled: true, aiTriage: 'off', routerShadow: false, wakeShadow: false }));
+  writeFileSync(join(state, 'manager.json'), JSON.stringify({ enabled: true, aiTriage: 'off', suggestionTriage: 'off', routerShadow: false, wakeShadow: false }));
   writeFileSync(join(state, 'sessions.json'), JSON.stringify({ 'worker-session': { priority: 'P2', paused: false, seenAt: Date.now(), startedBy: 'manager' } }));
   // the reflection question was already asked (the done check sends it on its own 5-min tick): answering the last item then ends the session's work
   writeFileSync(join(state, 'suggestions.json'), JSON.stringify({ since: 1, s: { 'worker-session': { asked: { at: 1, sig: 'earlier-done' }, items: [] } } }));

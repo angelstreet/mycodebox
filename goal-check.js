@@ -217,7 +217,7 @@ export function createGoalStore({ stateDir, now = Date.now } = {}) {
 // evaluate() -> null (nothing to say) | { kind: 'ask'|'fix-first'|'reply-rejected'|'accepted'|'reflect'|'capped', message?, reflect?, goal, ... }
 // (`reflect: true`: the message is the reflection question, alone or with the acceptance of the goal reply). It never sends:
 // the caller sends `message` and then calls sent(name, decision) so the state counts it (a failed send is not counted).
-export function createGoalGate({ stateDir, goalOf: goalFor = async () => '', partsOf = async () => [], bugsOf = async () => [], touchedOf = async () => [], record = async () => {}, suggestions: ledgerGiven = null, reflectMode = () => 'live', managerStarted = () => false, now = Date.now, mode = () => 'live', log = console } = {}) {
+export function createGoalGate({ stateDir, goalOf: goalFor = async () => '', partsOf = async () => [], bugsOf = async () => [], touchedOf = async () => [], record = async () => {}, suggestions: ledgerGiven = null, reflectMode = () => 'live', managerStarted = () => false, triaging = () => false, now = Date.now, mode = () => 'live', log = console } = {}) {
   const stFile = join(stateDir, 'goal-check.json');
   const journal = join(stateDir, 'goal-check.jsonl');
   let st = null;
@@ -254,7 +254,7 @@ export function createGoalGate({ stateDir, goalOf: goalFor = async () => '', par
     await load();
     ledger.observe(s.name, s.text, { at: s.doneAt || null });
     const unanswered = ledger.openOf(s.name);
-    if (!unanswered.length) return null;
+    if (!unanswered.length || triaging(s.name)) return null;   // Opus is answering them (suggestion-triage.js): the session hears it at once
     const e = (st.s[s.name] ||= {}), textSig = textSigOf(s.text);
     if (e.openTold === textSig) return null;
     return { kind: 'suggestions-open', message: openSuggestionsMessage(unanswered, { manager: managerStarted(s.name) }), goal: '', sig: sigOf(s.text), textSig };
@@ -275,7 +275,7 @@ export function createGoalGate({ stateDir, goalOf: goalFor = async () => '', par
     const unanswered = ledger.openOf(s.name);
     if (unanswered.length) {
       const textSig = textSigOf(s.text);
-      if (e.openTold === textSig || reflectMode() !== 'live' || mode() !== 'live' || s.canAnswer === false) return null;
+      if (e.openTold === textSig || reflectMode() !== 'live' || mode() !== 'live' || s.canAnswer === false || triaging(s.name)) return null;
       return { kind: 'suggestions-open', message: openSuggestionsMessage(unanswered, { manager: managerStarted(s.name) }), goal, sig: sigOf(s.text), textSig };
     }
     if (e.reflect) {   // asked: the goal is not questioned again. A reply that answers neither way is asked once more.

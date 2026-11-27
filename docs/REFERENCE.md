@@ -2313,6 +2313,25 @@ doing" and "smaller", a recommendation, "should I do them?", none built.
 - **Fixed with it:** `goalGate.forget` was given only the sessions currently done, so a session busy writing its reply lost the gate's state
   and was asked the goal question again (49 repeated asks in the journal). It now keeps every pane that exists.
 
+#### Opus triages the suggestions (owner, 2026-11-27, `suggestion-triage.js`)
+
+Owner: agents got stuck for ages waiting on suggestion answers. When a finished turn leaves open items in the ledger, the server starts ONE
+Opus call (`claude -p --model opus`, no tools, empty cwd, async; one at a time per session) with the items and the session's goal.
+
+- **Verdicts:** `<n>: YES | NO | DOUBT proposed yes|no - why`. YES -> the item is answered `yes` (by `opus`, via `triage`) and becomes a new
+  round (`approvedRound`); NO -> `no`; DOUBT, a missing line, or an **owner floor** (`floorOf`: money, customers, publishing, credentials,
+  deleting data, plus the hard floor of `doubt.js ownerOnly`) -> the item is parked with the owner (`answer: 'owner'`, `proposed`, `why`,
+  `floor`). A floor wins over an Opus YES.
+- **The session is told at once** (`harnessSend`; a Mac row: manager event `suggestions-triaged:<s>` to pass on with SendMessage): what to
+  build, what not, what is with the owner ("do not wait, do not ask again"), then the done line. Parked items do not hold the done
+  (`openOf` excludes them) and the goal check does not push "suggestions open" while the triage runs (`triaging`).
+- **Owner rows:** manager event `suggestions-owner:<s>`, a 4-column table `Session | Suggestion | Why you | Opus proposes`;
+  `GET /api/suggestions/owner` lists every parked item. Only the owner's answer (dashboard / typed) closes one; the manager's does not.
+- **Record:** one `manager-asks.jsonl` line per item (`point: suggestion-triage`, verdict, opus, proposed, why, floor, source `opus`), the
+  actions log (`suggestion-triage`, `suggestions-answered` by `opus`), `suggestions.jsonl`, and "Decided for you" for the yes / no.
+- **Fallback:** an Opus error is recorded (`verdict: error`) and leaves the items open for the old flow below; the same items are tried
+  again after 30 min. Switch `manager.json` `suggestionTriage`: `live` (default) | `off` (also off with `reflection` not `live`).
+
 #### No done while a suggestion has no yes / no (owner, 2026-11-26, `suggestions.js`)
 
 Owner: "if a user say done i'll archive and miss the fact that he suggests improvements, we should not say done until I say yes or no for the
