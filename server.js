@@ -1325,7 +1325,7 @@ async function answerParked(req, body = {}) {
   const by = actorOf(body), session = String(body.session || ''), n = Number(body.n), a = body.answer;
   if (!fromOwnerUi(req, by)) throw httpError(403, 'only the owner answers a suggestion parked with the owner (dashboard)');
   if (!session || !Number.isInteger(n) || (a !== 'yes' && a !== 'no')) throw httpError(400, 'body: { session, n, answer: "yes" | "no" }');
-  if (!suggestions.ownerItems().some((i) => i.session === session && i.n === n)) throw httpError(404, `no parked suggestion ${n} for ${session}`);
+  if (!suggestions.chipItems().some((i) => i.session === session && i.n === n)) throw httpError(404, `no parked suggestion ${n} for ${session}`);
   const r = suggestions.answer(session, { [n]: a }, { by: 'owner', via: 'dashboard' });
   const it = r.answered[0];
   logEvent({ type: 'suggestions-answered', session, via: 'dashboard', by: 'owner', answered: [`${n}:${a}`], parked: true });
@@ -3523,7 +3523,7 @@ async function handleHttp(req, res) {
     const limit = Math.min(2000, Math.max(1, Number(q.get('limit')) || 50));
     return json(res, 200, { events: await managerEvents.tail({ since, limit }) });
   }
-  if (req.method === 'GET' && p === '/api/suggestions/owner') return json(res, 200, { items: suggestions.ownerItems() });   // parked with the owner by the Opus triage
+  if (req.method === 'GET' && p === '/api/suggestions/owner') return json(res, 200, { items: suggestions.chipItems() });   // parked with the owner by the Opus triage
   if (req.method === 'POST' && p === '/api/suggestions/owner') {
     try { return json(res, 200, await answerParked(req, await readJsonBody(req))); }
     catch (err) { return json(res, err instanceof SyntaxError ? 400 : (err.status || 500), { ok: false, error: err.message }); }

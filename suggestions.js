@@ -374,5 +374,8 @@ export function createSuggestions({ stateDir, now = Date.now, active = () => tru
 
   // every item parked with the owner, across sessions: [{ session, n, text, proposed, why, floor?, at }]
   const ownerItems = () => Object.entries(st.s).flatMap(([session, r]) => ownerOf(r).map((i) => ({ session, n: i.n, text: i.text, proposed: i.proposed, why: i.why, ...(i.floor ? { floor: i.floor } : {}), at: i.answeredAt })));
-  return { file, reconcile, observe, asked, answer, triaged, ownerItems, ownerMessage, hold, newRound, drop, claimMissing, claimReadyToClose, get: rec, openOf: (n) => openOf(rec(n)), awaiting: (n) => { const r = rec(n); return !!r && (openOf(r).length > 0 || (!!r.asked && !r.clear)); }, list: () => ({ since: st.since, sessions: st.s }) };
+  // the quiet chip lists the parked items and the ones Opus has not answered yet; built, duplicate and answered items never show
+  const chipItems = () => Object.entries(st.s).flatMap(([session, r]) => openOf(r).map((i) => ({ session, n: i.n, text: i.text, open: true, at: i.at })))
+    .concat(ownerItems());
+  return { file, chipItems, reconcile, observe, asked, answer, triaged, ownerItems, ownerMessage, hold, newRound, drop, claimMissing, claimReadyToClose, get: rec, openOf: (n) => openOf(rec(n)), awaiting: (n) => { const r = rec(n); return !!r && (openOf(r).length > 0 || (!!r.asked && !r.clear)); }, list: () => ({ since: st.since, sessions: st.s }) };
 }

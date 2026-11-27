@@ -309,8 +309,7 @@ test('the dashboard: open suggestions read as the owner\'s turn, a pending refle
   assert.equal(displayState(row({ suggestions: { state: 'pending' } })), 'done', 'not asked yet: the led stays done, it turns green only when the question really runs');
   const open = row({ suggestions: { state: 'open', open: 2 } });
   assert.equal(displayState(open), 'waiting');
-  assert.equal(isOwnersTurn(open), true);
-  assert.equal(isOwnersTurn({ ...open, managerSession: false, stall: { ...open.stall, escalatedTo: 'manager' } }), true);
+  assert.equal(isOwnersTurn(open), false, 'open suggestions are a quiet chip, never a popup (owner 2026-11-27)');
   assert.equal(displayState({ ...open, state: 'idle' }), 'waiting');
   assert.equal(displayState({ ...open, state: 'working' }), 'working');
   assert.equal(isOwnersTurn(row({ suggestions: { state: 'pending' } })), false);
