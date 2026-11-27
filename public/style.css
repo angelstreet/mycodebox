@@ -2374,10 +2374,12 @@ body.res-hidden .topbar .summary{ margin-left:auto; }
   .mgr-section .mlog .ml .x, .mgr-section .mlog .ml .q, .mgr-section .mlog .ml .lab{ grid-column:2 / -1; }
 }
 
-/* touch: the row's buttons sit at the right edge and take no room when invisible (the hidden pin / park buttons used to reserve ~70px and squeezed the name, badge and time) */
+/* touch: keep row actions together; hidden or unavailable actions take no room */
 @media (hover: none){
-  .session-list li{ gap:6px; }
-  .session-list li:not(.pinned) .edit.pin, .session-list li .edit.park{ display:none !important; }
+  .session-list li{ gap:4px; }
+  .session-list .acts{ display:flex; flex:0 0 auto; gap:0; }
+  .session-list li:not(.pinned) .edit.pin{ display:none !important; }
+  .session-list li .edit.park[hidden]{ display:none !important; }
   .session-list .edit{ width:32px; height:32px; }
 }
 
