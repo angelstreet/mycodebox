@@ -399,7 +399,7 @@ def run(mode, timeout=10, tiles=False):
         tile = verdicts.get((e['host'], e['device']))
         if tile:
             row['tile'] = tile
-        tile_bad = bool(tile) and not tile.get('plays')
+        tile_bad = bool(tile) and tile.get('plays') is False
         av = cap.get('av')
         drift = bool(av) and abs(av['offset']) >= AV_DRIFT_SECONDS
         file_black = src_ok and cap['capture'] == 'black' and e['kind'] == 'file'
@@ -671,12 +671,15 @@ def main(argv):
         if r.get('note'):
             print(f"note: {r['host']}/{r['device']} - {r['note']}")
     tb = rep.get('tiles') or {}
+    # The cards that carry no live player (a drone, a PC screen) are named apart: they are not stream tiles.
+    extra = (f", {tb.get('no_video', 0)} card(s) without a live player (not stream tiles)"
+             if tb.get('no_video') else '')
     if tb.get('status') == 'ok':
         print(f"tiles (the app's own player): {tb.get('checked', 0)} checked, {tb.get('playing', 0)} playing,"
-              f" {tb.get('not_playing', 0)} not playing")
+              f" {tb.get('not_playing', 0)} not playing{extra}")
     elif tb.get('status') == 'partial':
         print(f"tiles (the app's own player): {tb.get('checked', 0)} checked, {tb.get('playing', 0)} playing,"
-              f" {tb.get('not_playing', 0)} not playing, the rest not read ({tb.get('why')})")
+              f" {tb.get('not_playing', 0)} not playing{extra}, the rest not read ({tb.get('why')})")
     elif tb.get('status') == 'skipped':
         print(f"tiles (the app's own player): skipped ({tb.get('why')})")
     if rep.get('pool'):

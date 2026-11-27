@@ -20,6 +20,7 @@
 // The browser is relaunched per page of the grid and again whenever the page dies (a grid with a hundred players
 // can take its renderer down): the night must not lose the rest of the grid because of one page.
 import { createRequire } from 'node:module';
+import { tileVerdict } from './rtsp_tile_verdict.mjs';
 
 const HLS = /output\.m3u8|segment_\d+\.ts/;
 
@@ -130,7 +131,7 @@ for (const srv of servers) {
           r = { name, host: null, capture: null, readyState: -1, dt: null, bright: null, plays: false, error: String(e.message).slice(0, 80) };
         }
         if (r) {
-          if (!r.plays && evidenceDir) {
+          if (r.plays === false && evidenceDir) {
             // The frame of a tile that does not play: the night's evidence, next to the report.
             try {
               const file = `${evidenceDir}/tile-${String(r.host || 'host').replace(/\W+/g, '_')}-${String(r.capture || 'cap').replace(/\W+/g, '_')}.png`;
@@ -146,7 +147,7 @@ for (const srv of servers) {
 
       // A tile that reads broken inside the sweep is probed again on its own: the sweep's load can read a playing
       // tile as black (2026-11-27: three tiles of the pi4 grid read broken and played at once).
-      for (const t of results.filter((x) => !x.plays && x.capture)) {
+      for (const t of results.filter((x) => x.plays === false && x.capture)) {
         if (Date.now() > deadline) { t.reprobe = 'the time budget ran out'; continue; }
         try {
           const card = page.locator('.MuiCard-root').filter({ hasText: t.name }).first();
@@ -187,7 +188,22 @@ async function probe(page, card, name, reqs, bad) {
     const mark = Date.now();
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);   // the live player only loads on hover
     let a = null;
-    for (let i = 0; i * 500 < perCardTimeoutMs && !(a && a.readyState >= 2); i++) { await page.waitForTimeout(500); a = await read(card); }
+    for (let i = 0; i * 500 < perCardTimeoutMs; i++) {
+      await page.waitForTimeout(500);
+      a = await read(card);
+      if (!a) break;
+      if (a.readyState === -1) {
+        // A card with no live player at all (a drone, a PC screen) never gets one: do not spend the whole card
+        // budget on it. The app may add the player a moment after the hover, so it gets a few tries first.
+        if (i >= 3 && !reqs.some((r) => r.at >= mark && /output\.m3u8/.test(r.url))) break;
+        continue;
+      }
+      if (a.readyState >= 2) break;              // the player has the picture
+      // A live player can sit at readyState 1 while it shows a bright picture and its clock moves (measured on
+      // FR Kids 2 on 2026-11-27: readyState 1 at 4 s, 4 at 6 s, alone; under the grid it never passed 1).
+      // Waiting for readyState 2 would read healthy tiles as broken, so the clock decides instead.
+      if (i >= 2 && a.t > 0) break;
+    }
     await page.waitForTimeout(2000);
     const z = await read(card);
     const bright = await brightest(card);
@@ -195,21 +211,34 @@ async function probe(page, card, name, reqs, bad) {
     return { a, z, bright, id: ident(first ? first.url : '') };
   };
   let r = await round();
-  if (!r.id.capture && r.z.readyState < 2) {
+  const moving = (x) => !!(x && x.a && x.z.t - x.a.t > 0 && x.bright !== null && x.bright > 32);
+  if (!r.id.capture && r.z.readyState >= 0 && !moving(r)) {
     // The player did not start on the first hover (the grid can still be settling): one more round.
     r = await round();
   }
+  if (r.z.readyState === -1) {
+    // The card carries no live player at all: a drone, a PC screen, a device the grid shows as a picture.
+    // It is not a stream tile, so it is not a broken tile either: it gets no verdict and no frame.
+    return { name, host: null, capture: null, readyState: -1, dt: null, bright: null, size: '0x0',
+             plays: null, kind: 'no-video', hls_failures: 0 };
+  }
   // Only the failures of this tile count: one broken tile must not condemn the rest of the grid.
   const own = bad.length - before;
-  const plays = !!(r.z.readyState >= 2 && r.a && r.z.t - r.a.t > 0 && r.bright !== null && r.bright > 32 && own === 0);
+  // The verdict lives in its own module (scripts/agent/rtsp_tile_verdict.mjs): the clock and the picture decide,
+  // readyState 2 is not the bar (FR Kids 2, 2026-11-27).
+  const plays = tileVerdict({ readyState: r.z.readyState, dt: r.a ? +(r.z.t - r.a.t).toFixed(2) : null,
+                              bright: r.bright, hlsFailures: own });
   return { name, host: r.id.host, capture: r.id.capture, readyState: r.z.readyState,
            dt: r.a ? +(r.z.t - r.a.t).toFixed(2) : null, bright: r.bright, size: `${r.z.w}x${r.z.h}`,
-           plays, hls_failures: own };
+           plays, kind: 'stream', hls_failures: own };
 }
 
-out.checked = out.tiles.length;
-out.playing = out.tiles.filter((t) => t.plays).length;
-out.not_playing = out.checked - out.playing;
+out.checked = out.tiles.filter((t) => t.plays === true || t.plays === false).length;
+out.playing = out.tiles.filter((t) => t.plays === true).length;
+out.not_playing = out.tiles.filter((t) => t.plays === false).length;
+// The cards that carry no live player (a drone, a PC screen): seen, but they are not stream tiles and they are
+// never broken ones.
+out.no_video = out.tiles.filter((t) => t.plays === null || t.plays === undefined).length;
 // A sweep that read some tiles and could not finish is 'partial' (what it read stands, the rest is named);
 // a sweep that read nothing is 'skipped' (the layer did not run: never a false 'ok').
 if (out.why) out.status = out.checked ? 'partial' : 'skipped';

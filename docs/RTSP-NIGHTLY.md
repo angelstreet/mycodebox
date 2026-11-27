@@ -217,15 +217,23 @@ never replaced because of it. Below the threshold the offset is mux jitter and s
 `rtsp_replace.py --tiles` (or `RTSP_TILE_SWEEP=on`) opens every tile of the device-control grid **once** in a headless
 browser and writes the verdict into the report as a `tiles` block: `checked`, `playing`, `not_playing`, and the verdict
 per tile (`readyState`, how far the clock moved, the brightest pixel of the picture). A tile plays when all hold: a
-`<video>` inside the card, `readyState >= 2`, `currentTime` moves at all (a live tile at the live edge runs slower than
+`<video>` inside the card, `readyState >= 1`, `currentTime` moves at all (a live tile at the live edge runs slower than
 wall time), no failed HLS request, and a picture that is not black — the conditions of the `vpt-headless-verify` skill,
-section 2c.
+section 2c, with one difference: **`readyState 2` is not the bar**. A healthy live player can sit at `readyState 1`
+while it shows a bright picture and its clock moves (FR Kids 2 on 2026-11-27: alone, `readyState 1` at 4 s and `4` at
+6 s; inside the grid, which keeps the other cards' pictures loading, it never passed 1 in 15 s). The clock and the
+picture decide, so the night reads the tiles it sees, not the state of a buffer.
 
 A tile that reads broken **inside** the sweep is probed again **on its own** before it is called broken: the sweep's load
 can read a playing tile as black (three tiles of the pi4 grid read broken and played at once on 2026-11-27). A tile that
 still does not play while its source plays is reported as a capture-side fault (`vpt-stream`), exactly like the A/V
 drift: the night **replaces nothing** for it. The frame of a tile that does not play is written in the night's evidence
 folder (`<state>/rtsp-nightly/evidence-<day>/tile-<host>-<capture>.png`).
+
+**Not every card of the grid is a stream tile.** The grid also shows the drones and the PC screens, and those cards
+carry no live player at all: the sweep has no verdict for them, so they are neither playing nor broken (the first whole
+night counted a drone card and a PC screen as broken tiles, 2026-11-27). They are counted apart in the report
+(`no_video`) and in the night's summary line, and they never become a device's fault.
 
 The layer needs `node` and playwright (the VirtualPyTest checkout's, `RTSP_PLAYWRIGHT_PATH`, default
 `~/virtualpytest/tests/e2e/playwright/node_modules/playwright`); without them the report says the layer was **skipped**,
@@ -243,6 +251,8 @@ mouse off the grid before the next hover, so each tile's request is its own).
 2 s playback window, the picture). It runs after the probes, so the night's length is the probes' plus that. The probes
 are the slower half on a night with black channels: the night re-measures a black tile's live layer 120 s later and
 reads a channel's own picture over a window before it blames the capture side (that cost is older than this layer).
+The card budget is a ceiling, not a cost: the sweep moves on as soon as the player has the picture or its clock moves
+(a healthy live player often sits at `readyState 1`, and waiting for `2` cost 15 s a card for nothing).
 
 
 
