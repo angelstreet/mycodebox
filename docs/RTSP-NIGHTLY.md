@@ -255,8 +255,9 @@ The tile's identity comes from the stream the player asks for **after the hover*
 stream path and the tile is matched to its device by that request (the previous tile's player is stopped by moving the
 mouse off the grid before the next hover, so each tile's request is its own).
 
-**What it costs the night.** Measured on 2026-11-27: 108 cards in about 8 min (~5 s a card: the hover, the player, a
-2 s playback window, the picture). It runs after the probes, so the night's length is the probes' plus that. The probes
+**What it costs the night.** Measured on 2026-11-27: 108 cards in about 13 min (~7 s a card: the hover, the player, a
+2 s playback window, the picture, and a second picture read to see whether it moves). It runs after the probes, so the
+night's length is the probes' plus that. The probes
 are the slower half on a night with black channels: the night re-measures a black tile's live layer 120 s later and
 reads a channel's own picture over a window before it blames the capture side (that cost is older than this layer).
 The card budget is a ceiling, not a cost: the sweep moves on as soon as the player has the picture or its clock moves
@@ -756,9 +757,12 @@ suggestion and the pool-candidate skip stay with the owner).
   `FR Kids 1` (`vpt-nipogi/DEVICE25`) reads +5.13 s, **`FR Movie 1 — Cine 666`** (`vpt-nipogi/DEVICE7`) **+10.163 s** (the
   drift of bug-16d06d74 reproduced: the tile shows the channel's own slate and its clock does not move), and
   `FR Regional 5 — TV3V` (`vpt-nipogi/DEVICE36`) **+0.016 s** — in sync, and it plays in the browser tonight.
-- **The browser layer**: every tile of the grid opened once (`scripts/agent/rtsp_tiles.mjs`). Measured live: 31 of 31
-  tiles identified by the stream their player asked for, and 94 of the 96 stream tiles of the pi4 grid play. The two that
-  do not are BFM2 (black, the drift above) and Cine 666 (a frozen slate).
+- **The browser layer**: every tile of the grid opened once (`scripts/agent/rtsp_tiles.mjs`). Measured live at 16:18,
+  a whole capped night end to end (`exit=0`, 16 hosts walked and read, no inventory error): **101 stream tiles checked,
+  99 play, 2 do not** — BFM2 (the black tile of the drift above) and `Samsung TV` (`vpt-nipogi/DEVICE50`: a black
+  picture, brightest pixel 14, while the clock runs) — and **7 cards carry no live player at all** (the Windows PC, the
+  two drones, three Lenovo hosts and the pi4): they are not stream tiles, so they are counted apart, never judged and
+  never a fault of a device.
 
 **The traps of the new layer, all found and fixed on the day it was written:**
 
@@ -772,6 +776,12 @@ suggestion and the pool-candidate skip stay with the owner).
   capture side.
 - The **grid loads late** (0 cards while the page reads "Checking authentication…") and is paginated (24 cards a page,
   5 pages): the layer waits for the cards and walks the pages.
+- **Not every card of the grid is a stream tile**: the drones and the PC screens carry no `<video>` at all, and the
+  first whole night counted them as broken tiles. They are seen and counted apart (`no_video`), never judged.
+- **A healthy live player can sit at `readyState 1`** while it shows a bright picture and its clock moves (FR Kids 2),
+  and a live tile at the live edge **nudges its clock backward** when it re-syncs (FireTV −0.05 s, ILTV −0.54 s: both
+  healthy). Waiting for `readyState 2` and reading the last two seconds of the clock read healthy tiles as broken, so
+  the tile is watched over the whole time it was read and its picture is hashed twice (see the browser layer above).
 
 
 
