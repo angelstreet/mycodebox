@@ -74,7 +74,7 @@ test('dashboard, app and voice: never the owner\'s turn for a manager-started se
   };
   for (const [what, row] of Object.entries(rows)) {
     const mine = { ...row, managerStarted: true };
-    assert.equal(isOwnersTurn(row), true, `owner-started: ${what}`);
+    assert.equal(isOwnersTurn(row), what !== 'open suggestions', `owner-started: ${what}`);   // open suggestions are a quiet chip (2026-11-27)
     assert.equal(isOwnersTurn(mine), false, what);
     assert.equal(displayState(mine), 'manager', what);
     assert.deepEqual(buildQueue({ s: mine }, {}, [{ name: 's' }]), [], what);
