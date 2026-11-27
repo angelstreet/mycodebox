@@ -238,6 +238,11 @@ The tile's identity comes from the stream the player asks for **after the hover*
 stream path and the tile is matched to its device by that request (the previous tile's player is stopped by moving the
 mouse off the grid before the next hover, so each tile's request is its own).
 
+**What it costs the night.** Measured on 2026-11-27: 108 cards in about 8 min (~5 s a card: the hover, the player, a
+2 s playback window, the picture). It runs after the probes, so the night's length is the probes' plus that. The probes
+are the slower half on a night with black channels: the night re-measures a black tile's live layer 120 s later and
+reads a channel's own picture over a window before it blames the capture side (that cost is older than this layer).
+
 
 
 A tile has **two pictures**, and "fixed" needs both, each with a screenshot looked at:
