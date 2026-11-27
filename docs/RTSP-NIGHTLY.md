@@ -217,12 +217,20 @@ never replaced because of it. Below the threshold the offset is mux jitter and s
 `rtsp_replace.py --tiles` (or `RTSP_TILE_SWEEP=on`) opens every tile of the device-control grid **once** in a headless
 browser and writes the verdict into the report as a `tiles` block: `checked`, `playing`, `not_playing`, and the verdict
 per tile (`readyState`, how far the clock moved, the brightest pixel of the picture). A tile plays when all hold: a
-`<video>` inside the card, `readyState >= 1`, `currentTime` moves at all (a live tile at the live edge runs slower than
-wall time), no failed HLS request, and a picture that is not black — the conditions of the `vpt-headless-verify` skill,
-section 2c, with one difference: **`readyState 2` is not the bar**. A healthy live player can sit at `readyState 1`
-while it shows a bright picture and its clock moves (FR Kids 2 on 2026-11-27: alone, `readyState 1` at 4 s and `4` at
-6 s; inside the grid, which keeps the other cards' pictures loading, it never passed 1 in 15 s). The clock and the
-picture decide, so the night reads the tiles it sees, not the state of a buffer.
+`<video>` inside the card, `readyState >= 1`, its picture is not black, **something about it moves**, and no failed HLS
+request of its own — the conditions of the `vpt-headless-verify` skill, section 2c, with two differences measured on
+2026-11-27:
+
+- **`readyState 2` is not the bar.** A healthy live player can sit at `readyState 1` while it shows a bright picture and
+  its clock moves (FR Kids 2: alone, `readyState 1` at 4 s and `4` at 6 s; inside the grid, which keeps the other cards'
+  pictures loading, it never passed 1 in 15 s). The clock and the picture decide, so the night reads the tiles it sees,
+  not the state of a buffer.
+- **The clock of the last two seconds is not the bar either.** A live tile at the live edge nudges its clock backward
+  when it re-syncs (FireTV −0.05 s, ILTV −0.54 s on 2026-11-27; both are healthy, their clocks run on: FireTV went
+  from 119 s to 141 s over 24 s, ILTV from 148 s to 170 s). So the tile is watched over the **whole** time it was read
+  (`dt_total`: the clock from the first position the player had to the last one) and its **picture** is hashed twice
+  (`picture_changed`): a tile lives when its clock runs, when it ran over the time it was watched, or when its picture
+  changes. A frozen slate has none of the three.
 
 A tile that reads broken **inside** the sweep is probed again **on its own** before it is called broken: the sweep's load
 can read a playing tile as black (three tiles of the pi4 grid read broken and played at once on 2026-11-27). A tile that

@@ -925,9 +925,18 @@ test('the tile verdict: a live player that sits at readyState 1 while it plays i
   assert.equal(tileVerdict({ readyState: 4, dt: 2.5, bright: 254, hlsFailures: 0 }), true);
 });
 
+test('the tile verdict: a live tile at the live edge that nudges its clock back is a playing tile', async () => {
+  // FireTV (-0.05 s) and ILTV (-0.54 s) over the last two seconds: both healthy, their clocks run on (measured
+  // alone on 2026-11-27). The clock over the WHOLE time the tile was watched, and the picture, are the honest
+  // signals: a frozen slate has neither.
+  assert.equal(tileVerdict({ readyState: 4, dt: -0.05, bright: 255, hlsFailures: 0 }), false, 'nothing moved yet');
+  assert.equal(tileVerdict({ readyState: 4, dt: -0.05, moved: true, bright: 255, hlsFailures: 0 }), true, 'the clock ran');
+  assert.equal(tileVerdict({ readyState: 1, dt: -0.54, pictureChanged: true, bright: 255, hlsFailures: 0 }), true, 'the picture changes');
+});
+
 test('the tile verdict: a black picture, a frozen clock, a failed request of its own and a card without a player', async () => {
   assert.equal(tileVerdict({ readyState: 1, dt: 3.76, bright: 0, hlsFailures: 0 }), false, 'the black tile of BFM2');
-  assert.equal(tileVerdict({ readyState: 4, dt: -0.42, bright: 238, hlsFailures: 0 }), false, 'the frozen slate of Cine 666');
+  assert.equal(tileVerdict({ readyState: 4, dt: 0, bright: 238, hlsFailures: 0 }), false, 'the frozen slate of Cine 666');
   assert.equal(tileVerdict({ readyState: 4, dt: 2.5, bright: 254, hlsFailures: 1 }), false, 'a failed HLS request of its own');
   assert.equal(tileVerdict({ readyState: 0, dt: 0, bright: 0, hlsFailures: 0 }), false, 'a player with nothing');
   assert.equal(tileVerdict({ readyState: -1, dt: null, bright: null, hlsFailures: 0 }), null, 'a card with no live player has no verdict');
