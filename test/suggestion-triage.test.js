@@ -219,3 +219,29 @@ test('the claude binary is found outside the service PATH (spawn claude ENOENT, 
   const r = await claudeOpus('x', { bin, env: { PATH: '/usr/bin:/bin' }, timeoutMs: 10000 });
   assert.deepEqual(r, { ok: false, error: 'exit 1: You have hit your weekly limit' });
 });
+
+test('a list repeated with notes is the same items, so "yes 1 2 3, no 4" reads one way (2026-11-27)', () => {
+  const dir = tmp('triage-dup-');
+  const ledger = createSuggestions({ stateDir: dir, now: () => t0 });
+  const first = ['Suggestions:', 'Worth doing:',
+    '1. Add a dashboard view for items parked with the owner. Today they appear only as a manager event.',
+    '2. Show a "triaging" state on the dashboard while the Opus call runs (up to about 3 minutes).',
+    'Smaller:', '3. Send Opus the session\'s closing text around each suggestion, not just the line.',
+    '4. Move the claude -p --model opus call into one shared helper. Two files build it.', '',
+    `STATUS: needs-manager: ${ASK_WORDS} — should I do 1 2?`].join('\n');
+  ledger.observe('s1', first, { at: t0 + 1 });
+  const again = ['Suggestions:',
+    '1. Add a dashboard view for items parked with the owner — built and merged (int-1a2b3c).',
+    '2. Show a "triaging" state on the dashboard while the Opus call runs — built and merged (int-1a2b3c).',
+    '3. Send Opus the session\'s closing text around each suggestion — built and merged (int-1a2b3c).',
+    '4. Move the claude -p --model opus call into one shared helper — not built (your answer was no).', '',
+    `STATUS: needs-manager: ${ASK_WORDS} — should I do 1 2 3?`].join('\n');
+  ledger.observe('s1', again, { at: t0 + 2 });
+  assert.equal(ledger.get('s1').items.length, 4);
+  const r = ledger.ownerMessage('s1', 'yes 1 2 3, no 4', { by: 'manager', via: 'send' });
+  assert.equal(r.numbering, undefined);
+  assert.deepEqual(r.answered.map((i) => `${i.n}:${i.answer}`), ['1:yes', '2:yes', '3:yes', '4:no']);
+  // two different items that share a short opening are still two items
+  ledger.observe('s2', ['Suggestions:', '1. Add a test. For the parser', '2. Add a test. For the lexer', '', `STATUS: needs-manager: ${ASK_WORDS} — should I do 1?`].join('\n'), { at: t0 + 3 });
+  assert.equal(ledger.get('s2').items.length, 2);
+});

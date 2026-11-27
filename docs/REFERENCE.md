@@ -2369,7 +2369,9 @@ reflection reply.
   when N items are open is asked back in the feed (all N, or item N only?). **Numbering:** items keep one numbering per session, so a second
   list's `1.` `2.` can be items 5 and 6; the ledger remembers the numbers of the latest list (`shown`). A reply that reads only one way (item
   numbers, as the dashboard lists them, or the session's own) takes it; one that reads both ways with different items records nothing and
-  is asked back (`suggestions-numbering` alert). It counts when it comes from the dashboard, phone or desktop app (a browser request with no `by`), a voice
+  is asked back (`suggestions-numbering` alert; the manager's own answer for a session it started is asked back to the manager as an event,
+  never to the owner). A list repeated with a note (`1. <item> — built and merged`) is the same item: matched on the item's first clause of at
+  least 4 words (`headOf`), not a new one. It counts when it comes from the dashboard, phone or desktop app (a browser request with no `by`), a voice
   answer, or is typed into the session (terminal or Remote Control: a reporter prompt this server did not type, not a peer message, hook or
   notification; Mac: the Stop hook's `last_prompt`). A Mac row has no pane: a dashboard yes / no is recorded (nothing is typed) and the
   manager gets `suggestions-answered:<session>` to pass your words on with `SendMessage`.

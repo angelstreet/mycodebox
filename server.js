@@ -1351,10 +1351,13 @@ function noteSuggestions(name, text, doneAt = null) {
 function ownerAnswered(name, text, via, by = 'owner') {
   const question = latest?.status?.[name]?.stall?.question || '';
   const open = suggestions.openOf(name).map((i) => i.n), amb = ambiguousAnswer(text, open, { bare: bareNumbersOk(question) });
-  if (amb) {   // "do the 4" of 4 items: all four or only item 4? Nothing is recorded; the owner is asked, in the feed
+  // a manager's answer (a session it started) that reads two ways is the manager's to restate: never an owner push (2026-11-27)
+  const askBack = (key, title, body) => (by === 'owner' ? alert(key, { title, priority: 'high', tier: 'interrupt', ntfyTags: 'question', body, url: `/?s=${encodeURIComponent(name)}`, tag: `ghosty-${name}` })
+    : managerEvents.record({ key, title, body, url: `/?s=${encodeURIComponent(name)}`, priority: 'default' }).catch((e) => console.error('[suggestions] ask back', e.message)));
+  if (amb) {   // "do the 4" of 4 items: all four or only item 4? Nothing is recorded; the owner (or the manager, for its answer) is asked
     logEvent({ type: 'suggestions-ambiguous', session: name, via, text: String(text).slice(0, 80), open });
-    alert(`${name}:suggestions-ambiguous`, { title: `${name}: all ${amb} suggestions, or only item ${amb}?`, priority: 'high', tier: 'interrupt', ntfyTags: 'question',
-      body: `Your reply "${String(text).trim().slice(0, 60)}" can mean all ${amb} items or only item ${amb}. Nothing was recorded. Reply "yes ${open.join(' ')}" for all, or "yes ${amb}, no ${open.filter((n) => n !== amb).join(' ')}" for item ${amb} only.`, url: `/?s=${encodeURIComponent(name)}`, tag: `ghosty-${name}` });
+    askBack(`${name}:suggestions-ambiguous`, `${name}: all ${amb} suggestions, or only item ${amb}?`,
+      `${by === 'owner' ? 'Your' : `The ${by}'s`} reply "${String(text).trim().slice(0, 60)}" can mean all ${amb} items or only item ${amb}. Nothing was recorded. Reply "yes ${open.join(' ')}" for all, or "yes ${amb}, no ${open.filter((n) => n !== amb).join(' ')}" for item ${amb} only.`);
     return;
   }
   const r = suggestions.ownerMessage(name, text, { via, by, question });
@@ -1362,8 +1365,8 @@ function ownerAnswered(name, text, via, by = 'owner') {
   if (r.numbering) {   // "do 1 and 2": items 1 and 2, or the session's own 1. and 2. of its latest list? Nothing is recorded; the owner is asked, in the feed
     const fmt = (m) => Object.entries(m).map(([n, a]) => `${a} ${n}`).join(', ');
     logEvent({ type: 'suggestions-ambiguous', session: name, via, by, text: String(text).slice(0, 80), open, numbering: r.numbering });
-    alert(`${name}:suggestions-numbering`, { title: `${name}: which numbers did you mean?`, priority: 'high', tier: 'interrupt', ntfyTags: 'question',
-      body: `${by === 'owner' ? 'Your' : `The ${by}'s`} reply "${String(text).trim().slice(0, 60)}" reads as "${fmt(r.numbering.items)}" with the dashboard's item numbers, and as "${fmt(r.numbering.shown)}" with the numbers of the session's latest list. Nothing was recorded. Reply with the item numbers (open: ${open.join(', ')}).`, url: `/?s=${encodeURIComponent(name)}`, tag: `ghosty-${name}` });
+    askBack(`${name}:suggestions-numbering`, `${name}: which numbers did you mean?`,
+      `${by === 'owner' ? 'Your' : `The ${by}'s`} reply "${String(text).trim().slice(0, 60)}" reads as "${fmt(r.numbering.items)}" with the dashboard's item numbers, and as "${fmt(r.numbering.shown)}" with the numbers of the session's latest list. Nothing was recorded. Reply with the item numbers (open: ${open.join(', ')}).`);
     return;
   }
   logEvent({ type: 'suggestions-answered', session: name, via, by, answered: r.answered.map((i) => `${i.n}:${i.answer}`), open: r.open });
