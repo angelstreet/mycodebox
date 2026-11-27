@@ -2168,10 +2168,10 @@ function buildSideRow(s) {
     </div>
 <span class="pinmark" aria-hidden="true">${icon('pin', 13)}</span><span class="acts">
     <button class="edit pin" aria-label="Pin" title="Pin to the top">${icon('pin', 15)}</button>
-    <button class="edit" aria-label="Rename">${icon('pencil', 15)}</button>
     <button class="edit park" aria-label="Park session" title="Park: save the conversation, free its RAM (Resume brings it back)">${icon('archive', 15)}</button>
-    <button class="edit acct" aria-label="Switch Claude account" title="Move this conversation to another Claude account" hidden>${icon('refresh', 15)}</button>
-    <button class="edit kill" aria-label="Kill session">${icon('x', 15)}</button></span>`;
+    <button class="edit kill" aria-label="Kill session">${icon('x', 15)}</button>
+    <button class="edit" aria-label="Rename">${icon('pencil', 15)}</button>
+    <button class="edit acct" aria-label="Switch Claude account" title="Move this conversation to another Claude account" hidden>${icon('refresh', 15)}</button></span>`;
   // hover devices: the action bar floats to the right of the list (never covers the rows), level with this row
   li.addEventListener('mouseenter', () => {
     const r = li.getBoundingClientRect(), a = li.querySelector('.acts');

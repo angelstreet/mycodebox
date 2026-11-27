@@ -40,6 +40,7 @@ The release note of this repo (owner 2026-11-13). Every merged code change (not 
 what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
+- **Mobile session actions use the requested Archive, Delete, Edit, Swap order** — the icon buttons sit edge to edge with 24 px horizontal targets, keeping the sidebar compact · area: dashboard
 - **Mobile session actions are closer together and include Park** — the sidebar keeps the archive icon available on touch screens for sessions that can be parked, while narrowing the gaps between row actions · area: dashboard
 
 - **Codex defaults to GPT-6.1 Sol** — New sessions default to `gpt-6.1-sol` and offer it even when the local model cache is stale. V2 routing registers the model and records ChatGPT-account pricing as unknown rather than inferring API prices (2026-11-26) · area: Codex
