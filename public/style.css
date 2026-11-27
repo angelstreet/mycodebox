@@ -2381,7 +2381,8 @@ body.phone-view .viewctl, body.phone-view #filterBtn{ display:none !important; }
   .session-list li{ gap:4px; }
   .session-list .acts{ display:flex; flex:0 0 auto; gap:0; }
   .session-list li:not(.pinned) .edit.pin{ display:none !important; }
-  .session-list li .edit.park[hidden]{ display:none !important; }
+  .session-list .edit[hidden]{ display:none !important; }
+  .session-list li .edit.park{ opacity:1; }
   .session-list .edit{ width:32px; height:32px; }
 }
 
