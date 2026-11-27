@@ -24,7 +24,7 @@ test('server: a listed suggestion keeps a done session out of done; only the own
   const base = tmp('sugg-wire-'), state = join(base, 'state'), home = join(base, 'home'), bin = join(base, 'bin');
   [state, home, bin, join(state, 'leases')].forEach((d) => mkdirSync(d, { recursive: true }));
   writeFileSync(join(state, 'leases', 'clients.json'), JSON.stringify({ clients: [{ name: 'mac-a', sha256: hashToken(MAC), remote: true }] }));
-  writeFileSync(join(state, 'manager.json'), JSON.stringify({ enabled: true, aiTriage: 'off', routerShadow: false, wakeShadow: false }));
+  writeFileSync(join(state, 'manager.json'), JSON.stringify({ enabled: true, aiTriage: 'off', suggestionTriage: 'off', routerShadow: false, wakeShadow: false }));
   const socket = `suggwire${process.pid}`, tmuxBin = join(bin, 'tmux');
   writeFileSync(tmuxBin, `#!/bin/sh\nexec ${execFileSync('sh', ['-c', 'command -v tmux']).toString().trim()} -L ${socket} "$@"\n`); chmodSync(tmuxBin, 0o755);
   // every typed line is echoed to a file; the first turn ends on a list above a done line, later turns on a plain done line

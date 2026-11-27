@@ -130,6 +130,7 @@ import { createSharedCheckoutGuard, expandHome } from './shared-checkout-guard.j
 import { createFoundBugs, sessionOfRequest, unreportedBugOf, sendBackOf, sendBackText, sweepGroups, equivalentFreeOf } from './found-bugs.js';
 import { goalOf as goalOfPrompt, blockedOrUnknownStatus, lastStatus } from './status-honesty.js';
 import { createGoalGate, createGoalStore, approvedRound, worthAGoal } from './goal-check.js';
+import { createSuggestionTriage } from './suggestion-triage.js';
 import { createSuggestions, createTypedLog, isOwnerTyped, answersOf, ambiguousAnswer, bareNumbersOk } from './suggestions.js';
 import { createManagerOwned, forManagerSession, MANAGER_ACTOR } from './manager-owned.js';
 import { createFinalAccept, isTaskActor, isTaskMessage } from './final-accept.js';
@@ -1289,11 +1290,38 @@ function suggestionHold(name, text, doneAt = null) {
   const h = suggestions.hold(name, text, { at: doneAt });
   return h?.state === 'pending' && finalAccept.has(name) ? null : h;
 }
+// Opus triages the suggestions (suggestion-triage.js, owner 2026-11-27): worthy -> yes, unworthy -> no, sent to the session at once; only doubt or an
+// owner floor goes to the owner, as a table row, and the session does not wait on it. manager.json `suggestionTriage` live (default) | off.
+const suggestionTriageMode = () => { try { return JSON.parse(readFileSync(managerConfigFile, 'utf8')).suggestionTriage === 'off' ? 'off' : 'live'; } catch { return 'live'; } };
+const suggestionTriage = createSuggestionTriage({ stateDir: STATE_DIR, ledger: suggestions, logEvent: (e) => logEvent(e),
+  mode: () => (suggestionTriageMode() === 'live' && reflectionMode() === 'live' ? 'live' : 'off'),
+  goalOf: (name) => goalForSession(name).catch(() => ''),
+  apply: async (name, decisions) => {
+    const r = suggestions.triaged(name, decisions);
+    if (!r.answered.length) return;
+    logEvent({ type: 'suggestions-answered', session: name, via: 'triage', by: 'opus', answered: r.answered.map((i) => `${i.n}:${i.answer}`), open: r.open });
+    const decided = r.answered.filter((i) => i.answer !== 'owner');
+    if (decided.length) fileDecision(join(STATE_DIR, 'manager-decisions.jsonl'), { session: name, decision: `${name}, suggestions (Opus triage): ${decided.map((i) => `${i.n} ${i.answer} (${i.text.slice(0, 80)})`).join(' | ')}`,
+      why: 'Opus triages improvement suggestions so sessions never wait on them (owner 2026-11-27).', undo: `Tell ${name} which items to drop or build.` })
+      .catch((e) => console.error('[triage] decision', e.message));
+    if (r.approved.length) await approvedRound({ goals, gate: goalGate, ledger: suggestions, name, approved: r.approved }).catch((e) => console.error('[suggestions] new round', e.message));
+  },
+  // the owner rows: one manager event per session (the manager shows them in its needs-you table), never asked again by the session
+  ownerItems: (name, rows) => managerEvents.record({ key: `suggestions-owner:${name}`, title: `${name}: ${rows.length} suggestion(s) for the owner (Opus triage; the session does not wait)`,
+    body: `| Session | Suggestion | Why you | Opus proposes |\n|---|---|---|---|\n${rows.join('\n')}\nAnswer on the dashboard or GET /api/suggestions/owner; nothing blocks the session.`.slice(0, 1800), url: `/?s=${encodeURIComponent(name)}`, priority: 'default' })
+    .catch((e) => console.error('[triage] owner event', e.message)),
+  send: async (name, text) => {
+    try { await harnessSend(name, text); }
+    catch (e) {   // a Mac / remote session has no pane: the manager passes it on with SendMessage
+      await managerEvents.record({ key: `suggestions-triaged:${name}`, title: `${name}: Opus answered its suggestions (pass it on with SendMessage)`, body: text.slice(0, 1800), url: '/', priority: 'default' });
+    }
+  } });
 const heldLine = (h) => (h.state === 'open' ? `${h.open} improvement suggestion(s) to answer: yes or no each` : 'checking for improvement suggestions');
 // A hand-over turn was read: new suggestions become items; a list under a line that is not needs-owner is pushed to the owner at once.
 function noteSuggestions(name, text, doneAt = null) {
   if (loadOwnerHiddenSessions().includes(name)) return;
   const { added } = suggestions.observe(name, text, { at: doneAt });
+  if (suggestionTriage.pending(name)) return;   // Opus answers them; only its doubt / floor rows reach the owner
   const kind = lastStatus(text)?.kind;
   if (added.length && kind !== 'needs-owner') notifySession(name, 'asks', `${suggestions.openOf(name).length} improvement suggestion(s) to answer, yes or no each: ${added.slice(0, 3).map((i) => `${i.n}. ${i.text.slice(0, 80)}`).join(' | ')}`);
 }
@@ -1376,6 +1404,7 @@ const goalGate = createGoalGate({
   record: (e) => managerEvents.record(e),
   mode: goalCheckMode,
   managerStarted: managerOwned,
+  triaging: (name) => suggestionTriage.pending(name),   // Opus is answering the open suggestions (suggestion-triage.js)
   reflectMode: reflectionMode,   // the reflection question after an accepted done (reflection.js)
 });
 
@@ -3469,6 +3498,7 @@ async function handleHttp(req, res) {
     const limit = Math.min(2000, Math.max(1, Number(q.get('limit')) || 50));
     return json(res, 200, { events: await managerEvents.tail({ since, limit }) });
   }
+  if (req.method === 'GET' && p === '/api/suggestions/owner') return json(res, 200, { items: suggestions.ownerItems() });   // parked with the owner by the Opus triage
   if (req.method === 'GET' && p === '/api/suggestions') return json(res, 200, suggestions.list());   // every suggestion and the owner's yes / no (suggestions.js)
   if (req.method === 'GET' && p === '/api/goal-check') return json(res, 200, await goalGate.snapshot());   // bounced dones per session today (goal-check.js)
   if (req.method === 'GET' && p === '/api/done-check') return json(res, 200, doneCheck.snapshot());   // sessions whose STATUS done disagrees with git

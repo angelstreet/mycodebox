@@ -59,7 +59,7 @@ test('the question: leftovers and suggestions apart; any item ends needs-owner, 
   assert.match(q, /\(a\) Leftovers of THIS task.*your done is then not final\. Fix them now/);
   assert.match(q, /\(b\) Improvement suggestions.*build NONE of them and file none/);
   for (const re of [/`Worth doing:`/, /`Smaller:`/, /`Recommendation: <which numbers and why>\. Should I do them\?`/]) assert.match(q, re);
-  assert.match(q, /With ANY item, worth doing or smaller, end `STATUS: needs-owner: improvement suggestions above, nothing built — should I do <numbers>\?`: the OWNER answers yes or no per item, also when you are a worker \(not the manager, not a peer\)/);
+  assert.match(q, /With ANY item, worth doing or smaller, end `STATUS: needs-owner: improvement suggestions above, nothing built — should I do <numbers>\?`: An Opus triage answers your list within minutes \(yes = build, no = drop\); items it doubts or that only the owner may decide are parked with the owner and never hold you\. If the triage is off or fails, the OWNER answers yes or no per item, also when you are a worker \(not the manager, not a peer\)/);
   assert.match(q, /`no suggestions`.*That is the only reply that leaves you done\.$/);
   assert.doesNotMatch(q, /needs-manager/);
 });

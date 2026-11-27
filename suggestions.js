@@ -156,6 +156,8 @@ export function createTypedLog({ max = 200 } = {}) {
 const keyOf = (t) => String(t).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().slice(0, 60);
 const textSig = (t) => createHash('sha1').update(String(t || '').replace(/\s+/g, ' ').trim()).digest('hex').slice(0, 12);
 const openOf = (r) => (r?.items || []).filter((i) => !i.answer);
+// parked with the owner by the Opus triage (suggestion-triage.js): the session does not wait on them; only the owner answers them later
+const ownerOf = (r) => (r?.items || []).filter((i) => i.answer === 'owner');
 
 // ---- the record ----
 // <state>/suggestions.json { since, s: { "<session>": { asked?: { at, sig }, clear?: { at, how }, items: [{ n, tier, text, at, answer?, by?, answeredAt?, via? }], missing? } } }
@@ -231,7 +233,7 @@ export function createSuggestions({ stateDir, now = Date.now, active = () => tru
   function answer(name, answers, { via = 'dashboard', by = 'owner' } = {}) {
     const r = rec(name);
     const answered = [];
-    for (const i of openOf(r)) {
+    for (const i of [...openOf(r), ...(by === 'owner' ? ownerOf(r) : [])]) {
       const a = answers?.[i.n];
       if (a !== 'yes' && a !== 'no') continue;
       Object.assign(i, { answer: a, by, via, answeredAt: now() });
@@ -247,12 +249,33 @@ export function createSuggestions({ stateDir, now = Date.now, active = () => tru
     if (r.clear) resolved(name, 'answered', { done: true });
     return { answered, open: openOf(r).length, approved };
   }
+  // The Opus triage's verdicts (suggestion-triage.js, owner 2026-11-27): yes / no recorded as Opus's, 'owner' parks the item with the owner
+  // (the session does not wait on it, it is never asked again). decisions: [{ n, decision, proposed, why, floor? }] -> as answer()
+  function triaged(name, decisions = []) {
+    const r = rec(name);
+    const open = new Map(openOf(r).map((i) => [i.n, i]));
+    const answered = [];
+    for (const d of decisions) {
+      const i = open.get(d.n);
+      if (!i || !['yes', 'no', 'owner'].includes(d.decision)) continue;
+      Object.assign(i, { answer: d.decision, by: 'opus', via: 'triage', answeredAt: now(), ...(d.decision === 'owner' ? { proposed: d.proposed, why: d.why, ...(d.floor ? { floor: d.floor } : {}) } : { why: d.why }) });
+      answered.push(i);
+    }
+    if (!answered.length) return { answered, open: openOf(r).length, approved: [] };
+    note({ session: name, answered: answered.map((i) => ({ n: i.n, answer: i.answer })), by: 'opus', via: 'triage' });
+    const unbuilt = r.items.filter((i) => i.answer === 'yes' && !i.built);
+    const approved = answered.some((i) => i.answer === 'yes') ? unbuilt : [];
+    if (!openOf(r).length) { if (unbuilt.length) delete r.clear; else r.clear = { at: now(), how: 'triaged' }; }
+    save();
+    if (r.clear) resolved(name, 'triaged', { done: true });
+    return { answered, open: openOf(r).length, approved };
+  }
   // A message that reached the session and was typed by the owner: records it when it reads as an answer. -> answer() result or null
   // opts.question: the session's closing question; bare numbers count as an answer only when it is not a numbered menu
   // The numbers can be the item numbers (the dashboard lists those) or the ones the session showed in its latest list: a reply that reads only one way
   // takes that one; one that reads both ways, differently, records nothing and comes back as { numbering: { items, shown } } so the owner is asked.
   function ownerMessage(name, text, opts = {}) {
-    const r = rec(name), open = openOf(r).map((i) => i.n), t = unpasted(text), bare = bareNumbersOk(opts.question);
+    const r = rec(name), open = [...openOf(r), ...((opts.by || 'owner') === 'owner' ? ownerOf(r) : [])].map((i) => i.n), t = unpasted(text), bare = bareNumbersOk(opts.question);
     const a = answersOf(t, open, { bare });
     const map = r?.shown || {}, back = Object.fromEntries(Object.entries(map).map(([k, v]) => [v, Number(k)]));
     const shownOpen = open.filter((n) => back[n] != null).map((n) => back[n]);
@@ -280,5 +303,7 @@ export function createSuggestions({ stateDir, now = Date.now, active = () => tru
   // the one nudge for a reply that answers neither way
   function claimMissing(name, text) { const r = rec(name); if (!r?.asked || r.clear || openOf(r).length || r.missing || textSig(text) === r.asked.sig) return false; r.missing = now(); save(); return true; }
 
-  return { file, observe, asked, answer, ownerMessage, hold, newRound, drop, claimMissing, claimReadyToClose, get: rec, openOf: (n) => openOf(rec(n)), awaiting: (n) => { const r = rec(n); return !!r && (openOf(r).length > 0 || (!!r.asked && !r.clear)); }, list: () => ({ since: st.since, sessions: st.s }) };
+  // every item parked with the owner, across sessions: [{ session, n, text, proposed, why, floor?, at }]
+  const ownerItems = () => Object.entries(st.s).flatMap(([session, r]) => ownerOf(r).map((i) => ({ session, n: i.n, text: i.text, proposed: i.proposed, why: i.why, ...(i.floor ? { floor: i.floor } : {}), at: i.answeredAt })));
+  return { file, observe, asked, answer, triaged, ownerItems, ownerMessage, hold, newRound, drop, claimMissing, claimReadyToClose, get: rec, openOf: (n) => openOf(rec(n)), awaiting: (n) => { const r = rec(n); return !!r && (openOf(r).length > 0 || (!!r.asked && !r.clear)); }, list: () => ({ since: st.since, sessions: st.s }) };
 }
