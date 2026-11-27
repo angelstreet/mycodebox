@@ -178,6 +178,8 @@ const headOf = (t) => { const h = keyOf(String(t).split(/\.\s|\s[—–-]\s|\s\(
 const textSig = (t) => createHash('sha1').update(String(t || '').replace(/\s+/g, ' ').trim()).digest('hex').slice(0, 12);
 const openOf = (r) => (r?.items || []).filter((i) => !i.answer);
 // parked with the owner by the Opus triage (suggestion-triage.js): the session does not wait on them; only the owner answers them later
+// An owner-parked item whose proposed answer Opus gave as 'no' is not shown: 'no clear answer' (no verdict line) stays visible.
+const hiddenNo = (i) => i.proposed === 'no' && !i.unclear && i.why !== 'Opus gave no verdict for this item' && i.why !== 'no verdict';
 const ownerOf = (r) => (r?.items || []).filter((i) => i.answer === 'owner');
 
 // ---- the record ----
@@ -214,6 +216,8 @@ export function createSuggestions({ stateDir, now = Date.now, active = () => tru
         if (saysBuilt(it.text)) set(it, 'built', 'the session reported it built');
         else if (target || ref != null) set(it, 'duplicate', `the same item as ${target ? target.n : ref}`);
       });
+      // after the built / duplicate pass: parked with the owner but Opus proposed 'no' (owner 2026-11-27: "i dont want to see the ones Opus said no"): answered no, the record stays
+      for (const it of items) if (it.answer === 'owner' && hiddenNo(it)) { Object.assign(it, { answer: 'no', by: 'opus', via: 'hide-no', answeredAt: now() }); changed++; note({ session: name, reconciled: it.n, answer: 'no', via: 'hide-no' }); }
       if (changed && !items.some((i) => !i.answer) && !r.clear && r.asked && !items.some((i) => i.answer === 'yes' && !i.built)) r.clear = { at: now(), how: 'reconciled' };
     }
     if (changed) save();
@@ -325,7 +329,7 @@ export function createSuggestions({ stateDir, now = Date.now, active = () => tru
     for (const d of decisions) {
       const i = open.get(d.n);
       if (!i || !['yes', 'no', 'owner'].includes(d.decision)) continue;
-      Object.assign(i, { answer: d.decision, by: 'opus', via: 'triage', answeredAt: now(), ...(d.decision === 'owner' ? { proposed: d.proposed, why: d.why, ...(d.floor ? { floor: d.floor } : {}) } : { why: d.why }) });
+      Object.assign(i, { answer: d.decision, by: 'opus', via: 'triage', answeredAt: now(), ...(d.decision === 'owner' ? { proposed: d.proposed, why: d.why, ...(d.unclear ? { unclear: true } : {}), ...(d.floor ? { floor: d.floor } : {}) } : { why: d.why }) });
       answered.push(i);
     }
     if (!answered.length) return { answered, open: openOf(r).length, approved: [] };
@@ -373,7 +377,7 @@ export function createSuggestions({ stateDir, now = Date.now, active = () => tru
   function claimMissing(name, text) { const r = rec(name); if (!r?.asked || r.clear || openOf(r).length || r.missing || textSig(text) === r.asked.sig) return false; r.missing = now(); save(); return true; }
 
   // every item parked with the owner, across sessions: [{ session, n, text, proposed, why, floor?, at }]
-  const ownerItems = () => Object.entries(st.s).flatMap(([session, r]) => ownerOf(r).map((i) => ({ session, n: i.n, text: i.text, proposed: i.proposed, why: i.why, ...(i.floor ? { floor: i.floor } : {}), at: i.answeredAt })));
+  const ownerItems = () => Object.entries(st.s).flatMap(([session, r]) => ownerOf(r).filter((i) => !hiddenNo(i)).map((i) => ({ session, n: i.n, text: i.text, proposed: i.proposed, why: i.why, ...(i.floor ? { floor: i.floor } : {}), at: i.answeredAt })));
   // the quiet chip lists the parked items and the ones Opus has not answered yet; built, duplicate and answered items never show
   const chipItems = () => Object.entries(st.s).flatMap(([session, r]) => openOf(r).map((i) => ({ session, n: i.n, text: i.text, open: true, at: i.at })))
     .concat(ownerItems());

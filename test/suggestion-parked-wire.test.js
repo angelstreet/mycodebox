@@ -23,7 +23,8 @@ test('server: a parked suggestion is listed and only the owner\'s dashboard answ
   const at = Date.now();
   writeFileSync(join(state, 'suggestions.json'), JSON.stringify({ since: at - 1000, s: { 'gone-session': { items: [
     { n: 1, tier: 'worth', text: 'add a test', at, answer: 'yes', by: 'opus', via: 'triage', built: true },
-    { n: 2, tier: 'smaller', text: 'buy a paid monitoring plan', at, answer: 'owner', by: 'opus', via: 'triage', proposed: 'no', why: 'costs money', floor: 'money', answeredAt: at },
+    { n: 2, tier: 'smaller', text: 'buy a paid monitoring plan', at, answer: 'owner', by: 'opus', via: 'triage', proposed: 'yes', why: 'costs money', floor: 'money', answeredAt: at },
+    { n: 4, tier: 'smaller', text: 'rename the lease columns', at, answer: 'owner', by: 'opus', via: 'triage', proposed: 'no', why: 'churn', answeredAt: at },   // Opus said no: never listed (owner 2026-11-27)
     { n: 3, tier: 'worth', text: 'split the lease view into two pages', at, answer: 'owner', by: 'opus', via: 'triage', proposed: 'yes', why: 'product choice', answeredAt: at },
   ] } } }));
   const socket = `parkwire${process.pid}`, tmuxBin = join(bin, 'tmux');
@@ -40,7 +41,7 @@ test('server: a parked suggestion is listed and only the owner\'s dashboard answ
   const post = async (body, headers = {}) => { const r = await fetch(`${url}/api/suggestions/owner`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) }); return { status: r.status, body: await r.json() }; };
 
   const list = await parked();
-  assert.deepEqual(list.map((i) => [i.session, i.n, i.proposed, i.floor]), [['gone-session', 2, 'no', 'money'], ['gone-session', 3, 'yes', undefined]]);
+  assert.deepEqual(list.map((i) => [i.session, i.n, i.proposed, i.floor]), [['gone-session', 2, 'yes', 'money'], ['gone-session', 3, 'yes', undefined]]);
   // not the owner: the manager, or a script with no browser origin, cannot answer it
   assert.equal((await post({ session: 'gone-session', n: 2, answer: 'yes', by: 'manager-agent' }, { origin: url })).status, 403);
   assert.equal((await post({ session: 'gone-session', n: 2, answer: 'yes' })).status, 403);
