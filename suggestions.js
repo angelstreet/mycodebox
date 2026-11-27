@@ -156,6 +156,24 @@ export function createTypedLog({ max = 200 } = {}) {
 const keyOf = (t) => String(t).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().slice(0, 60);
 // The item's first clause (up to ". ", " — ", " - ", " (" or ":"): a list repeated with a note ("... owner — built and merged (int-...)") is the same
 // item, not a new one (2026-11-27: two such copies made "yes 1 2 3, no 4" read two ways and nothing was recorded). At least 4 words.
+// A line that points at another item instead of suggesting one ("none left except 1", "the same item as 3", "duplicate of 2"): never a new item
+// (2026-11-27, coc-daily: three such lines reached the owner as items). -> the item number it points at, or null.
+const REF = /\b(?:none (?:left|open|remaining) (?:except|but)|(?:the )?same (?:item )?as|duplicate of|repeat of|a repeat of)\s+(?:item\s+|#)?(\d{1,2})\b/i;
+export const refOf = (t) => { const m = REF.exec(String(t || '').replace(/[*`"]+/g, '')); return m ? Number(m[1]) : null; };
+// The session says the item is already done ("Built and merged", "already built"): never open, never the owner's. "Not built" is not.
+const BUILT = /\b(?:built and merged|built, (?:tested and )?merged|(?:already|now) (?:built|merged|shipped|done)|(?:was|is|got) (?:built|merged|shipped)(?: and merged)?)\b/i;
+export const saysBuilt = (t) => BUILT.test(String(t || '').replace(/[*`]+/g, ''));
+// Two wordings of one item (the session's second list rewords the first): most of the content words are shared.
+const words = (t) => new Set(keyOf(String(t)).split(' ').concat(String(t).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(' ').slice(10, 40)).filter((w) => w.length > 3));
+// the opening clause, word stems ("judges" / "judged", "refuses" / "refused" are one word)
+const stems = (t) => new Set(keyOf(String(t).replace(/[*`"]+/g, '').split(/\.\s|\s[—–-]\s|\s\(|:\s/)[0]).split(' ').filter((w) => w.length > 2).map((w) => w.replace(/(?:es|ed|s|d|ing)$/, '')));
+export function sameItem(a, b) {
+  const overlap = (A, B) => { let n = 0; for (const w of A) if (B.has(w)) n++; return n; };
+  const SA = stems(a), SB = stems(b), s = overlap(SA, SB);
+  if (s >= 4 && s / Math.max(SA.size, SB.size) >= 0.75) return true;
+  const A = words(a), B = words(b), both = overlap(A, B);
+  return both >= 5 && both / Math.min(A.size, B.size) >= 0.6;
+}
 const headOf = (t) => { const h = keyOf(String(t).split(/\.\s|\s[—–-]\s|\s\(|:\s/)[0]); return h.split(' ').length >= 4 ? h : null; };
 const textSig = (t) => createHash('sha1').update(String(t || '').replace(/\s+/g, ' ').trim()).digest('hex').slice(0, 12);
 const openOf = (r) => (r?.items || []).filter((i) => !i.answer);
@@ -179,11 +197,34 @@ export function createSuggestions({ stateDir, now = Date.now, active = () => tru
     catch (e) { log.error?.('[suggestions] save', e.message); }
   }
   if (fresh) save();
+  // Items recorded before the reference / built rules (2026-11-27): a line pointing at an earlier item is a duplicate, an item the session reported
+  // built (itself, or a later line naming it) is built. Only open or owner-parked items change; idempotent, run at start. -> number of items changed
+  function reconcile() {
+    let changed = 0;
+    for (const [name, r] of Object.entries(st.s)) {
+      const items = r.items || [];
+      const set = (i, answer, why) => { Object.assign(i, { answer, by: 'session', via: 'reconcile', ...(answer === 'built' ? { built: true } : {}), answeredAt: now(), why }); changed++; note({ session: name, reconciled: i.n, answer }); };
+      const openish = (i) => !i.answer || i.answer === 'owner';
+      items.forEach((it, k) => {
+        const earlier = items.slice(0, k);
+        const ref = refOf(it.text);
+        const target = (ref != null && earlier.find((i) => i.n === (r.shown?.[ref] ?? ref) || i.n === ref)) || earlier.find((i) => sameItem(i.text, it.text));
+        if (target && saysBuilt(it.text) && openish(target)) set(target, 'built', `reported built by item ${it.n}`);
+        if (!openish(it)) return;
+        if (saysBuilt(it.text)) set(it, 'built', 'the session reported it built');
+        else if (target || ref != null) set(it, 'duplicate', `the same item as ${target ? target.n : ref}`);
+      });
+      if (changed && !items.some((i) => !i.answer) && !r.clear && r.asked && !items.some((i) => i.answer === 'yes' && !i.built)) r.clear = { at: now(), how: 'reconciled' };
+    }
+    if (changed) save();
+    return changed;
+  }
   const note = (e) => { try { appendFileSync(journal, JSON.stringify({ at: new Date(now()).toISOString(), ...e }) + '\n'); } catch {} };
   const rec = (name) => (Object.hasOwn(st.s, name) ? st.s[name] : null);
   const ensure = (name) => rec(name) || (st.s[name] = { items: [] });
   const resolved = (name, how, info) => { try { onResolved(name, how, info); } catch (e) { log.error?.('[suggestions] resolved', e.message); } };
   const seen = new Map();   // session -> sig of the last text read (the poll reads the same turn over and over)
+  try { const n = reconcile(); if (n) log.log?.(`[suggestions] reconciled ${n} item(s): references and reported-built items`); } catch (e) { log.error?.('[suggestions] reconcile', e.message); }
 
   // A turn the session ended. text: its closing text; at: when it ended. -> { added: [items] }
   function observe(name, text, { at = null } = {}) {
@@ -200,17 +241,32 @@ export function createSuggestions({ stateDir, now = Date.now, active = () => tru
     const known = new Map((prev?.items || []).map((i) => [keyOf(i.text), i.n]));
     const heads = new Map((prev?.items || []).map((i) => [headOf(i.text), i.n]).filter(([h]) => h));
     const added = [], shown = {};
+    let marked = false;
+    // the session says an item is done: it leaves the open list and the owner's list (it was never theirs to answer)
+    const markBuilt = (n) => {
+      const i = rec(name)?.items.find((x) => x.n === n);
+      if (!i || (i.answer && i.answer !== 'owner')) return;
+      Object.assign(i, { answer: 'built', by: 'session', via: 'listed', built: true, answeredAt: now() });
+      note({ session: name, built: n }); marked = true;
+    };
     for (const it of listed) {
-      const k = keyOf(it.text);
-      const same = known.has(k) ? known.get(k) : headOf(it.text) && heads.get(headOf(it.text));
-      if (same) { if (it.num) shown[it.num] = same; continue; }
+      const k = keyOf(it.text), ref = refOf(it.text);
+      const items = rec(name)?.items || [];
+      const refN = ref == null ? null : (shown[ref] ?? rec(name)?.shown?.[ref] ?? ref);   // "the same item as 3": 3 of this list first
+      const same = (known.has(k) ? known.get(k) : headOf(it.text) && heads.get(headOf(it.text)))
+        || (refN != null && items.some((i) => i.n === refN) ? refN : null)
+        || items.find((i) => sameItem(i.text, it.text))?.n;
+      if (same) { if (it.num) shown[it.num] = same; if (saysBuilt(it.text)) markBuilt(same); continue; }
+      if (ref != null) continue;   // points at an item this ledger does not hold: not a suggestion either
       const r = ensure(name), used = new Set(r.items.map((i) => i.n));
       let n = it.num && !used.has(it.num) ? it.num : 1;
       while (used.has(n)) n++;
       known.set(k, n);
       if (it.num) shown[it.num] = n;
       const item = { n, tier: it.tier, text: it.text, at: now() };
-      r.items.push(item); added.push(item);
+      r.items.push(item);
+      if (saysBuilt(it.text)) { Object.assign(item, { answer: 'built', by: 'session', via: 'listed', built: true, answeredAt: now() }); marked = true; continue; }   // reported done, not suggested
+      added.push(item);
       delete r.clear;
     }
     // the turn the items came from, for the Opus triage (suggestion-triage.js): what the session did and why it suggests them
@@ -218,6 +274,10 @@ export function createSuggestions({ stateDir, now = Date.now, active = () => tru
     // the numbers the session showed in its latest list -> item numbers: a second round's "1. 2." are items 5 and 6 here (2026-11-26: "do 1 and 2" recorded nothing)
     if (Object.keys(shown).length) { const r = ensure(name); if (JSON.stringify(r.shown) !== JSON.stringify(shown)) { r.shown = shown; if (!added.length) save(); } }
     const r = rec(name);
+    // the last open items were reported built: nothing is left to answer
+    if (marked && r && !added.length && !openOf(r).length && !r.clear && !r.items.some((i) => i.answer === 'yes' && !i.built)) {
+      r.clear = { at: now(), how: 'built' }; save(); resolved(name, 'built', { done: DONE_WORDS.has(ls.kind) });
+    } else if (marked && !added.length) save();
     if (added.length) delete r.closeTold;   // a new list: not ready to close again until it is answered
     if (added.length) { note({ session: name, listed: added.map((i) => ({ n: i.n, tier: i.tier, text: i.text.slice(0, 120) })), status: ls.kind }); save(); return { added }; }
     // the answer to the question: `no suggestions`, in a turn written after it was asked
@@ -283,6 +343,8 @@ export function createSuggestions({ stateDir, now = Date.now, active = () => tru
   // takes that one; one that reads both ways, differently, records nothing and comes back as { numbering: { items, shown } } so the owner is asked.
   function ownerMessage(name, text, opts = {}) {
     const r = rec(name), open = [...openOf(r), ...((opts.by || 'owner') === 'owner' ? ownerOf(r) : [])].map((i) => i.n), t = unpasted(text), bare = bareNumbersOk(opts.question);
+    // a reply that also names items already closed ("yes 1 2 3, no 4" when 1-3 were reported built) answers the open ones; the closed are ignored
+    const onlyOpen = (m) => { if (!m) return null; const o = Object.fromEntries(Object.entries(m).filter(([n]) => open.includes(Number(n)))); return Object.keys(o).length ? o : null; };
     const a = answersOf(t, open, { bare });
     const map = r?.shown || {}, back = Object.fromEntries(Object.entries(map).map(([k, v]) => [v, Number(k)]));
     const shownOpen = open.filter((n) => back[n] != null).map((n) => back[n]);
@@ -290,7 +352,7 @@ export function createSuggestions({ stateDir, now = Date.now, active = () => tru
     const b = sa && Object.fromEntries(Object.entries(sa).map(([k, v]) => [map[k], v]));
     const same = (x, y) => JSON.stringify(Object.entries(x).sort()) === JSON.stringify(Object.entries(y).sort());
     if (a && b && !same(a, b) && /\d/.test(t)) return { answered: [], open: open.length, approved: [], numbering: { items: a, shown: b } };
-    const pick = a || b;
+    const pick = a || b || onlyOpen(answersOf(t, (r?.items || []).map((i) => i.n), { bare }));   // last: a reply that also names closed items
     return pick ? answer(name, pick, opts) : null;
   }
   // -> null (nothing holds it) | { state: 'open', open: n, items } | { state: 'pending' } for a session whose latest turn is `text`
@@ -312,5 +374,5 @@ export function createSuggestions({ stateDir, now = Date.now, active = () => tru
 
   // every item parked with the owner, across sessions: [{ session, n, text, proposed, why, floor?, at }]
   const ownerItems = () => Object.entries(st.s).flatMap(([session, r]) => ownerOf(r).map((i) => ({ session, n: i.n, text: i.text, proposed: i.proposed, why: i.why, ...(i.floor ? { floor: i.floor } : {}), at: i.answeredAt })));
-  return { file, observe, asked, answer, triaged, ownerItems, ownerMessage, hold, newRound, drop, claimMissing, claimReadyToClose, get: rec, openOf: (n) => openOf(rec(n)), awaiting: (n) => { const r = rec(n); return !!r && (openOf(r).length > 0 || (!!r.asked && !r.clear)); }, list: () => ({ since: st.since, sessions: st.s }) };
+  return { file, reconcile, observe, asked, answer, triaged, ownerItems, ownerMessage, hold, newRound, drop, claimMissing, claimReadyToClose, get: rec, openOf: (n) => openOf(rec(n)), awaiting: (n) => { const r = rec(n); return !!r && (openOf(r).length > 0 || (!!r.asked && !r.clear)); }, list: () => ({ since: st.since, sessions: st.s }) };
 }

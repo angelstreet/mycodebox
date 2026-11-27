@@ -1,0 +1,162 @@
+{
+ "items": [
+  {
+   "n": 1,
+   "tier": "worth",
+   "text": "The fleet's model choice during the free plan's quota window \u2014 the fleet plays --model_choice flash, and when the quota is out (a 5 h window) the runs now stop at step 0 with the reason named: the village does not play in that window at all. Putting the fleet back on auto (Haiku on the owner's Anthr",
+   "at": 1795768394459,
+   "answer": "owner",
+   "by": "opus",
+   "via": "triage",
+   "answeredAt": 1795776478409,
+   "proposed": "no",
+   "why": "spends money on the owner's Anthropic key; owner must decide."
+  },
+  {
+   "n": 2,
+   "tier": "worth",
+   "text": "The Town Hall panel, the largest number left in the owner's rule \u2014 31 of the 100 runs of the window never read the panel and 593 steps name it (the read step is 643 of the 3 132 steps), while 42 runs sat at the cap with a free builder. The zoom-out that is meant to find the Town Hall (TH_ZOOM_AFTER ",
+   "at": 1795768394459,
+   "answer": "no",
+   "by": "opus",
+   "via": "triage",
+   "answeredAt": 1795776478409,
+   "why": "already built and merged per item 11."
+  },
+  {
+   "n": 3,
+   "tier": "worth",
+   "text": "The resource checker judges the crashed runs as played runs \u2014 the 6 crashes of the last 24 h had steps, so coc_resource_check.py measured the owner's rule on them and the lane counted 3 of them as played turns. A separate line in the report (\"N runs ended in a crash and were judged\") would keep the ",
+   "at": 1795768394459,
+   "answer": "no",
+   "by": "opus",
+   "via": "triage",
+   "answeredAt": 1795776478409,
+   "why": "already built and merged per item 7."
+  },
+  {
+   "n": 4,
+   "tier": "smaller",
+   "text": "The words \"unlimited free plan\" (shared/src/lib/ai/usages.py, scripts/agent/flash_run_log.py, TASK-164) describe the price (0) but the plan has a 5 h quota window \u2014 one clause would stop the next reader from reading \"unlimited\" as \"never throttled\".",
+   "at": 1795768394459,
+   "answer": "owner",
+   "by": "opus",
+   "via": "triage",
+   "answeredAt": 1795776478409,
+   "proposed": "no",
+   "why": "already built and merged per item 12.",
+   "floor": "money"
+  },
+  {
+   "n": 5,
+   "tier": "smaller",
+   "text": "A CoC host with no data directory refuses every run with the raw OS error (\"Permission denied: '/var/lib/vpt'\"); a check that names it (\"this host has no CoC data directory\") would say what to do \u2014 that is what cost the A57 its 09:27 run and its trace.",
+   "at": 1795768394459,
+   "answer": "owner",
+   "by": "opus",
+   "via": "triage",
+   "answeredAt": 1795776478409,
+   "proposed": "no",
+   "why": "already built and merged per item 8.",
+   "floor": "money"
+  },
+  {
+   "n": 6,
+   "tier": null,
+   "text": "none left except 1 \u2014 the fleet's model choice during the free plan's quota window (auto \u2192 Haiku on the owner's Anthropic key), which spends money and is held by the owner, not filed; it is recorded in TASK-209 as an open owner item and the run now names what happens in that window instead of crashin",
+   "at": 1795769337045,
+   "answer": "owner",
+   "by": "opus",
+   "via": "triage",
+   "answeredAt": 1795776478409,
+   "proposed": "no",
+   "why": "same as item 1; spending money is the owner's call.",
+   "floor": "money"
+  },
+  {
+   "n": 7,
+   "tier": null,
+   "text": "The resource checker judged the crashed runs as played runs \u2014 the 6 api_error runs of the 24 h sat in the statistics of the owner's rule. Built and merged (int-1a21c2ed95c7fdbb0): the report now carries crashed, crashed_by_stop and its own line (\"6 of the 91 run(s) that played ended in a crash\").",
+   "at": 1795769581030,
+   "answer": "no",
+   "by": "opus",
+   "via": "triage",
+   "answeredAt": 1795776478409,
+   "why": "already built and merged."
+  },
+  {
+   "n": 8,
+   "tier": null,
+   "text": "A CoC host with no data directory refused every run with the bare OS error (\"Permission denied: '/var/lib/vpt'\") and left no trace (the A57's run of 09:27 on 2026-11-26). Built and merged: the refusal now names the directory and what to do with it.",
+   "at": 1795769581030,
+   "answer": "no",
+   "by": "opus",
+   "via": "triage",
+   "answeredAt": 1795776478409,
+   "why": "already built and merged."
+  },
+  {
+   "n": 9,
+   "tier": null,
+   "text": "The same item as 1 (the fleet's model choice during the quota window) \u2014 listed separately in the reflection because it was the line \"none left except 1\". Not built, held by the owner, not filed.",
+   "at": 1795769581030,
+   "answer": "owner",
+   "by": "opus",
+   "via": "triage",
+   "answeredAt": 1795776478409,
+   "proposed": "no",
+   "why": "duplicate of item 1; spending money is the owner's call."
+  },
+  {
+   "n": 10,
+   "tier": null,
+   "text": "none left except 1 (held by the owner) \u2014 the fleet's model choice during the free plan's quota window (auto \u2192 Haiku on the owner's Anthropic key); it spends money, the owner decides, it is already an open owner item in TASK-209 and it is not filed.",
+   "at": 1795770270836,
+   "answer": "owner",
+   "by": "opus",
+   "via": "triage",
+   "answeredAt": 1795776478409,
+   "proposed": "no",
+   "why": "duplicate of item 1; already open owner item in TASK-209.",
+   "floor": "money"
+  },
+  {
+   "n": 11,
+   "tier": null,
+   "text": "The Town Hall panel (the wording of my second list) \u2014 the same item as 2. Built and merged.",
+   "at": 1795770484674,
+   "answer": "no",
+   "by": "opus",
+   "via": "triage",
+   "answeredAt": 1795776478409,
+   "why": "duplicate of item 2, already built and merged."
+  },
+  {
+   "n": 12,
+   "tier": null,
+   "text": "The quota-window wording (the wording of my second list) \u2014 the same item as 4. Built and merged.",
+   "at": 1795770484674,
+   "answer": "no",
+   "by": "opus",
+   "via": "triage",
+   "answeredAt": 1795776478409,
+   "why": "duplicate of item 4, already built and merged."
+  }
+ ],
+ "asked": {
+  "at": 1795768343804,
+  "sig": "130eae05e7ec"
+ },
+ "shown": {
+  "1": 1,
+  "2": 2,
+  "3": 3,
+  "4": 4,
+  "5": 5,
+  "6": 6,
+  "7": 7,
+  "8": 8,
+  "9": 11,
+  "10": 12
+ }
+}
