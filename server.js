@@ -130,7 +130,7 @@ import { createSharedCheckoutGuard, expandHome } from './shared-checkout-guard.j
 import { createFoundBugs, sessionOfRequest, unreportedBugOf, sendBackOf, sendBackText, sweepGroups, equivalentFreeOf } from './found-bugs.js';
 import { goalOf as goalOfPrompt, blockedOrUnknownStatus, lastStatus } from './status-honesty.js';
 import { createGoalGate, createGoalStore, approvedRound, worthAGoal } from './goal-check.js';
-import { createSuggestionTriage } from './suggestion-triage.js';
+import { createSuggestionTriage, claudeOpus } from './suggestion-triage.js';
 import { createSuggestions, createTypedLog, isOwnerTyped, answersOf, ambiguousAnswer, bareNumbersOk } from './suggestions.js';
 import { createManagerOwned, forManagerSession, MANAGER_ACTOR } from './manager-owned.js';
 import { createFinalAccept, isTaskActor, isTaskMessage } from './final-accept.js';
@@ -1295,6 +1295,8 @@ function suggestionHold(name, text, doneAt = null) {
 // owner floor goes to the owner, as a table row, and the session does not wait on it. manager.json `suggestionTriage` live (default) | off.
 const suggestionTriageMode = () => { try { return JSON.parse(readFileSync(managerConfigFile, 'utf8')).suggestionTriage === 'off' ? 'off' : 'live'; } catch { return 'live'; } };
 const suggestionTriage = createSuggestionTriage({ stateDir: STATE_DIR, ledger: suggestions, logEvent: (e) => logEvent(e),
+  // on the active Claude account (claude-accounts.js), like a new session; the binary is found outside the service's PATH (claudeBin)
+  ask: (prompt) => { const a = claudeAccounts.active(); return claudeOpus(prompt, { env: { ...process.env, ...(a?.configDir ? { CLAUDE_CONFIG_DIR: a.configDir } : {}) } }); },
   mode: () => (suggestionTriageMode() === 'live' && reflectionMode() === 'live' ? 'live' : 'off'),
   goalOf: (name) => goalForSession(name).catch(() => ''),
   apply: async (name, decisions) => {

@@ -6,8 +6,8 @@
 // 'suggestion-triage') and the actions log. Switch: manager.json `suggestionTriage` live (default) | off; off, or an Opus error, leaves the old
 // flow (owner / manager answers). Rule text: AGENTS.md "Reflection after an accepted done".
 import { spawn } from 'node:child_process';
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ownerOnly } from './doubt.js';
 
@@ -84,18 +84,27 @@ export function sessionMessage(decisions) {
 // Pure. One 4-column row per owner item: Session | Suggestion | Why you | Opus proposes.
 export const ownerRow = (session, d) => `| ${session} | ${d.n}. ${d.text.replace(/\|/g, '/').slice(0, 90)} | ${d.floor ? `floor: ${d.floor}` : `Opus in doubt: ${d.why.replace(/\|/g, '/').slice(0, 60)}`} | ${d.proposed} |`;
 
+// The claude binary: CLAUDE_BIN, else ~/.local/bin/claude (the installer's place: the systemd service's PATH does not have it, so every live
+// triage failed with "spawn claude ENOENT" on 2026-11-27), else `claude` on PATH.
+export function claudeBin({ env = process.env, home = homedir(), exists = existsSync } = {}) {
+  if (env.CLAUDE_BIN) return env.CLAUDE_BIN;
+  const local = join(home, '.local', 'bin', 'claude');
+  return exists(local) ? local : 'claude';
+}
 // The one Opus call, async (the server must not block): claude -p --model opus, no tools, an empty cwd. -> { ok, text } | { ok: false, error }
-export function claudeOpus(prompt, { bin = process.env.CLAUDE_BIN || 'claude', timeoutMs = Number(process.env.ASK_OPUS_TIMEOUT_MS) || 180000 } = {}) {
+// env: the child's environment (the server adds CLAUDE_CONFIG_DIR of the active Claude account).
+export function claudeOpus(prompt, { bin = claudeBin(), env = process.env, timeoutMs = Number(process.env.ASK_OPUS_TIMEOUT_MS) || 180000 } = {}) {
   return new Promise((resolve) => {
     const cwd = mkdtempSync(join(tmpdir(), 'triage-opus-'));
     let out = '', err = '', settled = false;
     const finish = (r) => { if (settled) return; settled = true; clearTimeout(t); rmSync(cwd, { recursive: true, force: true }); resolve(r); };
-    const p = spawn(bin, ['-p', '--model', 'opus', '--tools', '', '--no-session-persistence', '--disable-slash-commands', '--strict-mcp-config', '--setting-sources', '', '--output-format', 'text', '--system-prompt', SYSTEM], { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+    const p = spawn(bin, ['-p', '--model', 'opus', '--tools', '', '--no-session-persistence', '--disable-slash-commands', '--strict-mcp-config', '--setting-sources', '', '--output-format', 'text', '--system-prompt', SYSTEM], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
     const t = setTimeout(() => { p.kill('SIGTERM'); finish({ ok: false, error: `timeout after ${timeoutMs} ms` }); }, timeoutMs);
     p.stdout.on('data', (d) => { out += d; });
     p.stderr.on('data', (d) => { err += d; });
     p.on('error', (e) => finish({ ok: false, error: e.message }));
-    p.on('close', (code) => finish(code === 0 && out.trim() ? { ok: true, text: out } : { ok: false, error: (err.trim().split('\n').pop() || `exit ${code}`).slice(0, 300) }));
+    p.on('close', (code) => finish(code === 0 && out.trim() ? { ok: true, text: out } : { ok: false, error: `exit ${code}: ${(err.trim() || out.trim()).split('\n').pop() || 'no output'}`.slice(0, 300) }));
+    p.stdin.on('error', () => {});   // claude exited before reading (a limit, a bad flag): EPIPE must not crash the server; 'close' reports it
     p.stdin.end(prompt);
   });
 }
