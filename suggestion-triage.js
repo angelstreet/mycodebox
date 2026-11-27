@@ -53,7 +53,7 @@ export function parseVerdicts(reply, items) {
     const m = /^\W*(\d{1,2})\s*[:.)-]\s*\**\s*(YES|NO|DOUBT)\b\**\s*(?:\(?\s*proposed?\s*:?\s*(yes|no)\s*\)?)?\s*[-:—–]*\s*(.*)$/i.exec(line.trim());
     if (!m || !want.has(Number(m[1])) || out[m[1]]) continue;
     const verdict = m[2].toLowerCase();
-    out[m[1]] = { verdict, proposed: verdict === 'doubt' ? (m[3] || 'no').toLowerCase() : verdict, why: m[4].trim().slice(0, 200) };
+    out[m[1]] = { verdict, proposed: verdict === 'doubt' ? (m[3] || 'no').toLowerCase() : verdict, ...(verdict === 'doubt' && m[3] ? { explicit: true } : {}), why: m[4].trim().slice(0, 200) };
   }
   for (const i of items) out[i.n] ||= { verdict: 'doubt', proposed: 'no', why: 'Opus gave no verdict for this item' };
   return out;
@@ -66,8 +66,10 @@ export function decide(items, verdicts) {
     if (saysBuilt(i.text) || refOf(i.text) != null) return { n: i.n, text: i.text, decision: 'no', proposed: 'no', why: saysBuilt(i.text) ? 'the session says it is already built' : `the same item as ${refOf(i.text)}`, opus: verdicts[i.n]?.verdict || 'none' };
     const v = verdicts[i.n] || { verdict: 'doubt', proposed: 'no', why: 'no verdict' };
     const floor = floorOf(i.text);   // the item's own words only, never its context
-    const decision = floor || v.verdict === 'doubt' ? 'owner' : v.verdict;
-    return { n: i.n, text: i.text, decision, proposed: v.proposed, why: v.why, ...(floor ? { floor } : {}), opus: v.verdict };
+    // Opus is in doubt but proposes no (owner 2026-11-27: the owner does not see those): answered no, only recorded. No stated proposal = no clear answer: the owner.
+    const proposedNo = v.verdict === 'no' || (v.verdict === 'doubt' && v.explicit && v.proposed === 'no');   // a floor never forces a yes, so a no on a floor item is safe too
+    const decision = proposedNo ? 'no' : floor || v.verdict === 'doubt' ? 'owner' : v.verdict;
+    return { n: i.n, text: i.text, decision, proposed: v.proposed, why: v.why, ...(v.verdict === 'doubt' && !v.explicit ? { unclear: true } : {}), ...(floor ? { floor } : {}), opus: v.verdict };
   });
 }
 

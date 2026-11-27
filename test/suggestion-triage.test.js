@@ -22,7 +22,7 @@ const LIST = [
   `STATUS: needs-manager: ${ASK_WORDS} — should I do 1?`,
 ].join('\n');
 // What Opus would answer: it says YES to the floor items on purpose, to prove the floors win over it.
-const OPUS = ['1: YES - cheap test, closes a real race', '2: DOUBT proposed no - large scope, product choice', '3: NO - churn with no value',
+const OPUS = ['1: YES - cheap test, closes a real race', '2: DOUBT proposed yes - large scope, product choice', '3: NO - churn with no value',
   '4: YES - better errors', '5: YES - good publicity', '6: YES - saves space'].join('\n');
 const t0 = Date.parse('2026-11-27T09:00:00Z');
 
@@ -71,11 +71,11 @@ test('a doubtful suggestion reaches the owner as a table row, and the session do
   r.ledger.observe('s1', LIST);
   await r.tri.triage('s1');
   const two = r.ledger.get('s1').items.find((i) => i.n === 2);
-  assert.equal(two.answer, 'owner'); assert.equal(two.proposed, 'no');
+  assert.equal(two.answer, 'owner'); assert.equal(two.proposed, 'yes');
   // the owner row: 4 columns, with Opus's proposed answer
   const row = r.owner[0].rows.find((x) => x.includes('2. rework'));
   assert.equal(row.split('|').length - 2, 4);
-  assert.match(row, /Opus in doubt: large scope/); assert.match(row, /\| no \|$/);
+  assert.match(row, /Opus in doubt: large scope/); assert.match(row, /\| yes \|$/);
   // nothing holds the session any more: no open item, its done is not held, the goal check does not push it
   assert.equal(r.ledger.openOf('s1').length, 0);
   assert.notEqual(r.ledger.hold('s1', 'STATUS: done — x')?.state, 'open');   // only the approved item 1 is work (a new round), not item 2
@@ -93,7 +93,7 @@ test('a doubtful suggestion reaches the owner as a table row, and the session do
   assert.equal((await r.tri.triage('s1')).skipped, true);
   assert.equal(r.sent.length, 1); assert.equal(r.prompts.length, 1);
   // listed for the owner, and only the owner answers it later
-  assert.ok(r.ledger.ownerItems().some((i) => i.session === 's1' && i.n === 2 && i.proposed === 'no'));
+  assert.ok(r.ledger.ownerItems().some((i) => i.session === 's1' && i.n === 2 && i.proposed === 'yes'));
   assert.equal(r.ledger.answer('s1', { 2: 'yes' }, { by: 'manager' }).answered.length, 0);
   assert.equal(r.ledger.ownerMessage('s1', 'no 2', { by: 'owner' }).answered[0].answer, 'no');
   assert.equal(r.ledger.ownerItems().some((i) => i.n === 2), false);
@@ -302,7 +302,7 @@ const COC = {
 };
 
 test('coc-daily-20261127 transcript: only item 1 stays open and reaches the owner; references and built items never do', async () => {
-  const r = rig({ reply: { ok: true, text: '1: DOUBT proposed no - spends money on the owner\'s key\n2: YES - x\n3: YES - x\n4: YES - x\n5: YES - x' } });
+  const r = rig({ reply: { ok: true, text: '1: DOUBT proposed yes - spends money on the owner\'s key\n2: YES - x\n3: YES - x\n4: YES - x\n5: YES - x' } });
   let t = t0;
   for (const turn of [COC.first, COC.t0849, COC.t0853, COC.t0904, COC.t0908]) r.ledger.observe('coc', turn, { at: (t += 60000) });
   const items = r.ledger.get('coc').items;
@@ -312,7 +312,7 @@ test('coc-daily-20261127 transcript: only item 1 stays open and reaches the owne
   assert.equal(r.prompts.length, 1);
   assert.doesNotMatch(r.prompts[0], /^\d+\. .*(?:none left except|same item as)/m);
   // item 1 reaches the owner on Opus's doubt (its "spends money" lies past the 300 characters the ledger keeps, as live)
-  assert.deepEqual(r.ledger.ownerItems().map((i) => [i.session, i.n, i.proposed]), [['coc', 1, 'no']]);
+  assert.deepEqual(r.ledger.ownerItems().map((i) => [i.session, i.n, i.proposed]), [['coc', 1, 'yes']]);
   assert.equal(r.owner[0].rows.length, 1);
 });
 
@@ -330,14 +330,52 @@ test('an item the session calls built is never the owner\'s, and the floor reads
   assert.equal(decide(items, { 1: { verdict: 'yes', proposed: 'yes', why: '' } })[0].decision, 'yes');
 });
 
-test('the live coc-daily ledger of 2026-11-27 is cleaned at start: only item 1 stays with the owner', () => {
+test('the live coc-daily ledger of 2026-11-27 is cleaned at start: built / duplicate items closed, the proposed-no item 1 hidden but kept', () => {
   const dir = tmp('triage-reconcile-');
   const rec = JSON.parse(readFileSync(new URL('./fixtures/coc-daily-20261127-suggestions.json', import.meta.url), 'utf8'));
   writeFileSync(join(dir, 'suggestions.json'), JSON.stringify({ since: 1, s: { 'coc-daily-20261127': rec } }));
   assert.deepEqual(rec.items.filter((i) => i.answer === 'owner').map((i) => i.n), [1, 4, 5, 6, 9, 10]);   // as the first live triage left it
   const ledger = createSuggestions({ stateDir: dir, now: () => t0, log: { log() {}, error() {} } });
-  assert.deepEqual(ledger.ownerItems().map((i) => i.n), [1]);
+  assert.deepEqual(ledger.ownerItems().map((i) => i.n), []);   // item 1 is Opus-proposed no: hidden (owner 2026-11-27)
+  assert.deepEqual(ledger.chipItems(), []);
+  const kept = ledger.get('coc-daily-20261127').items.find((i) => i.n === 1);
+  assert.equal(kept.answer, 'no'); assert.equal(kept.via, 'hide-no'); assert.equal(kept.proposed, 'no'); assert.match(kept.why, /spends money/);
   const by = Object.fromEntries(ledger.get('coc-daily-20261127').items.map((i) => [i.n, i.answer]));
   assert.deepEqual([by[4], by[5], by[6], by[9], by[10]], ['built', 'built', 'duplicate', 'duplicate', 'duplicate']);
   assert.equal(ledger.reconcile(), 0, 'idempotent');
+});
+
+// ---- owner 2026-11-27: "in suggestions i dont want to see the ones Opus said no" ----
+test('an item Opus proposes no is answered no and hidden, only recorded; a proposed-yes or unclear one shows', async () => {
+  const r = rig({ reply: { ok: true, text: '1: YES - ok\n2: DOUBT proposed no - not worth it\n3: DOUBT proposed yes - maybe\n4: DOUBT proposed no - skip, money anyway\n5: DOUBT - cannot tell\n6: NO - x' } });
+  r.ledger.observe('s1', LIST);
+  await r.tri.triage('s1');
+  const by = Object.fromEntries(r.ledger.get('s1').items.map((i) => [i.n, i]));
+  assert.equal(by[2].answer, 'no'); assert.equal(by[2].by, 'opus');   // told no like any no
+  assert.equal(by[4].answer, 'no');   // a floor item Opus proposes no is a no too
+  assert.equal(by[3].answer, 'owner'); assert.equal(by[3].proposed, 'yes');
+  assert.equal(by[5].answer, 'owner');   // no stated proposal = no clear answer: the owner sees it
+  assert.deepEqual(r.ledger.chipItems().map((i) => i.n).sort(), [3, 5]);
+  assert.deepEqual(r.ledger.ownerItems().map((i) => i.n).sort(), [3, 5]);
+  assert.deepEqual(r.owner[0].ds.map((d) => d.n).sort(), [3, 5]);
+  assert.match(r.sent[0].text, /NO, do not build: 2\. rework/);
+  assert.doesNotMatch(r.sent[0].text, /With the owner, NOT for you:[^.]*2\./);
+  // recorded in manager-asks.jsonl
+  const rec = asks(r.dir).find((a) => a.point === 'suggestion-triage' && a.n === 2);
+  assert.equal(rec.verdict, 'no'); assert.equal(rec.opus, 'doubt'); assert.equal(rec.proposed, 'no'); assert.equal(rec.source, 'opus');
+});
+
+test('already parked proposed-no items disappear at start, the record stays, an unclear one and a dismissed one are untouched', () => {
+  const dir = tmp('triage-hide-');
+  const item = (n, extra) => ({ n, text: `item ${n}`, at: t0, ...extra });
+  const park = (n, proposed, why) => item(n, { answer: 'owner', by: 'opus', via: 'triage', answeredAt: t0, proposed, why });
+  writeFileSync(join(dir, 'suggestions.json'), JSON.stringify({ since: 1, s: { s1: { asked: { sig: 'x', at: t0 }, items: [park(1, 'no', 'large scope'), park(2, 'yes', 'worth a look'), park(3, 'no', 'Opus gave no verdict for this item'), item(4, { answer: 'no', by: 'owner', via: 'dashboard', answeredAt: t0 })] } } }));
+  const ledger = createSuggestions({ stateDir: dir, now: () => t0, log: { log() {}, error() {} } });
+  assert.equal(ledger.reconcile(), 0);   // already done when the ledger opened
+  assert.deepEqual(ledger.ownerItems().map((i) => i.n), [2, 3]);
+  const one = ledger.get('s1').items.find((i) => i.n === 1);
+  assert.equal(one.answer, 'no'); assert.equal(one.via, 'hide-no'); assert.equal(one.why, 'large scope');
+  assert.equal(ledger.get('s1').items.find((i) => i.n === 4).by, 'owner');
+  assert.equal(ledger.reconcile(), 0, 'idempotent');
+  assert.match(readFileSync(join(dir, 'suggestions.jsonl'), 'utf8'), /hide-no/);   // the actions log keeps the record
 });
