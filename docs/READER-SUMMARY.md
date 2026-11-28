@@ -54,12 +54,14 @@ reader, unchanged) and **`>_`** (terminal). The choice is saved per browser like
 **The reply / conversation switch is always reachable (owner addendum, 2026-11-28).** Today's "last reply only" /
 "earlier conversation" button was the first line of the scrolling text, so after scrolling down it took a long scroll back
 to reach it. It is now sticky at the top of the reader (`public/style.css`, merged b01ac09); that stays until step 2.
-Is one button enough? No: a toggle whose label names the *other* mode does not show which mode you are in, and in step 2
-it would sit next to Brief / All / `>_`. Step 2 replaces it with a second, always visible segmented control in the card
-header, outside the scroll area: **Reply | Conversation** (scope: the last turn, or every loaded turn). Scope and view
-are separate choices: Brief + Conversation is the question-and-summary list of older turns, All + Reply is today's
-default. The active segment is filled, both are one tap from any scroll position, and "↑ older conversation" stays at
-the top of the loaded text, as today. The choice is saved per browser like the view.
+Is one button enough? No: a toggle whose label names the *other* mode does not show which mode you are in. **Placement
+(owner decision, 2026-11-28, shipped 8cd3988):** on desktop the switch sits left of the model label under the composer
+(`switchReaderMode`, `syncDockModel` in `public/app.js`), always visible whatever the scroll; phones keep the sticky
+in-reader button. Step 2 builds on that spot instead of a header-only control: it turns the switch there into a two-way
+**Reply | Conversation** control (scope: the last turn, or every loaded turn) with the active segment filled, and the
+Brief / All / `>_` view choice sits beside it on the same line. Scope and view are separate choices: Brief +
+Conversation is the question-and-summary list of older turns, All + Reply is today's default. "↑ older conversation"
+stays at the top of the loaded text, as today. Both choices are saved per browser.
 
 | Item | Brief view | Why |
 |---|---|---|
@@ -172,7 +174,8 @@ const actions = `<div class="rd-actions">${copyPromptButtonHtml({ text: audioTex
   spoken ? audioChipHtml({ text: spoken, label: 'Read summary aloud' }) : ''}</div>`;
 ```
 
-- No summary in the turn: no play button. The STATUS headline is not read either.
+- No summary in the turn: no play button, a muted "no summary yet" hint in its place. The STATUS headline is not read either.
+- Browser proof after a deploy: `scripts/reader-audio-check.js <baseUrl> <session>` (REFERENCE).
 - Step 2: the chip moves into the summary card header (mockup); "Copy reply" stays in the All view.
 - `tts.js`, `audio-chip.js` and the `/api/tts` routes do not change: a summary of 10 lines of 160 characters is at most
   1 600 characters, well under `MAX_TEXT`, and the hash cache works as before (same summary, same audio file).
@@ -183,7 +186,7 @@ const actions = `<div class="rd-actions">${copyPromptButtonHtml({ text: audioTex
 | File | Change |
 |---|---|
 | `public/reader-summary.js` (new) | `summaryOf`, `briefOf` (pure) |
-| `public/app.js` | `paintReader`: Brief / All / `>_` control and the Reply / Conversation control (replaces the sticky `rd-more` button), summary card, pinned STATUS card, spoken text; `renderReply` draws `briefOf` segments in Brief; `toggleReader` becomes a three-way choice saved in `localStorage['ghosty.readerView']` (an old `ghosty.reader` value maps to Brief or `>_`) |
+| `public/app.js` | `paintReader`: Brief / All / `>_` control and the Reply / Conversation control under the composer, left of the model label (builds on `switchReaderMode`, 8cd3988; phones keep the sticky `rd-more` button), summary card, pinned STATUS card, spoken text; `renderReply` draws `briefOf` segments in Brief; `toggleReader` becomes a three-way choice saved in `localStorage['ghosty.readerView']` (an old `ghosty.reader` value maps to Brief or `>_`) |
 | `public/style.css` | `.rd-sum`, `.rd-status`, `.rd-steps`, `.rd-ai-line`, segmented control; the reader's bottom padding for the pinned STATUS |
 | `public/icons.js` | no new icon (play, chevrons exist) |
 | `status-honesty.js` | `lastStatus` and `headlineOf` moved to `public/status-line.js` (pure) and re-exported here, so the browser can import them |

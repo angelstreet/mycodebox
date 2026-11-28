@@ -2748,13 +2748,17 @@ later reader view: [READER-SUMMARY](READER-SUMMARY.md).
 - `public/reader-summary.js` (pure, server and browser): `summaryOf(text)` -> `{ lines, lineCount, tooLong }` for the last `Summary:`
   block (`**Summary:**` too), ended by `Verification:`, a STATUS line, or a blank line not followed by a list item; a pane row indented
   deeper than the block's first line and not a new bullet joins the line above. `spokenSummaryOf(lines)` is what the play button reads.
-- `public/status-line.js` (pure): `lastStatus`, `headlineOf` (moved from `status-honesty.js`, which re-exports them) and
-  `spokenStatusOf` ("Status: <word>. <claim>").
+- `public/status-line.js` (pure): `lastStatus`, `headlineOf` (moved from `status-honesty.js`, which re-exports them). It no longer
+  has a spoken STATUS: the play button reads the summary only.
 - `GET /api/reply/<s>` adds `summary: string[] | null` and `status: { kind, headline } | null`, read from a Claude session's own file
   (`conversation.js` `lastReplyText`: the assistant text since the owner's last prompt), else the pane's closing text (the one the
   done-check reads), else the reply (a Mac session's last stop).
 - The reader's play button reads the summary only (owner 2026-11-28: "has to be the summary only"); never the STATUS line, the reply
-  or the conversation. No summary in the turn: no play button.
+  or the conversation. No summary in the turn: no play button, a muted "no summary yet" hint (`.rd-nosum`) in its place.
+- `scripts/reader-audio-check.js <baseUrl> <session> [outDir]` (dev-only, `PLAYWRIGHT_CORE` like `reader-width-check.js`): opens the
+  reader of one session on a running dashboard, desktop width, with `/api/tts`, `/api/resize` and layout writes answered in the browser.
+  With a summary it clicks play and checks the one TTS request is `spokenSummaryOf(summary)`; without one it checks the hint. Prints
+  the URL and a screenshot path: the browser proof for a reader change after its deploy.
 - `done-check.js` (R) `summaryGapOf` / `summaryMessage`: a closing turn with no summary or a too long one gets one push per distinct
   STATUS line, at most `SUMMARY_PUSHES_PER_DAY` (2) a day, while idle, no draft, the host quiet. When the closing-review push (C) fires
   for the same line, it carries the ask ("Also: ..."), so the session gets one message. The first run records the lines it finds and

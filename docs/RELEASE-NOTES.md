@@ -73,6 +73,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **"no summary yet" where the play button would be** — a reply without a `Summary:` block now shows a muted hint instead of no button at all, so it does not look broken. `spokenStatusOf` (unused since the summary-only play button) is gone from `public/status-line.js`. New dev check `scripts/reader-audio-check.js <baseUrl> <session>`: the reader's play button on a running dashboard, headless, read-only · area: reader
+
 - **The Waste tab shows when each advisory last reached the manager, and a phone-width check now guards every view** — one line per advisory kind ("5 h ago · session" or "never"); a single list of advisory kinds with a drift test; a daily 390 px overflow check over the page map; the manager restart log prints the handover line it reads.
 
 - **The triage record says which rule and which words sent a suggestion to the owner** — each floor item's `manager-asks.jsonl` line (`point: suggestion-triage`) now has `floorRule` (`suggestion-triage FLOORS.<name>` or `doubt.js ownerOnly (ownerFloorMatch / hardMatch)`) and `floorWords` (the matched words, e.g. "wipe the backups"), so a false floor like the 2026-11-28 "drops" is found by reading the record, not by the owner. `suggestion-triage.js` `floorMatchOf` (`floorOf` is now its `.floor`) · tests: `test/suggestion-triage.test.js` · area: harness

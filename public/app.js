@@ -2880,8 +2880,10 @@ function paintReader(cell, n, opts = {}) {
   // The play button reads the agent's `Summary:` lines only (owner 2026-11-28: "has to be the summary only ... I read it then I click play"):
   // never the reply (over tts.js MAX_TEXT, the chip spun and failed) and never the STATUS line. No summary in the turn = no play chip.
   const spoken = spokenSummaryOf(c?.summary);
+  // where the play button would be: a muted hint, so a reply without a `Summary:` block does not look like a missing button (owner triage 2026-11-28)
+  const NO_SUMMARY_HINT = '<span class="rd-nosum" title="The agent wrote no Summary: block in this reply, so there is nothing to read aloud">no summary yet</span>';
   const actions = audioText
-    ? `<div class="rd-actions">${copyPromptButtonHtml({ text: audioText, label: 'Copy reply' })}${spoken ? audioChipHtml({ text: spoken, label: 'Read summary aloud' }) : ''}</div>`
+    ? `<div class="rd-actions">${copyPromptButtonHtml({ text: audioText, label: 'Copy reply' })}${spoken ? audioChipHtml({ text: spoken, label: 'Read summary aloud' }) : NO_SUMMARY_HINT}</div>`
     : '';
   const more = full && c.fullPartial ? '<button class="rd-more" data-act="older">\u2191 older conversation</button>' : '';
   const html = `<button class="rd-more" data-act="${full ? 'less' : 'more'}">${full ? 'last reply only' : '\u2191 earlier conversation'}</button>${more}${body}${actions}`;
