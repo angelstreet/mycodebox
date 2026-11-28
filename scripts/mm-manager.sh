@@ -32,6 +32,8 @@ BATCH_S="${BATCH_S:-60}"
 MM_RUNBOOK="${MM_RUNBOOK:-$REPO/.manager-s4.md}"
 MCODE="${MCODE:-$HOME/.local/bin/mcode}"
 NODE_BIN="${NODE_BIN:-$HOME/.local/node-v24.21.0-linux-x64/bin}"
+# The pinned node is codebox's; elsewhere (a cloud VM, a fresh box) every node call below would fail silently: use the one on PATH.
+[ -x "$NODE_BIN/node" ] || { _n=$(command -v node 2>/dev/null) && NODE_BIN=$(dirname "$_n"); }
 MCODE_TIMEOUT="${MCODE_TIMEOUT:-10m}"
 
 MM_LOG="$STATE_DIR/mm-manager-decisions.jsonl"

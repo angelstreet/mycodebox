@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The whole test suite passes in a cloud session** — seven tests failed only on the Anthropic cloud VM: two relied on chmod, which root ignores (now skipped as root); two read a killed child as alive because the VM leaves it a zombie (a zombie now counts as gone, and the orphaned lease waiter gets 10 s under load); the rtsp night test downloaded the public channel list from the internet (it now uses an empty local list); and `mm-manager.sh` used a node path that exists only on codebox (it now falls back to the `node` on PATH). · area: tests
+
 - **Claude Code notices under a finished turn are cut by position, and a nightly check catches hidden stops** — any paragraph Claude prints below its `✻ … for 7m` marker with no prompt, tool call or spinner after it is now dropped before the STATUS line is read, so a notice wording Claude adds later cannot grey a needs-owner LED again. The daily harness-health check reads the pane of every idle agent session and reports `harness-health:hidden-stop` when one ends on a needs-owner / needs-manager / blocked line the dashboard does not show. · area: status
 
 - **API credit shows the real spend** — the live Usage and Cost Analytics API puts each row's amount under `cost` (`{cost:{amount, list_amount, currency, requests}}`), while the parser read only a top-level `amount`, so every org showed $0 with "no cost recorded yet" (the AngelStreet org had $200 this month). `parseCostReport` now reads `cost.amount`; a fixture of the live shape is in `test/api-credit.test.js` · area: usage

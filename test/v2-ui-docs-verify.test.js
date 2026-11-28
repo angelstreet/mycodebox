@@ -129,7 +129,7 @@ test('a corrupt task log reads as unknown in API and view, never done', async ()
   assert.ok(!/done/i.test(listHtml([row]).match(/tk-badge[^]*?<\/span><\/span>/)[0]));
 });
 
-test('store_error exposed by GET does not leak absolute filesystem paths', async () => {
+test('store_error exposed by GET does not leak absolute filesystem paths', { skip: process.getuid?.() === 0 && 'root reads and writes past chmod (the Claude Code cloud VM runs as root)' }, async () => {
   const { dir, store, call } = setup();
   const { task_id: id } = await store.createTask(spec());
   chmodSync(join(dir, 'tasks', id, 'events.jsonl'), 0o444);

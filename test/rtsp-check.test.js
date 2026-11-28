@@ -160,7 +160,9 @@ async function world({ devices, pool, leaseBusy = false, leaseMissing = false, l
   const E = { ...env, PATH: pathV, GHOSTY_STATE_DIR: state, RTSP_POOL_FILE: poolFile, RTSP_CHECK_TOKEN_CMD: path.join(dir, 'tok'),
     RTSP_CHECK_SERVERS: `envA=http://127.0.0.1:${server.address().port}`, RTSP_SETTLE_SECONDS: '0', RTSP_CONFIRM_SECONDS: '0', RTSP_API_RETRY_SECONDS: '0', RTSP_BLACK_RESAMPLE_SECONDS: '0',
     RTSP_SOURCE_LUMA_RESAMPLE_SECONDS: '0', RTSP_CHECK_SSH: 'h1=local', RTSP_LOOPBACK_HOSTS: 'h1',
-    RTSP_INSTALL_VERIFY_SECONDS: '0', RTSP_TITLE_CHECK_SECONDS: '0', RTSP_TILE_RECHECK_SECONDS: '0' };  // the night verifies what it installed: no wait in the tests
+    RTSP_INSTALL_VERIFY_SECONDS: '0', RTSP_TITLE_CHECK_SECONDS: '0', RTSP_TILE_RECHECK_SECONDS: '0',   // the night verifies what it installed: no wait in the tests
+    RTSP_CHANNEL_LISTS: path.join(dir, 'none.m3u') };   // never the iptv-org list online nor ~/virtualpytest: a test that wants a list sets its own
+  writeFileSync(path.join(dir, 'none.m3u'), '#EXTM3U\n');
   // the ssh alias must not run ssh in tests: the probe goes through a fake ssh that runs the command locally
   sh(dir, 'ssh', 'shift 5 2>/dev/null; eval "$*"');
   return { E, state, posts, restarts, devices, close: () => server.close() };
