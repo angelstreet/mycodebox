@@ -94,7 +94,7 @@ export function windowsOf(j, now) {
     const w = rl[k];
     if (!w || !Number.isFinite(w.used_percentage)) continue;
     const resetsAt = Number.isFinite(w.resets_at) ? w.resets_at : null;
-    if (resetsAt != null && resetsAt * 1000 <= now) out.push({ name, usedPercent: 0, resetsAt: null, expired: true });
+    if (resetsAt != null && resetsAt * 1000 <= now) out.push({ name, usedPercent: 0, resetsAt: null, expired: true, resetAt: resetsAt * 1000 });
     else out.push({ name, usedPercent: Math.round(w.used_percentage * 10) / 10, resetsAt });
   }
   return out;
@@ -104,9 +104,18 @@ export function windowsOf(j, now) {
 // A fresh reading of the account's own windows with room in all of them: proof it is not at its limit.
 export const READING_FRESH_MS = 15 * 60e3;
 export function hasHeadroom(reading, now) {
-  const ws = (reading?.windows || []).filter((w) => !w.expired);
-  return !!reading?.at && now - reading.at < READING_FRESH_MS && ws.length > 0 && ws.every((w) => Number.isFinite(w.usedPercent) && w.usedPercent < LIMIT_PCT);
+  const ws = reading?.windows || [], active = ws.filter((w) => !w.expired);
+  return ws.length > 0 && ws.every((w) => Number.isFinite(w.usedPercent) && w.usedPercent < LIMIT_PCT)
+    && (!active.length || (!!reading.at && reading.at <= now && now - reading.at < READING_FRESH_MS));
 }
+
+// The quota's own timestamp, or an explicitly recorded reset we have now crossed. An expired-only reading needs no
+// new turn/status-line invocation to prove refill. Preserve that boundary when the raw reading predates a fallback mark.
+function headroomSince(reading, now) {
+  if (!hasHeadroom(reading, now)) return 0;
+  return Math.max(reading.at || 0, ...reading.windows.filter((w) => w.expired && Number.isFinite(w.resetAt)).map((w) => w.resetAt));
+}
+const markClearedByReading = (mark, reading, now) => !!mark && headroomSince(reading, now) > (mark.at || 0);
 
 export function accountState({ windows = [], mark = null, now }) {
   const full = windows.filter((w) => !w.expired && Number.isFinite(w.usedPercent) && w.usedPercent >= LIMIT_PCT);
@@ -172,9 +181,10 @@ export function accountsHealth(stateDir, { home = homedir(), now = Date.now, exc
   try { cfg = normalize(JSON.parse(readFileSync(join(stateDir, 'claude-accounts.json'), 'utf8')), home); } catch { return { total: 0, usable: [], allUsedUp: false }; }
   const t = now();
   const ok = cfg.accounts.filter((a) => !exclude.includes(a.id) && hasLogin(a)).filter((a) => {
-    let windows = [];
-    try { windows = windowsOf(JSON.parse(readFileSync(rateFile(stateDir, a.id), 'utf8')), t); } catch { /* no reading yet: usable */ }
-    return !accountState({ windows, mark: cfg.marks[a.id], now: t }).exhausted;
+    let reading = { windows: [], at: null };
+    try { const j = JSON.parse(readFileSync(rateFile(stateDir, a.id), 'utf8')); reading = { windows: windowsOf(j, t), at: Number(j.at) || null }; } catch { /* no reading yet: usable */ }
+    const mark = cfg.marks[a.id];
+    return !accountState({ windows: reading.windows, mark: markClearedByReading(mark, reading, t) ? null : mark, now: t }).exhausted;
   });
   const usable = [...ok.filter((a) => a.id === cfg.active), ...ok.filter((a) => a.id !== cfg.active)].map((a) => ({ id: a.id, configDir: a.configDir || null }));
   return { total: cfg.accounts.length, usable, allUsedUp: cfg.accounts.length > 0 && !usable.length };
@@ -256,7 +266,7 @@ export function createClaudeAccounts({ file, stateDir, home = homedir(), now = D
     let dirty = false;
     // A mark goes when it ran out, or when the account's own reading, taken after the mark, shows headroom (the stop text
     // was another account's pane, or the limit moved): the account's own windows decide.
-    for (const [id, m] of Object.entries(c.marks)) if (m.until <= t || (readings[id].at > (m.at || 0) && hasHeadroom(readings[id], t))) { delete c.marks[id]; dirty = true; }
+    for (const [id, m] of Object.entries(c.marks)) if (m.until <= t || markClearedByReading(m, readings[id], t)) { delete c.marks[id]; dirty = true; }
     states = Object.fromEntries(c.accounts.map((a) => [a.id, accountState({ windows: readings[a.id].windows, mark: c.marks[a.id], now: t })]));
     const from = c.active, to = pickAccount(c, states);
     if (to && to !== from) { c.active = to; dirty = true; }
@@ -273,11 +283,15 @@ export function createClaudeAccounts({ file, stateDir, home = homedir(), now = D
     claudeJsonFor(id = load().active) { const a = byId(id); return a?.configDir ? join(a.configDir, '.claude.json') : null; },
     refresh,
     // The account behind `id` hit its limit: block it until `until` (ms) or its window's reset, then re-pick.
-    async markExhausted(id, { until = null, reason = 'usage limit reached', confirmed = false, window = null } = {}) {
+    async markExhausted(id, { until = null, reason = 'usage limit reached', confirmed = false, window = null, observedAt = null } = {}) {
+      await refresh();   // a pane tick may run before the startup quota poll; use the account's actual reading
       const c = load(), t = now();
       if (!byId(id)) return null;
-      if (!confirmed && hasHeadroom(readings[id], t)) {   // an unverified sighting can be an old stop replay
-        if (c.marks[id]) { delete c.marks[id]; await save(); }
+      const stopAt = Number.isFinite(observedAt) ? observedAt : t;
+      if ((!confirmed && hasHeadroom(readings[id], t)) || headroomSince(readings[id], t) > stopAt) {
+        // A confirmed stop still loses to refill evidence newer than the session's last activity. Seeing the same old
+        // line after a reset (or a service restart) must not create a new one-hour mark.
+        if (markClearedByReading(c.marks[id], readings[id], t)) { delete c.marks[id]; await save(); }
         return refresh();
       }
       const windows = readings[id]?.windows || [];

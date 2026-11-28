@@ -25,9 +25,9 @@ export function createManagerRotation({ accounts, restart, alert, record = async
     if (!from) return { action: 'none' };   // no claude process: manager-watch.sh relaunches a dead manager
     if (limitStop && marked.get(session) !== from) {
       marked.set(session, from);
-      await accounts.markExhausted(from, { reason: `usage limit stop in ${session}`, confirmed: true });
+      await accounts.markExhausted(from, { reason: `usage limit stop in ${session}`, confirmed: true, observedAt: row.lastActivity });
       await refresh();
-    }
+    } else if (limitStop) await refresh();   // a waiting manager must see its refill without waiting for the periodic quota poll
     const view = accounts.view();
     const of = (id) => view.accounts.find((a) => a.id === id);
     if (!limitStop && !of(from)?.exhausted) { told.delete(session); return { action: 'none' }; }
