@@ -124,7 +124,8 @@ export function createManagerEvents({ stateDir, managerSessions = () => [], fs: 
     // routine deploy start/done (69 % of the feed) are not events: kept only when a lease blocked the deploy; failed/orphan/approve/lease-freed pass.
     if (cls.kind === 'deploy' && (cls.state === 'start' || cls.state === 'done') && !(Array.isArray(event.blockedBy) && event.blockedBy.length)) return null;
     const sessions = managerSessions() || [];
-    if (cls.session && sessions.includes(cls.session)) return null;
+    // the restart-yourself advisory is ABOUT the manager's own session and addressed to it: the own-session drop must not eat it (2026-11-28: it never reached the manager)
+    if (cls.session && sessions.includes(cls.session) && cls.kind !== 'manager-restart-advisory') return null;
 
     const at = event.at || new Date(now()).toISOString();
     const rec = { at, key: event.key, kind: cls.kind };
@@ -140,7 +141,7 @@ export function createManagerEvents({ stateDir, managerSessions = () => [], fs: 
     if (cls.kind === 'overlap' && event.overlap && typeof event.overlap === 'object') rec.overlap = event.overlap;
     if (cls.kind === 'shared-checkout-dirty' && event.sharedCheckout && typeof event.sharedCheckout === 'object') rec.sharedCheckout = event.sharedCheckout;
     if (cls.kind === 'bug' && event.bug && typeof event.bug === 'object') rec.bug = event.bug;
-    if (cls.kind === 'context-advisory' && event.advisory && typeof event.advisory === 'object') rec.advisory = event.advisory;
+    if ((cls.kind === 'context-advisory' || cls.kind === 'manager-restart-advisory') && event.advisory && typeof event.advisory === 'object') rec.advisory = event.advisory;
     if (cls.kind === 'no-progress' && event.progress && typeof event.progress === 'object') rec.progress = event.progress;
     if (typeof event.handled === 'string' && event.handled) rec.handled = event.handled.slice(0, 40);   // 'session': already delivered to the session (integration-notify.js); the wake filter skips it
     rec.title = typeof event.title === 'string' ? event.title : '';

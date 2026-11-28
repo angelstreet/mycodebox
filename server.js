@@ -1470,6 +1470,7 @@ const doneCheck = createDoneCheck({
   goalOf: async (name) => { try { return goalOfPrompt(readFileSync(join(homedir(), 'handovers', `${String(name).replace(/[^\w.-]/g, '')}.prompt.md`), 'utf8')); } catch { return ''; } },
   goalGate,   // (H) goal check
   integrationsOf: (name) => integrationLane.mergedFor(name),   // (O) release note / bug record evidence
+  lanePendingOf: async () => integrationLane.list({ state: 'queued,running', limit: 500 }),   // any branch in the lane now is on its way to main: no "git disagrees" for it
   pendingLiveOf: async (name) => deployLive.pendingOf(integrationLane.list({ state: 'deployed', limit: 100 }).filter((r) => (r.session === name || r.forSession === name) && Date.now() - (Date.parse(r.endedAt || '') || 0) < 12 * 3600e3)),   // (P) "deployed" claimed for an integration that is not live yet
   proofMode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).proofRisk; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },   // (P) proof by risk
   send: (name, text) => harnessSend(name, text),

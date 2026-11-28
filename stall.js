@@ -27,6 +27,7 @@
 import { waitsOnOwnJob, jobRefs, hasRef } from './job-refs.js';
 import { neutralizeRoutineHostUnit } from './host-unit-routine.js';
 import { neutralizeRoutineRestart } from './routine-restart.js';
+import { doneWithOpenOf } from './status-honesty.js';
 
 const ANSI_RE = /\x1b\[[0-9;?]*[ -\/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]/g;
 export const stripAnsi = (s) => String(s).replace(ANSI_RE, '');
@@ -1068,6 +1069,11 @@ export function classifyStall({ plain, raw = null, state, fromReport = false, sc
     // "STATUS: failed — goal not achieved: <why> · tried: <list>" (owner 2026-11-11, status-honesty.js): the agent needs help. A manager item
     // like needs-manager (event, manager LED), never a finished turn and never parked as one.
     if (st.kind === 'failed') { out.case = 'needs_manager'; out.failed = true; out.answer = null; out.autoCase = undefined; out.managerAsk = `goal not achieved: ${st.text.replace(/^goal not achieved\s*[:—–-]?\s*/i, '')}`.slice(0, 600); out.forbiddenText = askText(out, [], close); return finish(out); }
+    // A done line whose closing review lists leftovers or unverified items is "not fully confirmed" (owner 2026-11-12 / 2026-11-28): the manager decides
+    // (send it back, or accept it as final), it never reads as done / ready to close. 2026-11-28: token-audit-followup said done with five unverified items
+    // and the manager acted on it as finished.
+    const od = st.kind === 'done' ? doneWithOpenOf(`STATUS: done — ${st.text}`) : null;
+    if (od) { out.status = 'needs-manager'; out.doneWithOpen = od.open; out.case = 'needs_manager'; out.answer = null; out.autoCase = undefined; out.managerAsk = `said done, not fully confirmed: ${od.open.join(' · ')}`.slice(0, 600); out.forbiddenText = askText(out, [], close); return finish(out); }
     if (st.kind === 'needs-manager') { out.case = 'needs_manager'; out.answer = null; out.autoCase = undefined; out.managerAsk = st.text; out.forbiddenText = askText(out, [], close); return finish(out); }
     const mw = ['needs-owner', 'blocked', 'waiting'].includes(st.kind) && !((waitsOnOwnJob(st.text, st.kind) || /\b(?:finish(?:es|ed)?|completes?|ends?)\b/i.test(st.text)) && !/\bPR\s*#?\d|pull request|decision/i.test(st.text)) ? mergeWaitOf(st.text) : null;   // "the nightly job must finish before I can merge" waits on a job, not on a merge decision
     if (mw) { out.case = 'merge_wait'; out.mergeAsk = mw; out.answer = null; }
