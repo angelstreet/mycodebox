@@ -215,24 +215,60 @@ export function jevLine(jev) {
 // Plain English for the Jev choice keys, used in the expanded Why section.
 const JEV_PLAIN = { continue: 'continue', take_recommended: 'take recommended', ask_owner: 'ask you' };
 
-// Returns { ai: { present, label, conf, reasoning }, jev: { present, choice, label, probs } }
-// for the expandable "Why" section. `present: false` means the model wasn't run yet / Jev was
-// not asked — the section still renders (showing "not run yet" / "not asked") so the owner
-// sees both machine opinions before deciding.
+// Who made a suggestion, in plain words: the paid reviewer / Jev, or the free MiniMax fallback.
+export function sourceLabel(source) {
+  if (!source) return '';
+  if (source === 'minimax-fallback') return 'MiniMax, free fallback';
+  if (source === 'openrouter') return 'OpenRouter';
+  if (source === 'jev') return 'Jev';
+  return String(source);
+}
+// A failure or skip reason, short and plain (the raw text stays in stalls.jsonl).
+export function shortReason(why) {
+  const w = String(why || '').trim();
+  if (!w) return '';
+  if (/\b402\b|credit/i.test(w)) return 'no OpenRouter credit';
+  if (/not JSON|not a valid choice|empty answer|no answer/i.test(w)) return 'answer was not readable';
+  if (/timeout/i.test(w)) return w.match(/timeout after \d+\s*s/i)?.[0] || 'timed out';
+  if (/paused after 3 failures/i.test(w)) return 'paused after 3 failures';
+  if (/daily (?:cap|budget)/i.test(w)) return 'daily cap reached';
+  if (/busy/i.test(w)) return 'busy with another ask';
+  if (/not configured/i.test(w)) return 'not configured';
+  if (/fallback is off/i.test(w)) return 'fallback is off';
+  if (/breaker|Jev down/i.test(w)) return 'Jev is down';
+  return w.length > 60 ? `${w.slice(0, 57)}...` : w;
+}
+
+// Returns { ai: { present, label, conf, reasoning, source, missing }, jev: { present, choice, label, probs, source, missing } }
+// for the expandable "Why" section. When a model gave no answer, `missing` says what really happened (still reading, failed + reason,
+// skipped + reason, not needed), so the owner never reads "not run yet" for a call that ran and failed.
 export function whyModel(st) {
-  const ai = st?.triage?.ai || null;
+  const tr = st?.triage || null;
+  const ai = tr?.ai || null;
   const jev = st?.stall?.jev || null;
+  const note = st?.stall?.jevNote || null;
+  const aiMissing = !tr ? 'not run for this ask'
+    : tr.state === 'pending' ? 'reading the stop...'
+    : tr.state === 'error' ? `failed: ${shortReason(tr.error) || 'no answer'}${tr.source ? ` (${sourceLabel(tr.source)})` : ''}`
+    : tr.state === 'skipped' ? `skipped: ${shortReason(tr.skipped) || 'no reason given'}`
+    : 'no answer';
   const aiOut = ai
     ? {
         present: true,
         label: (ai.proposed_reply && !ai.owner_needed) ? ai.proposed_reply : 'yours to decide',
         conf: Number.isFinite(ai.confidence) ? ai.confidence : null,
         reasoning: ai.owner_needed ? (ai.owner_needed_why || 'needs owner') : (ai.reasoning || ''),
+        source: sourceLabel(tr.source),
       }
-    : { present: false, label: '', conf: null, reasoning: '' };
+    : { present: false, label: '', conf: null, reasoning: '', source: '', missing: aiMissing };
+  const jevMissing = !note ? 'not asked'
+    : note.status === 'not-needed' ? 'not needed: the rules decided'
+    : note.status === 'failed' ? `failed: ${shortReason(note.why) || 'no answer'}`
+    : `not asked: ${shortReason(note.why) || 'skipped'}`;
   const jevOut = jev
     ? {
         present: true,
+        source: sourceLabel(jev.source),
         choice: jev.choice || null,
         label: jev.choice ? (JEV_PLAIN[jev.choice] || jev.choice) : '',
         probs: {
@@ -241,7 +277,7 @@ export function whyModel(st) {
           ask_owner: Number.isFinite(jev.probabilities?.ask_owner) ? jev.probabilities.ask_owner : 0,
         },
       }
-    : { present: false, choice: null, label: '', probs: { continue: 0, take_recommended: 0, ask_owner: 0 } };
+    : { present: false, choice: null, label: '', probs: { continue: 0, take_recommended: 0, ask_owner: 0 }, source: '', missing: jevMissing };
   return { ai: aiOut, jev: jevOut };
 }
 

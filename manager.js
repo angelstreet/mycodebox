@@ -880,13 +880,16 @@ const getFallback = () => fallbackDecider || (providerDeciders[config.aiFallback
 const creditsOut = () => { if (Date.now() < creditsDownUntil) return true; try { const cr = creditsPeek(); return !!(cr?.ok && cr.balance != null && cr.balance <= 0); } catch { return false; } };
 const fallbackOn = () => config.aiFallback !== 'off';
 const fallbackGate = () => (!fallbackOn() ? 'MiniMax fallback is off' : fallbackBudget.over(Infinity, config.aiFallbackDailyCalls) ? `MiniMax fallback daily cap reached (${config.aiFallbackDailyCalls})` : null);
+const FALLBACK_BUSY_WAIT_MS = 90e3;
 async function fallbackRun(kind, session, fn, why) {
   const gate = fallbackGate();
   if (gate) return { error: gate, source: FALLBACK_SOURCE, gated: true };
-  const r = await fn(getFallback());
+  let r = await fn(getFallback());
+  // another stop is being read: wait for it (bounded) instead of leaving this ask without a suggestion
+  for (let waited = 0; r.skipped === 'fallback busy' && waited < FALLBACK_BUSY_WAIT_MS; waited += 2000) { await new Promise((res) => setTimeout(res, 2000)); r = await fn(getFallback()); }
   if (r.skipped) return { error: r.skipped, skipped: r.skipped, source: FALLBACK_SOURCE, gated: true };   // 'fallback busy': nothing ran, nothing counted
   fallbackBudget.add(0);
-  logLater({ type: 'fallback', source: FALLBACK_SOURCE, for: kind, session: session || null, why, ok: !r.error, ...(r.error ? { error: String(r.error).slice(0, 200) } : {}), ms: r.ms ?? null, model: r.model || null, cost: 0, calls: fallbackBudget.snapshot().calls, cap: config.aiFallbackDailyCalls });
+  logLater({ type: 'fallback', source: FALLBACK_SOURCE, for: kind, session: session || null, why, ok: !r.error, ...(r.error ? { error: String(r.error).slice(0, 200) } : {}), ...(r.tries > 1 ? { tries: r.tries } : {}), ms: r.ms ?? null, model: r.model || null, cost: 0, calls: fallbackBudget.snapshot().calls, cap: config.aiFallbackDailyCalls });
   return r;
 }
 // a Jev-shaped choice ({ choice, confidence, probabilities, ... }) from the fallback, or null when it cannot answer (the caller then skips as before)
@@ -895,6 +898,15 @@ async function fallbackChoice(body, session, why) {
   if (r.error || !r.answers?.choice) return null;
   const a = r.answers.choice;
   return { choice: a.choice, confidence: a.confidence, probabilities: a.probabilities, cost: 0, ms: r.ms, model: r.model, source: FALLBACK_SOURCE };
+}
+
+// What the popup says when Jev gave no choice: not needed (the rules decided), skipped (no credit, budget, off) or failed (+ the reason).
+export function jevNoteOf(stall, jevOut) {
+  if (stall?.source !== 'ambiguous') return { status: 'not-needed' };
+  if (!jevOut) return { status: 'skipped', why: 'not asked' };
+  if (jevOut.choice) return { status: 'ok', source: jevOut.source || 'jev' };
+  if (jevOut.skipped) return { status: 'skipped', why: String(jevOut.skipped).slice(0, 120) };
+  return { status: 'failed', why: String(jevOut.error || 'no answer').slice(0, 120) };
 }
 
 // ctx = { session, stallId, case }: what the product's log shows as "what this decision was about".
@@ -1523,7 +1535,7 @@ export function observe(s) {
     let ws = wouldSend(final);
     const confidence = final.source === 'jev' ? Number(jevOut?.probabilities?.[jevOut.choice] ?? jevOut?.confidence ?? 0) : 1;
     if (w.pending?.id === id) w.pending.cls = final.case;
-    w.stall = { ...final, would: ws, jev: jevOut?.choice ? { choice: jevOut.choice, probabilities: jevOut.probabilities || null } : null };
+    w.stall = { ...final, would: ws, jev: jevOut?.choice ? { choice: jevOut.choice, probabilities: jevOut.probabilities || null, source: jevOut.source || 'jev' } : null, jevNote: jevNoteOf(stall, jevOut) };
     await log({
       type: 'stall', id, session: s.name, project: s.project || null, agent: s.agent, state: s.state,
       at: new Date(s.now).toISOString(), case: final.case, source: final.source, textSource: stall.textSource || 'pane', question: final.question,
@@ -1596,6 +1608,7 @@ export function observe(s) {
       tri = await triageStop({ name: s.name, id, final, jevOut, state: s.state, agent: s.agent, project: s.project, stall }).catch((e) => { console.error('[manager] triage', e.message); return null; });
       if (w.hash !== h) return;   // the pane moved on while the reviewer was thinking
       w.triage = tri ? { id, hash: h, state: tri.ai ? 'done' : tri.skipped ? 'skipped' : 'error', ai: tri.ai || null, skipped: tri.skipped || null, error: tri.error || null, cost: tri.cost ?? null, ms: tri.ms ?? null, mode: tri.mode, case: final.case,
+        source: tri.source || (tri.skipped ? null : 'openrouter'), model: tri.model || null, fallback: tri.fallback || null,   // the popup names who made the suggestion, or why there is none
         jev: jevOut?.choice ? `${jevOut.choice} ${Math.round(Number(jevOut.probabilities?.[jevOut.choice] ?? jevOut.confidence ?? 0) * 100)} %` : null } : null;
       // auto mode: an owner-free, confident, non-forbidden proposal goes through the same countdown / cap / fire-time gates.
       const a = tri?.ai;
