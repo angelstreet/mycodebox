@@ -12,6 +12,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ownerOnly } from './doubt.js';
 import { saysBuilt, refOf } from './suggestions.js';
+import { usableAccounts, onAccounts } from './claude-accounts.js';
 
 // The five owner floors of a suggestion, in plain words. A hit is never approved, whatever Opus says.
 const FLOORS = [
@@ -116,6 +117,10 @@ export function claudeOpus(prompt, { bin = claudeBin(), env = process.env, timeo
   });
 }
 
+// claudeOpus on the first Claude account with headroom, then once more on the next when the first reports a limit (2026-11-27: the default
+// account was used up all evening while Team joachim had room). accounts: () -> [{id, configDir}] (usableAccounts); onLimit(acct) marks it used up.
+export const askOpusOnAccounts = (prompt, { accounts, onLimit, ...opts } = {}) => onAccounts(accounts(), (env) => claudeOpus(prompt, { ...opts, env }), { onLimit, base: opts.env || process.env });
+
 // ledger: suggestions.js; ask(prompt) -> { ok, text } (Opus); send(name, text) -> Promise (to the session); apply(name, decisions) records yes / no
 // in the ledger (the server's path, with approvedRound); ownerItems(name, rows, decisions) tells the manager the owner rows; mode() 'live' | 'off'.
 export function createSuggestionTriage({ stateDir, ledger, ask = claudeOpus, send, apply, ownerItems = () => {}, goalOf = () => '', mode = () => 'live', logEvent = () => {}, retryMs = 30 * 60000, now = Date.now, log = console } = {}) {
@@ -165,5 +170,17 @@ export function createSuggestionTriage({ stateDir, ledger, ask = claudeOpus, sen
     triage(name);
     return true;
   }
-  return { triage, pending, running: (n) => running.has(n) };
+  // Retry the lists whose triage errored (a limit, a timeout) once retryMs has passed, and pick up any list nobody triggered: the server calls this on a timer.
+  // -> the session names started.
+  function sweep() {
+    const started = [];
+    for (const name of Object.keys(ledger.list?.().sessions || {})) {
+      if (running.has(name) || mode() !== 'live' || !ledger.openOf(name).length) continue;
+      const f = failed.get(name);
+      if (f && f.sig === sigOf(name) && now() - f.at < retryMs) continue;
+      triage(name); started.push(name);
+    }
+    return started;
+  }
+  return { triage, pending, sweep, running: (n) => running.has(n) };
 }
