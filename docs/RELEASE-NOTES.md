@@ -3,6 +3,8 @@
 The release note of this repo (owner 2026-11-13). Every merged code change (not docs-only) adds one entry at the top of
 `## Unreleased`; the done-check reads the merged diff for this file (REFERENCE "Closing review"). Entry form: one line,
 
+- **The reader's "last reply only" button stays in view** — it was the first line of the scrolling conversation, so after scrolling down it took a long scroll back up to reach it. The switch ("last reply only" / "earlier conversation") is now sticky at the top of the reader. `public/style.css`.
+
 - **NEEDS YOU shows 0 when only suggestions are open** — the headline count added 1 for the "suggestions · N" chip, so the strip read "NEEDS YOU 1" while nothing needed the owner. The chip stays, the count no longer includes it. `public/app.js` `renderAttention`.
 
 - **Resuming a parked session whose worktree was cleaned up now works** — 390 of 658 parked sessions pointed at a merged, removed worktree and Resume failed with "cwd must be an existing directory". Resume now recreates the folder at the same path (a detached worktree of the main checkout it was named after, else an empty folder; only under $HOME), so `claude --resume` finds its transcript. `cwd-gone.js` `restoreGoneCwd`, `server.js` resume `validate`.

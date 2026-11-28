@@ -1060,6 +1060,9 @@ body.no-cardctl .cell .h .mv, body.no-cardctl .cell .jump{ display:none !importa
 
 .reader .rd-more{ display:block; width:100%; margin:0 0 12px; padding:8px; background:var(--bg-2); color:var(--ink-2); border:1px solid var(--line-2); border-radius:8px; font:inherit; font-size:12px; }
 .reader .rd-more:active{ color:var(--accent); border-color:var(--accent); }
+/* the "last reply only" / "earlier conversation" switch stays in view while the conversation scrolls (owner 2026-11-28) */
+.reader .rd-more[data-act=less], .reader .rd-more[data-act=more]{ position:sticky; top:0; z-index:3; margin-bottom:10px; background:var(--bg-2); box-shadow:0 6px 8px -6px rgba(0,0,0,.5); }
+
 
 /* task document (.md) view: replaces the terminal / reader inside a card until you go back */
 .cell .td{ display:none; }
