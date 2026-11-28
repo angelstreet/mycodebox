@@ -48,6 +48,8 @@
 # 2026-11-26: the deploy runner's server-restart warning (`deploy` state=warning, priority high: "waiting up to 10 min", then "restarting now") is dropped: the runner
 # waits and restarts by itself and there is nothing to do (3 wakes in 11 min). It stays in manager-events.jsonl and the owner views; a failed deploy still wakes urgently.
 # 2026-11-28 (token audit point d): `<session>:minimax-poll` (minimax-meter.js, a MiniMax session whose calls are mostly polls) is advisory: deferred like the notices above.
+# 2026-11-28 (token audit saving #2): `context-advisory` (a high-avg-context waste finding, context-advisory.js, priority low) passes and is deferred like the
+# other notices: it rides with the next wake, never a wake of its own, never urgent. test/manager-event-filter.test.js pins it.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STATE_DIR="${GHOSTY_STATE_DIR:-$HOME/.local/state/ghosty}"
 POLICY_DEFAULT="$HERE/manager-event-policy.json"
@@ -86,7 +88,7 @@ jq -c --unbuffered --argjson policy "$POLICY" '
   # Notices the manager left alone on 2026-11-11: they ride with the next wake, unless the policy file makes the kind urgent or pass (waiting, hold, no-progress, quota are urgent by default).
   def timebox: (((.key//"")|tostring)|test("^time-box:"));
   def noclaude: ((.kind=="no-progress") and (((.body//"")|tostring)|test("not a Claude session")));
-  def notice: (timebox or noclaude or (((.kind//"")|tostring)|test("^(waiting|bug-unreported|leftovers|no-progress|hold|bug-drain|orphaned-task|minimax-poll)$|^int-[0-9a-f]+:cancelled$")) or ((.kind=="lease") and (.state=="nudge")));
+  def notice: (timebox or noclaude or (((.kind//"")|tostring)|test("^(waiting|bug-unreported|leftovers|no-progress|hold|bug-drain|orphaned-task|minimax-poll|context-advisory)$|^int-[0-9a-f]+:cancelled$")) or ((.kind=="lease") and (.state=="nudge")));
   def lowdisk: (((.kind=="disk") or (.kind=="quota")) and (pct != null) and (pct < 95));
   # The lane refused a self-approval (the session asked for the merge floor to be skipped): the lane already answered the session, the manager read it and did nothing (2 of 2 wakes, replay 2026-11-11).
   def selfappr: (((.kind//"")|tostring)|test("^self-approval:"));

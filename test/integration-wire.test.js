@@ -12,6 +12,7 @@ import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { makeWorld } from './helpers-lane.js';
 import { tmp } from './helpers-tmp.js';
+import { waitServer } from './helpers/wait-server.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -36,11 +37,7 @@ test('server.js wires the lane to notify: a merged request waits for the digest 
   let log = ''; child.stdout.on('data', (d) => { log += d; }); child.stderr.on('data', (d) => { log += d; });
   const url = `http://127.0.0.1:${port}`;
   try {
-    for (let i = 0; ; i++) {
-      try { if ((await fetch(`${url}/api/sessions`)).ok) break; } catch { /* not up yet */ }
-      if (i > 150) throw new Error(`server did not start:\n${log}`);
-      await sleep(100);
-    }
+    await waitServer(url, () => log);
     const tokenFile = join(state, 'reporter.token');
     assert.ok(existsSync(tokenFile), 'reporter token file');
     const token = readFileSync(tokenFile, 'utf8').trim();
@@ -83,11 +80,7 @@ test('a request resumed at boot (pushed, deploy pending) finds notify and deploy
   let log = ''; child.stdout.on('data', (d) => { log += d; }); child.stderr.on('data', (d) => { log += d; });
   const url = `http://127.0.0.1:${port}`;
   try {
-    for (let i = 0; ; i++) {
-      try { if ((await fetch(`${url}/api/sessions`)).ok) break; } catch { /* not up yet */ }
-      if (i > 150) throw new Error(`server did not start:\n${log}`);
-      await sleep(100);
-    }
+    await waitServer(url, () => log);
     let pending = null, event = null;
     for (let i = 0; i < 100 && !(pending && event); i++) {
       pending = pendingOf(state).find((p) => p.title.includes('int-seedmerged')) || null;

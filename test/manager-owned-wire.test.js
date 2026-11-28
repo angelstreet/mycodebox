@@ -10,6 +10,7 @@ import { createServer } from 'node:net';
 import { tmp } from './helpers-tmp.js';
 import { displayState } from '../public/state.js';
 import { isOwnersTurn } from '../public/ask-model.js';
+import { waitServer } from './helpers/wait-server.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -56,7 +57,7 @@ done
   const child = spawn(process.execPath, ['server.js'], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
   cleanups.push(() => child.kill('SIGKILL'));
   let log = ''; child.stdout.on('data', (d) => { log += d; }); child.stderr.on('data', (d) => { log += d; });
-  for (let i = 0; ; i++) { try { if ((await fetch(`${url}/api/sessions`)).ok) break; } catch { /* not up */ } if (i > 150) throw new Error(`no server:\n${log}`); await sleep(100); }
+  await waitServer(`${url}`, () => log);
   await sleep(4000);
   const post = async (path, body, headers = {}) => { const r = await fetch(url + path, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) }); return { status: r.status, body: await r.json() }; };
   const record = async () => (await (await fetch(`${url}/api/suggestions`)).json()).sessions['worker-session'];

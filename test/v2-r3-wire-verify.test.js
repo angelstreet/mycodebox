@@ -12,6 +12,7 @@ import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { v2Config } from '../orchestration/v2-runtime.js';
 import { createServerIntegrate } from '../orchestration/v2-integrate.js';
+import { waitServer } from './helpers/wait-server.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const TMP = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'v2-r3-verify-')));
@@ -78,11 +79,7 @@ async function boot(w, { extra = {}, cwd = ROOT } = {}) {
     const r = await fetch(`${base}${p}`, { method, headers: { origin: base, ...(body ? { 'content-type': 'application/json' } : {}), ...headers }, body: body ? JSON.stringify(body) : undefined });
     return { status: r.status, body: await r.json().catch(() => null) };
   };
-  for (let i = 0; ; i++) {
-    try { if ((await fetch(`${base}/api/sessions`)).ok) break; } catch { /* not up yet */ }
-    if (i > 150) throw new Error(`server did not start:\n${log}`);
-    await sleep(100);
-  }
+  await waitServer(base, () => log);
   const s = { child, port, api, exited, log: () => log.split('\n').filter((l) => !/listSessions|^\s*$/.test(l)).join('\n') };
   s.status = await until(async () => { const r = await api('GET', '/api/v2/ops/status'); return ['running', 'refused'].includes(r.body?.status?.state) && r.body.status; }, 20_000, () => log);
   return s;
