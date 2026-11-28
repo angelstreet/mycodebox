@@ -96,3 +96,7 @@ else
   echo 'restart failed; no PID fallback attempted' >&2
   exit 2
 fi
+# The usage tailer (usage/*.js: ledger, waste, loops) is its own unit: without this a merged usage/ change stayed dormant until a
+# reboot (token audit 2026-11-28: two loop fixes merged and "deployed", the summary still showed old counts). It keeps offsets on
+# disk and its ids are deterministic, so a restart loses nothing. try-restart: only if it runs here; best effort, never fails the restart.
+sudo -n systemctl try-restart ghosty-usage || echo 'usage tailer restart failed (ghosty-sessions was restarted)' >&2

@@ -49,7 +49,8 @@ if (command === 'systemctl') console.log('0');
   try { calls = readFileSync(join(dir, 'calls'), 'utf8').trim().split('\n').map(JSON.parse); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   return { ...result, calls };
 }
-const restarts = (r) => r.calls.filter(([c]) => c === 'sudo');
+const restarts = (r) => r.calls.filter(([c, ...a]) => c === 'sudo' && a.includes('ghosty-sessions'));
+const usageRestarts = (r) => r.calls.filter(([c, ...a]) => c === 'sudo' && a.includes('ghosty-usage'));
 const response = (body = snapshot()) => ({ body });
 
 for (const [name, body] of [
@@ -175,6 +176,7 @@ test('restart failure does not fall back to PID operations', (t) => {
   const r = invoke(t, [response()], [], 1);
   assert.notEqual(r.status, 0);
   assert.equal(restarts(r).length, 1);
+  assert.equal(usageRestarts(r).length, 0, 'no usage tailer restart after a failed main restart');
   assert.equal(r.calls.filter(([c]) => c === 'systemctl').length, 0);
 });
 
@@ -225,7 +227,7 @@ test('T21: the script owns no kill path and restarts only through systemctl', ()
   const script = readFileSync(resolve('scripts/safe-restart.sh'), 'utf8');
   assert.match(script, /^set -euo pipefail$/m);
   assert.doesNotMatch(script, /\b(?:kill|pkill|killall|pgrep|fuser|pidof)\b|\.pid\b/);
-  assert.deepEqual(script.match(/systemctl \w+[^\n;]*/g), ['systemctl restart ghosty-sessions']);
+  assert.deepEqual(script.match(/systemctl [\w-]+ [^\n;|]*/g).map((m) => m.trim()), ['systemctl restart ghosty-sessions', 'systemctl try-restart ghosty-usage']);
   assert.match(script, /sudo -n systemctl restart ghosty-sessions/);
 });
 test('F5: an approved deploy is busy (exit 1, waitable) whether or not the runner is on', (t) => {
@@ -295,4 +297,12 @@ test('Q199: one blocked queued deploy beside a running one is still refused', (t
   const r = invoke(t, [response(snapshot({ enabled: true, deploys: [deploy('queued', { id: 'a', blocked: true }), deploy('running', { id: 'b' })] }))]);
   assert.equal(r.status, 1);
   assert.equal(restarts(r).length, 0);
+});
+
+// Token audit 2026-11-28: usage/ changes merged with --deploy server stayed dormant because the usage tailer is its own unit.
+test('a successful restart also restarts the usage tailer, after the main service', (t) => {
+  const r = invoke(t, [response()]);
+  assert.equal(r.status, 0, r.stderr);
+  const sudo = r.calls.filter(([c]) => c === 'sudo');
+  assert.deepEqual(sudo, [['sudo', '-n', 'systemctl', 'restart', 'ghosty-sessions'], ['sudo', '-n', 'systemctl', 'try-restart', 'ghosty-usage']]);
 });
