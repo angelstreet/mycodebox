@@ -244,7 +244,7 @@ root and the git worktrees (`du`, read-only, cached for 5 minutes). Nothing is e
 > The disk is 91% full on / (2.0 GB free). Starting a new session is paused until it drops below 90%. Sessions that
 > are already running are not affected — free some space and try again.
 
-The 409 body carries `{"ok": false, "error": "<that text>", "reason": "disk_low"}`. The dashboard banner shows the
+The new-session dialog shows that text (`public/new-session-error.js`; only a taken name reads "already exists"). The 409 body carries `{"ok": false, "error": "<that text>", "reason": "disk_low"}`. The dashboard banner shows the
 same thing in one line; tapping it opens the detail with the volumes and the biggest folders.
 
 `GET /api/disk` returns the whole reading: `{ok, reason, level, hold, blocked, enabled, override, holdPct, warnPct,
