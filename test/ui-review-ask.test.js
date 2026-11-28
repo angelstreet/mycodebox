@@ -1,7 +1,7 @@
 // A needs-owner stop on something to look at: ghosty reviews it before the owner is woken (ui-review-ask.js).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createAskReview, visualAskOf, kindOf, MAX_ROUNDS } from '../ui-review-ask.js';
 import { tmp } from './helpers-tmp.js';
@@ -23,7 +23,7 @@ const rig = (verdicts, o = {}) => {
   const file = join(dir, 'poster.html'); writeFileSync(file, '<html></html>');
   const a = createAskReview({ stateDir: dir, branchOf: async () => ({ cwd: dir, base: 'x', files: [] }), send: async (s, t) => sent.push(t),
     review: async (x) => { reviewed.push(x); return { verdict: verdicts.shift() || 'fail', summary: 'sum', table: '| text.words_per_line | FAIL | 20 words |' }; }, ...o });
-  return { a, sent, reviewed, file };
+  return { a, sent, reviewed, file, dir };
 };
 
 test('a fail is held and sent back; the owner is pushed after two rounds, with the table said to be failing', async () => {
@@ -48,7 +48,7 @@ test('a pass pushes at once with the verdict, and the same stop is not reviewed 
 test('a claude.ai artifact with no file behind it is sent back for the file', async () => {
   const { a, sent, reviewed } = rig([]);
   assert.equal((await a.handle('s1', ask('https://claude.ai/artifact/abc'))).push, false);
-  assert.match(sent[0], /absolute path of the HTML file/); assert.equal(reviewed.length, 0);
+  assert.match(sent[0], /page publish <file>[\s\S]*absolute path of the HTML file/); assert.equal(reviewed.length, 0);
 });
 
 test('a review that breaks or finds nothing to look at never swallows the ask', async () => {
@@ -78,7 +78,7 @@ test('a screenshot cited as evidence is not reviewed as the deliverable; a mocku
   const sent = [];
   const b = createAskReview({ stateDir: tmp('ask-'), send: async (s, t) => sent.push(t), branchOf: async () => null, review: async () => assert.fail('nothing to run') });
   await b.handle('s2', `Mockup: ${join(dir, 'frame.png')}\nSTATUS: needs-owner: mockup ok?`);
-  assert.match(sent[0], /HTML file behind it/);
+  assert.match(sent[0], /page publish[\s\S]*HTML file/);
 });
 
 test('only the alert of a finished needs-owner turn is taken: never one over a prompt on screen', () => {
@@ -86,4 +86,11 @@ test('only the alert of a finished needs-owner turn is taken: never one over a p
   for (const alert of [{ kind: 'waiting', state: null }, { kind: 'asks', state: 'waiting' }, { kind: 'done', state: null }, { kind: 'asks', state: 'done', status: 'blocked' }]) {
     assert.equal(a.takeAlert('s1', { ...alert, text: ask() }, () => assert.fail('not taken')), false, JSON.stringify(alert));
   }
+});
+
+test('a shared page named by its /p/<slug>/ URL is reviewed from its published file', async () => {
+  const { a, reviewed, dir } = rig(['pass']);
+  const site = join(dir, 'pages', 'mock-1', 'site'); mkdirSync(site, { recursive: true }); writeFileSync(join(site, 'index.html'), '<p>x</p>');
+  const r = await a.handle('s1', 'The mockup is at https://box.example.ts.net/p/mock-1/\nSTATUS: needs-owner: mockup; 1 = ship / 2 = change');
+  assert.equal(r.push, true); assert.equal(reviewed[0].files[0].file, join(site, 'index.html'));
 });

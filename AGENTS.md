@@ -168,6 +168,7 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
 - A session ends only when everything is finished (owner, 2026-11-03, supersedes 2026-11-01): `STATUS: not fully confirmed` and `partial` are
   not end states. Finish the work, or stop with `STATUS: waiting: <system wait id>`, `blocked: <reason + what you tried>` or `needs-owner:` for a
   hard-floor item. The done-check sends a session that ends on "not fully confirmed", `partial` or a done line with leftovers back to finish (max 3 pushes a day, then the manager is told).
+- **Pages for the owner** (owner 2026-11-28): a page, mockup or report goes out with `page publish <file.html|file.md|folder>` (stable `/p/<slug>/` URL, list at `/p/`), never a claude.ai Artifact or Claude Doc: those are private to one of three Claude accounts ([REFERENCE](docs/REFERENCE.md), "Shared pages").
 - UI icons come from `public/icons.js`; add an icon there instead of pasting emoji or one-off SVG.
 - Match the surrounding code: terse comments that explain why, no new dependencies without a reason.
 

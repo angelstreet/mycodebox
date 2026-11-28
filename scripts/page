@@ -1,0 +1,65 @@
+#!/usr/bin/env node
+// page: publish a page, mockup or report on the mycodebox dashboard (owner 2026-11-28). Use it instead of a claude.ai Artifact or a
+// Claude Doc: those are private to the Claude account that made them, and the sessions run on three accounts. Codebox only.
+//   page publish <file.html|file.md|folder> [--slug s] [--title t] [--asset file ...]   -> prints the URL (stable: same slug = same URL)
+//        The files the page refers to by a relative path (images, CSS, JS) are copied beside it; a folder is copied whole (index.html).
+//        Without --slug the slug is the file name; publish again to update the page at the same URL.
+//   page list            the published pages (slug, title, URL)
+//   page url <slug>      the URL of a page
+// The page is served sandboxed at <dashboard>/p/<slug>/ (Tailscale only): its scripts run but cannot fetch, post forms or call the
+// dashboard API, so put the data in the page. The list is <dashboard>/p/ (More menu > Pages).
+import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { basename, join } from 'node:path';
+import { listPages, publishPage, readMeta } from '../pages.js';
+
+const STATE_DIR = process.env.GHOSTY_STATE_DIR || join(homedir(), '.local', 'state', 'ghosty');
+const die = (m, code = 1) => { process.stderr.write(`page: ${m}\n`); process.exit(code); };
+const USAGE = 'usage: page publish <file.html|file.md|folder> [--slug s] [--title t] [--asset file ...] | page list | page url <slug>';
+
+// The address the owner opens: PUBLIC_URL (the server's), else GHOSTY_URL / MYCODEBOX_URL, else the dashboard's own answer.
+async function base() {
+  const env = (process.env.PUBLIC_URL || process.env.GHOSTY_URL || process.env.MYCODEBOX_URL || '').replace(/\/+$/, '');
+  if (env && !/127\.0\.0\.1|localhost/.test(env)) return env;
+  const port = process.env.PORT || 7777;
+  try {
+    const r = await fetch(`http://127.0.0.1:${port}/api/pages`, { signal: AbortSignal.timeout(3000) });
+    const j = await r.json(); if (j?.base) return String(j.base).replace(/\/+$/, '');
+  } catch { /* dashboard down: the loopback address below */ }
+  try { const m = /^PUBLIC_URL=(.*)$/m.exec(readFileSync(join(homedir(), 'ghosty-sessions', '.env'), 'utf8')); if (m?.[1]) return m[1].trim().replace(/^["']|["']$/g, '').replace(/\/+$/, ''); } catch { /* no live checkout */ }
+  return env || `http://127.0.0.1:${port}`;
+}
+function sessionName() {
+  if (process.env.TMUX) { try { return execFileSync('tmux', ['display-message', '-p', '#S'], { encoding: 'utf8' }).trim(); } catch { /* not in tmux */ } }
+  return process.env.FOUND_BUG_SESSION || '';
+}
+const account = () => (process.env.CLAUDE_CONFIG_DIR ? basename(process.env.CLAUDE_CONFIG_DIR) : '');
+
+const [cmd, ...args] = process.argv.slice(2);
+if (!cmd || cmd === '--help' || cmd === '-h') { console.log(USAGE); process.exit(cmd ? 0 : 2); }
+if (cmd === 'list') {
+  const b = await base();
+  for (const m of listPages(STATE_DIR)) console.log(`${m.slug}\t${m.title}\t${b}/p/${m.slug}/`);
+  process.exit(0);
+}
+if (cmd === 'url') {
+  if (!args[0] || !readMeta(STATE_DIR, args[0])) die(`no page "${args[0] || ''}" (page list)`);
+  console.log(`${await base()}/p/${args[0]}/`); process.exit(0);
+}
+if (cmd !== 'publish') die(USAGE, 2);
+let src = '', slug = '', title = ''; const assets = [];
+for (let i = 0; i < args.length; i++) {
+  const a = args[i];
+  if (a === '--slug') slug = args[++i] || '';
+  else if (a === '--title') title = args[++i] || '';
+  else if (a === '--asset') assets.push(args[++i] || '');
+  else if (a.startsWith('--')) die(`unknown option ${a}\n${USAGE}`, 2);
+  else if (!src) src = a; else assets.push(a);
+}
+if (!src) die(USAGE, 2);
+try {
+  const r = publishPage(STATE_DIR, src, { slug, title, assets, session: sessionName(), account: account() });
+  console.log(`${await base()}/p/${r.slug}/`);
+  process.stderr.write(`page: ${r.created ? 'published' : `updated (v${r.meta.version})`} "${r.meta.title}", ${r.files} file(s); list: /p/\n`);
+} catch (e) { die(e.message); }

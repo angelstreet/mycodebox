@@ -61,6 +61,7 @@ An image or file that will not attach: open `/upload-debug.html` on the device t
 
 - **Rules**: AGENTS.md, the STATUS table and the contract, read-only (`GET /api/rules`).
 - **Session log**: the selected session's stats, your prompts, its STATUS lines and the manager's events in time order (`GET /api/timeline/<session>`; the prompts and STATUS lines come from a Claude session's own file).
+- **Pages**: the pages, mockups and reports agents published with `page publish` (`/p/`), newest first; each opens at its own `/p/<slug>/` link, on a phone too.
 - **Usage & cost**: tokens and API-equivalent cost per agent, project, model, day and session; "classic view" opens the compact sheet.
 - **Notifications**: turns the phone / browser alert on; the bell shows the feed.
 - **Legacy & rarely used**: V2 tasks, Install app, and the older pages a new page replaced.

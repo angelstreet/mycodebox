@@ -4,7 +4,7 @@
 //                              { kind: 'mockup', url, deadlineAt, mockupId, actions: [Object] }
 //                              Lint first (mockup-lint.js, manager.json `mockupLint` live|dry|off, default live): a mockup with readability defects is
 //                              NOT posted: 422 { ok:false, error:'mockup-lint', defects } and the session is sent the defects (max 8) to fix and re-post.
-//                              The HTML is read from /files/<path> (the served file) or an http(s) loopback url; anything else is not linted (logged).
+//                              The HTML is read from /files/<path> or a shared page /p/<slug>/ (pages.js; any host) or an http(s) loopback url; anything else is not linted (logged).
 //                              A session the manager started: no feed record and no push; the manager gets the event `<session>:mockup` instead.
 //   POST /api/mockups/:id/object   the owner's "object" tap: the session is told to wait for the owner's notes
 //   mockupRule(final, ...)     a stop asking "show me / approve the mockup before I build?" is answered "Proceed: post the mockup ... and build"
@@ -13,6 +13,9 @@ import { randomUUID } from 'node:crypto';
 import { isLoopback, TOKEN_HEADER } from './reporter.js';
 import { lintMockup, formatDefects } from './mockup-lint.js';
 import { resolveServedFile } from './files-route.js';
+import { resolvePageFile } from './pages.js';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { MANAGER_ACTOR } from './manager-owned.js';
 
 export const OBJECT_TEXT = 'The owner objects to the mockup: wait for their notes.';
@@ -32,10 +35,12 @@ export function mockupRule(final, { windowMin = WINDOW_DEFAULT_MIN, enabled = tr
 }
 
 // The mockup's HTML for the lint, or null when the url cannot be read here (skipped, logged by the caller).
-export async function loadMockupHtml(url, { home = process.env.HOME || '/', fetchFn = globalThis.fetch, readFn = readFile } = {}) {
-  const u = String(url);
+export async function loadMockupHtml(url, { home = process.env.HOME || '/', stateDir = process.env.GHOSTY_STATE_DIR || join(homedir(), '.local', 'state', 'ghosty'), fetchFn = globalThis.fetch, readFn = readFile } = {}) {
+  let u = String(url);
   try {
+    const pg = /^https?:\/\/[^/]+(\/p\/[^?#]*)/i.exec(u); if (pg) u = pg[1];   // a shared page by its full dashboard URL
     if (u.startsWith('/files/')) { const r = resolveServedFile(u.slice('/files'.length).replace(/[?#].*$/, ''), { home }); return r.file ? await readFn(r.file, 'utf8') : null; }
+    if (u.startsWith('/p/')) { const r = resolvePageFile(stateDir, u.slice(3).replace(/[?#].*$/, '').replace(/^([^/]+)$/, '$1/')); return r.file ? await readFn(r.file, 'utf8') : null; }   // a shared page (pages.js)
     if (/^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?(?:[/?#]|$)/i.test(u)) {
       const res = await fetchFn(u, { signal: AbortSignal.timeout(5000) }); return res.ok ? await res.text() : null;
     }

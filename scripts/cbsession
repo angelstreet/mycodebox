@@ -303,6 +303,8 @@ GOAL_RULE
   fi
   if [ "$WORKERS" = 1 ]; then printf '\n%s\n' '**Workers** (owner 2026-11-13): this brief allows workers (cbsession -K). Use them only where they save time, and never wait on an idle one: if a worker is idle for 10 min, do the work yourself.'
   else printf '\n%s\n' '**No workers** (owner 2026-11-13): do all the work yourself. Do not start workers (cbsession, other sessions, V2 tasks) or hand work to peers unless this brief or the owner says "workers: allowed".'; fi
+  # Shared pages (owner 2026-11-28): Artifacts and Claude Docs are private to one of three Claude accounts; the dashboard serves pages to the owner
+  printf '\n%s\n' '**Pages for the owner** (owner 2026-11-28): publish any page, mockup or report with `page publish <file.html|file.md|folder>` and give the URL it prints (stable: publish again to update it; list at /p/). Never a claude.ai Artifact or a Claude Doc: they are private to one of our three Claude accounts.'
 } >> "$P"
 # Record who started this session (owner, 2026-10-18): env CBSESSION_BY if the caller set it; else the tmux session
 # name of the calling pane ($TMUX_PANE -> `tmux display -p -t $TMUX_PANE '#S'`) so a session started by another

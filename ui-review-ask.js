@@ -44,10 +44,12 @@ export function createAskReview({ stateDir, review, run, branchOf, send, journal
   async function judge(session, ask, text) {
     const b = await branchOf(session).catch(() => null);
     // pictures are usually the session's evidence frames, not the deliverable: a page or drawing file comes first, then the branch
-    const files = ask.files.map((f) => f.replace(/^~/, home)).filter((f) => /\.(?:html|svg)$/i.test(f) && fs.existsSync(f));
+    // a shared page (`page publish`, pages.js) named by its dashboard URL is reviewed from its published file
+    const shared = [...new Set([...String(text).matchAll(/\/p\/([a-z0-9][a-z0-9-]{0,59})\/?(?=[\s)'"`>\]]|$)/g)].map((m) => path.join(stateDir, 'pages', m[1], 'site', 'index.html')))].slice(0, 3);
+    const files = [...ask.files.map((f) => f.replace(/^~/, home)), ...shared].filter((f) => /\.(?:html|svg)$/i.test(f) && fs.existsSync(f));
     if (files.length) return review({ id: `ask-${session}-${now()}`, files: files.map((f) => ({ file: f, kind: kindOf(f, text) })) });
     if (b && b.files.some((f) => VISUAL_PATHS.test(f))) return review({ id: `ask-${session}-${now()}`, tree: b.cwd, base: b.base });
-    if (ask.artifact || (ask.files.length && /\bmock-?ups?\b|\bposters?\b|\blessons?\b/i.test(text))) return { verdict: 'fail', summary: 'the reviewer cannot judge a claude.ai artifact or a flat picture: put the absolute path of the HTML file behind it in your closing text', table: '' };
+    if (ask.artifact || (ask.files.length && /\bmock-?ups?\b|\bposters?\b|\blessons?\b/i.test(text))) return { verdict: 'fail', summary: 'the reviewer cannot judge a claude.ai artifact or a flat picture: publish it with `page publish <file>` and put the /p/<slug>/ URL (or the absolute path of the HTML file) in your closing text', table: '' };
     return null;   // words only ("the layout of the config file"): nothing to look at
   }
 
