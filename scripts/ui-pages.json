@@ -1,0 +1,17 @@
+{
+  "_doc": "Page map of the dashboard: every deep-linked view, opened by its query string (public/app.js boot). scripts/ui-overflow-check.js visits each at 390 px and fails on horizontal overflow. A new deep-linked view belongs here.",
+  "viewport": { "width": 390, "height": 844 },
+  "pages": [
+    { "id": "home", "url": "/", "wait": "#moreBtn" },
+    { "id": "home-grid", "url": "/?view=grid", "wait": "#moreBtn" },
+    { "id": "home-list", "url": "/?view=list", "wait": "#moreBtn" },
+    { "id": "usage", "url": "/?usage-page=1", "wait": ".uv-navb" },
+    { "id": "decisions", "url": "/?decisions=1", "wait": ".sheet" },
+    { "id": "decided", "url": "/?decided=1", "wait": ".sheet" },
+    { "id": "leases", "url": "/?leases=1", "wait": ".sheet" },
+    { "id": "integration", "url": "/?integration=1", "wait": ".sheet" },
+    { "id": "platforms", "url": "/?platforms=1", "wait": ".sheet" },
+    { "id": "deploys", "url": "/?deploys=1", "wait": ".sheet" }
+  ],
+  "usageTabs": ["Waste", "Trending"]
+}

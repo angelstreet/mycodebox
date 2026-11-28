@@ -105,8 +105,13 @@ export async function run({ home = homedir(), now = Date.now(), argv = process.a
   const results = [];
   if (cfg.error) { R.push(`Config: ${cfg.error}. Nothing ran.`, ''); out(`daily-checks: ${cfg.error}`); }
   // Built in (no config entry needed): installed copies of repo scripts (~/.local/bin/integrate ...) against the repo version.
-  const checks = cfg.checks.some((c) => c.id === 'installed-copies') ? cfg.checks
-    : [...cfg.checks, { id: 'installed-copies', title: 'Installed script copies', command: [process.execPath, join(dirname(fileURLToPath(import.meta.url)), 'installed-copies-check.js')], timeoutSec: 30 }];
+  const here = dirname(fileURLToPath(import.meta.url));
+  const builtInChecks = [
+    { id: 'installed-copies', title: 'Installed script copies', command: [process.execPath, join(here, 'installed-copies-check.js')], timeoutSec: 30 },
+    // Every deep-linked view at 390 px headless (scripts/ui-pages.json); skips cleanly (healthy) on a host without playwright-core.
+    { id: 'ui-overflow', title: 'Phone overflow (390 px)', command: [process.execPath, join(here, 'ui-overflow-check.js')], timeoutSec: 180 },
+  ];
+  const checks = [...cfg.checks, ...builtInChecks.filter((b) => !cfg.checks.some((c) => c.id === b.id))];
   for (const check of checks.filter((c) => !only || c.id === only)) {
     const t0 = Date.now();
     const res = spawnSync(check.command[0], check.command.slice(1), { encoding: 'utf8', timeout: (check.timeoutSec || 600) * 1000, maxBuffer: 32 * 1024 * 1024, env: { ...process.env, HOME: home } });

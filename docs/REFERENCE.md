@@ -1620,6 +1620,18 @@ with the next wake. Tests: `test/context-advisory.test.js`, `test/manager-event-
 `~/vpt-manager/docs/manager-handover.log`, then run `scripts/manager-fresh.sh`; the fresh kickoff reads the last line of that
 log first. Advisory only, same 24 h cooldown. Usage page: `.uv-root` is `width:100%` and `.spark` shrinks so no tab overflows a 390 px phone.
 
+**One list of advisory kinds, a phone-width check, the restart log line, last fired (2026-11-28 follow-up).**
+`advisory-kinds.js` is the single list of advisory kinds (`context-advisory`, `subagent-advisory`, `manager-restart-advisory`);
+`context-advisory.js` and `manager-events.js` import it, and `test/advisory-kinds.test.js` fails when `scripts/manager-event-filter.sh`
+or the feed drifts from it (two bugs of the token audit were a kind added in one place and missed in another).
+`scripts/ui-pages.json` is the page map of the dashboard's deep-linked views; `scripts/ui-overflow-check.js` opens each at 390 px
+headless against a throw-away server with a synthetic usage summary and fails on a document wider than the screen or an unclipped
+element past the edge (verified: it fails on the old `.uv-root` and sparkline CSS). It is also the built-in daily check `ui-overflow`
+(skips as healthy without a playwright-core), and `test/ui-pages-map.test.js` fails when a deep link in `public/app.js` is not in the map.
+`scripts/manager-handover-line.sh` prints the handover line the restart kickoff tells the manager to read; `manager-fresh.sh`
+runs it before the kickoff, so a restart is confirmed from its log. `/api/usage` carries `advisories` (`lastFired()` over
+`manager-events.jsonl`, memoised 60 s) and the Waste tab shows one line per kind: "5 h ago · session" or "never since <date>".
+
 **1-hour prompt cache TTL (#5), default off.** For Claude sessions whose turns are more than 5 minutes apart (the 5-minute
 cache expires and every turn re-writes the context). The Claude Code switches, verified in the installed Claude Code 2.1.332
 binary: `CLAUDE_CODE_PROMPT_CACHE_TTL=1h` (main conversation; unset = automatic, 1 h on a subscription within its limits,

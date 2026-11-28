@@ -112,3 +112,7 @@ The coc-daily prompt comes from `~/.local/share/coc-daily-review/run.sh` (unit `
 ## Second correction: shared trace id (28 Nov)
 
 All findings of one session carry the same trace id, and the advisory state was keyed by id alone, so the context advisory already sent for `userinterface-audit` (id 7bdb4de4) suppressed its subagent-heavy advisory for 24 h. The state key is now `<kind>:<id>` for every kind except `high-avg-context` (old key kept so existing state files stay valid). Test: both findings of one session produce two advisories and neither repeats.
+
+## Follow-up round (28 Nov, owner-triaged suggestions)
+
+Built: (a) `advisory-kinds.js` single list + drift test (the filter regex, the feed and the builder agree); (b) `scripts/ui-pages.json` + `scripts/ui-overflow-check.js`, a 390 px headless check over every deep-linked view, also the daily check `ui-overflow` (proved by reverting the two usage-page CSS fixes: it then fails with `div.uv-root reaches 530px` and `svg reaches 397px`); (c) `manager-fresh.sh` prints the handover line it tells the manager to read; (d) the Waste tab shows "last fired" per advisory kind from `manager-events.jsonl` (manager decision: one line per kind, 390 px checked). The live tmux restart with a real handover log stays deferred to the manager's next natural restart.

@@ -225,7 +225,7 @@ import { createQuotaResumer } from './quota-resume.js';
 import { createIntegrationDeploys } from './integration-deploys.js';
 import { createDeployLive } from './deploy-live.js';
 import { createMockups } from './mockups.js';
-import { createContextAdvisory } from './context-advisory.js';
+import { createContextAdvisory, lastFired } from './context-advisory.js';
 import { createVoice, feedActions, stopItem as voiceStopItem, decidedFor as voiceDecidedFor } from './voice.js';
 
 const exec = promisify(execFile);
@@ -1004,6 +1004,14 @@ async function jsonlTail(file, bytes = 400 * 1024) {
   } catch { return []; }
 }
 // A session stop the manager was woken for and left with no message and no decision line is sent back to it once (stop-answer.js).
+// Waste tab: when each advisory kind last reached the manager feed (read from manager-events.jsonl, memoised 60 s: the feed is up to 5 MB).
+let advMemo = { at: 0, v: null };
+async function advisoryLastFired() {
+  if (advMemo.v && Date.now() - advMemo.at < 60_000) return advMemo.v;
+  const rows = await jsonlTail(join(STATE_DIR, 'manager-events.jsonl'), 5 * 1024 * 1024);
+  advMemo = { at: Date.now(), v: lastFired(rows) };
+  return advMemo.v;
+}
 async function stopAnswerTick() {
   const mgr = reminderTarget(loadManagerSessions(), (n) => standbyFlagsOf(n).standby);
   if (!mgr) return;
@@ -3387,7 +3395,7 @@ async function handleHttp(req, res) {
   }
   if (req.method === 'GET' && p === '/api/usage') {
     const b = await usage.body(Object.keys(latest?.status || {}));
-    return b ? json(res, 200, { ...b, minimax: minimaxMeter.snapshot() }) : json(res, 404, { error: 'no usage summary yet' });
+    return b ? json(res, 200, { ...b, minimax: minimaxMeter.snapshot(), advisories: await advisoryLastFired() }) : json(res, 404, { error: 'no usage summary yet' });
   }
   if (req.method === 'GET' && p === '/api/deploys') return json(res, 200, deployRunner.snapshot());
   const dm = p.match(/^\/api\/deploys\/([0-9a-f]+)\/(approve|cancel|log)$/);
