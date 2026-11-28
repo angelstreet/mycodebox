@@ -19,6 +19,7 @@ import { fitFont, canShrinkFont, isSettling } from '/fit-font.js';
 import { registerFileLinks, registerUrlLinks } from '/term-links.js';
 import { jevTabHtml, jevRowHtml, creditRowHtml, filtersHtml, decisionsHtml, creditChip } from '/jev-view.js';
 import { apiCreditChips } from '/anthropic-chips.js';
+import { createRefusal } from '/new-session-error.js';
 import { audioChipHtml, wireAudioChips } from '/audio-chip.js';
 import { copyPromptButtonHtml, wireCopyPrompt } from '/copy-prompt.js';
 import { readerCopyButtonHtml, wireReaderCopy } from '/reader-copy.js';
@@ -5446,9 +5447,9 @@ function openNewSession() {
           if (!r) { toast('no answer from the server — check the session list before trying again', 6000); return; }
         }
         if (r.status === 404 || r.status === 405) { toast("server doesn't support this yet"); return; }
-        if (r.status === 409) { toast(`"${name}" already exists`); return; }
         const j = await r.json().catch(() => ({}));
-        if (!r.ok || j.ok === false) { toast(`create failed: ${j.error || 'HTTP ' + r.status}`, 3000); return; }
+        const refused = createRefusal(r.status, j, name);
+        if (refused) { toast(refused, 8000); return; }
         addRecentDir(cwd);
         if (model) models[agent] = model;
         lsSet(LS_NEW_LAST, JSON.stringify({ agent, models, cwd, priority }));
