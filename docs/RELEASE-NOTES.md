@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The copy icon in the manager question popup is no longer a red circle** — the popup's button rule also styled the copy icon, so it looked like an alert (owner screenshot, 2026-11-28). It now has the same quiet style as every other copy icon. The phone-width scroll check (`scripts/scroll-bench/verify.py`) is reliable again: its swipes start inside the reader, and its test app shows Claude Code's "Jump to bottom" hint, without which a slow run failed · area: dashboard
+
 - **API spend takes one short group in the top bar** — "we take too much spaces ... Claude API 94/945 - 200/200 since 200 is max" (owner 2026-11-28). The two org groups (`Claude API 94/945$`, `Claude team API 200/11$`) become one `Claude API 94/945 - 200/200`: spent / credit left per org, and spent / limit, red, once an org has reached its monthly limit (its API calls are stopped, so the credit does not matter). The org and exact figures are in each value's title · area: usage
 
 - **The Anthropic cache audit can be run again** — `scripts/anthropic-cache-audit.py` prints cache use and cost per organisation, API key, model and day or hour from the Admin API reports (read-only, keys never printed); the steps and traps are in [ANTHROPIC-CACHE-AUDIT](ANTHROPIC-CACHE-AUDIT.md).
