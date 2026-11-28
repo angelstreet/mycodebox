@@ -88,7 +88,7 @@ jq -c --unbuffered --argjson policy "$POLICY" '
   # Notices the manager left alone on 2026-11-11: they ride with the next wake, unless the policy file makes the kind urgent or pass (waiting, hold, no-progress, quota are urgent by default).
   def timebox: (((.key//"")|tostring)|test("^time-box:"));
   def noclaude: ((.kind=="no-progress") and (((.body//"")|tostring)|test("not a Claude session")));
-  def notice: (timebox or noclaude or (((.kind//"")|tostring)|test("^(waiting|bug-unreported|leftovers|no-progress|hold|bug-drain|orphaned-task|minimax-poll|context-advisory)$|^int-[0-9a-f]+:cancelled$")) or ((.kind=="lease") and (.state=="nudge")));
+  def notice: (timebox or noclaude or (((.kind//"")|tostring)|test("^(waiting|bug-unreported|leftovers|no-progress|hold|bug-drain|orphaned-task|minimax-poll|context-advisory|subagent-advisory|manager-restart-advisory)$|^int-[0-9a-f]+:cancelled$")) or ((.kind=="lease") and (.state=="nudge")));
   def lowdisk: (((.kind=="disk") or (.kind=="quota")) and (pct != null) and (pct < 95));
   # The lane refused a self-approval (the session asked for the merge floor to be skipped): the lane already answered the session, the manager read it and did nothing (2 of 2 wakes, replay 2026-11-11).
   def selfappr: (((.kind//"")|tostring)|test("^self-approval:"));

@@ -21,3 +21,16 @@ export function projectCandidates(path, home) {
   }
   return [...new Set(out)];
 }
+
+// Resume of a parked session whose folder was removed (merged worktree cleaned up while it was parked). Claude keys its transcript
+// by the folder path, so the session must come back at the SAME path: recreate it as a detached worktree of the main checkout the
+// worktree was named after, else as an empty folder. Only paths strictly under $HOME are touched. Returns the path or null.
+export async function restoreGoneCwd(path, home, { exists, run, mkdir }) {
+  const p = goneCwd(path) ?? String(path || '');
+  if (!home || !p.startsWith(home + '/') || p.includes('/../') || exists(p)) return exists(p) ? p : null;
+  for (const c of projectCandidates(p, home)) {
+    if (c === p || !exists(`${c}/.git`)) continue;
+    try { await run('git', ['-C', c, 'worktree', 'prune']); await run('git', ['-C', c, 'worktree', 'add', '--detach', p]); if (exists(p)) return p; } catch { /* try the next candidate */ }
+  }
+  try { await mkdir(p, { recursive: true }); return exists(p) ? p : null; } catch { return null; }
+}
