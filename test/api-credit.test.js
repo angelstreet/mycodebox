@@ -22,6 +22,8 @@ const dirs = (keys = {}) => {
 test('parseCostReport: analytics rows and legacy bucket results, cents strings summed', () => {
   assert.deepEqual(parseCostReport(fx('anthropic-cost-analytics.json')), { cents: 16745.67, rows: 2, hasMore: false, nextPage: null, refreshedAt: '2026-11-28T06:00:00Z' });
   assert.deepEqual(parseCostReport(fx('anthropic-cost-report-legacy.json')), { cents: 300, rows: 2, hasMore: true, nextPage: 'page_2', refreshedAt: null });
+  // the shape the live API answers (2026-11-28): the amount sits under cost; reading only a top-level amount showed $0
+  assert.deepEqual(parseCostReport(fx('anthropic-cost-analytics-live.json')), { cents: 20020.323341, rows: 1, hasMore: false, nextPage: null, refreshedAt: '2026-11-28T15:28:07Z' });
   assert.deepEqual(parseCostReport({ data: [], data_refreshed_at: null }), { cents: 0, rows: 0, hasMore: false, nextPage: null, refreshedAt: null });
   assert.throws(() => parseCostReport({ error: { type: 'x' } }));
 });

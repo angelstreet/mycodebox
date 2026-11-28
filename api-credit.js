@@ -30,7 +30,8 @@ const cents = (x) => {
 };
 
 // One page of either report -> { cents, rows, hasMore, nextPage, refreshedAt }.
-//   analytics: { data:[{ amount, list_amount, ... }], data_refreshed_at, has_more, next_page }
+//   analytics: { data:[{ starting_at, ending_at, group:{...}, cost:{ amount, list_amount, currency, requests } }], data_refreshed_at, has_more, next_page }
+//              (older draft shape with amount at the row's top level still read)
 //   legacy:    { data:[{ starting_at, ending_at, results:[{ amount, currency, ... }] }], has_more, next_page }
 export function parseCostReport(body) {
   const data = Array.isArray(body?.data) ? body.data : null;
@@ -38,6 +39,7 @@ export function parseCostReport(body) {
   let total = 0, rows = 0;
   for (const d of data) {
     if (Array.isArray(d?.results)) for (const r of d.results) { total += cents(r?.amount); rows++; }
+    else if (d?.cost && typeof d.cost === 'object') { total += cents(d.cost); rows++; }   // the live analytics row: { starting_at, ending_at, group, cost:{ amount, list_amount, currency, requests } }
     else if (d && 'amount' in d) { total += cents(d.amount); rows++; }
   }
   return { cents: total, rows, hasMore: !!body.has_more, nextPage: body.next_page || null, refreshedAt: body.data_refreshed_at ?? null };

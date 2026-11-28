@@ -1,0 +1,10 @@
+{
+  "data": [
+    { "starting_at": "2026-11-01T00:00:00Z", "ending_at": "2026-11-28T16:00:00Z",
+      "group": { "product": null, "model": null, "workspace_id": null, "service_tier": null },
+      "cost": { "currency": "USD", "amount": "20020.323341", "list_amount": "20020.323341", "requests": 63676 } }
+  ],
+  "has_more": false,
+  "next_page": null,
+  "data_refreshed_at": "2026-11-28T15:28:07Z"
+}
