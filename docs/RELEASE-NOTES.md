@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The token audit can be run again** — `scripts/token-audit.js` prints the audit figures, models, top sessions and waste findings for any time windows from the usage ledger; the steps and traps are in [TOKEN-AUDIT](TOKEN-AUDIT.md).
+
 - **The API spend values carry a dollar sign** — "put dollars in both it is money" (owner 2026-11-28): the top bar reads `Claude API 94/945$ - 200/200$` · area: usage
 
 - **A full disk no longer reads as "already exists"** — creating a session on a disk at 90 % or more was refused with the toast `"<name>" already exists`, because the dialog took every 409 for a taken name. It now shows the disk guard's own message; "already exists" is only for a taken name · area: dashboard
