@@ -228,7 +228,7 @@ import { createClaudeRotation } from './claude-rotation.js';
 import { createIntegrationDeploys } from './integration-deploys.js';
 import { createDeployLive } from './deploy-live.js';
 import { createMockups } from './mockups.js';
-import { PAGE_CSP, indexHtml, listPages, resolvePageFile } from './pages.js';
+import { PAGE_CSP, indexHtml, listPages, pagePathOf, resolvePageFile } from './pages.js';
 import { readCloudSessions } from './cloud-sessions.js';
 import { createContextAdvisory, lastFired } from './context-advisory.js';
 import { createRestartCheck } from './restart-check.js';
@@ -1731,7 +1731,7 @@ const uiReviewer = createUiReview({ stateDir: STATE_DIR, git: createDefaultGit()
 const uiReviewConfig = () => Object.values(loadIntegrationConfig(STATE_DIR).repos).find((r) => r.uiReview?.repo === 'virtualpytest')?.uiReview || null;
 const askReviewOn = () => { try { if (JSON.parse(readFileSync(managerConfigFile, 'utf8')).uiReviewAsk === 'off') return false; } catch { /* default on */ } return !!uiReviewConfig(); };
 const askReview = createAskReview({ stateDir: STATE_DIR, run: uiReviewRun,
-  review: createAskRunner({ lane: uiReviewer, cfg: uiReviewConfig, stateDir: STATE_DIR, run: uiReviewRun }),
+  review: createAskRunner({ lane: uiReviewer, cfg: uiReviewConfig, stateDir: STATE_DIR, run: uiReviewRun, publicUrl: PUBLIC_URL }),
   branchOf: async (session) => {
     const cwd = (await listPanes()).get(session)?.cwd;
     if (!cwd) return null;
@@ -3051,6 +3051,9 @@ async function handleHttp(req, res) {
     return createReadStream(r.file, rg || {}).on('error', () => { try { res.end(); } catch {} }).pipe(res);
   }
   if (req.method === 'GET' && p.startsWith('/files/')) {   // an agent's picture / mockup for the reader (files-route.js)
+    let named = ''; try { named = decodeURIComponent(p.slice('/files'.length)).replace(/^\/~\//, `${homedir()}/`); } catch { /* bad escape: resolveServedFile says so */ }
+    const shared = pagePathOf(STATE_DIR, named);   // a shared page named by its stored file -> its /p/ URL
+    if (shared) { res.writeHead(302, { location: shared, 'cache-control': 'no-store' }); return res.end(); }
     const r = resolveServedFile(p.slice('/files'.length), { home: homedir() });
     if (!r.file) { res.writeHead(r.status, { 'content-type': 'text/plain; charset=utf-8' }); return res.end(r.error); }
     const h = { 'content-type': r.type, 'content-length': r.size, 'cache-control': 'private, max-age=300', 'x-content-type-options': 'nosniff' };

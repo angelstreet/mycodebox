@@ -11,7 +11,7 @@ import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { tmp } from './helpers-tmp.js';
 import { waitServer } from './helpers/wait-server.js';
-import { PAGE_CSP, accountOf, indexHtml, listPages, localRefs, markdownToHtml, publishPage, resolvePageFile, slugify } from '../pages.js';
+import { PAGE_CSP, accountOf, indexHtml, listPages, localRefs, markdownToHtml, pagePathOf, publishPage, resolvePageFile, slugify } from '../pages.js';
 import { loadMockupHtml } from '../mockups.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -79,6 +79,12 @@ test('publishPage: a folder is copied whole, dot files and symlinks skipped', ()
   assert.ok(!fs.existsSync(path.join(site, '.env')) && !fs.existsSync(path.join(site, 'assets', 'link.txt')));
 });
 
+test('pagePathOf: the stored file of a shared page is named by its /p/ URL, nothing else is', () => {
+  assert.equal(pagePathOf('/s', '/s/pages/wk/site/index.html'), '/p/wk/');
+  assert.equal(pagePathOf('/s', '/s/pages/wk/site/img/a b.png'), '/p/wk/img/a%20b.png');
+  for (const f of ['/s/pages/wk/meta.json', '/s/pages/wk/site/../meta.json', '/s/pages/../manager.json', '/s/pages/Bad Slug/site/x.html', '/other/pages/wk/site/index.html', '']) assert.equal(pagePathOf('/s', f), '', f);
+});
+
 test('loadMockupHtml reads a shared page by path or full URL (mockup lint)', async () => {
   const state = tmp('pages-state-'), src = tmp('pages-src-');
   fs.writeFileSync(path.join(src, 'm.html'), '<h1>mock</h1>');
@@ -141,6 +147,9 @@ test('server: /p/ list, /p/<slug>/ sandboxed with no API access, /api/pages', as
   assert.equal(page.headers.get('content-security-policy'), PAGE_CSP);
   assert.match(PAGE_CSP, /^sandbox (?!.*allow-same-origin)/); assert.match(PAGE_CSP, /connect-src 'none'/); assert.match(PAGE_CSP, /form-action 'none'/);
   assert.equal((await fetch(`${base}/p/report/a.png`)).status, 200);
+  // the link the reader makes from a stored page path (a UI review table named it): sent to the page, not "hidden folder"
+  const stored = await fetch(`${base}/files${path.join(state, 'pages', 'report', 'site', 'index.html')}`, { redirect: 'manual' });
+  assert.equal(stored.status, 302); assert.equal(stored.headers.get('location'), '/p/report/');
   const part = await fetch(`${base}/p/report/a.png`, { headers: { range: 'bytes=1-2' } });   // video on Safari needs ranges
   assert.equal(part.status, 206); assert.equal(part.headers.get('content-range'), 'bytes 1-2/3'); assert.equal(await part.text(), 'NG');
   assert.equal((await fetch(`${base}/p/report/a.png`, { headers: { range: 'bytes=9-' } })).status, 416);
