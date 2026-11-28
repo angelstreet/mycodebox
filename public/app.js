@@ -1657,7 +1657,8 @@ function renderAttention() {
   const entries = names;
   const mgrAsks = unattachedAsks(state.ownerAsks, state.status, state.sessions);
   const parked = state.parked || [];
-  const total = names.length + mgrAsks.length + (parked.length ? 1 : 0);
+  // the suggestions chip is quiet (owner 2026-11-27, ask-model.js): drawn in the strip but never counted as "needs you"
+  const total = names.length + mgrAsks.length;
   const line = (n) => { const a = state.status[n]?.triage?.ai; return a ? (a.proposed_reply ? `AI: \u201c${a.proposed_reply}\u201d` : 'AI: needs you') : ''; };
   const label = (k) => (k === 'owner-direct' || k === 'owner' ? 'for you' : displayName(k));
   // TTS text for the chip (Q94=2, every surface gets the audio chip). Reads aloud what the
