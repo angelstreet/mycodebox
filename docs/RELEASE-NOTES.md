@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A dashboard restart waits for a running UI review** — a restart threw the review away and the request started it over (one started over about 5 times while other changes deployed). `scripts/safe-restart.sh` now waits for it, 10 minutes at most (`GHOSTY_REVIEW_WAIT_MIN`, 0 = off), then restarts anyway; the deploy guard is unchanged and read again before the restart. Tests in `test/safe-restart.test.js` · area: integration lane
+
 - **The temp-folder cleanup list covers the lane log test** — `test/integration-log.test.js` creates `intlog-` folders that `TMP_PREFIXES` did not name, so `health-watch.test.js` failed on main and returned merges (2026-11-28) · area: tests
 
 - **Two lease-lock tests no longer fail on a busy host** — the calls that must succeed had 150 to 200 ms, and `lock()` checks that limit right after breaking a stale lock, so a slow host reported "busy" with the lock free and the lane returned a merge (2026-11-28). Those calls now wait up to 5 s; the calls that must be refused keep the short wait. Test-only change · area: tests
