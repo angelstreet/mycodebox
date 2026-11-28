@@ -1,6 +1,6 @@
 # Reader mode: filtered view, agent summary, audio from the summary (proposal, 2026-11-28)
 
-Status: **proposal, nothing built yet.** Owner request (2026-11-28): the terminal may show every log line, but the reader
+Status: **step 1 built (2026-11-28)**: the `Summary:` parser, the `summary` / `status` fields of `/api/reply`, the done-check (R) in `dry`, the rule in AGENTS.md and the `cbsession` brief, and a play button that reads the summary, else the STATUS line (REFERENCE "Owner summary before the STATUS"). The Brief / All / `>_` reader view (step 2) is not built. Owner request (2026-11-28): the terminal may show every log line, but the reader
 should show only what the owner needs to read. The STATUS line comes last and is the most important thing. Each agent
 writes a short summary for a human, 10 lines at most. The play button reads that summary, never the full last response.
 

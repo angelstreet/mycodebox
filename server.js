@@ -14,7 +14,7 @@
 //                                 each stopped agent also has `lastTurn` {at, elapsedMs, tokens{in,out,cacheRead,cacheWrite,total}, status, info, line, source} (turn-meter.js; null parts = unknown)
 //   GET  /api/health            → {ok, sessions, port, eventLoop: {worst lags with timestamps, stalls}}; every lag >= 500 ms is also a line in <state>/event-loop-lag.jsonl
 //   GET  /api/sessions?full=1   → same, plus `reply` text per session
-//   GET  /api/reply/:session    → {reply, replyHash}: agent's last reply block, plain text
+//   GET  /api/reply/:session    → {reply, replyHash, summary, status}: agent's last reply block, plain text; the turn's Summary: lines and STATUS {kind, headline}
 //   POST /api/resize/:session   → {cols, rows} resize a detached session's window
 //   POST /api/scroll/:session   → {dir: up|down|top|bottom, n?} to a pane in the alternate screen (no tmux scrollback; Claude Code fullscreen): n SGR wheel notches when the app tracks the mouse, else PageUp/PageDown; answers once redrawn and pushes the pane to open cards; 409 when the pane has scrollback
 //   POST /api/sessions          → {name, agent, cwd, priority?, model?, prompt?} create a tmux session + start the agent
@@ -129,7 +129,7 @@ import { createOverlapGuard, DEFAULT_IGNORE } from './overlap-guard.js';
 import { createProgressWatch } from './progress-watch.js';
 import { createSharedCheckoutGuard, expandHome } from './shared-checkout-guard.js';
 import { createFoundBugs, sessionOfRequest, unreportedBugOf, sendBackOf, sendBackText, sweepGroups, equivalentFreeOf } from './found-bugs.js';
-import { goalOf as goalOfPrompt, blockedOrUnknownStatus, lastStatus } from './status-honesty.js';
+import { goalOf as goalOfPrompt, blockedOrUnknownStatus, lastStatus, headlineOf } from './status-honesty.js';
 import { createGoalGate, createGoalStore, approvedRound, worthAGoal } from './goal-check.js';
 import { createSuggestionTriage, askOpusOnAccounts } from './suggestion-triage.js';
 import { createSuggestions, createTypedLog, isOwnerTyped, answersOf, ambiguousAnswer, bareNumbersOk } from './suggestions.js';
@@ -164,7 +164,8 @@ import { pickableProject, launchArgs, codexModels, CLAUDE_MODELS, MINIMAX_MODELS
 import { createSessionHistory, STARTED_BY } from './session-history.js';
 import { paneLinesOk } from './pane-lines.js';
 import { scrollPlan, wheelPlan, altScrollApplies } from './alt-scroll.js';
-import { timelineOf, effortOf, taskDocsWritten, findSessionFile, readConversation, tailChars } from './conversation.js';
+import { timelineOf, effortOf, taskDocsWritten, findSessionFile, readConversation, tailChars, lastReplyText } from './conversation.js';
+import { summaryOf } from './public/reader-summary.js';
 import { createLimiter, createCoalescer } from './pane-cache.js';
 import { findInFolder, resolveServedFile } from './files-route.js';
 import { readViewFile } from './file-view.js';
@@ -1457,6 +1458,7 @@ const doneCheck = createDoneCheck({
     }
     return out;
   },
+  summaryMode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).summaryCheck; return m === 'live' || m === 'off' ? m : 'dry'; } catch { return 'dry'; } },   // (R) the owner's summary: dry first (docs/READER-SUMMARY.md)
   blockedMode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).blockedCheck; return m === 'live' || m === 'off' ? m : 'dry'; } catch { return 'dry'; } },   // dry first: it types into sessions
   // (D) the session's own waiting ticket and its healthy free equivalents (lease service `equivalents_free`, health-filtered)
   equivalentOf: async (name) => {
@@ -3050,7 +3052,18 @@ async function handleHttp(req, res) {
         return json(res, 404, { ok: false, error: 'no such session' });
       }
     }
-    return json(res, 200, { session, reply, replyHash: reply ? shortHash(reply) : null });
+    // The owner's summary and the STATUS of the last turn (docs/READER-SUMMARY.md): a Claude session's own file, else the pane's closing
+    // text (the same text the done-check reads), else the reply (a Mac session's last stop).
+    let src = '';
+    if (!remote.owns(session)) {
+      const sid = latest?.status?.[session]?.claudeSessionId;
+      const file = sid ? await findSessionFile(sid).catch(() => null) : null;
+      if (file) src = await lastReplyText(file);
+      if (!src) src = closingTextOf(latest?.status?.[session]?.stall);
+    }
+    if (!src) src = reply || '';
+    const sum = summaryOf(src), st = lastStatus(src);
+    return json(res, 200, { session, reply, replyHash: reply ? shortHash(reply) : null, summary: sum?.lines.length ? sum.lines : null, status: st ? { kind: st.kind, headline: headlineOf(st.text) } : null });
   }
   if (req.method === 'GET' && p === '/api/vpt-locks') {   // {ok, env, locks:[{host, device, ownerType, owner, reason, ageMin}]} or {ok:false, env, error}; never an error status
     let v;

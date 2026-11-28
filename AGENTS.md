@@ -29,6 +29,8 @@ turn with a STATUS line.
 
 Forms: `done — <what> · goal: achieved · evidence: <links / run ids / frames>`; `running: <job id / worker names> — <what is left>`; `waiting: <id / ticket / session / time>`; `blocked: <what stops you> · tried: <list> · need: <who must do what>`; `failed — goal not achieved: <why> · tried: <list> · cause: <what you found> · plan: <next approach, who does it>`. "blocked: waiting on ..." is never right. A green / pass / proven claim carries its evidence.
 
+**Summary before the STATUS (owner 2026-11-28).** The final message of a turn that ends `done`, `failed`, `blocked`, `needs-manager` or `needs-owner` carries a summary for the owner, placed after your answer and before `Verification:` and the STATUS line: a line `Summary:` and then 1 to 10 short lines (160 characters each at most) in plain words: what happened, what it means, what the owner must do, if anything. No ids, hashes, paths, branch names or commands in it. The reader shows it above the STATUS and the play button reads only it. A `running` or `waiting` turn may carry one. Missing or too long, the done-check sends it back once ([READER-SUMMARY](docs/READER-SUMMARY.md)).
+
 Before you fix a filed bug, run `found-bug --claim <id>` (exit 3: someone else is fixing it).
 
 **Goal first, verification last (owner 2026-11-11).** A task opens and closes with the same list.

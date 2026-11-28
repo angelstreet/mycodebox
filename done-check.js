@@ -9,6 +9,7 @@ import { proofGapOf, proofGapMessage } from './proof-risk.js';
 import { pushableItems } from './done-leftovers.js';
 import { computeStopState, doneWhileMessage } from './stop-state.js';
 import { doneButFailedOf, doneButFailedMessage, proofWithoutEvidenceOf, proofWithoutEvidenceMessage, blockedHonestyOf, blockedHonestyMessage, failedHonestyOf, failedHonestyMessage, doneWithOpenOf, doneWithOpenMessage, verificationOf, verificationMessage, timeBoxWakeMessage, unknownStatusWordOf, unknownStatusWordMessage, lastStatus as lastStatusOf } from './status-honesty.js';
+import { summaryOf } from './public/reader-summary.js';
 import { readFile, writeFile, appendFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -248,6 +249,25 @@ export function uncommittedOf(porcelain) {
   return String(porcelain || '').split('\n').filter(Boolean).map((l) => l.slice(3).split(' -> ').pop().trim()).filter((p) => p && !IGNORED.includes(p));
 }
 
+// (R) The owner's summary (owner 2026-11-28, docs/READER-SUMMARY.md): a turn that ends done / failed / blocked / needs-manager / needs-owner carries
+// `Summary:` and 1 to 10 short lines before `Verification:` and the STATUS. The reader shows it and the play button reads it. Pure.
+export const SUMMARY_KINDS = new Set(['done', 'failed', 'blocked', 'needs-manager', 'needs-owner']);
+export const SUMMARY_PUSHES_PER_DAY = 2;
+// -> null (nothing to ask: no closing STATUS of those kinds, or a good summary) | { kind, missing, tooLong, lineCount }
+export function summaryGapOf(text) {
+  const st = lastStatusOf(text || '');
+  if (!st || !SUMMARY_KINDS.has(st.kind)) return null;
+  const sm = summaryOf(text);
+  if (sm?.lines.length && !sm.tooLong) return null;
+  return { kind: st.kind, missing: !sm?.lines.length, tooLong: !!sm?.tooLong, lineCount: sm?.lineCount || 0 };
+}
+export const summarySig = (text) => createHash('sha1').update(lastStatusOf(text || '')?.line || '').digest('hex').slice(0, 12);
+export function summaryMessage() {
+  return 'Done check: your last message has no `Summary:` block, or it is longer than 10 lines (or a line is over 160 characters). '
+    + 'The owner reads only the summary and the STATUS on the phone, and the play button reads only the summary. '
+    + 'Add `Summary:` with 1 to 10 short plain-language lines (what happened, what it means, what the owner must do; no ids, paths or commands) just before `Verification:`, then repeat the STATUS line unchanged.';
+}
+
 export function createDoneCheck({
   stateDir, git, listDone: listDoneAll, send: sendRaw, record = async () => {}, equivalentOf = async () => null, goalOf = async () => '', mode = () => 'live', home = process.env.HOME || '',
   pressure = () => ({ loadPerCore: 0, ramAvailPct: 100 }), now = Date.now, pollMs = POLL_MS, log = console, ignoreBranches = () => DEFAULT_IGNORE_BRANCHES,
@@ -260,6 +280,7 @@ export function createDoneCheck({
   proofMode = () => 'live', proofStat,   // (P) proof by risk (proof-risk.js): headless e2e on the deployed URL for a UI fix / feature; manager.json proofRisk
   listBlocked: listBlockedAll = async () => [], blockedMode = () => 'dry',   // (I) blocked is not a wait: dry (journal only) until the owner switches manager.json blockedCheck to live
   lanePendingOf = async () => [],   // the session's lane requests not final yet (queued / running): [{ id, branch, state }]. Their commits are on the way to main.
+  summaryMode = () => 'dry',   // (R) the owner's summary: manager.json summaryCheck live | dry (default: journal only) | off
 } = {}) {
   const unaccepted = (list) => async () => (await list()).filter((s) => !finalAccepted(s.name));
   const listDone = unaccepted(listDoneAll), listBlocked = unaccepted(listBlockedAll), listSessions = unaccepted(listSessionsAll);
@@ -425,8 +446,10 @@ export function createDoneCheck({
         if (m === 'dry') { await note({ dry: true, session: s.name, closingReview: 'missing' }); continue; }
         if (!quiet || nudged >= MAX_NUDGES_PER_TICK) continue;
         const bugsMissing = !!bugsFieldOf(s.text)?.missing;
+        const sumGap = summaryMode() === 'live' && summaryGapOf(s.text);   // (R) rides on this push: one message, not two
         try {
-          await send(s.name, closingReviewMessage({ bugsMissing }));
+          await send(s.name, closingReviewMessage({ bugsMissing }) + (sumGap ? ' Also: ' + summaryMessage().replace(/^Done check: /, '') : ''));
+          if (sumGap) { const t0 = (st.toldSummary ||= {})[s.name]; st.toldSummary[s.name] = { sig: summarySig(s.text), day, n: (t0?.day === day ? t0.n : 0) + 1 }; }
           st.toldReview[s.name] = { sig, day, n: used + 1 }; nudged++; reviewSent.add(s.name);
           if (bugsMissing) st.toldBugs[s.name] = now();   // the same push asked for it
           await note({ session: s.name, closingReview: 'missing', parts: cr.parts });
@@ -701,6 +724,32 @@ export function createDoneCheck({
         try { await send(s.name, proofGapMessage(g)); st.toldProof[s.name] = { sig }; nudged++; await note({ session: s.name, proofGap: g }); }
         catch (e) { log.error?.('[done-check] send proof gap', s.name, e.message); }
       }
+      // (R) the owner's summary: a closing turn (done / failed / blocked / needs-*) with no `Summary:` block or a too long one gets one push per
+      // distinct STATUS line, at most SUMMARY_PUSHES_PER_DAY a day, while idle and the host is quiet. The first run only records the lines it finds,
+      // so the rollout never reopens an old turn. The manager is not listed (listSessions). dry (default) journals once per line.
+      const missingSummary = [], sm = summaryMode();
+      if (sm !== 'off') {
+        st.toldSummary ||= {};
+        let all = []; try { all = await listSessions(); } catch { all = []; }
+        const names = new Set(all.map((s) => s.name));
+        for (const n of Object.keys(st.toldSummary)) if (!names.has(n)) delete st.toldSummary[n];
+        const first = !st.summarySince;
+        for (const s of all) {
+          const gap = summaryGapOf(s.text);
+          if (!gap) continue;
+          const sig = summarySig(s.text), t = st.toldSummary[s.name];
+          if (first) { st.toldSummary[s.name] = { sig, day, n: 0, baseline: true }; continue; }
+          missingSummary.push(s.name);
+          if (t?.sig === sig || s.working || s.draft || touched.has(s.name)) continue;
+          const used = t?.day === day ? t.n : 0;
+          if (used >= SUMMARY_PUSHES_PER_DAY) continue;
+          if (sm === 'dry') { st.toldSummary[s.name] = { sig, day, n: used, dry: true }; await note({ dry: true, session: s.name, summary: gap }); continue; }
+          if (!quiet || nudged >= MAX_NUDGES_PER_TICK) continue;
+          try { await send(s.name, summaryMessage()); st.toldSummary[s.name] = { sig, day, n: used + 1 }; nudged++; await note({ session: s.name, summary: gap }); }
+          catch (e) { log.error?.('[done-check] send summary', s.name, e.message); }
+        }
+        if (first) st.summarySince = new Date(now()).toISOString();
+      }
       const goalCheck = { asked: [], bounced: [], accepted: [], capped: [], reflected: [], suggestions: [...openTold] };
       const closeBox = async (name) => {
         let e = null; try { e = await goalEntryOf(name); } catch {}
@@ -735,7 +784,7 @@ export function createDoneCheck({
         }
       }
       await save(st);
-      return (last = { at: now(), mode: m, checked: sessions.length, goalCheck, doneButFailed, proofWithoutEvidence: noEvidence, shipOffers, waitingWhileEquivalentFree: waitEq, missingBugsField: missing, missingClosingReview: missingReview, findings: findings.map(({ name, text }) => ({ name, text })), held: quiet ? null : 'host busy' });
+      return (last = { at: now(), mode: m, checked: sessions.length, goalCheck, doneButFailed, proofWithoutEvidence: noEvidence, shipOffers, waitingWhileEquivalentFree: waitEq, missingBugsField: missing, missingClosingReview: missingReview, missingSummary, summaryMode: sm, findings: findings.map(({ name, text }) => ({ name, text })), held: quiet ? null : 'host busy' });
     } catch (e) {
       log.error?.('[done-check]', e.message);
       return (last = { ...last, at: now(), error: e.message });

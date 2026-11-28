@@ -52,3 +52,20 @@ test('tailChars: absent or junk = everything (0); else clamped between 5000 and 
   assert.equal(tailChars(undefined), 0); assert.equal(tailChars(null), 0); assert.equal(tailChars('abc'), 0); assert.equal(tailChars('-5'), 0); assert.equal(tailChars('0'), 0);
   assert.equal(tailChars('40000'), 40000); assert.equal(tailChars('100'), 5000); assert.equal(tailChars('99999999'), MAXC);
 });
+
+test('lastReplyOf: the assistant text since the last owner prompt; tool results, sidechains and notices skipped', async () => {
+  const { lastReplyOf } = await import('../conversation.js');
+  const rec = (o) => JSON.stringify(o);
+  const jsonl = [
+    rec({ type: 'user', message: { content: 'first prompt' } }),
+    rec({ type: 'assistant', message: { content: [{ type: 'text', text: 'old reply\nSummary:\n- old' }] } }),
+    rec({ type: 'user', message: { content: 'second prompt' } }),
+    rec({ type: 'assistant', message: { content: [{ type: 'text', text: 'working on it' }, { type: 'tool_use', name: 'Bash', input: { command: 'ls' } }] } }),
+    rec({ type: 'user', message: { content: [{ type: 'tool_result', content: 'a\nb' }] } }),
+    rec({ type: 'user', message: { content: '<system-reminder>note</system-reminder>' } }),
+    rec({ type: 'assistant', isSidechain: true, message: { content: [{ type: 'text', text: 'subagent text' }] } }),
+    rec({ type: 'assistant', message: { content: [{ type: 'text', text: 'Summary:\n- new\n\nSTATUS: done — x' }] } }),
+  ].join('\n');
+  assert.equal(lastReplyOf(jsonl), 'working on it\n\nSummary:\n- new\n\nSTATUS: done — x');
+  assert.equal(lastReplyOf(''), '');
+});
