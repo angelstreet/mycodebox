@@ -4,6 +4,7 @@
   "worktrees": { "minAgeH": 24 },
   "caches": { "idleDays": 3, "names": ["node_modules", ".vite", ".playwright"], "maxDepth": 3 },
   "laneWorktrees": { "minAgeH": 24 },
+  "reviewExports": { "minAgeH": 24 },
   "logs": [
     { "file": "stalls.jsonl", "maxMB": 64, "keepMB": 16 },
     { "file": "mm-manager.log", "maxMB": 20, "keepMB": 5 },

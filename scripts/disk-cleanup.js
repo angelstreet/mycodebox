@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 // Daily disk cleanup (owner task 2026-11-11; the disk froze the host on 10-18, 10-20, 11-01 and 11-07).
-//   node scripts/disk-cleanup.js [--dry-run] [--no-fetch] [--policy FILE]
+//   node scripts/disk-cleanup.js [--dry-run] [--no-fetch] [--policy FILE] [--help]
+// --help prints usage and exits; an unknown argument is refused (exit 2). Neither ever starts a cleanup.
 // DRY RUN unless $GHOSTY_STATE_DIR/disk-cleanup.json says {"live": true} (the owner's switch); --dry-run always wins.
 // Reuses scripts/worktree-prune.js (plan + apply, no --force) and the lane's merge-worktree layout. Steps:
 //   a) worktrees merged to origin/main, clean, unused, idle > 24 h: git worktree remove + git branch -d
 //   b) node_modules / .vite / .playwright of worktrees idle > 3 days (gitignored dirs only; `npm ci` brings them back)
 //   c) own logs over a size cap: keep the tail
 //   d) lane merge worktrees (<state>/integration/wt/<id>) of finished requests, idle > 24 h
+//   e) UI reviewer exports (<state>/integration/ui-review/reviewer/<id>) a killed review left behind, idle > 24 h
 // Never touched: the policy's `never` paths (live checkouts, vpt-private, vpt-backups ...), anything named in the parked-worktree
 // files, a worktree holding non-cache ignored files (.env, keystores) or unpushed commits, state files other than the listed logs.
 import { execFileSync } from 'node:child_process';
@@ -19,6 +21,8 @@ import { plan, apply, writePlan, listWorktrees, inUse, usedCwds, liveRefs, lastC
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const GB = (b) => `${(b / 2 ** 30).toFixed(2)}G`, MB = (b) => `${(b / 2 ** 20).toFixed(0)}M`;
 const SAFE_IGNORED = /(^|\/)(node_modules|\.cache|\.vite|\.playwright|coverage|dist|build|__pycache__|\.pytest_cache|\.ruff_cache|\.mypy_cache|\.turbo|\.next)(\/|$)/;
+// Regenerable files outside a cache dir: tsc's incremental cache, and the API spec the docs generator rewrites (11-28: these alone kept 15 merged worktrees).
+const SAFE_IGNORED_FILE = /(^|\/)[^/]*\.tsbuildinfo$|^frontend\/public\/docs\/api\/specs\/server-all\.yaml$/;
 const stateDir = () => process.env.GHOSTY_STATE_DIR || path.join(os.homedir(), '.local', 'state', 'ghosty');
 const expand = (p) => path.resolve(String(p).replace(/^~(?=\/|$)/, os.homedir()));
 const real = (p) => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
@@ -70,14 +74,15 @@ export function busy(wt, { cwds, refs }) {
 export function precious(wtPath) {
   const out = git(wtPath, 'status', '--porcelain', '--ignored', '--untracked-files=all');
   if (out == null) return '<git status failed>';
-  return out.split('\n').find((l) => l.startsWith('!! ') && !SAFE_IGNORED.test(l.slice(3))) ?.slice(3) || null;
+  return out.split('\n').find((l) => l.startsWith('!! ') && !SAFE_IGNORED.test(l.slice(3)) && !SAFE_IGNORED_FILE.test(l.slice(3))) ?.slice(3) || null;
 }
 
-function findCaches(root, names, maxDepth) {
+function findCaches(root, names, maxDepth, links) {
   const hits = [];
   (function walk(dir, d) {
     let ents = []; try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
     for (const e of ents) {
+      if (links && e.isSymbolicLink() && names.includes(e.name)) links.push(path.join(dir, e.name));
       if (!e.isDirectory() || e.name === '.git') continue;
       const p = path.join(dir, e.name);
       if (names.includes(e.name)) { hits.push(p); continue; }   // never descend into a cache
@@ -85,6 +90,13 @@ function findCaches(root, names, maxDepth) {
     }
   })(root, 1);
   return hits;
+}
+
+// Caches another checkout reaches through a symlink (<worktree>/node_modules -> elsewhere): deleting the target breaks the user of the link.
+function linkTargets(repos, names, maxDepth) {
+  const links = [];
+  for (const repo of repos) for (const wt of listWorktrees(repo)) findCaches(wt.path, names, maxDepth, links);
+  return links.flatMap((link) => { try { return [{ link, target: fs.realpathSync(link) }]; } catch { return []; } });   // dangling: nothing to protect
 }
 
 export async function planCleanup({ policy = loadPolicy(), state = stateDir(), now = Date.now(), noFetch = false, cwds, refs, url, minAgeH, worktreesOnly = false } = {}) {
@@ -108,6 +120,7 @@ export async function planCleanup({ policy = loadPolicy(), state = stateDir(), n
   // b) caches of idle worktrees (also of worktrees that stay: only the regenerable dirs go)
   const removing = new Set(planned.map((i) => i.path));
   const idleMs = (policy.caches?.idleDays ?? 3) * 864e5;
+  const linked = linkTargets(repos, policy.caches?.names || [], policy.caches?.maxDepth ?? 3);
   for (const repo of repos) {
     for (const wt of listWorktrees(repo)) {
       if (removing.has(wt.path) || path.resolve(wt.path) === path.resolve(repo) || !fs.existsSync(wt.path)) continue;
@@ -116,6 +129,8 @@ export async function planCleanup({ policy = loadPolicy(), state = stateDir(), n
       if (!found.length) continue;
       if (now - lastChangeMs(wt.path) < idleMs) continue;
       for (const c of found) {
+        const user = linked.find((l) => within(l.target, real(c)));
+        if (user) { skipped.push({ step: 'cache', path: c, why: `symlink target of ${user.link}` }); continue; }
         if (git(wt.path, 'check-ignore', '-q', c) === null || git(wt.path, 'ls-files', '--', c)) { skipped.push({ step: 'cache', path: c, why: 'tracked or not gitignored' }); continue; }
         items.push({ step: 'cache', path: c, bytes: du(c), why: `worktree idle > ${policy.caches?.idleDays ?? 3} d` });
       }
@@ -140,6 +155,16 @@ export async function planCleanup({ policy = loadPolicy(), state = stateDir(), n
     let age = 0; try { age = (now - fs.statSync(d).mtimeMs) / 36e5; } catch { continue; }
     if (age < (policy.laneWorktrees?.minAgeH ?? 24)) { skipped.push({ step: 'lane', path: d, why: `changed ${age.toFixed(1)} h ago` }); continue; }
     items.push({ step: 'lane', path: d, bytes: du(d), why: `request ${st}, idle ${age.toFixed(0)} h` });
+  }
+  // e) reviewer exports: ui-review-lane.js removes its own when a review ends; a restart that kills one leaves ~170M (git archive, rebuilt on demand)
+  const revDir = path.join(state, 'integration', 'ui-review', 'reviewer');
+  let exports_ = []; try { exports_ = fs.readdirSync(revDir); } catch { /* none */ }
+  for (const id of exports_) {
+    const d = path.join(revDir, id);
+    if (inUse(d, cwds)) { skipped.push({ step: 'review', path: d, why: 'in use' }); continue; }
+    let age = 0; try { age = (now - fs.statSync(d).mtimeMs) / 36e5; } catch { continue; }
+    if (age < (policy.reviewExports?.minAgeH ?? 24)) { skipped.push({ step: 'review', path: d, why: `changed ${age.toFixed(1)} h ago` }); continue; }
+    items.push({ step: 'review', path: d, bytes: du(d), why: `left-over reviewer export, idle ${age.toFixed(0)} h` });
   }
   return { items, skipped, repos, fetchFailed, planned, sessionsOk: p.sessionsOk, cwds, refs };
 }
@@ -178,7 +203,7 @@ export async function runCleanup({ live = false, ...opts } = {}) {
     for (const i of P.items.filter((x) => x.step !== 'worktree')) {
       try {
         if (!fs.existsSync(i.path)) continue;   // already gone (removed by an earlier step)
-        if (i.step === 'cache') fs.rmSync(i.path, { recursive: true, force: true });
+        if (i.step === 'cache' || i.step === 'review') fs.rmSync(i.path, { recursive: true, force: true });
         else if (i.step === 'log') i.bytes = truncateLog(i.path, i.keepBytes);
         else if (i.step === 'lane') {
           const c = git(i.path, 'rev-parse', '--git-common-dir');
@@ -197,7 +222,7 @@ export function report(P, res) {
   const short = (p) => p.replace(os.homedir(), '~');
   const L = [`# disk cleanup ${res.live ? 'LIVE' : 'DRY RUN (nothing is deleted)'}`];
   let total = 0;
-  for (const step of ['worktree', 'cache', 'lane', 'log']) {
+  for (const step of ['worktree', 'cache', 'lane', 'review', 'log']) {
     const it = P.items.filter((i) => i.step === step).sort((a, b) => b.bytes - a.bytes);
     const sum = it.reduce((n, i) => n + i.bytes, 0); total += sum;
     L.push(`${step}: ${it.length} item(s), ${GB(sum)}`);
@@ -225,11 +250,32 @@ export function journalText({ res, before, after, at = new Date() }) {
   return `${L.join('\n')}\n`;
 }
 
+export const USAGE = `usage: node scripts/disk-cleanup.js [--dry-run] [--no-fetch] [--policy FILE]
+       node scripts/disk-cleanup.js --sweep [--above PCT] [--min-age-h H] [--journal FILE] [--dry-run]
+       node scripts/disk-cleanup.js --help
+Deletes only when $GHOSTY_STATE_DIR/disk-cleanup.json says {"live": true} and --dry-run is absent (docs/DISK-CLEANUP.md).`;
+const FLAGS = new Set(['--dry-run', '--no-fetch', '--sweep']), VALUE_FLAGS = new Set(['--policy', '--above', '--min-age-h', '--journal']);
+
+// A typo or a --help must never reach the live run: -> { help } | { error } | {}
+export function checkArgs(args) {
+  if (args.some((a) => a === '--help' || a === '-h')) return { help: true };
+  for (let i = 0; i < args.length; i++) {
+    if (FLAGS.has(args[i])) continue;
+    if (!VALUE_FLAGS.has(args[i])) return { error: `unknown argument: ${args[i]}` };
+    if (args[i + 1] === undefined || args[i + 1].startsWith('--')) return { error: `${args[i]} needs a value` };
+    i++;
+  }
+  return {};
+}
+
 // node scripts/disk-cleanup.js --sweep [--above 85] [--min-age-h 2] [--journal FILE]
 // Sweep = worktrees only (merged, clean, unused, idle > min-age-h; no caches, logs or lane trees), and only when the disk is above
 // --above percent. Same guards as the daily run (never dirty, never a live session / lease / open request), still dry unless live.
 async function main() {
   const argv = process.argv, arg = (k) => { const i = argv.indexOf(k); return i > 0 ? argv[i + 1] : undefined; };
+  const checked = checkArgs(argv.slice(2));
+  if (checked.help) { console.log(USAGE); return; }
+  if (checked.error) { console.error(`${checked.error}\n${USAGE}`); process.exitCode = 2; return; }
   const sweep = argv.includes('--sweep');
   const live = isLive() && !argv.includes('--dry-run');
   const policy = loadPolicy(arg('--policy') && expand(arg('--policy')));

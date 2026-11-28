@@ -104,6 +104,8 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
   does the integration lane on each merge. The full suite (`npm run test:full`) runs once a day on main as a daily check;
   do not run it yourself unless the selection says `full`. In a fresh worktree run `npm ci` first: without `node_modules` the
   server tests fail on "Cannot find package 'ws'", which reads like a real failure.
+  Never symlink `node_modules` from another checkout: `npm ci` empties the link's target (2026-11-28, it crash-looped the live
+  dashboard); `cbsession` copies it.
   At most two big test runs share the host: a third waits for a ticket (owner, 2026-10-20; `scripts/test-run.js`).
 - Tests must not touch live state: point `GHOSTY_STATE_DIR` at a temp directory, and never write the live
   `layout.json`.

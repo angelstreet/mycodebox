@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
-import { runCleanup, planCleanup, isLive, truncateLog, protector, report, journalText, diskUsedPct } from '../scripts/disk-cleanup.js';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { runCleanup, planCleanup, isLive, truncateLog, protector, report, journalText, diskUsedPct, checkArgs } from '../scripts/disk-cleanup.js';
 
 const OLDISO = new Date(Date.now() - 96 * 36e5).toISOString();
 const ENV = { ...process.env, GIT_COMMITTER_DATE: OLDISO, GIT_AUTHOR_DATE: OLDISO };
@@ -148,4 +149,65 @@ test('sweep live: removes idle merged worktree without force, spares dirty and i
 test('diskUsedPct: percent in use, null when unreadable', () => {
   assert.equal(diskUsedPct('/', () => ({ blocks: 100, bavail: 12 })), 88);
   assert.equal(diskUsedPct('/', () => { throw new Error('x'); }), null);
+});
+
+test('tsc incremental cache and the generated API spec do not keep a merged worktree; a .env beside them still does', async () => {
+  const f = fixture();
+  fs.appendFileSync(path.join(f.repo, '.gitignore'), '*.tsbuildinfo\nfrontend/public/docs/\n');
+  fs.mkdirSync(path.join(f.repo, 'frontend')); fs.writeFileSync(path.join(f.repo, 'frontend', 'k.txt'), 'k');
+  sh(f.repo, 'add', '.'); sh(f.repo, ...G, 'commit', '-qm', 'ignore'); sh(f.repo, 'push', '-q', 'origin', 'HEAD:main'); sh(f.repo, 'fetch', '-q');
+  const put = (wt, rel) => { fs.mkdirSync(path.dirname(path.join(wt, rel)), { recursive: true }); fs.writeFileSync(path.join(wt, rel), 'x'); };
+  const ts = f.wt('wt-ts', 'feat/ts'); put(ts, 'frontend/.tsbuildinfo'); put(ts, 'frontend/public/docs/api/specs/server-all.yaml'); age(ts);
+  const env = f.wt('wt-ts-env', 'feat/ts-env'); put(env, 'frontend/.tsbuildinfo'); put(env, '.env'); age(env);
+  const doc = f.wt('wt-doc', 'feat/doc'); put(doc, 'frontend/public/docs/notes.md'); age(doc);   // any other ignored docs file stays precious
+  const res = await runCleanup({ live: true, ...opts(f) });
+  assert.ok(!fs.existsSync(ts), JSON.stringify(res.plan.skipped));
+  assert.ok(fs.existsSync(env) && fs.existsSync(doc));
+  assert.match(res.plan.skipped.find((s) => s.path === env).why, /ignored non-cache file: \.env/);
+});
+
+test('reviewer exports a killed review left behind go after 24 h; young or in-use ones stay', async () => {
+  const f = fixture();
+  const dir = path.join(f.state, 'integration', 'ui-review', 'reviewer');
+  const mk = (id, old) => { const p = path.join(dir, id); fs.mkdirSync(p, { recursive: true }); fs.writeFileSync(path.join(p, 'x'), 'x'); if (old) fs.utimesSync(p, OLD, OLD); return p; };
+  const gone = mk('int-old', true), young = mk('int-young', false), used = mk('int-used', true);
+  await runCleanup({ live: true, ...opts(f, { cwds: new Set([used]) }) });
+  assert.ok(!fs.existsSync(gone));
+  assert.ok(fs.existsSync(young) && fs.existsSync(used));
+});
+
+test('--help and a mistyped flag print usage and delete nothing, even with the live switch on', () => {
+  const f = fixture();
+  fs.writeFileSync(path.join(f.state, 'disk-cleanup.json'), '{"live":true}');
+  const policyFile = path.join(f.root, 'policy.json'); fs.writeFileSync(policyFile, JSON.stringify(f.policy));
+  const a = f.wt('wt-help', 'feat/help'); age(a);
+  const script = fileURLToPath(new URL('../scripts/disk-cleanup.js', import.meta.url));
+  const run = (...args) => spawnSync(process.execPath, [script, '--policy', policyFile, '--no-fetch', ...args],
+    { encoding: 'utf8', env: { ...process.env, GHOSTY_STATE_DIR: f.state, GHOSTY_URL: 'http://127.0.0.1:9' }, timeout: 60000 });
+  for (const flag of ['--help', '-h']) {
+    const r = run(flag);
+    assert.equal(r.status, 0, r.stderr); assert.match(r.stdout, /^usage:/); assert.doesNotMatch(r.stdout, /LIVE|freed/);
+  }
+  const bad = run('--dryrun');
+  assert.equal(bad.status, 2); assert.match(bad.stderr, /unknown argument: --dryrun/);
+  assert.ok(fs.existsSync(a), 'nothing removed');
+  assert.ok(!fs.existsSync(path.join(f.state, 'disk-cleanup')), 'no run report written');
+  assert.deepEqual(checkArgs(['--sweep', '--above', '85', '--min-age-h', '2', '--journal', 'j.md']), {}, 'the sweep unit command line is accepted');
+  assert.match(checkArgs(['--journal']).error, /needs a value/);
+});
+
+test('a node_modules reached through a symlink survives: removing the linking worktree and cleaning idle caches', async () => {
+  const f = fixture();
+  const live = path.join(f.repo, 'node_modules', 'ws'); fs.mkdirSync(live, { recursive: true }); fs.writeFileSync(path.join(live, 'index.js'), 'x');
+  const gone = f.wt('wt-link', 'feat/link'); fs.symlinkSync(path.join(f.repo, 'node_modules'), path.join(gone, 'node_modules')); age(gone);
+  // an idle worktree whose real node_modules another worktree links to
+  const owner = f.wt('wt-owner', 'feat/owner'); fs.writeFileSync(path.join(owner, 'w.txt'), 'w');
+  fs.mkdirSync(path.join(owner, 'node_modules')); fs.writeFileSync(path.join(owner, 'node_modules', 'x'), 'x'); age(owner);
+  const user = f.wt('wt-user', 'feat/user'); fs.writeFileSync(path.join(user, 'w.txt'), 'w'); fs.mkdirSync(path.join(user, 'frontend')); fs.writeFileSync(path.join(user, 'frontend', 'f.js'), 'f');
+  fs.symlinkSync(path.join(owner, 'node_modules'), path.join(user, 'frontend', 'node_modules'));
+  const res = await runCleanup({ live: true, ...opts(f) });
+  assert.ok(!fs.existsSync(gone), JSON.stringify(res.plan.skipped));
+  assert.ok(fs.existsSync(path.join(live, 'index.js')), "the checkout's node_modules is untouched");
+  assert.ok(fs.existsSync(path.join(owner, 'node_modules', 'x')), 'a linked-to cache stays');
+  assert.match(res.plan.skipped.find((s) => s.path === path.join(owner, 'node_modules')).why, /symlink target of/);
 });
