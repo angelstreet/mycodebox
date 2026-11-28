@@ -45,3 +45,16 @@ test('done-with-unverified: a done line without a closing review is left to the 
   const r = classifyStall({ plain: pane(['STATUS: done — x merged']), raw: null, state: 'done' });
   assert.equal(r.case, 'done');
 });
+
+// 2026-11-28, after the first fix went live: the session re-ended on "unverified none for the task (... deferred ... not yet fired live)".
+test('done-with-unverified: "none" that goes on to name deferred or unfired work is not none', () => {
+  const line = 'STATUS: done — x merged · closing review: docs updated · leftovers none · unverified none for the task (live manager restart path deferred-to-manager; the two new advisories not yet fired live, they fire on a live session over threshold) · bugs: fixed — (1) int-1';
+  const r = classifyStall({ plain: pane([line]), raw: null, state: 'done' });
+  assert.equal(r.case, 'needs_manager');
+  assert.match(r.doneWithOpen[0], /^unverified: none for the task \(live manager restart path deferred/);
+});
+
+test('done-with-unverified: "none (all checked live)" stays none', () => {
+  const r = classifyStall({ plain: pane(['STATUS: done — x · closing review: docs none needed · leftovers none · unverified none (all three checked live) · bugs: none']), raw: null, state: 'done' });
+  assert.equal(r.case, 'done');
+});

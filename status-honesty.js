@@ -189,6 +189,10 @@ export function doneWithoutGoalMessage(f) {
 // a check not made. (A bug outside the task goes in `bugs: reported <id>`, which does not hold the line.) Before this, `leftovers <filed ids>` and any
 // `unverified` list passed: a Mac session wrote done with a hook not installed, two bugs open and three items unverified.
 const NOTHING_RE = /^(?:none|nothing|n\/a|-)(?:\b|$)/i;
+// "none" that goes on to name open work is not none (2026-11-28: "unverified none for the task (live manager restart path
+// deferred-to-manager; the two new advisories not yet fired live)" kept a session done).
+const HEDGE_RE = /\b(?:not\s+(?:yet|live|tested|exercised|verified|confirmed|run|fired|reachable)|deferred|unconfirmed|untested|unverified|pending|to\s+be\s+(?:checked|verified|confirmed|tested)|still\s+(?:open|to))/i;
+const isNothing = (x) => NOTHING_RE.test(x) && !HEDGE_RE.test(x.replace(NOTHING_RE, ''));
 // Pure. -> null (not a done line, no closing review, or nothing open) | { open: ['leftovers: ...', 'unverified: ...'], ids: n }.
 export function doneWithOpenOf(text) {
   const st = lastStatus(text);
@@ -199,8 +203,8 @@ export function doneWithOpenOf(text) {
   const part = (k, others) => (new RegExp(`\\b${k}\\s*:?\\s+(.+?)(?=\\s*[·;|]\\s*(?:${others}|bugs)\\b|\\s+(?:${others})\\s*:|$)`, 'i').exec(body) || [])[1]?.trim().replace(/[.,;·\s]+$/, '') || '';
   const left = part('leftovers', 'docs|unverified'), unv = part('unverified', 'docs|leftovers');
   const open = [];
-  if (left && !NOTHING_RE.test(left)) open.push(`leftovers: ${left.slice(0, 160)}`);
-  if (unv && !NOTHING_RE.test(unv)) open.push(`unverified: ${unv.slice(0, 160)}`);
+  if (left && !isNothing(left)) open.push(`leftovers: ${left.slice(0, 160)}`);
+  if (unv && !isNothing(unv)) open.push(`unverified: ${unv.slice(0, 160)}`);
   return open.length ? { open, ids: (left.match(/\b(?:bug|idea)-[0-9a-f]{6,}\b/gi) || []).length } : null;
 }
 export function doneWithOpenMessage(f) {
