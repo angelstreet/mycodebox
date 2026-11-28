@@ -179,6 +179,7 @@ import { createCredits } from './credits.js';
 import { createAnthropicSpend } from './anthropic-spend.js';
 import { createApiCredit } from './api-credit.js';
 import { createUsage, usageFile } from './usage-view.js';
+import { createBehindCheck } from './usage/code-version.js';
 import { createTurnMeter, statusMeterLine } from './turn-meter.js';
 import { evaluatePolicy } from './public/policy.js';
 import { isPriority } from './public/prio.js';
@@ -227,6 +228,7 @@ import { createIntegrationDeploys } from './integration-deploys.js';
 import { createDeployLive } from './deploy-live.js';
 import { createMockups } from './mockups.js';
 import { createContextAdvisory, lastFired } from './context-advisory.js';
+import { createRestartCheck } from './restart-check.js';
 import { createVoice, feedActions, stopItem as voiceStopItem, decidedFor as voiceDecidedFor } from './voice.js';
 
 const exec = promisify(execFile);
@@ -1034,6 +1036,7 @@ const layoutStore = createLayoutStore({ file: join(STATE_DIR, 'layout.json') });
 const sendQueue = createSendQueue({ file: join(STATE_DIR, 'send-queue.json') });   // when:'idle' sends parked while a session is busy (send-queue.js)
 const turnMeter = createTurnMeter({ ledgerFile: join(STATE_DIR, 'usage-ledger.jsonl') });   // elapsed + tokens of a finished turn, shown with its STATUS line (turn-meter.js)
 const usage = createUsage({ file: usageFile(process.env, STATE_DIR) });   // USAGE_SUMMARY overrides the path
+const usageBehind = createBehindCheck({ cwd: dirname(fileURLToPath(import.meta.url)) });
 // Lease authority (lease-source.js): manager.json `leaseAuthority` "legacy" (default: the registry over ssh) | "central-through-ssh" (same path, labelled: the registry host service through the ssh wrapper) | "central" (the in-process lease service).
 // Read once at boot: switching needs a restart, so one process never has two authorities.
 const leaseCfg = (() => { try { return JSON.parse(readFileSync(join(STATE_DIR, 'manager.json'), 'utf8')); } catch { return {}; } })();
@@ -3377,6 +3380,7 @@ async function handleHttp(req, res) {
   }
   if (req.method === 'GET' && p === '/api/usage') {
     const b = await usage.body(Object.keys(latest?.status || {}));
+    if (b?.writer) b.writer = { ...b.writer, behind: await usageBehind(b.writer.sha) };   // tailer runs older usage code (usage/code-version.js)
     return b ? json(res, 200, { ...b, minimax: minimaxMeter.snapshot(), advisories: await advisoryLastFired() }) : json(res, 404, { error: 'no usage summary yet' });
   }
   if (req.method === 'GET' && p === '/api/deploys') return json(res, 200, deployRunner.snapshot());
@@ -4065,6 +4069,22 @@ server.listen(PORT, HOST, async () => {
   const usageTick = () => usage.get().then(() => contextAdvisory.tick()).catch(() => {});   // one small file read per 30 s keeps the status field cheap
   usageTick();
   setInterval(usageTick, 30000);
+  // token audit 2026-11-28: after a self-deploy's safe-restart waiter exits, check every unit running the changed code restarted
+  // (ghosty-sessions, plus ghosty-usage for usage/ changes); a unit still on old code becomes one high manager item per request.
+  const restartCheck = createRestartCheck({ stateDir: STATE_DIR,
+    listDeployed: () => integrationLane.list({ state: 'deployed', limit: 50 }),
+    getReq: (id) => (id ? integrationLane.get(id) : null),
+    changedPaths: async (live, from, to) => (from && to && from !== to ? (await exec('git', ['-C', live, 'diff', '--name-only', from, to], { timeout: 10000 })).stdout.split('\n').filter(Boolean) : []),
+    unitStartMs: async (unit) => {
+      const pid = Number((await exec('systemctl', ['show', unit, '-p', 'MainPID', '--value'], { timeout: 5000 })).stdout.trim());
+      if (!Number.isInteger(pid) || pid <= 0) return null;   // not installed / not running here
+      const et = Number((await exec('ps', ['-o', 'etimes=', '-p', String(pid)], { timeout: 5000 })).stdout.trim());
+      return Number.isFinite(et) ? Date.now() - et * 1000 : null;
+    },
+    readExit: async (f) => { try { const n = parseInt(await readFile(f, 'utf8'), 10); return Number.isInteger(n) ? n : null; } catch { return null; } },
+    managerItem: (e) => managerEvents.record(e) });
+  setTimeout(() => restartCheck.tick(), 60000).unref?.();
+  setInterval(() => restartCheck.tick(), 120000).unref?.();
   const quotaTick = () => claudeAccountsRefresh().then(() => quota.poll()).then(() => { reevaluateHolds(); latest = null; }).catch((e) => console.error('[quota]', e.message));
   quotaTick();
   deployRunner.start();

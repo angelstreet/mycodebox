@@ -391,5 +391,15 @@ export function pageHtml({ usage, tab = 'today', score = null, jev = null, quota
     + projectsHtml(usage, tab, rows, ui)
     + quotaHtml(quota, jev);
 
-  return `<div class="uv-root">${head}${filters}<div class="uv-body">${bodyHtml}</div></div>`;
+  return `<div class="uv-root">${head}${staleWriterHtml(usage)}${filters}<div class="uv-body">${bodyHtml}</div></div>`;
+}
+
+// The tailer that wrote this summary runs older usage code than the live checkout (/api/usage `writer.behind`, usage/code-version.js):
+// its numbers may be wrong until it restarts (token audit 2026-11-28: merged loop fixes stayed dormant for hours).
+export function staleWriterHtml(u) {
+  const w = u?.writer;
+  if (!w || w.behind !== true) return '';
+  const t = Date.parse(w.startedAt);
+  const since = Number.isFinite(t) ? ` (started ${esc(new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }))})` : '';
+  return `<div class="uv-note uv-stale" role="status">These numbers come from older usage code: the usage tailer${since} has not restarted since its code changed. The next server deploy restarts it.</div>`;
 }
