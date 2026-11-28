@@ -48,7 +48,7 @@ test('chips: extra left in its currency, warn at 80 % used, nothing without a re
   assert.match(anthropicChips({ ok: true, extra: { limit: 200, used: 170, left: 30, currency: 'EUR' } }), /qi warn[^>]*>extra €30 left/);
   assert.equal(anthropicChips({ ok: true, extra: { error: 'x' } }), '');
 });
-test('API credit chips: one per org with a reading, short name, spent / budget, warn at 80 %, stale marked', () => {
+test('API credit chips: one per org with a reading, short name, spent (budget in the title), warn at 80 %, stale marked', () => {
   assert.equal(apiCreditChips(null), '');
   const c = { ok: true, orgs: [
     { org: 'max', label: 'Virtualpytest API org', budgetUsd: 200, spentUsd: 0, leftUsd: 200, usedPercent: 0 },
@@ -56,8 +56,8 @@ test('API credit chips: one per org with a reading, short name, spent / budget, 
     { org: 'x', label: 'No key', budgetUsd: 50, spentUsd: null, noKey: true },
   ] };
   const h = apiCreditChips(c);
-  assert.match(h, /class="qi ok"[^>]*>Virtualpytest \$0\/\$200</);
-  assert.match(h, /class="qi warn old"[^>]*>AngelStreet \$851\/\$1000</);
+  assert.match(h, /class="qi ok"[^>]*>Virtualpytest \$0</);
+  assert.match(h, /class="qi warn old"[^>]*>AngelStreet \$851</);
   assert.doesNotMatch(h, /No key/);
   assert.match(apiCreditChips({ ok: true, orgs: [{ org: 'm', label: '<b>', spentUsd: 3.5 }] }), />&lt;b&gt; \$3\.50</);
 });

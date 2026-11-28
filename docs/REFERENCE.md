@@ -2354,7 +2354,7 @@ repository, run by the server in its own clone, one request at a time per repo (
 
 The quota button opens a centred dialog (`.sheet-back.center`, `.quota-sheet`), not a bottom sheet. Top to bottom:
 
-- **Header chip** (`apiCreditChips`, `public/anthropic-chips.js`): the quota row also shows `<org> $spent/$budget` per org with a reading (label without "API org"), before `extra €… left`; orgs without a key are left out.
+- **Header chip** (`apiCreditChips`, `public/anthropic-chips.js`): the quota row also shows `<org> $spent` per org with a reading (budget and left in the title; amber 80 %, red 95 % of the budget) (label without "API org"), before `extra €… left`; orgs without a key are left out.
 - **API credit · <month>**: one row per Anthropic org from `api-credit.js`: spent this month (UTC month start), budget, left, a bar. Source:
   `GET api.anthropic.com/v1/organizations/analytics/cost` (beta `analytics-usage-cost-2026-08-24`; amounts are cents strings, data lands 4 to 24 h
   late), falling back to `/v1/organizations/cost_report` on 404/400. The key (an `sk-ant-admin` key or an organization-scoped key) is read per request from `~/.config/anthropic/<org>.admin.key`,
