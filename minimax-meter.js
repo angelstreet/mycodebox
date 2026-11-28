@@ -10,9 +10,10 @@ export const WINDOW_MS = 5 * H;
 export const METER_DEFAULTS = {
   pollLoopCalls: 40, pollLoopMinutes: 10, pollLoopMaxNewTokens: 300,   // N calls in M minutes at under T new tokens per call
   sharePct: 40, shareMinCalls: 50,                                      // alert when one session passes sharePct of the window's calls (and the window has shareMinCalls)
+  pollMaxOutput: 150, pollSharePct: 25, pollShareMinCalls: 100,         // a call writing under pollMaxOutput tokens is a poll; tell the manager when polls pass pollSharePct of a session's window calls
 };
 
-// manager.json keys minimaxPollLoopCalls / ...Minutes / ...MaxNewTokens, minimaxSharePct, minimaxShareMinCalls
+// manager.json keys minimaxPollLoopCalls / ...Minutes / ...MaxNewTokens, minimaxSharePct, minimaxShareMinCalls, minimaxPollMaxOutput / ...SharePct / ...ShareMinCalls
 export function meterConfig(j = {}) {
   const c = { ...METER_DEFAULTS }, pos = (v) => (Number(v) > 0 ? Number(v) : null);
   c.pollLoopCalls = pos(j.minimaxPollLoopCalls) ?? c.pollLoopCalls;
@@ -20,6 +21,9 @@ export function meterConfig(j = {}) {
   c.pollLoopMaxNewTokens = pos(j.minimaxPollLoopMaxNewTokens) ?? c.pollLoopMaxNewTokens;
   c.sharePct = pos(j.minimaxSharePct) ?? c.sharePct;
   c.shareMinCalls = pos(j.minimaxShareMinCalls) ?? c.shareMinCalls;
+  c.pollMaxOutput = pos(j.minimaxPollMaxOutput) ?? c.pollMaxOutput;
+  c.pollSharePct = pos(j.minimaxPollSharePct) ?? c.pollSharePct;
+  c.pollShareMinCalls = pos(j.minimaxPollShareMinCalls) ?? c.pollShareMinCalls;
   return c;
 }
 
@@ -42,7 +46,8 @@ function add(acc, r) {
 
 // rows -> { window, h24, sessions[] } for MiniMax rows only. Window = (wStart, now], h24 = (now - 24 h, now].
 // A session is its label (the tmux name) and falls back to the session id; rows of the same name merge.
-// -> sessions sorted by window calls, then 24 h calls: { name, window, h24, share (0-100 of window calls), top, manager, pollLoop }
+// -> sessions sorted by window calls, then 24 h calls: { name, window, h24, share (0-100 of window calls), top, manager, pollLoop, polls, pollShare }
+// polls = window calls that wrote under config.pollMaxOutput tokens (token audit 2026-11-28: 27-40% of the nightly sessions' calls); pollShare = 0-100 of the session's window calls.
 export function aggregate(rows, { now = Date.now(), wStart, isManager = () => false, config = METER_DEFAULTS } = {}) {
   wStart = Number.isFinite(wStart) ? wStart : now - WINDOW_MS;
   const per = new Map(), tot = { window: empty(), h24: empty() };
@@ -50,10 +55,10 @@ export function aggregate(rows, { now = Date.now(), wStart, isManager = () => fa
   for (const r of rows || []) {
     if (r?.agent !== 'minimax' || !Number.isFinite(r.ts) || r.ts > now || r.ts <= now - 24 * H) continue;
     const name = r.label || r.session || 'unknown';
-    const s = per.get(name) || { name, window: empty(), h24: empty(), recent: { calls: 0, newTokens: 0 } };
+    const s = per.get(name) || { name, window: empty(), h24: empty(), recent: { calls: 0, newTokens: 0 }, polls: 0 };
     per.set(name, s);
     add(s.h24, r); add(tot.h24, r);
-    if (r.ts > wStart) { add(s.window, r); add(tot.window, r); }
+    if (r.ts > wStart) { add(s.window, r); add(tot.window, r); if (((r.usage || {}).output || 0) < (config.pollMaxOutput ?? METER_DEFAULTS.pollMaxOutput)) s.polls++; }
     if (r.ts > loopFrom) { s.recent.calls++; s.recent.newTokens += ((r.usage || {}).input || 0) + ((r.usage || {}).output || 0); }
   }
   const sessions = [...per.values()].sort((a, b) => (b.window.calls - a.window.calls) || (b.h24.calls - a.h24.calls));
@@ -62,6 +67,7 @@ export function aggregate(rows, { now = Date.now(), wStart, isManager = () => fa
     s.share = wc ? Math.round((s.window.calls / wc) * 1000) / 10 : 0;
     s.manager = !!isManager(s.name);
     s.pollLoop = s.recent.calls >= config.pollLoopCalls && s.recent.newTokens / s.recent.calls < config.pollLoopMaxNewTokens;
+    s.pollShare = s.window.calls ? Math.round((s.polls / s.window.calls) * 1000) / 10 : 0;
     s.top = false;
     delete s.recent.newTokens;
   }
@@ -79,6 +85,22 @@ export function newShareAlerts(snap, config, told, now = Date.now()) {
   for (const s of snap.sessions) {
     const prev = told.get(s.name);
     if (s.share > config.sharePct && !(prev >= snap.window.start)) { told.set(s.name, now); out.push(s); }
+  }
+  return out;
+}
+
+// Sessions whose window calls are mostly polls (pollShare over pollSharePct with pollShareMinCalls calls, or a live poll loop), not announced yet in this
+// window; the manager session itself is left out. Advisory only: server.js records a `<name>:minimax-poll` manager event (deferred by the event filter:
+// it rides with the next wake). Nothing here stops or changes a session. `told`: Map name -> ms of the last advisory, updated here.
+export function newPollAlerts(snap, config, told, now = Date.now()) {
+  const out = [];
+  if (!snap) return out;
+  for (const s of snap.sessions) {
+    if (s.manager || s.window.calls < config.pollShareMinCalls) continue;
+    if (!(s.pollShare >= config.pollSharePct || s.pollLoop)) continue;
+    const prev = told.get(s.name);
+    if (prev >= snap.window.start) continue;
+    told.set(s.name, now); out.push(s);
   }
   return out;
 }
