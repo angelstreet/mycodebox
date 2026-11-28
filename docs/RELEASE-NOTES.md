@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The Anthropic cache audit can be run again** — `scripts/anthropic-cache-audit.py` prints cache use and cost per organisation, API key, model and day or hour from the Admin API reports (read-only, keys never printed); the steps and traps are in [ANTHROPIC-CACHE-AUDIT](ANTHROPIC-CACHE-AUDIT.md).
+
 - **The top bar is shorter and easier to read** — one block per source; the quota strip now reads `CLAUDE 5% wk · MINIMAX 8% 5h · OPENROUTER -$0.20 · CLAUDE API 94/200$ · CLAUDE TEAM API 212$` and wraps to a second row instead of clipping; the extra-usage "left" chip and unlimited windows are gone from it; CPU / RAM / disk details show only on an amber or red value (always in the tooltip); amber values are no longer bigger than the rest (an unrelated `.warn` style leaked in) · area: dashboard
 
 - **A shared page no longer opens as "hidden folder"** — the UI review send-back typed a shared page's stored file path into the session, the reader turned it into a /files/ link, and that link answered 403, so the owner thought the agent had sent a broken link (it had not; 2026-11-28). The review table now names the public /p/ URL, and an old /files/ link to a shared page's file redirects to it · area: pages
