@@ -379,3 +379,14 @@ test('already parked proposed-no items disappear at start, the record stays, an 
   assert.equal(ledger.reconcile(), 0, 'idempotent');
   assert.match(readFileSync(join(dir, 'suggestions.jsonl'), 'utf8'), /hide-no/);   // the actions log keeps the record
 });
+
+test('the triage record names the Claude account Opus answered on, also on an error (2026-11-28)', async () => {
+  const { mkdtempSync } = await import('node:fs'); const { tmpdir } = await import('node:os');
+  const stateDir = mkdtempSync(join(tmpdir(), 'triage-acct-'));
+  const items = [{ n: 1, text: 'Add a unit test for the parser' }];
+  const mk = (r) => createSuggestionTriage({ stateDir, ledger: { openOf: () => items }, ask: async () => r, apply: async () => {}, send: async () => {} });
+  await mk({ ok: false, error: "exit 1: You've hit your weekly limit", account: 'team1' }).triage('s1');
+  await mk({ ok: true, text: '1: YES - cheap', account: 'team2' }).triage('s1');
+  const recs = readFileSync(join(stateDir, 'manager-asks.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.deepEqual(recs.map((x) => [x.verdict, x.account]), [['error', 'team1'], ['yes', 'team2']]);
+});
