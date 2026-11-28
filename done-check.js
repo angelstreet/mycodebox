@@ -18,6 +18,7 @@ import { createHash } from 'node:crypto';
 export const DEFAULT_IGNORE_BRANCHES = ['task44-ai-manager'];
 export const POLL_MS = 5 * 60 * 1000;
 const FETCH_EVERY_MS = 30 * 60 * 1000;
+const REFETCH_MS = 60 * 1000;   // the re-read before a message: at most one fetch a minute per repo
 const MAX_NUDGES_PER_TICK = 2;
 const MAX_LOAD_PER_CORE = 1.5, MIN_RAM_AVAIL_PCT = 20;
 // The goal / reflection questions go to sessions that have finished, and a done is not final until they are answered (owner 2026-11-26: "ask the question
@@ -258,6 +259,7 @@ export function createDoneCheck({
   finalAccepted = () => false,   // (final-accept.js) the manager / owner accepted this session's result as final: no check sends or records anything for it
   proofMode = () => 'live', proofStat,   // (P) proof by risk (proof-risk.js): headless e2e on the deployed URL for a UI fix / feature; manager.json proofRisk
   listBlocked: listBlockedAll = async () => [], blockedMode = () => 'dry',   // (I) blocked is not a wait: dry (journal only) until the owner switches manager.json blockedCheck to live
+  lanePendingOf = async () => [],   // the session's lane requests not final yet (queued / running): [{ id, branch, state }]. Their commits are on the way to main.
 } = {}) {
   const unaccepted = (list) => async () => (await list()).filter((s) => !finalAccepted(s.name));
   const listDone = unaccepted(listDoneAll), listBlocked = unaccepted(listBlockedAll), listSessions = unaccepted(listSessionsAll);
@@ -286,15 +288,23 @@ export function createDoneCheck({
     return commits;
   }
 
+  // A session's facts minus the branches it has a queued / running lane request for: those commits are on their way to main (a wait).
+  async function factsFor(s, opts = {}) {
+    let pending = [];
+    try { pending = (await lanePendingOf(s.name)) || []; } catch (e) { log.error?.('[done-check] lane pending', s.name, e.message); }
+    const onWay = new Set(pending.map((r) => r.branch).filter(Boolean));
+    return (await allFactsOf(s.cwd, s.text, opts)).map((x) => (x.branch && onWay.has(x.branch) && x.notOnMain.length ? { ...x, notOnMain: [] } : x));
+  }
+
   // The session's folder, plus the branches and worktree paths its closing text names that exist in that repo.
-  async function allFactsOf(cwd, text) {
-    const own = await factsOf(cwd);
+  async function allFactsOf(cwd, text, opts = {}) {
+    const own = await factsOf(cwd, opts);
     if (!own) return [];
     const out = [own];
     const { paths, branches } = namedRefs(text, home);
     for (const p of paths) {
       if (p === cwd) continue;
-      const f = await factsOf(p).catch(() => null);
+      const f = await factsOf(p, opts).catch(() => null);
       if (f && (f.notOnMain.length || f.uncommitted.length)) out.push({ ...f, where: p });
     }
     const ign = new Set(ignoreBranches());
@@ -310,10 +320,11 @@ export function createDoneCheck({
   }
 
   // Git facts of a checkout, or null (not a repo, no origin/main).
-  async function factsOf(cwd) {
+  // fresh: fetch again unless the last fetch is under REFETCH_MS old (the re-read right before a message).
+  async function factsOf(cwd, { fresh = false } = {}) {
     let common;
     try { common = (await git(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim(); } catch { return null; }
-    if (now() - (fetchedAt.get(common) || 0) > FETCH_EVERY_MS) { fetchedAt.set(common, now()); try { await git(cwd, ['fetch', '-q', 'origin']); } catch {} }
+    if (now() - (fetchedAt.get(common) || 0) > (fresh ? REFETCH_MS : FETCH_EVERY_MS)) { fetchedAt.set(common, now()); try { await git(cwd, ['fetch', '-q', 'origin']); } catch {} }
     let base = null;
     for (const b of ['origin/main', 'origin/master']) { try { await git(cwd, ['rev-parse', '-q', '--verify', b]); base = b; break; } catch {} }
     if (!base) return null;
@@ -366,9 +377,10 @@ export function createDoneCheck({
       for (const n of Object.keys(st.told)) if (!live.has(n)) delete st.told[n];
       const findings = [];
       for (const s of sessions) {
-        const f = finding(await allFactsOf(s.cwd, s.text));
+        const f = finding(await factsFor(s));
         if (f) findings.push({ name: s.name, working: s.working, draft: s.draft, ...f });
       }
+      const stale = new Set();
       const pr = pressure();
       const quiet = pr.loadPerCore <= MAX_LOAD_PER_CORE && pr.ramAvailPct >= MIN_RAM_AVAIL_PCT;
       let nudged = 0;
@@ -378,6 +390,13 @@ export function createDoneCheck({
         if (st.told[f.name] === f.sig || f.working || f.draft) continue;
         if (m === 'dry') { await note({ dry: true, session: f.name, finding: f.text }); continue; }
         if (!quiet || nudged >= MAX_NUDGES_PER_TICK) continue;   // a later tick tells it
+        // Re-read main right before sending (2026-11-28: the lane merged 814bc38 38 s after the check said "not on main"; the check had read an
+        // origin/main fetched up to 30 min earlier, while that branch's lane request was running). No message unless a fresh fetch still disagrees.
+        const s0 = sessions.find((s) => s.name === f.name);
+        const fresh = finding(await factsFor(s0, { fresh: true }));
+        if (!fresh) { stale.add(f.name); await note({ session: f.name, finding: f.text, stale: 'agrees after a fresh fetch of main' }); continue; }
+        Object.assign(f, fresh);
+        if (st.told[f.name] === f.sig) continue;
         try {
           await send(f.name, message(f));
           st.told[f.name] = f.sig; nudged++;
@@ -385,6 +404,7 @@ export function createDoneCheck({
           await record({ key: `done-check:${f.name}`, title: `${f.name} said done, git disagrees`, body: f.text, url: '/', priority: 'default' });
         } catch (e) { log.error?.('[done-check] send', f.name, e.message); }
       }
+      for (let i = findings.length - 1; i >= 0; i--) if (stale.has(findings[i].name)) findings.splice(i, 1);   // git agrees now: the other checks read the line
       // (C) a done STATUS without the closing review segment gets one push per session turn (one done line), while idle, no draft,
       // host not busy; at most REVIEW_PUSHES_PER_DAY per session. It also asks for the bugs field when that is missing too.
       st.toldBugs ||= {}; st.toldReview ||= {};

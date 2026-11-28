@@ -76,6 +76,33 @@ test('manager session over 300k -> restart-yourself advisory with the handover-l
   assert.match(readFileSync(new URL('../scripts/manager-fresh.sh', import.meta.url), 'utf8'), /manager-handover\.log/);
 });
 
+// 2026-11-28: the restart-yourself advisory never reached the manager. Faithful path: the manager's own traces -> buildWaste -> tick with
+// the server's startedBy wiring -> the real manager-events feed with the live manager sessions. The feed used to drop it as "own session".
+test('manager over 300k: waste finding -> tick -> the manager feed keeps the restart advisory, once per cooldown', async () => {
+  const dir = tmp('ghosty-ctxadv-mgr-');
+  const waste = buildWaste(big('manager', 'trm'), NOW);
+  assert.ok(waste.findings.some((f) => f.kind === 'high-avg-context' && f.session === 'manager'));
+  const mgrs = ['mm-manager', 'manager'];
+  const me = createManagerEvents({ stateDir: dir, managerSessions: () => mgrs, now: () => NOW });
+  let t = NOW;
+  const a = createContextAdvisory({ stateDir: dir, getSummary: async () => ({ waste }), record: (e) => me.record(e), now: () => t,
+    startedBy: (n) => (mgrs.includes(n) ? 'self' : 'unknown') });
+  assert.equal(await a.tick(), 1);
+  t += 30e3; assert.equal(await a.tick(), 0, 'not repeated inside the cooldown');
+  const lines = readFileSync(join(dir, 'manager-events.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0].key, 'manager:manager-restart-advisory');
+  assert.equal(lines[0].kind, 'manager-restart-advisory');
+  assert.equal(lines[0].advisory.kind, 'manager-restart');
+  assert.equal(lines[0].advisory.findingId, 'trm');
+});
+
+test('the own-session drop still holds for the manager\'s other events', async () => {
+  const dir = tmp('ghosty-ctxadv-mgr2-');
+  const me = createManagerEvents({ stateDir: dir, managerSessions: () => ['manager'], now: () => NOW });
+  assert.equal(await me.record({ key: 'manager:context-advisory', title: 'x', body: 'y' }), false);
+});
+
 test('tick end to end: the manager-restart and subagent advisories reach the feed (the manager session is not dropped for its own restart advisory)', async () => {
   const dir = tmp('ghosty-ctxadv2-');
   const me = createManagerEvents({ stateDir: dir, managerSessions: () => ['mgr'], now: () => NOW });

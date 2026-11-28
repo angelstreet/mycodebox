@@ -1820,6 +1820,13 @@ check, and none while the session works or the host is busy (load above 1.5 per 
 `manager.json` `doneCheck`: `"dry"` (journal `done-check.jsonl` only) or `"off"`; default live. `GET /api/done-check`
 shows the last check and its findings.
 
+Right before it sends a git finding, the check re-reads main (a fresh fetch when the last one is over 1 min old) and drops
+the finding when main now has the commits; a branch with a `queued` or `running` integration lane request counts as on its
+way, not as a disagreement (2026-11-28: token-audit-followup-20261128 was told "1 commit not on main (814bc38)" 38 s before
+the lane merged it). A `STATUS: done` whose closing review lists leftovers or unverified items is not a done for the
+dashboard: `stall.js` classifies it `needs_manager` ("said done, not fully confirmed: ..."), so the manager sends it back or
+accepts it as final instead of closing it. Tests: `test/done-check-fresh.test.js`, `test/done-with-unverified.test.js`.
+
 ### Ship without asking (E, owner 2026-11-11)
 
 A closing text with **no STATUS line** that offers or asks permission for a step the rules already authorise ("nothing is
