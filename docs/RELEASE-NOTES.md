@@ -69,6 +69,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The triage record says which rule and which words sent a suggestion to the owner** — each floor item's `manager-asks.jsonl` line (`point: suggestion-triage`) now has `floorRule` (`suggestion-triage FLOORS.<name>` or `doubt.js ownerOnly (ownerFloorMatch / hardMatch)`) and `floorWords` (the matched words, e.g. "wipe the backups"), so a false floor like the 2026-11-28 "drops" is found by reading the record, not by the owner. `suggestion-triage.js` `floorMatchOf` (`floorOf` is now its `.floor`) · tests: `test/suggestion-triage.test.js` · area: harness
+
 - **The reader's play button works after the reader repaints** — the chip was wired only on the reader's first paint, so a chip painted later (after "no reply yet", or after a smooth-scroll swap) did nothing on tap. Every reader rebuild now wires its chips (`public/app.js` paintReader, test `test/reader-chip-wiring.test.js`) · area: reader
 
 - **The suggestion-triage owner floor matches real data deletion, not the word "drops"** — on 2026-11-28 a dashboard suggestion ("the state frame drops managerAsk") went to the owner as "owner floor (\"drops\")". The data floor now needs a deletion verb aimed at data (tables, rows, records, history, logs, recordings, backups, branches, sessions...) or `rm -rf` / `drop table`; "drops" / "remove" / "delete" in a UI, journal or code sense is no floor, and the other ownerOnly floors see those words masked. On the live ledger this changes three past items only (the two "drops" items and one "overwrites" item). `suggestion-triage.js` `isDataDeletion`, `maskNonData` · tests: `test/suggestion-triage.test.js` · area: harness
