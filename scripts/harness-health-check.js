@@ -31,6 +31,7 @@ import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { FLOORS } from '../owner-asks.js';
+import { readRequests } from '../integration-log.js';
 import { closingLines, statusLine } from '../stall.js';
 
 export const HOURS = 24;
@@ -107,12 +108,7 @@ const branchKey = (r) => {
 const tsOf = (v) => { const t = Date.parse(v || ''); return Number.isFinite(t) ? t : 0; };
 
 export function laneStats(lines, { now, hours = HOURS }) {
-  const latest = new Map();
-  for (const line of lines) {
-    let r; try { r = JSON.parse(line); } catch { continue; }
-    if (!r || typeof r !== 'object' || !r.id) continue;
-    latest.set(r.id, r);
-  }
+  const latest = readRequests(lines);
   // The latest request time of every request that landed merged or deployed, per repo+branch.
   const landed = new Map();
   for (const r of latest.values()) {

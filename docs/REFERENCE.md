@@ -640,7 +640,7 @@ as ONE line (`{date, ...}`) to `<stateDir>/harness-health.jsonl`, then compares 
 only, read-only, except that appended line: new owner asks and how many were answered (`manager-owner-asks.jsonl`: a line
 with a `question` in the window is an ask and carries the `session` that filed it, a later line of the same id closes it),
 decisions taken for the owner
-(`manager-decisions.jsonl`), the lane (`integration/requests.jsonl`: the last record per id, counted by final state, plus
+(`manager-decisions.jsonl`), the lane (`integration/requests.jsonl`: each request rebuilt with `integration-log.js`, counted by final state, plus
 `approvalRefused`; a return that a later request for the same repo+branch landed is resolved and is not counted), CI
 (`ci-watch.jsonl`: red minutes from a red record to the next green, clipped to the window, so a
 streak opened before it is not a day-long outage), the box (`/proc/loadavg`, `MemAvailable` from `/proc/meminfo`, `/`

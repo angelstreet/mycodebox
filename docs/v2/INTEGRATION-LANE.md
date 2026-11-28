@@ -110,7 +110,7 @@ One waiter at a time: the launch writes the waiter shell's pid to `<id>.pid`. If
 `restart_failed`, `deploy_failed`. Nothing is ever reset; once the checkout moved, the result carries a `rollback` line: `git -C <live> checkout --detach <prev sha> && scripts/safe-restart.sh`, then `git revert -m 1 <merge>` on the target through the lane (never `reset --hard`; the next self-deploy refuses until the live checkout is back on the target branch).
 
 Files: `integration-lane.js` (queue, steps, restart), `integration-routes.js` (HTTP), `scripts/integrate` (CLI). The queue is
-`<state>/integration/requests.jsonl` (one snapshot per line, the last wins). A client token for the Mac:
+`<state>/integration/requests.jsonl` (append-only, format in `integration-log.js`: a full request on its first save by a lane process and on every change of state, else only the changes, `{of, set, del, steps}`; read it with `readRequests`, never "last line per id", and never cut its head. Code older than this format skips change lines and shows each request as of its last full line, so after a rollback check requests that were open). A client token for the Mac:
 `node scripts/lease-token.js add <name> --integrate`. A request's states: `queued`, `running`, then one final state
 (`merged`, `deployed`, `returned`, `returned_after_deploy`, `merged_ci_red`, `merged_ci_superseded`, `deploy_failed`, `cancelled`). `notify(request, event)` fires on every
 transition; `event.kind` is `queued | running | step | resumed | state | coalesced | final`, `event.final` is true on a final state.

@@ -8,11 +8,11 @@ import fs from 'node:fs';
 import { lastStatus } from '../status-honesty.js';
 import { parkedDeps } from '../own-jobs.js';
 import { computeStopState } from '../stop-state.js';
+import { readRequests } from '../integration-log.js';
 const state = process.env.GHOSTY_STATE_DIR || `${process.env.HOME}/.local/state/ghosty`;
 const since = process.argv.find((a, i) => i > 1 && /^\d{4}-/.test(a)) || '2026-11-11';
 const jl = (f) => { try { return fs.readFileSync(f, 'utf8').split('\n').flatMap((l) => { try { return l ? [JSON.parse(l)] : []; } catch { return []; } }); } catch { return []; } };
-const lane = new Map();   // id -> last snapshot
-for (const r of jl(`${state}/integration/requests.jsonl`)) if (r.id) lane.set(r.id, r);
+const lane = readRequests(jl(`${state}/integration/requests.jsonl`));   // id -> latest state
 const bySession = new Map();
 for (const r of lane.values()) if (r.session) (bySession.get(r.session) || bySession.set(r.session, []).get(r.session)).push({ id: r.id, from: Date.parse(r.createdAt), to: r.endedAt ? Date.parse(r.endedAt) : Infinity });
 const rows = jl(`${state}/stalls.jsonl`).filter((r) => r.at >= since);

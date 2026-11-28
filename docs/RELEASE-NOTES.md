@@ -6,6 +6,7 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The lane's request log records only what changed** — every save appended the whole request with all its step output, so `integration/requests.jsonl` reached 444 MB. It now writes a full line on a change of state (and after a restart) and only the changes otherwise; existing lines stay as they are. Replaying the real history this way: 427 MB becomes 89 MB, with the same requests rebuilt · area: harness
 - **Cloud sessions start on Sonnet too** — `scripts/cloud-start` now passes `--model sonnet` instead of leaving the model to the account's default; the new `-m <model>` chooses another one · area: cloud sessions
 
 - **Disk cleanup frees space again, and `--help` no longer deletes** — merged worktrees were kept only for tsc's `*.tsbuildinfo` (and one generated API spec), so the run freed 0 items while `/` was at 93 % and new sessions were paused; both now count as cache (`.env` and every other ignored file still keep a worktree). `--help` ran a live cleanup: it now prints usage, and an unknown flag is refused. The run also collects reviewer exports a killed UI review left behind (about 170 MB each, idle over 24 h) · area: harness

@@ -1,5 +1,6 @@
 // The lane's self deploy (deploy.kind 'self'): the repo of the service that runs the lane. A fake live checkout (a clone of
 // the throwaway remote), a fake restart launcher and a fake health check; the real restart command runs a fake safe-restart.sh.
+import { readRequests } from '../integration-log.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync } from 'node:fs';
@@ -30,7 +31,7 @@ function mk(w, { stateDir = tmp('lane-self-'), restart, health = async () => tru
   return { lane: l, stateDir, events, launches };
 }
 const until = async (fn, ms = 120000) => { const end = Date.now() + ms; while (Date.now() < end) { const v = fn(); if (v) return v; await new Promise((r) => setTimeout(r, 5)); } throw new Error('timed out waiting'); };
-const lastRecord = (stateDir, id) => readFileSync(join(stateDir, 'integration', 'requests.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((x) => x.id === id).at(-1);
+const lastRecord = (stateDir, id) => readRequests(readFileSync(join(stateDir, 'integration', 'requests.jsonl'), 'utf8').split('\n')).get(id);
 
 test('merge, pull, check: the request is done, persisted and told BEFORE the restart launcher runs', async () => {
   const w = world(); w.branch('feat', { 'new.js': 'x\n' });
