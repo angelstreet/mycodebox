@@ -57,7 +57,8 @@ scripts/cloud-start -C ~/ghosty-sessions -l fix-foo -t "Fix ... ; run the tests;
 scripts/cloud-start -C ~/virtualpytest -l fix-bar -f /tmp/task.txt
 ```
 
-`cloud-start` runs `claude --cloud` (creating a cloud session is interactive only: `--print` is refused) in a private
+`cloud-start` passes `--model sonnet` (owner 2026-11-28; `-m <model>` wins; checked on 2.1.332: a cloud session started with `--model haiku` ran on
+Haiku). It runs `claude --cloud` (creating a cloud session is interactive only: `--print` is refused) in a private
 tmux, prints the session URL and appends one line to `$GHOSTY_STATE_DIR/cloud-sessions.jsonl`
 (`at, id, url, repo, base, label, by, task`). Run it once per task for parallel agents. Interactive alternative: type
 `claude --cloud "task"` in a terminal. From a phone or browser: claude.ai/code on the default login.

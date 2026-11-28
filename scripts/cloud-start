@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # cloud-start: start one Claude Code cloud session (Anthropic-hosted VM) from codebox and print its URL. docs/CLOUD.md.
-#   cloud-start -C <repo checkout> [-l <label>] (-t "task" | -f task-file)
+#   cloud-start -C <repo checkout> [-l <label>] [-m <model>, default sonnet] (-t "task" | -f task-file)
 # The VM clones the checkout's GitHub remote at its CURRENT BRANCH as pushed (not local changes): push it first.
 # Creating a cloud session is interactive only (CLI 2.1.332: "--cloud cannot be combined with --print"), so
 # `claude --cloud` runs in a detached tmux on a private socket (no dashboard card); we read its "View:" line and close it.
@@ -8,12 +8,14 @@
 # Follow-up message to a running session: claude -p "<text>" --cloud <session-id>
 set -euo pipefail
 usage() { sed -n '2,3p' "$0" | sed 's/^# //' >&2; exit 2; }
-DIR=. LABEL= TASK= FILE=
-while getopts "C:l:t:f:h" o; do
-  case $o in C) DIR=$OPTARG ;; l) LABEL=$OPTARG ;; t) TASK=$OPTARG ;; f) FILE=$OPTARG ;; *) usage ;; esac
+DIR=. LABEL= TASK= FILE= MODEL=sonnet
+while getopts "C:l:m:t:f:h" o; do
+  case $o in C) DIR=$OPTARG ;; l) LABEL=$OPTARG ;; m) MODEL=$OPTARG ;; t) TASK=$OPTARG ;; f) FILE=$OPTARG ;; *) usage ;; esac
 done
 [ -n "$FILE" ] && TASK=$(cat "$FILE")
 [ -n "$TASK" ] || usage
+# The model goes into the tmux command line below: ids and aliases only.
+[[ $MODEL =~ ^[A-Za-z0-9._-]+$ ]] || { echo "cloud-start: bad model name" >&2; exit 2; }
 cd "$DIR"
 BR=$(git rev-parse --abbrev-ref HEAD)
 REM=$(git ls-remote origin "refs/heads/$BR" | cut -f1)
@@ -22,7 +24,7 @@ STATE=${GHOSTY_STATE_DIR:-$HOME/.local/state/ghosty}
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"; tmux -L cloud-start kill-session -t "$name" 2>/dev/null || true' EXIT
 printf '%s' "$TASK" > "$tmp/task"
 name=cs-$$
-tmux -L cloud-start new-session -d -s "$name" -x 220 -y 50 -c "$PWD" "claude --cloud \"\$(cat '$tmp/task')\"; sleep 30"
+tmux -L cloud-start new-session -d -s "$name" -x 220 -y 50 -c "$PWD" "claude --model $MODEL --cloud \"\$(cat '$tmp/task')\"; sleep 30"
 url=
 for _ in $(seq 1 60); do
   url=$(tmux -L cloud-start capture-pane -p -t "$name" 2>/dev/null | tr -d '\n' | grep -o 'https://claude.ai/code/session_[A-Za-z0-9]*' | head -n 1) || true
