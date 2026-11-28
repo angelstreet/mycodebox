@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The API spend values carry a dollar sign** — "put dollars in both it is money" (owner 2026-11-28): the top bar reads `Claude API 94/945$ - 200/200$` · area: usage
+
 - **A full disk no longer reads as "already exists"** — creating a session on a disk at 90 % or more was refused with the toast `"<name>" already exists`, because the dialog took every 409 for a taken name. It now shows the disk guard's own message; "already exists" is only for a taken name · area: dashboard
 
 - **API spend takes one short group in the top bar** — "we take too much spaces ... Claude API 94/945 - 200/200 since 200 is max" (owner 2026-11-28). The two org groups (`Claude API 94/945$`, `Claude team API 200/11$`) become one `Claude API 94/945 - 200/200`: spent / credit left per org, and spent / limit, red, once an org has reached its monthly limit (its API calls are stopped, so the credit does not matter). The org and exact figures are in each value's title · area: usage
