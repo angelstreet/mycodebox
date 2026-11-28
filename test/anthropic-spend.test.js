@@ -50,16 +50,16 @@ test('API spend: one "Claude API" group, spent/credit per org, spent/limit and r
     { org: 'x', label: 'No key', budgetUsd: 50, spentUsd: null, noKey: true },
   ] });
   assert.equal((h.match(/class="qg"/g) || []).length, 1);
-  assert.match(h, /^<span class="qg"><b>Claude API<\/b><span class="qi ok" title="Virtualpytest API org: [^"]*\$94\.27 of the \$1000\.00 limit \(9%\), credit left about \$945\.09">94\/945<\/span><i class="dim">-<\/i><span class="qi crit" title="AngelStreet API org: [^"]*\$200\.20 of the \$200\.00 limit \(100%, API calls stopped until the 1st\), credit left about \$10\.85">200\/200<\/span><\/span>$/);
-  assert.doesNotMatch(h, /No key|\d\$/);
+  assert.match(h, /^<span class="qg"><b>Claude API<\/b><span class="qi ok" title="Virtualpytest API org: [^"]*\$94\.27 of the \$1000\.00 limit \(9%\), credit left about \$945\.09">94\/945\$<\/span><i class="dim">-<\/i><span class="qi crit" title="AngelStreet API org: [^"]*\$200\.20 of the \$200\.00 limit \(100%, API calls stopped until the 1st\), credit left about \$10\.85">200\/200\$<\/span><\/span>$/);
+  assert.doesNotMatch(h, /No key/);
 });
 test('API spend values without credit: spent/limit, spent alone, "?" before the first reading, amber at 80 %, red with no credit, stale marked', () => {
   const v = (o) => apiCreditChips({ ok: true, orgs: [{ label: 'L', ...o }] });
-  assert.match(v({ org: 'max', budgetUsd: 200, spentUsd: 94.27, usedPercent: 47 }), /qi ok"[^>]*>94\/200</);
-  assert.match(v({ org: 'team', spentUsd: 211.6 }), /qi ok"[^>]*>212</);
-  assert.match(v({ org: 'max', budgetUsd: 200, spentUsd: null }), /qi na"[^>]*>\?\/200</);
-  assert.match(v({ org: 'team', budgetUsd: 1000, spentUsd: 850.5, usedPercent: 85.05, stale: true, error: 'timeout' }), /qi warn old" title="[^"]*\$850\.50 of the \$1000\.00 limit[^"]*not live: timeout">851\/1000</);
-  assert.match(v({ org: 'dry', budgetUsd: 1000, spentUsd: 10, usedPercent: 1, creditLeftUsd: -2.4 }), /qi crit"[^>]*>10\/-2</);
+  assert.match(v({ org: 'max', budgetUsd: 200, spentUsd: 94.27, usedPercent: 47 }), /qi ok"[^>]*>94\/200\$</);
+  assert.match(v({ org: 'team', spentUsd: 211.6 }), /qi ok"[^>]*>212\$</);
+  assert.match(v({ org: 'max', budgetUsd: 200, spentUsd: null }), /qi na"[^>]*>\?\/200\$</);
+  assert.match(v({ org: 'team', budgetUsd: 1000, spentUsd: 850.5, usedPercent: 85.05, stale: true, error: 'timeout' }), /qi warn old" title="[^"]*\$850\.50 of the \$1000\.00 limit[^"]*not live: timeout">851\/1000\$</);
+  assert.match(v({ org: 'dry', budgetUsd: 1000, spentUsd: 10, usedPercent: 1, creditLeftUsd: -2.4 }), /qi crit"[^>]*>10\/-2\$</);
   assert.match(v({ org: 'm', label: '<b>', spentUsd: 3.5 }), /title="&lt;b&gt;: /);
   assert.equal(v({ org: 'other', spentUsd: null }), '');
 });
