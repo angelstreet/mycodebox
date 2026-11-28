@@ -14,6 +14,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'no
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ownerOnly } from '../doubt.js';
+import { claudeBin } from '../suggestion-triage.js';
 import { usableAccounts, envFor, isLimitText } from '../claude-accounts.js';
 
 const SYSTEM = `You advise the AI manager that supervises coding agent sessions. It is in doubt how to answer one session's question.
@@ -22,6 +23,7 @@ Only the owner may decide: money or cost beyond plan, credentials and secrets, c
 Reply with the first line exactly "ANSWER: <the reply the manager should send to the session>" or "OWNER: <why only the owner can decide>", then at most 3 lines of reasons.
 Contained, reversible engineering choices (design, scope, merge, deploy, restart, tests) are the manager's: answer them. If the facts are too thin to answer safely, say in the ANSWER what the session must find out first.`;
 
+let account = null;   // the Claude account the call ran on, in the output and the record (2026-11-28)
 const fail = (msg) => { process.stderr.write(`${msg}\n`); process.exit(2); };
 const flags = {};
 for (let i = 2; i < process.argv.length; i += 2) {
@@ -40,7 +42,7 @@ if (!question && !facts) fail('--question or --facts is required');
 const session = flags.session || facts?.session || null;
 
 function done(verdict, text, source, extra = {}) {
-  const out = { session, verdict, text, model: source === 'opus' ? 'opus' : null, source };
+  const out = { session, verdict, text, model: source === 'opus' ? 'opus' : null, source, ...(account ? { account } : {}) };
   process.stdout.write(JSON.stringify(out) + '\n');
   const dir = process.env.GHOSTY_STATE_DIR || join(homedir(), '.local', 'state', 'ghosty');
   try {
@@ -61,7 +63,8 @@ const stateDir = process.env.GHOSTY_STATE_DIR || join(homedir(), '.local', 'stat
 const accts = usableAccounts(stateDir).slice(0, 2);
 let r;
 for (const a of accts.length ? accts : [null]) {
-  r = spawnSync(process.env.CLAUDE_BIN || 'claude', ['-p', '--model', 'opus', '--tools', '', '--no-session-persistence', '--disable-slash-commands', '--strict-mcp-config', '--setting-sources', '', '--output-format', 'text', '--system-prompt', SYSTEM],
+  account = a?.id || null;   // no account file: the process env, not named
+  r = spawnSync(claudeBin(), ['-p', '--model', 'opus', '--tools', '', '--no-session-persistence', '--disable-slash-commands', '--strict-mcp-config', '--setting-sources', '', '--output-format', 'text', '--system-prompt', SYSTEM],
     { cwd, input: prompt, encoding: 'utf8', env: a ? envFor(a) : process.env, timeout: Number(process.env.ASK_OPUS_TIMEOUT_MS) || 180000, maxBuffer: 1 << 22 });
   if (!(r.status !== 0 && isLimitText(`${r.stdout}\n${r.stderr}`))) break;
 }

@@ -134,7 +134,7 @@ export function createSuggestionTriage({ stateDir, ledger, ask = claudeOpus, sen
     if (!items.length || mode() !== 'live') return { skipped: true };
     const r = await ask(promptOf(items, { session: name, goal: await goalOf(name), context: ledger.get?.(name)?.context || '' }));
     if (!r?.ok) {   // no verdict: the old flow stands (the manager / owner answers)
-      record({ session: name, verdict: 'error', error: r?.error || 'no reply', items: items.map((i) => i.n) });
+      record({ session: name, verdict: 'error', error: r?.error || 'no reply', items: items.map((i) => i.n), ...(r?.account ? { account: r.account } : {}) });
       logEvent({ type: 'suggestion-triage-error', session: name, error: String(r?.error || '').slice(0, 200) });
       return { error: r?.error || 'no reply' };
     }
@@ -142,7 +142,7 @@ export function createSuggestionTriage({ stateDir, ledger, ask = claudeOpus, sen
     const still = new Set(ledger.openOf(name).map((i) => i.n));
     const decisions = decide(items.filter((i) => still.has(i.n)), parseVerdicts(r.text, items));
     if (!decisions.length) return { skipped: true };
-    for (const d of decisions) record({ session: name, n: d.n, text: d.text.slice(0, 200), verdict: d.decision, opus: d.opus, proposed: d.proposed, why: d.why, ...(d.floor ? { floor: d.floor } : {}), source: 'opus' });
+    for (const d of decisions) record({ session: name, n: d.n, text: d.text.slice(0, 200), verdict: d.decision, opus: d.opus, proposed: d.proposed, why: d.why, ...(d.floor ? { floor: d.floor } : {}), source: 'opus', ...(r.account ? { account: r.account } : {}) });
     logEvent({ type: 'suggestion-triage', session: name, decisions: decisions.map((d) => `${d.n}:${d.decision}`) });
     await apply(name, decisions);
     const owner = decisions.filter((d) => d.decision === 'owner');
