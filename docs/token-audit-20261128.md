@@ -56,3 +56,27 @@ Together about 30%, with #1 and #2 two thirds of it. Nothing in 1 to 5 changes h
 ## What shipped (detectors, so this stays visible)
 
 `/api/usage` and `usage-summary.json` fields: `perAccount`, `waste` (findings: high-avg-context over 300k, low-cache-hit under 90%, cache-churn from 3 M written, subagent-heavy over 50% and 100 M, idle-polling 20% of calls, expensive-model-cheap-work), `burn` (hourly, time to 100% per window and account, and MiniMax), `loops`, a filled `outliers` list, and a `waste` line per day in the scorecard. First live run: 19 findings (5 high-avg-context, 2 subagent-heavy, 8 idle-polling, 3 cache-churn, 1 low-cache-hit). Page `/monitoring/ai-usage` shows them (virtualpytest repo).
+
+## Before / after the merged fixes (measured 2026-11-28 09:35 UTC)
+
+Merges: token-fix-a 00:43, token-fix-c-context 00:52, token-fix-b-waits 01:07, token-watch-subagents 04:18 (all UTC, 28 Nov). Source: `usage-ledger.jsonl`, Claude rows. Before = 27 Nov 00:43 to 28 Nov 00:43 (24 h). After = 28 Nov 04:30 to 09:35 (5.1 h, a Saturday morning). The after window is short and quiet, so the matching hours of 27 and 26 Nov are given as the fair baseline. Cost is null in the ledger for these rows, so context tokens per hour stands in for burn.
+
+| Metric | Before 24 h | Same hours 27 Nov | Same hours 26 Nov | After 5.1 h |
+|---|---|---|---|---|
+| Calls per hour | 180 | 126 | 625 | 95 |
+| Context M tokens per hour | 35 | 14 | 120 | 8 |
+| Avg context per call | 196k | 115k | 192k | 84k |
+| Calls above 300k | 19.7% | 3.1% | 12.0% | 0.0% |
+| Cache hit | 98.1% | 98.0% | 98.3% | 95.8% |
+| Subagent share of context | 65.3% | 5.0% | 25.7% | 19.9% |
+| Tiny turns (<150 out) share of Opus/Fable calls | 14.8% | 13.4% | 11.0% | 15.2% |
+| Calls/h of sessions labelled manager | 15 | 15 | 51 | 23 |
+
+Weekly plan % per account (rate-limit files): default 100% (reset 28 Nov 15:00 Paris, no change); team1 71% in the audit, now 87% (+16 points; 5 h window 13%); team2 75% in the audit, now 86% (+11 points). Both still climbed after the merges, driven by the morning's work of 28 Nov before the after window and by the load of the days before, not by something the after window shows.
+
+Reading: the large-context share fell (19.7% to 0.0% of calls above 300k, avg context 196k to 84k) and context per hour is 43% under the same hours of 27 Nov (14 to 8 M/h), but one quiet morning is not proof: volume is a third of a normal day, and the 26 Nov hours were a peak. Cache hit fell 2 points (95.8%), which fits the shorter sessions rewriting a smaller cache; watch it, the opt-in 1 h TTL is the lever. Tiny turns on Opus/Fable did not move (saving #5 is not shipped). Manager-labelled calls per hour rose (15 to 23, crude label match): the wait fix cuts wakes per wait, not the number of events the manager handles. Re-measure with a full weekday after the next merge window; script: `usage/` fields `waste` and `perAccount` of `/api/usage`.
+
+## Saving #3: what is built, what stays with the owners
+
+Built (ours): `context-advisory.js` now also turns a `subagent-heavy` waste finding into a low-priority manager advisory (`<session>:subagent-advisory`, one per finding id, same cooldown) carrying the narrow-prompt brief: one question per subagent, named files, answer in about 10 lines, Sonnet/Haiku for read-only lookups, no subagent for a few tool calls. Test in `test/context-advisory.test.js`.
+Stays with the owners: the start briefs and skill text of `userinterface-audit` and `mcp-server-audit` are not in any repo we own (they were started by hand), so the actual prompt narrowing and the context cap there belong to their session owners; the advisory is how they get told, and the manager applies the 300k restart rule (saving #2) to the ones it started.

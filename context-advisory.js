@@ -13,7 +13,18 @@ export const COOLDOWN_MS = 24 * 3600e3;
 export const FILE_NAME = 'context-advisory.json';
 
 // Pure: the event for one finding. startedBy: 'manager' | 'owner' | 'unknown'.
+export const SUB_KIND = 'subagent-advisory';
 export function advisoryEvent(f, startedBy = 'unknown', at = new Date().toISOString()) {
+  if (f.kind === 'subagent-heavy') {
+    const who = startedBy === 'manager' ? 'started by the manager' : 'not started by the manager';
+    return {
+      at, key: `${f.session}:${SUB_KIND}`, priority: 'low', session: f.session,
+      title: `${f.session}: advisory, subagent-heavy (${f.value}% of its context is subagents; ${who})`,
+      body: `Advisory, no action required. ${f.detail}. Saving #3 of the token audit: give each subagent a narrow prompt (one question, the files to read, an output cap of about 10 lines), prefer Sonnet or Haiku for read-only lookups, and do not spawn one for work of a few tool calls. Brief text for the session owner: "Subagents: one question each, named files, answer in 10 lines, no whole-repo reads." Finding ${f.id}, cost $${f.cost ?? '?'} in the window.`,
+      url: `/?s=${encodeURIComponent(f.session)}`,
+      advisory: { findingId: f.id, kind: f.kind, share: f.value, startedBy, account: f.account || null, agent: f.agent || null },
+    };
+  }
   const who = startedBy === 'manager' ? 'started by the manager' : startedBy === 'owner' ? 'started by the owner (or a worker, not the manager)' : 'starter unknown';
   const rule = startedBy === 'manager'
     ? 'You started it: you may restart it (fresh session, same task, a handover) at its next natural stop, never mid-turn.'
@@ -32,7 +43,7 @@ export function advisoryEvent(f, startedBy = 'unknown', at = new Date().toISOStr
 export function dueFindings(findings, sent, now, { cooldownMs = COOLDOWN_MS, isLive = () => true } = {}) {
   const out = [], ids = new Set();
   for (const f of findings || []) {
-    if (!f || f.kind !== 'high-avg-context' || !f.id || !f.session || ids.has(f.id)) continue;
+    if (!f || (f.kind !== 'high-avg-context' && f.kind !== 'subagent-heavy') || !f.id || !f.session || ids.has(f.id)) continue;
     if (!isLive(f.session)) continue;
     const prev = sent[f.id];
     if (Number.isFinite(prev) && now - prev < cooldownMs) continue;
