@@ -18,7 +18,7 @@ import { fitAction, fitSatisfied } from '/fit-policy.js';
 import { fitFont, canShrinkFont, isSettling } from '/fit-font.js';
 import { registerFileLinks, registerUrlLinks } from '/term-links.js';
 import { jevTabHtml, jevRowHtml, creditRowHtml, filtersHtml, decisionsHtml, creditChip } from '/jev-view.js';
-import { anthropicChips } from '/anthropic-chips.js';
+import { anthropicChips, apiCreditChips } from '/anthropic-chips.js';
 import { audioChipHtml, wireAudioChips } from '/audio-chip.js';
 import { copyPromptButtonHtml, wireCopyPrompt } from '/copy-prompt.js';
 import { readerCopyButtonHtml, wireReaderCopy } from '/reader-copy.js';
@@ -1092,7 +1092,7 @@ function connectStatus() {
       } else if (msg.type === 'credits') {
         state.credits = msg.credits; onQuota(state.quota);
       } else if (msg.type === 'apiCredit') {
-        state.apiCredit = msg.apiCredit; quotaRerender?.();
+        state.apiCredit = msg.apiCredit; onQuota(state.quota); quotaRerender?.();
       }
     } catch {}
   };
@@ -3596,7 +3596,7 @@ const winShort = (n) => (n === 'week' ? 'wk' : n === 'month' ? 'mo' : n);
 function onQuota(q) {
   state.quota = q;
   const el = els.quota;
-  const chip = [creditChip(state.credits), anthropicChips(state.anthropic)].filter(Boolean).join('<i class="sep">&middot;</i>');
+  const chip = [creditChip(state.credits), apiCreditChips(state.apiCredit), anthropicChips(state.anthropic)].filter(Boolean).join('<i class="sep">&middot;</i>');
   if (!q || !q.plans?.length) { if (chip) { el.className = `quota ok${el.classList.contains('inbar') ? ' inbar' : ''}`; el.innerHTML = chip; } else el.classList.add('hidden'); return; }
   const parts = q.plans.map((p) => {
     const short = p.plan;
@@ -3661,7 +3661,7 @@ function openQuota() {
     foot.classList.remove('hidden');
     foot.innerHTML = '<button class="sbtn" data-a="refresh">refresh</button><span class="grow"></span><button class="sbtn" data-a="close">close</button>';
     // refresh pulls the API credit now (?force=1, at most once a minute server-side) so a newly added admin key shows at once
-    const pullCredit = (force) => fetch(`/api/api-credit${force ? '?force=1' : ''}`).then((r) => r.json()).then((c) => { if (c?.ok) { state.apiCredit = c; render(); } });
+    const pullCredit = (force) => fetch(`/api/api-credit${force ? '?force=1' : ''}`).then((r) => r.json()).then((c) => { if (c?.ok) { state.apiCredit = c; render(); onQuota(state.quota); } });
     foot.onclick = (e) => {
       if (e.target.closest('[data-a="close"]')) return close();
       const b = e.target.closest('[data-a="refresh"]');
