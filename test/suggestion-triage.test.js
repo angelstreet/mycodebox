@@ -204,9 +204,9 @@ test('parked items show in the NEEDS YOU strip with Yes / No per item', () => {
   const items = [{ session: 's1', n: 4, text: 'buy a <paid> plan', proposed: 'no', floor: 'money' }, { session: 's2', n: 2, text: 'redesign', proposed: 'yes', why: 'big scope' }];
   assert.match(parkedChipHtml(items), /data-parked="1"[^>]*>suggestions · 2</);
   const html = parkedRowsHtml(items, { name: (s) => s.toUpperCase() });
-  assert.match(html, /data-s="s1" data-n="4"><b>S1 · 4<\/b> buy a &lt;paid&gt; plan/);
+  assert.match(html, /data-s="s1" data-n="4" title="Owner only: money"><b>S1 · 4<\/b> buy a &lt;paid&gt; plan/);
   assert.match(html, /Owner only: money/); assert.match(html, /Opus in doubt: big scope/);
-  assert.match(html, /Opus proposes: yes/);
+  assert.match(html, /class="qrec">yes</); assert.doesNotMatch(html, /Opus proposes|Yes, build it/); assert.doesNotMatch(html, /class="qwhy">(Owner only|Opus in doubt)/);
   assert.equal((html.match(/data-a="yes"/g) || []).length, 2);
   assert.equal((html.match(/data-a="no"/g) || []).length, 2);
 });

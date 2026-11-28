@@ -3,6 +3,8 @@
 The release note of this repo (owner 2026-11-13). Every merged code change (not docs-only) adds one entry at the top of
 `## Unreleased`; the done-check reads the merged diff for this file (REFERENCE "Closing review"). Entry form: one line,
 
+- **Suggestion rows are short** — the popup no longer prints "Owner only: …" / "Opus in doubt: …" (now the row's hover text), the green line is just Opus's proposal ("yes" / "no", no "Opus proposes:"), and the button reads "Yes" instead of "Yes, build it". `public/parked-view.js`.
+
 - **The reader's "last reply only" / "earlier conversation" switch is also under the composer** — a pill at the left of the line that shows the provider and model ("Claude Sonnet 5.5 · medium"), always in reach while the conversation scrolls; same action as the button inside the reader (`switchReaderMode`). Desktop only: that line is hidden on phones, where the sticky in-reader button stays. `public/app.js`, `public/style.css`.
 
 - **The reader's "last reply only" button stays in view** — it was the first line of the scrolling conversation, so after scrolling down it took a long scroll back up to reach it. The switch ("last reply only" / "earlier conversation") is now sticky at the top of the reader. `public/style.css`.
