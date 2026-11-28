@@ -97,7 +97,7 @@ that still holds when a session pushes straight to `main` without the hook.
 "restartWaitMin": 10 }`. Every merge (no `--deploy` needed; a re-request of a branch already on the target is not redeployed unless `--deploy` is explicit) is followed by: `node --check server.js` on the merge before
 the push (step `precheck`; a failure returns the request); then in the live checkout: refuse when tracked files have
 uncommitted changes (untracked files are fine) or the checkout is not on the target; `git fetch` then `git merge --ff-only <tested merge sha>` (never whatever the target is now; refused when the target no longer contains the sha or the live checkout cannot fast-forward to it); `npm ci` when `package-lock.json` changed; `node --check server.js` (a failure is reported, the
-service is not restarted); then `scripts/safe-restart.sh --wait <restartWaitMin>`. The lane runs inside the service it
+service is not restarted); then `scripts/safe-restart.sh --wait <restartWaitMin>` (it restarts `ghosty-sessions`, then try-restarts the usage tailer `ghosty-usage`). The lane runs inside the service it
 restarts and the unit sets `NoNewPrivileges`, so the script is launched with `tmux run-shell -b` (the tmux server is
 outside the unit) and its output and exit code land in `<state>/integration/restart/<id>.{log,exit}`. The restart is
 the last step: the request is first persisted done (`deployed`, "deployed live ghosty at <sha> (was <sha>), restart
