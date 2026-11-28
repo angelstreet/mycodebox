@@ -45,6 +45,13 @@ export const DEFAULT_CONFIG = { debounceHours: 20, keepDays: 14, checks: [] };
 
 const cut = (s, n) => { s = String(s ?? ''); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
 
+// One row per check at the top of the report, so a phone-overflow (or any other) failure shows in the table, not only in a section.
+export function resultsTable(results) {
+  const cell = (x) => String(x ?? '').replace(/\|/g, '/').replace(/\s+/g, ' ').trim().slice(0, 120);
+  const rows = results.map((r) => `| ${cell(r.check.id)} | ${r.ok ? 'pass' : r.broken ? 'BROKEN' : 'FAIL'} | ${r.findings.length} | ${cell(r.summary)} |`);
+  return ['## Check results', '', '| check | result | findings | summary |', '|---|---|---|---|', ...(rows.length ? rows : ['| (none ran) | - | 0 | - |']), ''];
+}
+
 export function loadConfig(path) {
   let raw;
   try { raw = JSON.parse(readFileSync(path, 'utf8')); } catch (e) { return { ...DEFAULT_CONFIG, error: e.code === 'ENOENT' ? `no config at ${path}` : `config unreadable: ${e.message}` }; }
@@ -122,6 +129,7 @@ export async function run({ home = homedir(), now = Date.now(), argv = process.a
     if (r.report) R.push(r.report.trim(), '');
   }
 
+  R.splice(2, 0, ...resultsTable(results));
   try { R.push(...g8Lines(summarizeShare(loadShare({ stateDir, days: 1, now })), summarizeShare(loadShare({ stateDir, days: 7, now })))); }
   catch (e) { R.push('## Decision share (G8)', '', `could not be computed: ${e.message}`, ''); }
 

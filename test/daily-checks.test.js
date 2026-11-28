@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 
 import { join } from 'node:path';
-import { parseCheckResult, buildEvent, shouldWake, loadConfig, run } from '../scripts/daily-checks.js';
+import { resultsTable, parseCheckResult, buildEvent, shouldWake, loadConfig, run } from '../scripts/daily-checks.js';
 import { tmp } from './helpers-tmp.js';
 
 const chk = { id: 'x', title: 'X', command: ['n'] };
@@ -73,4 +73,26 @@ test('loadConfig: missing file is reported, malformed checks are dropped', () =>
   const p = join(tmp('daily-'), 'c.json');
   writeFileSync(p, JSON.stringify({ checks: [{ id: 'a', command: ['x'] }, { id: 'b' }, 7] }));
   assert.deepEqual(loadConfig(p).checks.map((c) => c.id), ['a']);
+});
+
+test('resultsTable: one row per check incl. ui-overflow, pass / FAIL / BROKEN; pipes cannot break the table', () => {
+  const t = resultsTable([
+    { check: { id: 'ci' }, ok: true, findings: [], summary: 'green' },
+    { check: { id: 'ui-overflow' }, ok: false, broken: false, findings: [{}, {}], summary: '2 of 9 views overflow at 390 px | usage' },
+    { check: { id: 'x' }, ok: false, broken: true, findings: [{}], summary: 'timed out' },
+  ]).join('\n');
+  assert.match(t, /\| ci \| pass \| 0 \| green \|/);
+  assert.match(t, /\| ui-overflow \| FAIL \| 2 \| 2 of 9 views overflow at 390 px \/ usage \|/);
+  assert.match(t, /\| x \| BROKEN \| 1 \|/);
+  assert.match(resultsTable([]).join('\n'), /none ran/);
+});
+
+test('run: the report carries the Check results table with the built-in ui-overflow row', async () => {
+  const home = tmp('daily-'); const dir = join(home, '.local/state/ghosty'); mkdirSync(dir, { recursive: true });
+  process.env.GHOSTY_SYSTEMD_DIR = tmp('daily-units-');
+  writeFileSync(join(dir, 'daily-checks.json'), JSON.stringify({ checks: [] }));
+  const r = await run({ home, now: Date.UTC(2026, 9, 5, 5), argv: ['--dry-run'], out: () => {} });
+  const rep = readFileSync(r.reportPath, 'utf8');
+  assert.match(rep, /## Check results\n\n\| check \| result \| findings \| summary \|/);
+  assert.match(rep, /\| ui-overflow \| (pass|FAIL|BROKEN) \|/);
 });

@@ -11,7 +11,7 @@ export function createUsage({ file, ttlMs = 30000, now = () => Date.now() } = {}
     try {
       const raw = await fs.readFile(file, 'utf8');
       cached = JSON.parse(raw);
-    } catch { cached = null; }
+    } catch { /* missing or half-written file: keep the last good summary in memory (null only if none was ever read) */ }
     at = now();
     index = usageByLabel(cached, now());
   }

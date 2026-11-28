@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, rmSync } from 'node:fs';
 
 import { join } from 'node:path';
 import { fmtTok, fmtUsd, costOrNull, usageByLabel, sessionDays, sessionRows, topEntries, dayBars, summaryFresh } from '../public/usage.js';
@@ -136,5 +136,9 @@ test('createUsage: missing file -> null / null body (404-safe); present file is 
   assert.equal(u.forSession('ghost'), null);
   writeFileSync(file, '{ not json');
   t += 31_000;
-  assert.equal(await u.get(), null);           // corrupt file: null, no throw
+  assert.equal((await u.get()).total.cost, 30); // corrupt file: keeps the last good summary, no throw
+  rmSync(file);
+  t += 31_000;
+  assert.equal((await u.get()).total.cost, 30); // file gone: still the last summary (not a 404)
+  assert.ok(await u.body(['busy']));
 });

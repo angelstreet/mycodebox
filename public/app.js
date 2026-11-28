@@ -4366,7 +4366,7 @@ async function openUsagePage() {
     };
 
     const paint = () => {
-      if (!v.usage) { body.innerHTML = '<div class="uv-empty">loading…</div>'; return; }
+      if (!v.usage) { body.innerHTML = `<div class="uv-empty">${v.loaded ? 'no usage summary yet — the ghosty-usage tailer has not written one; use refresh in a minute' : 'loading…'}</div>`; return; }
       const r = sortRows(rows().filter((x) => (!ui.f.agent || x.agent === ui.f.agent) && (!ui.f.project || x.project === ui.f.project) && (!ui.f.q || x.session === ui.f.q)));
       body.innerHTML = uv.pageHtml({
         usage: v.usage, tab, score: v.score, jev: v.jev, quota: v.quota,
@@ -4381,6 +4381,7 @@ async function openUsagePage() {
         v.usage = r.ok ? await r.json() : null;
         if (!r.ok) v.usage = null;
       } catch { v.usage = null; }
+      v.loaded = true;
       // the scorecard and the Jev tab feed the tiles and the quality row; either may be missing, so neither blocks the page
       await Promise.all([
         fetch('/api/manager/scorecard?days=14').then((r) => (r.ok ? r.json() : null)).then((j) => { v.score = j; }).catch(() => {}),
