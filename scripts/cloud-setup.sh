@@ -27,6 +27,8 @@ fi
 want=$(sha256sum package-lock.json | cut -c1-64)
 stamp=node_modules/.cloud-setup
 if [ "$(cat "$stamp" 2>/dev/null)" != "$want" ]; then
+  # A codebox worktree may link node_modules to the live checkout; npm ci there empties the live folder (2026-11-28 outage).
+  if [ -L node_modules ]; then echo "cloud-setup: node_modules is a symlink ($(readlink node_modules)); refusing npm ci" >&2; exit 2; fi
   npm ci --no-audit --no-fund
   echo "$want" > "$stamp"
 fi
