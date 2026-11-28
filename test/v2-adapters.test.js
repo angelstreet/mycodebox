@@ -518,3 +518,21 @@ test('verify extras: fake runtime does not follow a symlink out of cwd', async (
   for (const p of ['dir/f.txt', 'leaf.txt']) await a.start({ task_id: 't', cwd, prompt: 'x', script: [{ op: 'write', path: p, content: 'x' }] }).done;
   assert.deepEqual(fs.readdirSync(outside), []);
 });
+
+test('token audit: claude adapter maps fable to opus unless allow_fable, subagents on sonnet', async () => {
+  const { claudeModel, claudeEnv } = await import('../orchestration/adapters/claude.js');
+  assert.equal(claudeModel('fable'), 'opus');
+  assert.equal(claudeModel('claude-fable-5-2'), 'opus');
+  assert.equal(claudeModel('fable', true), 'fable');
+  assert.equal(claudeModel('sonnet'), 'sonnet');
+  assert.equal(claudeModel(undefined), null);
+  assert.deepEqual(claudeEnv({ model: 'opus' }, {}), { CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet' });
+  assert.deepEqual(claudeEnv({ model: 'haiku' }, {}), {});
+  assert.deepEqual(claudeEnv({}, { CLAUDE_CODE_SUBAGENT_MODEL: 'opus' }), {});
+  const { rec } = await runCli('claude', 'ok', { model: 'fable' });
+  const i = rec.argv.indexOf('--model');
+  assert.equal(rec.argv[i + 1], 'opus');
+  assert.ok(rec.env.includes('CLAUDE_CODE_SUBAGENT_MODEL'));
+  const ok = await runCli('claude', 'ok', { model: 'fable', allow_fable: true });
+  assert.equal(ok.rec.argv[ok.rec.argv.indexOf('--model') + 1], 'fable');
+});

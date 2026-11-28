@@ -447,7 +447,7 @@ export function makeCliAdapter(spec) {
       const trusted = (head.trusted || []).filter((i) => Number.isInteger(i) && i >= 0 && i < head.args.length);
       return spawnRun({
         spawnFn: spawn, bin: binPath, argv, skip: [...trusted, argv.length - 1], cwd: realCwd, allowedRoots, fs, now,
-        env: buildEnv(env, spec.envAllow, o.env), parse: spec.parse, usageMode: spec.usageMode, killGraceMs, exitGraceMs,
+        env: buildEnv(env, spec.envAllow, { ...(spec.env ? spec.env(o, env) : {}), ...(o.env || {}) }), parse: spec.parse, usageMode: spec.usageMode, killGraceMs, exitGraceMs,
         meta: {
           adapter: spec.id, task_id: o.task_id ?? null, run_id, artifact_dir: o.artifact_dir || (artifactDir ? path.join(artifactDir, String(run_id)) : null),
           timeout_ms: o.timeout_ms, session_id: head.session_id || resumeId || null,
