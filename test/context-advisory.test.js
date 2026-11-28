@@ -75,3 +75,16 @@ test('manager session over 300k -> restart-yourself advisory with the handover-l
   assert.equal(ev.priority, 'low');
   assert.match(readFileSync(new URL('../scripts/manager-fresh.sh', import.meta.url), 'utf8'), /manager-handover\.log/);
 });
+
+test('tick end to end: the manager-restart and subagent advisories reach the feed (the manager session is not dropped for its own restart advisory)', async () => {
+  const dir = tmp('ghosty-ctxadv2-');
+  const me = createManagerEvents({ stateDir: dir, managerSessions: () => ['mgr'], now: () => NOW });
+  const waste = { findings: [
+    { kind: 'high-avg-context', id: 'a1', session: 'mgr', value: 350000, detail: 'avg context 350k per call over 80 calls' },
+    { kind: 'subagent-heavy', id: 'a2', session: 'w9', value: 61, detail: 'subagents read 60M of 100M context tokens (61%)' }] };
+  const a = createContextAdvisory({ stateDir: dir, getSummary: async () => ({ waste }), record: (e) => me.record(e), startedBy: (n) => (n === 'mgr' ? 'self' : 'owner'), now: () => NOW });
+  assert.equal(await a.tick(), 2);
+  const lines = readFileSync(join(dir, 'manager-events.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.deepEqual(lines.map((l) => l.kind).sort(), ['manager-restart-advisory', 'subagent-advisory']);
+  assert.ok(lines.every((l) => l.advisory && l.advisory.findingId));
+});
