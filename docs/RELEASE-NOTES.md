@@ -3,6 +3,8 @@
 The release note of this repo (owner 2026-11-13). Every merged code change (not docs-only) adds one entry at the top of
 `## Unreleased`; the done-check reads the merged diff for this file (REFERENCE "Closing review"). Entry form: one line,
 
+- **Resuming a parked session whose worktree was cleaned up now works** — 390 of 658 parked sessions pointed at a merged, removed worktree and Resume failed with "cwd must be an existing directory". Resume now recreates the folder at the same path (a detached worktree of the main checkout it was named after, else an empty folder; only under $HOME), so `claude --resume` finds its transcript. `cwd-gone.js` `restoreGoneCwd`, `server.js` resume `validate`.
+
 - **A Claude account switch after a limit error leaves a record, and /api/health says when every account is used up** — `ask-opus.js` now shares the server's retry helper (`onAccounts`), each switch writes a `claude-account-switch` row (from, to, source) to `manager-asks.jsonl`, and `/api/health` carries `claudeAccounts: { total, usable, allUsedUp }` (true only when accounts are configured and none has headroom). `claude-accounts.js` `accountsHealth` / `recordSwitch`.
 
 - **Suggestion triage and ask-opus run on a Claude account with headroom, and errored lists are retried** — every triage failed on 2026-11-27 evening with "weekly limit" because the server ran `claude` on the used-up Default account while Team had room. Both now pick the active account first, skip accounts marked used up, set `CLAUDE_CONFIG_DIR` for the child, and retry once on the next account after a limit error (which marks the first used up); a 5-minute sweep re-runs lists whose triage errored. `claude-accounts.js` `usableAccounts`, `suggestion-triage.js`, `scripts/ask-opus.js`.
