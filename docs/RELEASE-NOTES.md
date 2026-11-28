@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **Cloud view and Node 24 in cloud sessions** — the More menu has a read-only Cloud view (`/?cloud=1`): every Claude Code cloud session started with `cloud-start`, its task, a link to it and the integration that handed its branch back. Cloud sessions were only visible in the claude.ai sidebar. `scripts/cloud-setup.sh` now switches the cloud VM from Node 22 to Node 24 like codebox, so tests behave the same in both places · area: cloud
+
 - **Header shows the API spend of each Anthropic org** — the quota row only showed the Claude extra-usage budget; it now also shows one chip per org with an admin key, `<org> $spent/$budget` this month (amber at 80 %, red at 95 %, dimmed when not live), from `api-credit.js`. It updates when the server pushes `apiCredit` and when the quota popup's refresh is pressed. Test in `test/anthropic-spend.test.js` · area: usage
 
 - **Reader copy keeps its focus while history loads** — opening the clipboard menu now protects it from a conversation repaint immediately, preserving keyboard focus when an early copy overlaps the history load. · area: reader
