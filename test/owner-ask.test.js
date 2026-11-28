@@ -295,7 +295,7 @@ test('damaged lines are surfaced with a count and line numbers, not their conten
   assert.ok(!JSON.stringify(rep.damaged).includes('Synthetic question'), 'no ledger text in the damage report');
 });
 
-test('an unreadable ledger is reported, not mistaken for an empty one', async () => {
+test('an unreadable ledger is reported, not mistaken for an empty one', { skip: process.getuid?.() === 0 && 'root reads and writes past chmod (the Claude Code cloud VM runs as root)' }, async () => {
   const dir = await mkdtemp(join(tmpdir(), 'owner-ask-unreadable-'));
   const file = join(dir, 'manager-owner-asks.jsonl');
   await writeFile(file, JSON.stringify(askRec(1)) + '\n');

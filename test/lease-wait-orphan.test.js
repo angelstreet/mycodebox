@@ -38,7 +38,11 @@ const vl = (args, env = {}) => new Promise((ok) => {      // async: the service 
   c.on('close', (status) => ok({ status, stdout: out, stderr: err }));
 });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+// A zombie is dead: where PID 1 does not reap orphans (the Claude Code cloud VM), a killed child stays a zombie and kill(0) still succeeds.
+const zombie = (pid) => { try { return /^\d+ \(.*\) Z/.test(fs.readFileSync(`/proc/${pid}/stat`, 'utf8')); } catch { return false; } };
+const alive = (pid) => { try { process.kill(pid, 0); } catch { return false; } return !zombie(pid); };
+// Under a full-suite load the waiter can take longer than its fast-mode poll to notice: wait for it, bounded.
+const goneWithin = async (pid, ms) => { const end = Date.now() + ms; while (alive(pid) && Date.now() < end) await sleep(250); return !alive(pid); };
 const leases = async () => JSON.parse((await vl(['list', '--json'])).stdout).leases;
 
 test('a waiter whose parent shell died is cancelled, so it never claims after the holder releases', async () => {
@@ -50,8 +54,7 @@ test('a waiter whose parent shell died is cancelled, so it never claims after th
   const wpid = await new Promise((ok) => sh.stdout.once('data', (c) => ok(Number(String(c).trim()))));
   await sleep(1500);
   sh.kill('SIGKILL');
-  await sleep(2500);
-  const stillAlive = alive(wpid);
+  const stillAlive = !(await goneWithin(wpid, 10000));
   assert.equal((await vl(['release', holderId, '--agent', 'codebox:holder'])).status, 0);
   await sleep(1500);
   const stale = (await leases()).filter((l) => l.agent === 'codebox:waiter');
