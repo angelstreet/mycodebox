@@ -4054,7 +4054,7 @@ server.listen(PORT, HOST, async () => {
   setInterval(healthTick, HEALTH_MS);
   // token audit saving #2: high-avg-context waste findings -> one advisory manager event per finding id (24 h cooldown)
   const contextAdvisory = createContextAdvisory({ stateDir: STATE_DIR, getSummary: () => usage.get(), record: (e) => managerEvents.record(e),
-    startedBy: (n) => (managerOwned(n) ? 'manager' : (sessionMeta.startedBy(n) || history.instances().some((i) => i.name === n)) ? 'owner' : 'unknown'),
+    startedBy: (n) => (loadManagerSessions().includes(n) ? 'self' : managerOwned(n) ? 'manager' : (sessionMeta.startedBy(n) || history.instances().some((i) => i.name === n)) ? 'owner' : 'unknown'),
     isLive: (n) => !!latest?.status?.[n] });
   const usageTick = () => usage.get().then(() => contextAdvisory.tick()).catch(() => {});   // one small file read per 30 s keeps the status field cheap
   usageTick();
