@@ -2725,7 +2725,7 @@ body:not(.res-hidden) .fgrp{ display:none; }
 /* ----- Usage & cost page (public/usage-view.js, owner request 2026-10-21) -----
    Full-width tab replacing the cramped usage sheet. Same palette and type scale as the rest of the
    app; only the layout is new: tiles at the top, real table columns, sections stacked in reading order. */
-.uv-root{ padding:10px 12px 28px; max-width:1100px; margin:0 auto; font-variant-numeric:tabular-nums; }
+.uv-root{ padding:10px 12px 28px; max-width:1100px; margin:0 auto; width:100%; min-width:0; box-sizing:border-box; font-variant-numeric:tabular-nums; }
 .uv-empty{ padding:28px 6px; color:var(--ink-3); }
 
 .uv-head{ position:sticky; top:0; z-index:5; background:var(--bg); padding:8px 0 10px; border-bottom:1px solid var(--line-2); margin-bottom:12px; }
