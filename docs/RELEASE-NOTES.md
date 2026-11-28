@@ -3,6 +3,8 @@
 The release note of this repo (owner 2026-11-13). Every merged code change (not docs-only) adds one entry at the top of
 `## Unreleased`; the done-check reads the merged diff for this file (REFERENCE "Closing review"). Entry form: one line,
 
+- **NEEDS YOU shows 0 when only suggestions are open** — the headline count added 1 for the "suggestions · N" chip, so the strip read "NEEDS YOU 1" while nothing needed the owner. The chip stays, the count no longer includes it. `public/app.js` `renderAttention`.
+
 - **Resuming a parked session whose worktree was cleaned up now works** — 390 of 658 parked sessions pointed at a merged, removed worktree and Resume failed with "cwd must be an existing directory". Resume now recreates the folder at the same path (a detached worktree of the main checkout it was named after, else an empty folder; only under $HOME), so `claude --resume` finds its transcript. `cwd-gone.js` `restoreGoneCwd`, `server.js` resume `validate`.
 
 - **A Claude account switch after a limit error leaves a record, and /api/health says when every account is used up** — `ask-opus.js` now shares the server's retry helper (`onAccounts`), each switch writes a `claude-account-switch` row (from, to, source) to `manager-asks.jsonl`, and `/api/health` carries `claudeAccounts: { total, usable, allUsedUp }` (true only when accounts are configured and none has headroom). `claude-accounts.js` `accountsHealth` / `recordSwitch`.
