@@ -13,6 +13,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { attribute } from '../usage-window.js';
+import { readRequests } from '../integration-log.js';
 
 const DAY = 864e5, WINDOW_CAP = DAY, STALE = 6 * 3600e3;
 
@@ -61,8 +62,7 @@ const usageFields = (a, how) => ({ costUsd: a?.costUsd ?? null, plan: a?.plan ??
 // Integration lane: one record per request id (last snapshot wins). Verified = merged/deployed AND pushed AND the final
 // test step green AND not alreadyMerged (the lane did not test those). returned/failed = unverified; queued/running = open.
 function laneRecords(rows, usage, hist) {
-  const last = new Map();
-  for (const r of rows) if (r.id) last.set(r.id, r);   // file order = time order, last snapshot wins
+  const last = readRequests(rows);   // file order = time order
   const reqs = [...last.values()].sort((a, b) => ms(a.createdAt) - ms(b.createdAt));
   const prev = new Map(), fails = new Map(), out = [];
   for (const r of reqs) {

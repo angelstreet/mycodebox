@@ -7,13 +7,14 @@
 // A merge that reached the target is never reverted here: CI red / deploy failed are reported and the manager decides.
 // merged_ci_superseded is the other half of "CI red": the run was CANCELLED because a newer commit landed on the target, so
 // CI runs on that newer tip and this commit was never verified on its own. Nothing to fix, and the session must not branch again.
-// Durable: <state>/integration/requests.jsonl, one full snapshot per line (last wins). A request found `running` at start is
+// Durable: <state>/integration/requests.jsonl, full requests and change lines (format: integration-log.js). A request found `running` at start is
 // resumed from its recorded progress: fetch / merge / test are idempotent (fresh worktree), the push is re-checked by reading
 // the remote, CI and the deploy continue where they were.
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { randomBytes } from 'node:crypto';
+import { readRequests, createRequestWriter } from './integration-log.js';
 import { spawn, execFile } from 'node:child_process';
 import { reportVerdict, reportCandidates, fingerprintGate, parseFingerprintPaths, FINGERPRINT_PATHS_FILE, FINGERPRINT_PATHS_PLACEHOLDER, gitFacts, mergeFloor, isConvention, isDocFile, migrationReasons } from './merge-policy.js';
 import { mergeReleaseNote } from './release-note-merge.js';
@@ -358,7 +359,8 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
   // Per-request milestone times (r.times, ISO): set once, where the state changes. integrate status shows them (integration-notify.js timeline()).
   const stamp = (r, k) => { r.times = r.times || {}; if (!r.times[k]) r.times[k] = iso(); };
   const markPushed = (r) => { r.pushed = true; stamp(r, 'mergedAt'); };
-  const persist = (r) => { try { fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); fs.appendFileSync(file, `${JSON.stringify(r)}\n`, { mode: 0o600 }); } catch (e) { log('persist failed', e.message); } };
+  const writeRequest = createRequestWriter(file);
+  const persist = (r) => { try { writeRequest(r); } catch (e) { log('persist failed', e.message); } };
   let lastTold = Promise.resolve();   // the latest notify call, so a self deploy can let the notice out before its restart
   const emit = (r, event) => {
     try { lastTold = Promise.resolve(notify(view(r), { at: iso(), ...event })).catch((e) => log('notify failed', e?.message)); } catch (e) { log('notify failed', e?.message); lastTold = Promise.resolve(); }
@@ -404,7 +406,7 @@ export function createIntegrationLane({ stateDir, config = null, git = createDef
     let txt = ''; try { txt = fs.readFileSync(file, 'utf8'); } catch { return; }
     const lines = txt.split('\n');
     if (lines[lines.length - 1] === '') lines.pop(); else lines.pop();   // an unterminated last line was never acknowledged
-    for (const l of lines) { try { const r = JSON.parse(l); if (r?.id) reqs.set(r.id, r); } catch { /* torn */ } }
+    for (const [id, r] of readRequests(lines)) reqs.set(id, r);
   }
 
   function transition(r, state, patch = {}, event = {}) {
