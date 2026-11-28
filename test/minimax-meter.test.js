@@ -94,3 +94,23 @@ test('minimaxHtml renders the bar, the top consumer and the loop chip, and escap
   assert.doesNotMatch(html, /<b><b>/);
   assert.match(minimaxHtml(null), /no MiniMax meter/);
 });
+
+// token audit 2026-11-28 point d: 27-40% of the nightly MiniMax sessions' calls were polls; the manager is told (advisory), nothing is stopped
+test('poll share: calls under pollMaxOutput are polls; newPollAlerts names a session past pollSharePct once per window, never the manager', async () => {
+  const { newPollAlerts } = await import('../minimax-meter.js');
+  const cfg = { ...METER_DEFAULTS, pollShareMinCalls: 10, pollSharePct: 25 };
+  const rows = [
+    ...Array.from({ length: 6 }, () => row({ label: 'nightly', usage: { input: 50, output: 40, cache_read: 200000 } })),
+    ...Array.from({ length: 6 }, () => row({ label: 'nightly' })),
+    ...Array.from({ length: 12 }, () => row({ label: 'busy' })),
+    ...Array.from({ length: 12 }, () => row({ label: 'mgr', usage: { input: 10, output: 10, cache_read: 1 } })),
+    ...Array.from({ length: 4 }, () => row({ label: 'small', usage: { input: 10, output: 10, cache_read: 1 } })),
+  ];
+  const snap = aggregate(rows, { now: NOW, wStart: NOW - WINDOW_MS, config: cfg, isManager: (n) => n === 'mgr' });
+  const by = Object.fromEntries(snap.sessions.map((s) => [s.name, [s.polls, s.pollShare]]));
+  assert.deepEqual(by.nightly, [6, 50]); assert.deepEqual(by.busy, [0, 0]);
+  const told = new Map();
+  assert.deepEqual(newPollAlerts(snap, cfg, told, NOW).map((s) => s.name), ['nightly'], 'busy is under the share, mgr is the manager, small has too few calls');
+  assert.equal(newPollAlerts(snap, cfg, told, NOW + 60e3).length, 0, 'once per window');
+  assert.equal(meterConfig({ minimaxPollSharePct: 30 }).pollSharePct, 30);
+});

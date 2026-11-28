@@ -410,7 +410,7 @@ state.cardCtl = lsGet(LS_CTRL, '1') !== '0';
 document.body.classList.toggle('no-cardctl', !state.cardCtl);
 // "Smooth scroll" (docs/SCROLL-DESIGN.md): scrolling a fullscreen session's terminal up shows its conversation locally; the bottom returns to the live screen.
 const LS_SMOOTH = 'ghosty.smoothScroll';
-state.smoothScroll = lsGet(LS_SMOOTH, '1') !== '0';
+state.smoothScroll = lsGet(LS_SMOOTH, '0') === '1';
 state.scrollRd = new Set();   // sessions whose terminal card shows the conversation while scrolled up; per card, never saved
 function setSmoothScroll(on) {
   state.smoothScroll = !!on;

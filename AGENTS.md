@@ -116,7 +116,7 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
   CI or deploy wait, owner 2026-11-14); the lane merges, tests, pushes, waits for CI and deploys, then tells you the result.
   After `integrate request`, keep working on the next independent item of your task (validation runs, tests, other fixes, the
   leases you need); a docs-only or already-pushed integration never blocks device or validation work. Only when nothing is left that
-  does not depend on the result, end the turn with `STATUS: waiting: integration <id>` (the lane wakes you with the result); a returned
+  does not depend on the result, end the turn with `STATUS: waiting: integration <id>` (the lane wakes you with the result); if you must block on it, use one `integrate wait <id>` (run_in_background), never poll `integrate status` in a loop (each poll is a model call: token audit 2026-11-28); a returned
   request is fixed on your branch and requested again.
   Never ask the owner, or end a turn waiting on anyone, for a merge or PR decision: run `integrate request`, then continue, or `STATUS: waiting: integration <id>` if nothing else is left.
   See [docs/REFERENCE.md](docs/REFERENCE.md) "Integration lane".

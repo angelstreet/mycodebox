@@ -1,0 +1,73 @@
+// Context advisory (token audit 2026-11-28, saving #2; manager decision): a `high-avg-context` finding of usage/waste.js
+// (avg context > 300k per call over >= 30 calls, read from usage-summary.json `waste.findings`) becomes ONE advisory event to the
+// manager (`<session>:context-advisory`, priority low) per finding id (the Langfuse trace id, stable for a session), then nothing
+// for that id for `cooldownMs` (default 24 h), so the usage tick (every 30 s) never repeats it. Advisory only: the manager restarts
+// only a session it started itself, at a natural stop, never an owner-started one. The detector is not redone here.
+// State: <stateDir>/context-advisory.json { <finding id>: <ms last sent> } (old entries pruned).
+
+import { join } from 'node:path';
+import { promises as fsp } from 'node:fs';
+
+export const KIND = 'context-advisory';
+export const COOLDOWN_MS = 24 * 3600e3;
+export const FILE_NAME = 'context-advisory.json';
+
+// Pure: the event for one finding. startedBy: 'manager' | 'owner' | 'unknown'.
+export function advisoryEvent(f, startedBy = 'unknown', at = new Date().toISOString()) {
+  const who = startedBy === 'manager' ? 'started by the manager' : startedBy === 'owner' ? 'started by the owner (or a worker, not the manager)' : 'starter unknown';
+  const rule = startedBy === 'manager'
+    ? 'You started it: you may restart it (fresh session, same task, a handover) at its next natural stop, never mid-turn.'
+    : 'Not yours: do NOT restart it. The manager restarts only sessions it started itself, at a natural stop, never an owner-started session.';
+  const k = Math.round((f.value || 0) / 1e3);
+  return {
+    at, key: `${f.session}:${KIND}`, priority: 'low', session: f.session,
+    title: `${f.session}: advisory, big context (avg ${k}k per call; ${who})`,
+    body: `Advisory, no action required. ${f.detail || `avg context ${k}k per call`}. ${rule} Finding ${f.id}, cost $${f.cost ?? '?'} in the window.`,
+    url: `/?s=${encodeURIComponent(f.session)}`,
+    advisory: { findingId: f.id, avgContext: f.value, startedBy, account: f.account || null, agent: f.agent || null },
+  };
+}
+
+// Pure: which findings are due. sent: { id: ms }. Returns the findings to send now.
+export function dueFindings(findings, sent, now, { cooldownMs = COOLDOWN_MS, isLive = () => true } = {}) {
+  const out = [], ids = new Set();
+  for (const f of findings || []) {
+    if (!f || f.kind !== 'high-avg-context' || !f.id || !f.session || ids.has(f.id)) continue;
+    if (!isLive(f.session)) continue;
+    const prev = sent[f.id];
+    if (Number.isFinite(prev) && now - prev < cooldownMs) continue;
+    ids.add(f.id); out.push(f);
+  }
+  return out;
+}
+
+// getSummary(): the usage summary (usage-view.js get()); record(ev): managerEvents.record; startedBy(name): 'manager'|'owner'|'unknown'.
+export function createContextAdvisory({ stateDir, getSummary, record, startedBy = () => 'unknown', isLive = () => true, now = Date.now, cooldownMs = COOLDOWN_MS, fs = fsp, log = console } = {}) {
+  const file = join(stateDir, FILE_NAME);
+  let sent = null, busy = false;
+  async function load() {
+    try { const j = JSON.parse(await fs.readFile(file, 'utf8')); sent = j && typeof j === 'object' ? j : {}; } catch { sent = {}; }
+  }
+  async function tick() {
+    if (busy) return 0;
+    busy = true;
+    try {
+      if (!sent) await load();
+      const summary = await getSummary();
+      const t = now();
+      const due = dueFindings(summary?.waste?.findings, sent, t, { cooldownMs, isLive });
+      let n = 0;
+      for (const f of due) {
+        let by = 'unknown';
+        try { by = startedBy(f.session) || 'unknown'; } catch { /* unknown */ }
+        await record(advisoryEvent(f, by, new Date(t).toISOString()));
+        sent[f.id] = t; n++;
+      }
+      for (const [id, at] of Object.entries(sent)) if (!Number.isFinite(at) || t - at > 4 * cooldownMs) delete sent[id];
+      if (n) { await fs.mkdir(stateDir, { recursive: true }); await fs.writeFile(file, JSON.stringify(sent)); }
+      return n;
+    } catch (e) { log.error?.('[context-advisory]', e.message); return 0; }
+    finally { busy = false; }
+  }
+  return { tick };
+}

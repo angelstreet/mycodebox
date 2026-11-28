@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:net';
 import { makeWorld } from './helpers-lane.js';
 import { tmp } from './helpers-tmp.js';
+import { waitServer } from './helpers/wait-server.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -48,7 +49,7 @@ cat >> ${got}
   const child = spawn(process.execPath, ['server.js'], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
   cleanups.push(() => child.kill('SIGKILL'));
   let log = ''; child.stdout.on('data', (d) => { log += d; }); child.stderr.on('data', (d) => { log += d; });
-  for (let i = 0; ; i++) { try { if ((await fetch(`http://127.0.0.1:${port}/api/sessions`)).ok) break; } catch { /* not up */ } if (i > 150) throw new Error(`no server:\n${log}`); await sleep(100); }
+  await waitServer(`http://127.0.0.1:${port}`, () => log);
   await sleep(4000);   // seen working first: ghosty alerts on changes, never on first sight
   writeFileSync(go, '1');
   const journal = join(state, 'ui-review-ask.jsonl');

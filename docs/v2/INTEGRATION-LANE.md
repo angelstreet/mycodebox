@@ -37,7 +37,7 @@ One **integration lane per repository**, run by the mycodebox server, fed by eve
 3. **The session is told the outcome.** Merged at `<sha>`, deployed `<version>`; or the exact reason it was returned
    (merge conflict outside convention files, red tests with the failing output tail, red CI, deploy failed) so the
    session fixes it on its branch and requests again. A codebox session gets one line through the guarded send when it
-   is stopped; any session can block on `integrate wait <id>`; the manager's own-job watcher wakes a session whose
+   is stopped; any session can block on one `integrate wait <id>` (run it with `run_in_background`: it long-polls the server, which answers on the state change; never poll `integrate status` in a loop, each poll is a model call); the manager's own-job watcher wakes a session whose
    STATUS names the request id. Anything ambiguous goes to the manager, never to the owner.
 4. **Visible.** An Integration view (queue per repo, the current step, recent results, links to commits and deploys), a
    feed notice per result, and the manager journal.

@@ -210,3 +210,46 @@ test('a waiter killed while holding a deferred line hands it to the next one (.d
   assert.deepEqual(ids(r.stdout), ['b1', 's2']);
   assert.equal(existsSync(held), false, 'the file goes once its lines are printed');
 });
+
+// ---- minimum spacing (token audit 2026-11-28 point d): a routine batch never goes out sooner than MANAGER_WAIT_MIN_S after the last delivery ----
+test('min spacing: a routine event right after a delivery waits until MANAGER_WAIT_MIN_S has passed, then rides with what came meanwhile', async () => {
+  const s = setup(); s.env.MANAGER_WAIT_WINDOW = '0.5'; s.env.MANAGER_WAIT_MIN_S = '3';
+  const last = join(dirname(s.cursor), '.last-delivery');
+  writeFileSync(s.cursor, '0\n');
+  writeFileSync(s.events, quiet(1));
+  const t0 = Date.now();
+  let r = run(s);
+  assert.deepEqual(ids(r.stdout), ['q1']);
+  assert.ok(Date.now() - t0 < 2500, `no previous delivery: the plain window (${Date.now() - t0} ms)`);
+  assert.ok(Math.abs(Number(readFileSync(last, 'utf8')) * 1000 - Date.now()) < 2000, '.last-delivery written');
+  appendFileSync(s.events, quiet(2));
+  const p = spawn('bash', [SH], { env: s.env });
+  let out = ''; p.stdout.on('data', (d) => { out += d; });
+  const t1 = Date.now();
+  await new Promise((res) => setTimeout(res, 1200)); appendFileSync(s.events, quiet(3));
+  await new Promise((res) => p.on('close', res));
+  assert.deepEqual(ids(out), ['q2', 'q3'], 'one wake for both');
+  assert.ok(Date.now() - t1 >= 1500, `held until the spacing passed (${Date.now() - t1} ms)`);
+  assert.equal(Number(readFileSync(s.cursor, 'utf8')), readFileSync(s.events).length);
+});
+
+test('min spacing never delays an urgent event', () => {
+  const s = setup(); s.env.MANAGER_WAIT_MIN_S = '30';
+  writeFileSync(join(dirname(s.cursor), '.last-delivery'), String(Date.now() / 1000) + '\n');   // delivered just now
+  writeFileSync(s.cursor, '0\n');
+  writeFileSync(s.events, quiet(1) + ev(2));
+  const t0 = Date.now();
+  const r = run(s);
+  assert.deepEqual(ids(r.stdout), ['q1', 's2']);
+  assert.ok(Date.now() - t0 < 2500, `urgent closes after the grace (${Date.now() - t0} ms)`);
+});
+
+test('MANAGER_WAIT_MIN_S=0 turns the spacing off', () => {
+  const s = setup(); s.env.MANAGER_WAIT_WINDOW = '0.5'; s.env.MANAGER_WAIT_MIN_S = '0';
+  writeFileSync(join(dirname(s.cursor), '.last-delivery'), String(Date.now() / 1000) + '\n');
+  writeFileSync(s.cursor, '0\n');
+  writeFileSync(s.events, quiet(1));
+  const t0 = Date.now();
+  assert.deepEqual(ids(run(s).stdout), ['q1']);
+  assert.ok(Date.now() - t0 < 2500, `${Date.now() - t0} ms`);
+});

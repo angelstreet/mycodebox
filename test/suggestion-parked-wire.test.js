@@ -8,6 +8,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:net';
 import { tmp } from './helpers-tmp.js';
+import { waitServer } from './helpers/wait-server.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -36,7 +37,7 @@ test('server: a parked suggestion is listed and only the owner\'s dashboard answ
   const child = spawn(process.execPath, ['server.js'], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
   cleanups.push(() => child.kill('SIGKILL'));
   let log = ''; child.stdout.on('data', (d) => { log += d; }); child.stderr.on('data', (d) => { log += d; });
-  for (let i = 0; ; i++) { try { if ((await fetch(`${url}/api/sessions`)).ok) break; } catch { /* not up */ } if (i > 150) throw new Error(`no server:\n${log}`); await sleep(100); }
+  await waitServer(`${url}`, () => log);
   const parked = async () => (await (await fetch(`${url}/api/suggestions/owner`)).json()).items;
   const post = async (body, headers = {}) => { const r = await fetch(`${url}/api/suggestions/owner`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) }); return { status: r.status, body: await r.json() }; };
 

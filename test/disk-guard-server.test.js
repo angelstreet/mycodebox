@@ -12,6 +12,7 @@ import net from 'node:net';
 import { spawn, execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { waitServer } from './helpers/wait-server.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const TMP = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'diskguard-')));
@@ -55,11 +56,7 @@ async function boot({ diskGuard }) {
     const r = await fetch(`${base}${p}`, { method, headers: { origin: base, ...(body ? { 'content-type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
     return { status: r.status, body: await r.json().catch(() => null) };
   };
-  for (let i = 0; ; i++) {
-    try { if ((await fetch(`${base}/api/sessions`)).ok) break; } catch { /* not up yet */ }
-    if (i > 150) throw new Error(`server did not start:\n${log}`);
-    await sleep(100);
-  }
+  await waitServer(base, () => log);
   return { api, home, log: () => log };
 }
 

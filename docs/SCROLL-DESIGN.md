@@ -5,7 +5,7 @@ wheel notches to Claude Code the right design, or is there another way?
 
 **Answer.** Forwarding is the only way to scroll *the app's own screen*, and it cannot glide: every step is a network
 round trip plus a redraw, in whole rows. The history does not have to come from the app: the page already holds the
-conversation. **Recommendation, shipped as the setting "Smooth scroll" (on by default): scrolling up in a fullscreen
+conversation. **Recommendation, shipped as the optional setting "Smooth scroll" (off by default): scrolling up in a fullscreen
 terminal shows the conversation in the card and scrolls it locally; reaching the bottom returns to the live screen.**
 Forwarding stays as the path for the setting off, for apps without a conversation file, and until the file is loaded.
 
@@ -123,7 +123,7 @@ down, and the setting turns the whole behaviour off.
     position.
   - Not used (forwarding as before): setting off, a fullscreen app without a session file (vim, htop), conversation not
     loaded yet, grid view.
-- Setting: `localStorage ghosty.smoothScroll` (default on). Switches: More menu "Smooth scroll: on/off" (phone), text
+- Setting: `localStorage ghosty.smoothScroll` (default off, so terminal scrolling stays in the terminal unless enabled). Switches: More menu "Smooth scroll: on/off" (phone), text
   popover "Smooth scroll" (desktop).
 - Verified at phone width on the test server: `python3 scripts/scroll-bench/verify.py` (18 checks: goes local with no
   request, saved view untouched, momentum, returns at the bottom, jump buttons, scrollbar press, reload, the switch,

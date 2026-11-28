@@ -324,3 +324,24 @@ test('deploy restart warnings open no wake (either phase); a failed deploy still
   const out = r.stdout.split('\n').filter(Boolean).map((l) => JSON.parse(l));
   assert.deepEqual(out.map((o) => [o.l.state, o.u, o.d]), [['failed', true, false]]);
 });
+
+// 2026-11-28 (token audit point d): the MiniMax poll-share advisory (minimax-meter.js newPollAlerts) never wakes the manager by itself
+test('a <session>:minimax-poll advisory is deferred (d), not urgent', () => {
+  const dir = tmp('ghosty-filt-mmpoll-'); const env = { ...process.env, GHOSTY_STATE_DIR: dir };
+  const o = run(env, ev({ key: 'rtsp-nightly-x:minimax-poll', kind: 'minimax-poll', session: 'rtsp-nightly-x', title: 'MiniMax: 40% of rtsp-nightly-x\'s calls are polls', body: 'advisory', priority: 'default' }))
+    .stdout.split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  assert.equal(o.length, 1);
+  assert.equal(o[0].d, true); assert.equal(o[0].u, false);
+});
+
+// token audit 2026-11-28 saving #2: a context advisory passes, never urgent, deferred to the next wake
+test('context-advisory (high-avg-context finding) passes the filter, not urgent, deferred', () => {
+  const dir = tmp('ghosty-filt-');
+  const r = run({ ...process.env, GHOSTY_STATE_DIR: dir }, ev({ key: 'w1:context-advisory', kind: 'context-advisory', session: 'w1', priority: 'low', body: 'Advisory, no action required.' }));
+  assert.equal(r.status, 0, r.stderr);
+  const out = r.stdout.split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  assert.equal(out.length, 1);
+  assert.equal(out[0].l.kind, 'context-advisory');
+  assert.equal(out[0].u, false);
+  assert.equal(out[0].d, true);
+});

@@ -433,7 +433,7 @@ the next append would push it past 5 MB. A freshly-started agent catches up via
 **Wake batch window and event policy (owner, 2026-11-02).** On 2026-11-01 the manager woke 652 times, one wake per filtered event, and
 84 % of the wakes did nothing (`GET /api/manager/wakes`): every wake re-reads the whole context, so idle wakes were most of the manager's
 tokens. `scripts/manager-wait.sh` now keeps collecting for `MANAGER_WAIT_WINDOW` seconds (default 60) after the first delivered event, so
-one wake carries the batch; an **urgent** event closes the window `MANAGER_WAIT_GRACE` seconds (default 2) after it arrived. Which events are
+one wake carries the batch; an **urgent** event closes the window `MANAGER_WAIT_GRACE` seconds (default 2) after it arrived. Since 2026-11-28 (token audit point d) a non-urgent batch is also held until `MANAGER_WAIT_MIN_S` seconds (default 300) have passed since the previous delivery (`<state>/manager-reports/.last-delivery`), so a trickle of routine events is one wake every 5 min, not one per event; urgent lines ignore it, `0` turns it off. Which events are
 urgent, routine or ignored is a table, not code: `scripts/manager-event-policy.json` (repo defaults) merged with
 `<state dir>/manager-event-policy.json` (the owner's copy wins per key), `'<kind>'` or `'<kind>:<state>'` -> `pass | ignore | urgent`.
 `ignore` drops the event before the built-in filter rules; `pass` keeps it even where a built-in rule would drop it (for example
@@ -1487,6 +1487,10 @@ tokens but re-reads ~200K of cached context), so sessions are ranked by calls; n
 - **Poll loop**: at least `minimaxPollLoopCalls` (40) calls in the last `minimaxPollLoopMinutes` (10) with fewer than `minimaxPollLoopMaxNewTokens` (300) new tokens per call on average.
 - **Share push**: once per session and window, when one session has more than `minimaxSharePct` (40) % of the window's calls and the window has at least
   `minimaxShareMinCalls` (50) calls: an interrupt push. All five keys live in `manager.json`.
+- **Poll share advisory** (token audit 2026-11-28 point d): a call that wrote under `minimaxPollMaxOutput` (150) tokens is a poll; once per window, a
+  non-manager session with at least `minimaxPollShareMinCalls` (100) window calls whose polls pass `minimaxPollSharePct` (25) % (or that is in a poll loop)
+  gets a `<session>:minimax-poll` manager event naming the session and its poll share. The event filter defers it (it rides with the next wake); nothing
+  is stopped (`newPollAlerts`, `minimax-meter.js`).
 
 ## Usage (Langfuse)
 
@@ -1594,6 +1598,35 @@ The `session:` tag is the tmux session name (matched from the pane's current pat
   (all uses) when it answers, else ghosty's own log (manager only), labelled on the page. Tap a manager row: its
   session card when running, otherwise the stop's text.
 - Tests: `test/jev-decisions.test.js`.
+
+### Token audit fixes: context advisory and 1-hour cache TTL (2026-11-28)
+
+From `docs/token-audit-20261128.md`, savings #2 and #5 (manager decisions).
+
+**Context advisory (#2).** Every usage tick (30 s) `context-advisory.js` reads the `high-avg-context` findings of
+`usage/waste.js` (average context over 300k per call over at least 30 calls, `/api/usage` `waste.findings`; the detector is
+not redone) and writes one `<session>:context-advisory` event (priority low) to `manager-events.jsonl` per finding id (the
+session's trace id), for live sessions only, then nothing for that id for 24 h (`<state>/context-advisory.json`). The event
+says it is advisory, and whether the session was started by the manager, the owner (or a non-manager session), or unknown
+(`manager-owned.js`, `sessions.json` startedBy, session history); the field `advisory` carries `{findingId, avgContext,
+startedBy, account, agent}`. The rule in the text: the manager restarts only a session it started itself, at a natural stop,
+never an owner-started session. `scripts/manager-event-filter.sh` lets it through deferred (`d: true`, never urgent): it rides
+with the next wake. Tests: `test/context-advisory.test.js`, `test/manager-event-filter.test.js`.
+
+**1-hour prompt cache TTL (#5), default off.** For Claude sessions whose turns are more than 5 minutes apart (the 5-minute
+cache expires and every turn re-writes the context). The Claude Code switches, verified in the installed Claude Code 2.1.332
+binary: `CLAUDE_CODE_PROMPT_CACHE_TTL=1h` (main conversation; unset = automatic, 1 h on a subscription within its limits,
+5 min on an API key, Bedrock, Vertex) and `ENABLE_PROMPT_CACHING_1H=1` (subagents and helpers). `cache-ttl.js` exports both
+for a selected session, nothing otherwise:
+
+- env `CBSESSION_CACHE_1H=1` when running `cbsession` (that session), or in the ghosty service env (every V2 Claude run);
+- `<GHOSTY_STATE_DIR>/cache-1h.json`: `{"sessions": ["<tmux session name or V2 task id>"]}` (`"all": true` = every Claude session).
+
+`scripts/cbsession` (claude provider) appends the `export` lines to the launch file; `orchestration/v2-runtime.js` passes them
+as the run's explicit env to the V2 Claude adapter (`o.env`, which `buildEnv` keeps). 1-hour cache writes are billed higher
+than 5-minute ones: turn it on per session and compare `cache_write_1h` / `cache_read` in the usage ledger before widening.
+Note: subscription sessions may already get 1 h automatically (Claude Code's own default); the switch matters most on
+API-key billing (`-b NAME`). Tests: `test/cache-ttl.test.js`.
 
 ### Usage view (UI)
 

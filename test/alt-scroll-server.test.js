@@ -10,6 +10,7 @@ import net from 'node:net';
 import { spawn, execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { waitServer } from './helpers/wait-server.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const TMP = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'altscroll-')));
@@ -46,11 +47,7 @@ async function boot() {
   child = spawn(process.execPath, ['server.js'], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
   let log = ''; child.stdout.on('data', (d) => { log += d; }); child.stderr.on('data', (d) => { log += d; });
   const base = `http://127.0.0.1:${port}`;
-  for (let i = 0; ; i++) {
-    try { if ((await fetch(`${base}/api/sessions`)).ok) break; } catch { /* not up yet */ }
-    if (i > 150) throw new Error(`server did not start:\n${log}`);
-    await sleep(100);
-  }
+  await waitServer(base, () => log);
   // the 1 s tick must have seen the panes (alt flag) before a scroll is accepted
   for (let i = 0; i < 50; i++) {
     const r = await fetch(`${base}/api/snapshot/mouse`).then((x) => x.json()).catch(() => null);

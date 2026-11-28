@@ -22,6 +22,7 @@ import { loadPolicy } from './policy.js';
 import { normalizeBudgetPolicy } from './budget.js';
 import { buildScorecard } from './scorecard.js';
 import { routeHistory, tokenTotals } from './route-history.js';
+import { cacheEnvFor } from '../cache-ttl.js';
 
 export const MAX_CONCURRENCY = 8;
 const REMOTE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -271,6 +272,9 @@ export async function createV2Runtime({ stateDir, env = process.env, repoRoot, l
             const left = info.get(o.task_id)?.capLeft;
             const usd = Math.max(0.01, Math.min(cfg.claudeRunUsd, left ?? Infinity));
             a = createAdapter({ ...base, extraArgs: ['--max-budget-usd', usd.toFixed(2)] });
+            // 1-hour prompt cache TTL (token audit #5, default off): CBSESSION_CACHE_1H=1 in the service env, or the task id in cache-1h.json
+            const c1h = cacheEnvFor(o.task_id || '', { env });
+            if (Object.keys(c1h).length) x.env = { ...c1h, ...(x.env || {}) };
           }
           try { return track(a, a.start(x), x, rt); } catch (e) {
             if (x.effort != null && e?.code === 'E_UNSUPPORTED') return track(a, a.start({ ...x, effort: undefined }), x, rt);
