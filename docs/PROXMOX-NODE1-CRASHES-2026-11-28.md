@@ -51,3 +51,14 @@ Owner-floor items (money, credential, physical):
    and the shrinking interval. A replacement or server swap would be a money decision.
 3. **BIOS**: the board has L0.34 (2024-08); ask Hetzner if a newer BIOS exists; re-enable AMD microcode (currently blacklisted by
    the install default) is a reboot-level change; the Ryzen 3000 idle-hang class matches a quiet hang with `max_cstate=1` only partly.
+
+## Applied 2026-11-28 (manager go, no reboot)
+
+Through the NOPASSWD `tee` on node1:
+- Live now and persistent: `kernel.softlockup_panic=1`, `kernel.hardlockup_panic=1`, `kernel.nmi_watchdog=1`
+  (`/etc/sysctl.d/90-crash-forensics.conf`; values read back from `/proc/sys/kernel`). With `kernel.panic=10`, a lockup now
+  sends a trace over netconsole and reboots in 10 s.
+- Written, **active from the next boot** (no `daemon-reexec` possible without root, no reboot done): `RuntimeWatchdogSec=30`,
+  `ShutdownWatchdogSec=10min` in `/etc/systemd/system.conf.d/90-hw-watchdog.conf`, arming the SP5100 hardware watchdog.
+- Rollback: delete both files; `echo 0 > /proc/sys/kernel/{softlockup_panic,hardlockup_panic}` as root.
+- Side effect to know: a soft lockup under heavy load now reboots the host (10 s) instead of recovering on its own.
