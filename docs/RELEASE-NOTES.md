@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **API credit shows spend / credit left, with the real limits** — "better show spending / credit ... 94/945 we round numbers" (owner 2026-11-28). The header reads `Claude API 94/945$ · Claude team API 200/11$`: spent this month / prepaid credit left, whole dollars, red when the org hit its monthly limit or has no credit left. The Admin API has no balance endpoint, so the credit is the Console figure written in `quota-budgets.json` (`creditUsd`, `creditAt`) minus the cost recorded since; the popup shows it with the limit. The budgets had the two orgs' limits swapped (AngelStreet is capped at $200 and stopped until Dec 1, not $1000) · area: usage
+
 - **The top bar is shorter and easier to read** — one block per source; the quota strip now reads `CLAUDE 5% wk · MINIMAX 8% 5h · OPENROUTER -$0.20 · CLAUDE API 94/200$ · CLAUDE TEAM API 212$` and wraps to a second row instead of clipping; the extra-usage "left" chip and unlimited windows are gone from it; CPU / RAM / disk details show only on an amber or red value (always in the tooltip); amber values are no longer bigger than the rest (an unrelated `.warn` style leaked in) · area: dashboard
 
 - **A shared page no longer opens as "hidden folder"** — the UI review send-back typed a shared page's stored file path into the session, the reader turned it into a /files/ link, and that link answered 403, so the owner thought the agent had sent a broken link (it had not; 2026-11-28). The review table now names the public /p/ URL, and an old /files/ link to a shared page's file redirects to it · area: pages

@@ -3629,7 +3629,7 @@ const atText = (t) => new Date(t).toLocaleString([], { hour: '2-digit', minute: 
 const winRow = (w) => (w.usedPercent == null
   ? `<div class="qw na"><span>${escapeHtml(w.name)}</span><span>${w.unlimited ? 'unlimited' : 'unknown'}</span>${w.unlimited ? '' : `<span class="dim">${escapeHtml(resetText(w))}</span>`}</div>`
   : `<div class="qw ${qLevel(w.usedPercent)}"><span>${escapeHtml(w.name)}</span><span class="qbar"><i style="width:${Math.min(100, w.usedPercent)}%"></i></span><span>${Math.round(w.usedPercent)}%</span><span class="dim">${escapeHtml(resetText(w))}</span></div>`);
-// API credit per org (api-credit.js): spent / budget / left this month, or how to add the missing admin key
+// API credit per org (api-credit.js): spent / limit / left this month, the prepaid credit left, or how to add the missing admin key
 function apiCreditHtml(c) {
   if (!c?.orgs?.length) return '<div class="qsec">API credit</div><div class="qplan"><div class="mnote">reading the Admin API cost report…</div></div>';
   const month = new Date(`${c.month}-01T12:00:00Z`).toLocaleDateString([], { month: 'long' });
@@ -3637,8 +3637,9 @@ function apiCreditHtml(c) {
     const has = o.spentUsd != null;
     const lvl = qLevel(o.usedPercent ?? null);
     return `<div class="qplan qcredit" data-org="${escapeHtml(o.org)}">
-      <div class="qh"><b>${escapeHtml(o.label)}</b><span class="dim">${o.budgetUsd ? `${qUsd(o.budgetUsd)} / month` : 'no budget set'}</span></div>
+      <div class="qh"><b>${escapeHtml(o.label)}</b><span class="dim">${o.budgetUsd ? `${qUsd(o.budgetUsd)} limit / month` : 'no limit set'}</span></div>
       ${has ? `<div class="qw ${lvl}"><span>spent</span><span class="qbar"><i style="width:${Math.min(100, o.usedPercent ?? 0)}%"></i></span><span>${qUsd(o.spentUsd)}</span>${o.leftUsd != null ? `<span class="dim">${o.leftUsd < 0 ? `${qUsd(-o.leftUsd)} over` : `${qUsd(o.leftUsd)} left`}</span>` : ''}</div>` : ''}
+      ${o.creditLeftUsd != null ? `<div class="qw ${o.creditLeftUsd <= 0 ? 'crit' : 'ok'}"><span>credit</span><span></span><span>${qUsd(o.creditLeftUsd)}</span><span class="dim">left (Console ${qUsd(o.creditUsd)} at ${escapeHtml(atText(o.creditAt))})</span></div>` : ''}
       ${o.note ? `<div class="mnote">${escapeHtml(o.note)}</div>` : ''}
       ${o.error ? `<div class="mnote${o.noKey ? '' : ' warn'}">${escapeHtml(o.error)}</div>` : ''}
       ${has ? `<div class="mnote">${escapeHtml(o.source || '')}${o.refreshedAt ? `, data to ${atText(o.refreshedAt)}` : ''}${o.stale ? ' (not live)' : ''}</div>` : ''}
