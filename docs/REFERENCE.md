@@ -1535,6 +1535,14 @@ Usage records contain numbers and identifiers; evaluation/dataset features can a
 
 **Which code wrote the summary (token audit 2026-11-28).** The tailer stamps each summary with `writer: { pid, startedAt, sha }` (the commit checked out when it started; `usage/code-version.js`). `GET /api/usage` adds `writer.behind`: `true` when the tailer's files (`usage/`, `scorecard.js`, `session-history.js`, `claude-accounts.js`) differ between that commit and the live checkout's HEAD, `false` when not, `null` when unknown (cached 30 s per sha). The usage page shows an amber note while `behind` is true.
 
+**Default model of a new Claude session: Sonnet** (owner 2026-11-28). `cbsession` without `-m` and the dashboard / `POST /api/sessions`
+without a model pass `--model sonnet` (`new-session.js` `startModel`); an explicit model wins, and an `AGENT_CMD_CLAUDE` override is used
+verbatim. The Claude Code default (`model` in `~/.claude/settings.json`) is `sonnet` too. `team1` / `team2` link to that one file
+(`claude-accounts.js` `SHARED`), so a new or rotated account has it. `/model` in any session can rewrite that file, which is why mycodebox
+passes the flag. Resume never adds the default: park / rotation resume repeats the recorded `--model`, crash resume the launch line's;
+with neither, `claude --resume` keeps the conversation's own model (checked on 2.1.332: an Opus conversation started without `--model`
+resumed on Opus with the default already `sonnet`). The dashboard dialog still preselects the model picked last time.
+
 **Token-fix gates and the hourly check (manager-approved 2026-11-28, audit savings #1 and #3).** `cbsession -m fable` starts on Opus unless `-F` (or `CBSESSION_ALLOW_FABLE=1`); the V2 claude adapter does the same unless the run says `allow_fable: true`. Claude sessions get `CLAUDE_CODE_SUBAGENT_MODEL=sonnet` (subagents on Sonnet) unless the main model is Haiku, the caller's env already sets it, or `CBSESSION_SUBAGENT_MODEL` is empty or `inherit`. `node scripts/token-watch.js` re-reads `/api/usage` `waste` and sums the last hour of the ledger (Fable share, cost of context above 300k, poll-size calls, subagent share and models, cache writes 1h/5m, top sessions, MiniMax polls) against the audit's figures; it appends one line per run to `$GHOSTY_STATE_DIR/token-watch.jsonl` and is run once an hour after each token-fix ship.
 
 - **Langfuse**: optional separately deployed service, outside this repository. Configure `LANGFUSE_URL`, project keys and access controls for your installation. Do not assume any deployment's Docker configuration, signup or telemetry settings. Keep its private configuration outside the checkout.

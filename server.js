@@ -161,7 +161,7 @@ import { createSessionMeta } from './session-meta.js';
 import { goneCwd, projectCandidates, restoreGoneCwd } from './cwd-gone.js';
 import { maybeGzip, acceptsGzip } from './gzip-send.js';
 import { logUpload, readUploadLog, cleanReport, clientOf } from './upload-log.js';
-import { pickableProject, launchArgs, codexModels, CLAUDE_MODELS, MINIMAX_MODELS, DEFAULT_MODELS, aiNamePrompt, cleanAiName, nameFromWords } from './new-session.js';
+import { pickableProject, launchArgs, codexModels, CLAUDE_MODELS, MINIMAX_MODELS, DEFAULT_MODELS, startModel, aiNamePrompt, cleanAiName, nameFromWords } from './new-session.js';
 import { createSessionHistory, STARTED_BY } from './session-history.js';
 import { paneLinesOk } from './pane-lines.js';
 import { scrollPlan, wheelPlan, altScrollApplies } from './alt-scroll.js';
@@ -1893,7 +1893,7 @@ async function pollOnce() {
     const agentCmd = ag ? ag.cmd : (p.cmd || 'bash');
     const known = crashResumeKnown.get(s.name) || {};
     crashResumeStates.set(s.name, { name: s.name, tmuxName: s.name, cwd: p.cwd, lines: plain, agent: agentFromTree(p.pid, table)?.agent || null,
-      shellForeground: SHELLS.has(p.cmd), scriptBusy: false, input: '', closed: /(?:^|\s)(?:\/exit|\^C)\s*$/.test(tail.at(-1) || ''), base: known.base || launch.commands[ag?.agent || 'claude'], model: known.model || null, claudeSessionId: known.claudeSessionId || null });
+      shellForeground: SHELLS.has(p.cmd), scriptBusy: false, input: '', closed: /(?:^|\s)(?:\/exit|\^C)\s*$/.test(tail.at(-1) || ''), base: known.base || launch.commands[ag?.agent || 'claude'], claudeSessionId: known.claudeSessionId || null });
 
     const live = liveState({ offline, agent, tail, changeAt: t.changeAt, now,
       reportedWait: () => reporter.waitingNow(s.name, t.changeAt), handedTurn: () => reporter.handedOverTurn(s.name),
@@ -2047,7 +2047,7 @@ async function pollOnce() {
     v.lastActivity = la ? la.at : null;
     v.lastActivitySource = la ? la.source : null;
     v.claudeSessionId = c ? c.info.sessionId : null;
-    if (c?.info?.sessionId) crashResumeKnown.set(k, { claudeSessionId: c.info.sessionId, model: v.model, base: claudeAccounts.commandFor(launch.commands.claude) });
+    if (c?.info?.sessionId) crashResumeKnown.set(k, { claudeSessionId: c.info.sessionId, base: claudeAccounts.commandFor(launch.commands.claude) });
     v.claudeAccount = c ? claudeAccountOfPid(c.pid) : null;
     v.effort = c ? await effortCached(c.info.sessionId) : null;   // the dock shows it next to the model
     v.rssMb = c && table.rss.get(c.pid) ? Math.round(table.rss.get(c.pid) / 1024) : null;
@@ -2287,12 +2287,13 @@ async function createSession({ name, agent, cwd, priority, model, prompt, handov
     promptFile = join(pdir, `${real}-${Date.now()}.txt`);
     await writeFile(promptFile, prompt, { mode: 0o600 });
   }
-  if (cmd) cmd += launchArgs(agent, { model, promptFile });
+  const chosen = cmd ? startModel(agent, model, process.env.AGENT_CMD_CLAUDE) : model;
+  if (cmd) cmd += launchArgs(agent, { model: chosen, promptFile });
   if (cmd) {
     await exec(TMUX, ['send-keys', '-t', `=${real}:`, '-l', '--', cmd]);
     await exec(TMUX, ['send-keys', '-t', `=${real}:`, 'Enter']);
   }
-  await historyLog({ kind: 'session.started', name: real, provider: agent, model: model ?? null, cwd: dir, started_by: 'dashboard', prompt_ref: promptFile ?? prompt ?? null, handover_ref: handover ?? null, tmux_created: await tmuxCreated(real) });
+  await historyLog({ kind: 'session.started', name: real, provider: agent, model: chosen ?? null, cwd: dir, started_by: 'dashboard', prompt_ref: promptFile ?? prompt ?? null, handover_ref: handover ?? null, tmux_created: await tmuxCreated(real) });
   reopenFinal(real, 'dashboard', 'a new session took the name');
   goalGate.drop(real).catch(() => {}); suggestions.drop(real); goals.forget(real); if (prompt || handover) captureGoal(real, prompt || handover, 'dashboard');   // goal check: the goal as given at start
   sessionMeta.reset(real);

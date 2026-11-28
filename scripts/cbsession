@@ -7,7 +7,7 @@
 #   -n  tmux session name (A-Z a-z 0-9 _ -, max 40); also the Remote Control name
 #   -d  working directory on this host (repo checkout)
 #   -p  provider (default claude)
-#   -m  model: claude haiku|sonnet|opus|fable|<id>; codex <model>; minimax MiniMax-M3 (default; the only MiniMax model, owner decision 2026-10-14);
+#   -m  model: claude haiku|sonnet|opus|fable|<id> (default sonnet, owner 2026-11-28); codex <model>; minimax MiniMax-M3 (default; the only MiniMax model, owner decision 2026-10-14);
 #       opencode <provider/model>
 #   -b  claude billing: sub (default, the Max plan login) or NAME = the API key in ~/.config/anthropic/NAME.key
 #       (one line, chmod 600; read at launch by apiKeyHelper, never copied). NAME.workspace, if present, holds the
@@ -51,6 +51,9 @@ DIR=$(cd "$DIR" && pwd)
 if [ "$PROV" = claude ] && [ "$FABLE_OK" != 1 ] && [[ ${MODEL,,} == *fable* ]]; then
   echo "cbsession: -m $MODEL -> opus (Fable by exception, token audit 2026-11-28); pass -F to really use Fable" >&2; MODEL=opus
 fi
+# New Claude sessions run on Sonnet (owner 2026-11-28). Passed explicitly: /model in any session rewrites the shared Claude Code
+# default (~/.claude/settings.json), which a start without --model would then follow. -m still wins.
+if [ "$PROV" = claude ]; then MODEL=${MODEL:-sonnet}; fi
 SUBM=sonnet; [ -n "${CBSESSION_SUBAGENT_MODEL+x}" ] && SUBM=$CBSESSION_SUBAGENT_MODEL
 { [[ ${MODEL,,} == *haiku* ]] || [ "$SUBM" = inherit ]; } && SUBM=
 [[ $BILL =~ ^[A-Za-z0-9_-]{1,40}$ ]] || { echo "cbsession: -b BILLING must be sub or a key name (A-Z a-z 0-9 _ -)" >&2; exit 2; }

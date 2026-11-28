@@ -165,6 +165,16 @@ test('a manager start is on record before the tmux session exists; an owner star
   assert.doesNotMatch(fs.readFileSync(children, 'utf8'), /cb-early-own/);
 });
 
+test('no -m: a Claude session starts on sonnet (owner 2026-11-28); -m wins; other providers get no default from it', () => {
+  let r = run('-x', '-n', 'cb-default', '-d', work, '-t', 'x');
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(launch('cb-default'), /-n cb-default --model sonnet /);
+  run('-x', '-n', 'cb-explicit', '-d', work, '-m', 'opus', '-t', 'x');
+  assert.match(launch('cb-explicit'), /--model opus /);
+  run('-x', '-n', 'cb-codex-default', '-d', work, '-p', 'codex', '-t', 'x');
+  assert.doesNotMatch(launch('cb-codex-default'), /sonnet|--model| -m /);
+});
+
 test('token audit: -m fable starts on opus unless -F, subagents on sonnet unless haiku or overridden', () => {
   let r = run('-x', '-n', 'cb-fable', '-d', work, '-m', 'fable', '-t', 'x');
   assert.equal(r.status, 0, r.stderr);
