@@ -226,6 +226,9 @@ export function hiddenAgentWork(lines, { now, hours = HOURS }) {
     i++;
     let r; try { r = JSON.parse(raw); } catch { continue; }
     if (!r || typeof r !== 'object') continue;
+    // real turns only: `api-request-blob` lines (request snapshots, no timestamp) repeat earlier blocks; a repeated cbsession start
+    // could hide a real subagent result of the same turn (token audit 2026-11-28, same cause as the loop detector fix)
+    if (r.type && r.type !== 'user' && r.type !== 'assistant') continue;
     if (r.type === 'user' && !blocks(r).some((b) => b?.type === 'tool_result')) turn++;
     for (const b of blocks(r)) {
       if (b?.type === 'tool_use' && (b.name === 'Agent' || b.name === 'Task')) agents.push({ id: b.id, at: r.timestamp, turn, i, name: String(b.input?.description || b.input?.subagent_type || 'agent').slice(0, 60) });

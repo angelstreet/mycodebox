@@ -23,6 +23,7 @@ import { buildScorecard, langfuseScoreEvents, scorecardTraceId, foldRuns } from 
 import { createLoopScanner } from './loops.js';
 import { buildWaste, burnVsLimit, wasteLine, readLimits, foldAccounts } from './waste.js';
 import { accountOfPid } from '../claude-accounts.js';
+import { writerStamp } from './code-version.js';
 
 const exec = promisify(execFile);
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -718,6 +719,7 @@ export function createIngester(cfg, hooks = {}) {
     return loopCache.map((l) => ({ ...l, label: label.get(l.session) || l.session.slice(0, 8) }));
   }
 
+  const writer = cfg.writer || writerStamp({ cwd: join(HERE, '..') });   // stamped at start: the code this process runs
   async function summary() {
     if (!state) await init(false);
     const now = cfg.now(), records = [...byId.values()];
@@ -733,6 +735,7 @@ export function createIngester(cfg, hooks = {}) {
       const seen = new Set(s.outliers.map((o) => o.id));
       for (const f of w.findings) if (f.id && !seen.has(f.id) && f.kind !== 'cache-churn' && f.kind !== 'subagent-heavy') { seen.add(f.id); s.outliers.push({ session: f.session, id: f.id, agent: f.agent, kind: f.kind, costToday: f.cost, reason: `${f.kind}: ${f.detail}` }); }
     } catch (e) { console.error('[usage] waste:', e.message); }
+    s.writer = writer;   // which code wrote this (usage/code-version.js)
     await atomicWrite(cfg.summaryFile, JSON.stringify(s, null, 1));
     return s;
   }

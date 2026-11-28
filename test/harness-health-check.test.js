@@ -403,6 +403,12 @@ test('hiddenAgentWork: counts fix/recommend subagent results with no cbsession i
   assert.deepEqual(r.names, ['review vpt-monitor-subtitle']);
   assert.equal(hiddenAgentWork(lines, { now: NOW, hours: 0.01 }).count, 0, 'outside the window');
 });
+test('hiddenAgentWork: an api-request-blob repeating a cbsession start does not hide a real subagent result', () => {
+  const at = ago(3600000);
+  const blob = line({ type: 'api-request-blob', hash: 'x', sessionId: 's', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'b9', name: 'Bash', input: { command: 'cbsession -n old -d ~/x' } }] } });
+  const lines = [um('review it'), tu('a1', 'Agent', { description: 'review A' }, at), tr('a1', 'I recommend fixing it.'), blob, um('next')];
+  assert.equal(hiddenAgentWork(lines, win).count, 1);
+});
 test('hiddenAgentStats + summarize: count line and a finding; missing dir is n/a, not 0', () => {
   const dir = tmp('hidden');
   const at = new Date().toISOString();

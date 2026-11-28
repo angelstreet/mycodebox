@@ -105,6 +105,10 @@ test('claude transcript: dedupes message.id, ignores partial last line, upserts 
   assert.equal(s.perProject['demo-repo'].output, 151);
   assert.equal(s.total.cache_read, 3000);
   assert.equal(s.perDay['2026-10-03'].turns, 3);
+  // every summary says which code wrote it (usage/code-version.js): pid, start time, commit
+  assert.equal(s.writer.pid, process.pid);
+  assert.ok(Number.isFinite(Date.parse(s.writer.startedAt)));
+  assert.ok(s.writer.sha === null || /^[0-9a-f]{40}$/.test(s.writer.sha));
 });
 
 test('truncated file is re-read from the start; replay uses the same generation ids', async () => {

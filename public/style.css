@@ -2766,6 +2766,7 @@ body:not(.res-hidden) .fgrp{ display:none; }
 .uv-sec h2{ display:flex; align-items:baseline; gap:10px; margin:0 0 10px; font-size:11px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-2); }
 .uv-sec h2 .dim{ font-weight:400; letter-spacing:0; text-transform:none; }
 .uv-note{ font-size:11px; color:var(--ink-3); padding:4px 2px; }
+.uv-stale{ color:var(--warn, #d9a441); border-left:2px solid var(--warn, #d9a441); padding-left:8px; margin:4px 0; }
 
 /* quality */
 .uv-quality{ display:grid; grid-template-columns:repeat(auto-fit, minmax(130px, 1fr)); gap:10px; align-items:stretch; margin-bottom:8px; }
