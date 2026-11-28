@@ -31,6 +31,7 @@
 import { join } from 'node:path';
 import { mkdir, stat, rename, appendFile, readFile, open } from 'node:fs/promises';
 import { eventDoubt } from './doubt.js';
+import { isAdvisoryKind, MANAGER_ADVISORY_KINDS } from './advisory-kinds.js';
 
 export const DEFAULT_MAX_BYTES = 5 * 1024 * 1024;
 export const FILE_NAME = 'manager-events.jsonl';
@@ -124,7 +125,7 @@ export function createManagerEvents({ stateDir, managerSessions = () => [], fs: 
     // routine deploy start/done (69 % of the feed) are not events: kept only when a lease blocked the deploy; failed/orphan/approve/lease-freed pass.
     if (cls.kind === 'deploy' && (cls.state === 'start' || cls.state === 'done') && !(Array.isArray(event.blockedBy) && event.blockedBy.length)) return null;
     const sessions = managerSessions() || [];
-    if (cls.session && sessions.includes(cls.session) && cls.kind !== 'manager-restart-advisory') return null;   // the restart advisory is ABOUT the manager and is meant for it
+    if (cls.session && sessions.includes(cls.session) && !MANAGER_ADVISORY_KINDS.includes(cls.kind)) return null;   // the restart advisory is ABOUT the manager and is meant for it
 
     const at = event.at || new Date(now()).toISOString();
     const rec = { at, key: event.key, kind: cls.kind };
@@ -140,7 +141,7 @@ export function createManagerEvents({ stateDir, managerSessions = () => [], fs: 
     if (cls.kind === 'overlap' && event.overlap && typeof event.overlap === 'object') rec.overlap = event.overlap;
     if (cls.kind === 'shared-checkout-dirty' && event.sharedCheckout && typeof event.sharedCheckout === 'object') rec.sharedCheckout = event.sharedCheckout;
     if (cls.kind === 'bug' && event.bug && typeof event.bug === 'object') rec.bug = event.bug;
-    if (/^(context|subagent|manager-restart)-advisory$/.test(cls.kind) && event.advisory && typeof event.advisory === 'object') rec.advisory = event.advisory;
+    if (isAdvisoryKind(cls.kind) && event.advisory && typeof event.advisory === 'object') rec.advisory = event.advisory;
     if (cls.kind === 'no-progress' && event.progress && typeof event.progress === 'object') rec.progress = event.progress;
     if (typeof event.handled === 'string' && event.handled) rec.handled = event.handled.slice(0, 40);   // 'session': already delivered to the session (integration-notify.js); the wake filter skips it
     rec.title = typeof event.title === 'string' ? event.title : '';

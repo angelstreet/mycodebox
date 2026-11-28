@@ -344,11 +344,15 @@ export function wasteHtml(u) {
   const row = (kind, name, agent, detail, extra = '') => `<div class="urow"><div class="u1"><span class="tag" style="white-space:nowrap;font-size:11px;padding:1px 6px;border-radius:8px;background:var(--bg-3);color:var(--ink)">${esc(KIND_LABEL[kind] || kind)}</span> <i class="adot ${esc(agent || '')}"></i><b>${esc(name)}</b>${extra}</div><div class="u2">${esc(detail)}</div></div>`;
   const finds = (w.findings || []).slice(0, 30).map((f) => row(f.kind, f.session, f.agent, f.detail, f.cost ? `<span class="grow"></span><span class="dim">$${Math.round(f.cost)}</span>` : '')).join('') || '<div class="dim">no waste found in this window</div>';
   const loops = (u.loops || []).slice(0, 15).map((l) => row(l.kind, l.label || l.session, 'claude', `${l.count}× ${l.sample}`)).join('') || '<div class="dim">no repeated commands or prompts</div>';
+  const ADV = [['context-advisory', 'context'], ['subagent-advisory', 'subagent'], ['manager-restart-advisory', 'manager restart']];
+  const adv = u.advisories?.kinds ? ADV.map(([k, l]) => { const a = u.advisories.kinds[k]; const ms = a ? Date.now() - new Date(a.at).getTime() : 0;
+    return `<div class="urow"><div class="u1"><b>${esc(l)}</b><span class="grow"></span><span class="dim">${a ? `${esc(hrs(ms / 3600e3))} ago${a.session ? ` &middot; ${esc(a.session)}` : ''}` : `never${u.advisories.since ? ` since ${esc(String(u.advisories.since).slice(5, 10))}` : ''}`}</span></div></div>`; }).join('') : '';
   const th = w.thresholds || {};
   return `<section class="uv-sec"><h2>Waste &mdash; last ${esc(String(w.windowH))} h</h2><div class="uv-note dim">${esc(u.wasteLine || '')}</div>${bars}</section>
     <section class="uv-sec"><h2>Burn vs plan limit</h2>${burn}</section>
     <section class="uv-sec"><h2>By account</h2>${accs}</section>
     <section class="uv-sec"><h2>Findings (${(w.findings || []).length})</h2>${finds}<div class="uv-note dim">rules: avg context &gt; ${Math.round((th.avgCtx || 0) / 1e3)}k &middot; cache hit &lt; ${Math.round((th.hitBelow || 0) * 100)}% &middot; cache writes &ge; ${fmtTok(th.churnWrite || 0)} &middot; subagents &ge; ${Math.round((th.subShare || 0) * 100)}% &middot; polling calls &ge; ${Math.round((th.pollShare || 0) * 100)}%</div></section>
+    ${adv ? `<section class="uv-sec"><h2>Advisories <span class="dim">last sent to the manager</span></h2>${adv}</section>` : ''}
     <section class="uv-sec"><h2>Loops</h2>${loops}<div class="uv-note dim">same command or prompt repeated in one session (transcripts)</div></section>`;
 }
 

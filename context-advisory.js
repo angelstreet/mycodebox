@@ -8,13 +8,15 @@
 import { join } from 'node:path';
 import { promises as fsp } from 'node:fs';
 
-export const KIND = 'context-advisory';
+import { CONTEXT_ADVISORY, SUBAGENT_ADVISORY, MANAGER_RESTART_ADVISORY, ADVISORY_KINDS } from './advisory-kinds.js';
+
+export const KIND = CONTEXT_ADVISORY;
 export const COOLDOWN_MS = 24 * 3600e3;
 export const FILE_NAME = 'context-advisory.json';
 
 // Pure: the event for one finding. startedBy: 'manager' | 'owner' | 'unknown'.
-export const SUB_KIND = 'subagent-advisory';
-export const MGR_KIND = 'manager-restart-advisory';
+export const SUB_KIND = SUBAGENT_ADVISORY;
+export const MGR_KIND = MANAGER_RESTART_ADVISORY;
 export const HANDOVER_FILE = '~/vpt-manager/docs/manager-handover.log';
 export function advisoryEvent(f, startedBy = 'unknown', at = new Date().toISOString()) {
   if (f.kind === 'subagent-heavy') {
@@ -53,6 +55,18 @@ export function advisoryEvent(f, startedBy = 'unknown', at = new Date().toISOStr
 
 // Pure: which findings are due. sent: { id: ms }. Returns the findings to send now.
 // Dedupe key: the trace id is shared by every finding of one session, so a kind other than high-avg-context gets its own key (the old id-only key stays for high-avg-context: state files already hold it).
+// Pure: when did each advisory kind last reach the manager feed? rows = manager-events.jsonl records (any order).
+// -> { kinds: { <kind>: { at, session } | null }, since: <oldest row's at in the feed, so "never" can say how far back it looked> }
+export function lastFired(rows) {
+  const kinds = Object.fromEntries(ADVISORY_KINDS.map((k) => [k, null]));
+  let since = null;
+  for (const r of rows || []) {
+    if (!r || typeof r.at !== 'string') continue;
+    if (since === null || r.at < since) since = r.at;
+    if (r.kind in kinds && (kinds[r.kind] === null || r.at > kinds[r.kind].at)) kinds[r.kind] = { at: r.at, session: typeof r.session === 'string' ? r.session : '' };
+  }
+  return { kinds, since };
+}
 export const sentKey = (f) => (f.kind === 'high-avg-context' ? f.id : `${f.kind}:${f.id}`);
 export function dueFindings(findings, sent, now, { cooldownMs = COOLDOWN_MS, isLive = () => true } = {}) {
   const out = [], ids = new Set();
