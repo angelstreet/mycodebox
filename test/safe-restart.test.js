@@ -34,7 +34,7 @@ if (command === 'curl') {
 }
 if (command === 'date') console.log(args[0] === '+%s%3N' ? ${NOW} + Number(read('elapsed', 0)) : Math.floor((${NOW} + Number(read('elapsed', 0))) / 1000));
 if (command === 'sleep') write('elapsed', Number(read('elapsed', 0)) + Number(args[0]) * 1000);
-if (command === 'sudo') process.exit(input.sudoCode);
+if (command === 'sudo') { const n = Number(read('sudos', 0)); write('sudos', n + 1); process.exit(Array.isArray(input.sudoCode) ? input.sudoCode[Math.min(n, input.sudoCode.length - 1)] : input.sudoCode); }
 if (command === 'systemctl') console.log('0');
 `;
   for (const command of ['curl', 'sudo', 'systemctl', 'date', 'sleep']) {
@@ -305,4 +305,15 @@ test('a successful restart also restarts the usage tailer, after the main servic
   assert.equal(r.status, 0, r.stderr);
   const sudo = r.calls.filter(([c]) => c === 'sudo');
   assert.deepEqual(sudo, [['sudo', '-n', 'systemctl', 'restart', 'ghosty-sessions'], ['sudo', '-n', 'systemctl', 'try-restart', 'ghosty-usage']]);
+});
+
+// exit 5 = what `systemctl try-restart` returns for a unit that does not exist (checked on codebox 2026-11-28): an install without the
+// optional usage unit, or any usage-restart failure, only warns; the dashboard restart already succeeded and the script exits 0.
+test('a failed usage tailer restart (or no such unit) only warns: exit 0, dashboard restarted', (t) => {
+  const r = invoke(t, [response()], [], [0, 5]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(restarts(r).length, 1);
+  assert.equal(usageRestarts(r).length, 1);
+  assert.match(r.stdout, /restarted via systemctl/);
+  assert.match(r.stderr, /usage tailer restart failed \(ghosty-sessions was restarted\)/);
 });
