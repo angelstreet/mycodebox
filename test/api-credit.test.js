@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, rmSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseCostReport, normalizeBudgets, createApiCredit, monthStart, keyHint, POLL_MS } from '../api-credit.js';
+import { parseCostReport, normalizeBudgets, createApiCredit, monthStart, keyHint, POLL_MS, FORCE_MIN_MS } from '../api-credit.js';
 
 const fx = (n) => JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'fixtures', n), 'utf8'));
 const NOW = Date.UTC(2026, 10, 28, 10, 0);
@@ -87,4 +87,21 @@ test('a refused key: the row carries the API\'s own 401 reason', async () => {
   assert.equal(team.spentUsd, null);
   assert.ok(team.error.startsWith(`key refused (http 401): ${msg}`), team.error);
   assert.ok(!team.error.includes('notadmin'));
+});
+
+test('force (the popup refresh button): a new key shows at once, but at most one forced pull a minute', async () => {
+  const { state, keyDir } = dirs();
+  let t = NOW, calls = 0;
+  const c = createApiCredit({ stateDir: state, keyDir, now: () => t, fetchFn: async () => { calls++; return resp(fx('anthropic-cost-analytics.json')); } });
+  assert.equal((await c.get()).orgs[0].noKey, true);
+  writeFileSync(join(keyDir, 'max.admin.key'), 'sk-ant-admin01-fake\n');
+  t += 30e3;
+  assert.equal((await c.get({ force: true })).orgs[0].noKey, true, 'under a minute: cached, no pull');
+  assert.equal((await c.get()).orgs[0].noKey, true, 'plain get keeps the 15 min cache');
+  assert.equal(calls, 0);
+  t = NOW + FORCE_MIN_MS;
+  const r = await c.get({ force: true });
+  assert.equal(r.orgs[0].spentUsd, 167.46);
+  assert.equal(calls, 1);
+  assert.ok(FORCE_MIN_MS < POLL_MS);
 });

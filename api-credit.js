@@ -12,6 +12,7 @@ import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 
 export const POLL_MS = 15 * 60e3;
+export const FORCE_MIN_MS = 60e3; // the popup's refresh button: a forced pull at most once a minute
 export const DEFAULT_BUDGETS = {
   max: { label: 'Max account', budgetUsd: 200, period: 'month' },
   team: { label: 'Team account', budgetUsd: 1000, period: 'month' },
@@ -122,7 +123,8 @@ export function createApiCredit({
   return {
     peek: () => cached,
     refresh,
-    async get() { await seed(); if (due()) await refresh(); return cached; },
+    // force (the quota popup's refresh button): pull now unless the last pull is under a minute old, so a new key shows at once
+    async get({ force = false } = {}) { await seed(); if (due() || (force && now() - cached.at >= FORCE_MIN_MS)) await refresh(); return cached; },
     start() {
       seed().then(() => { if (due()) return refresh(); onChange(cached); }).catch(() => {});
       setInterval(() => refresh().catch(() => {}), ttl).unref?.();

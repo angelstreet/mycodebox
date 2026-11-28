@@ -132,7 +132,7 @@ The view polls every few seconds while it is open and does nothing otherwise. Ro
 | Settings in `.env` ignored | Node does not load it automatically; check the service's EnvironmentFile path and use the guarded restart procedure |
 | Reporter events missing | New Claude session loaded the plugin; loopback URL/port correct; same state directory or token-file override; token readable by that user |
 | Usage/quota missing | Optional tailer/CLI authentication and feature settings; unknown or stale data is not zero usage |
-| API credit row says "no admin key" or "key refused" | Put an Admin API key (Console > Settings > Admin keys) for that org in `~/.config/anthropic/<org>.admin.key`, chmod 600; the row refreshes within 15 min |
+| API credit row says "no admin key" or "key refused" | Put an Admin API key (Console > Settings > Admin keys, `sk-ant-admin01-...`; only an org admin can create one) for that org in `~/.config/anthropic/<org>.admin.key`, chmod 600, then press **refresh** in the quota popup (else it refreshes within 15 min). Other key types fail: a normal `sk-ant-api03` or service `sk-ant-svc` key gets 401 "requires an Admin API key"; an org-scoped `sk-ant-usr` key without the usage/cost read permission gets 403 "Missing permissions" |
 | Old UI after update | Reload; close/reopen installed app; inspect service-worker update before clearing browser storage |
 
 Use local logs for diagnosis, but redact session text, keys and infrastructure details before sharing an issue.

@@ -87,7 +87,7 @@
 //   GET  /api/reporter/:session → latest reported turn / prompt / waiting / agents of a session
 //   GET  /api/usage also carries `minimax` (per-session calls this 5h window / 24 h, minimax-meter.js)
 //   GET  /api/quota             → plan windows (codex / claude / minimax); also pushed on /ws/status
-//   GET  /api/api-credit        → {at, month, orgs:[{org,label,budgetUsd,spentUsd,leftUsd,usedPercent,source,stale?,error?}]} Anthropic API spend this month per org (Admin API cost report, 15 min cache); pushed as apiCredit on /ws/status
+//   GET  /api/api-credit        → {at, month, orgs:[{org,label,budgetUsd,spentUsd,leftUsd,usedPercent,source,stale?,error?}]} Anthropic API spend this month per org (Admin API cost report, 15 min cache; ?force=1 pulls now, at most once a minute); pushed as apiCredit on /ws/status
 //   GET  /api/usage             → usage-summary.json (API-equivalent cost / tokens) + `sessions` {name:{todayCost, days[14]}} for live sessions; 404 when absent
 //   GET  /api/vm                → codebox health: cpu %, load vs cores, RAM, disks (also pushed on /ws/status)
 //   GET  /api/disk              → the disk-space policy: level, thresholds and the top consumers (also pushed on /ws/status)
@@ -3466,7 +3466,7 @@ async function handleHttp(req, res) {
   if (req.method === 'GET' && p === '/api/jev-ai') return json(res, 200, { ...await jevAiTab(), credits: await credits.get() });
   if (req.method === 'GET' && p === '/api/credits') return json(res, 200, await credits.get());
   if (req.method === 'GET' && p === '/api/anthropic-spend') return json(res, 200, await anthropicSpend.get() || { ok: false });
-  if (req.method === 'GET' && p === '/api/api-credit') return json(res, 200, await apiCredit.get() || { ok: false });
+  if (req.method === 'GET' && p === '/api/api-credit') return json(res, 200, await apiCredit.get({ force: url.searchParams.get('force') === '1' }) || { ok: false });
   if (req.method === 'GET' && p === '/api/decisions') {
     const q = url.searchParams;
     return json(res, 200, await decisionsView({ usage: q.get('usage') || '', ok: q.get('ok') || '', hasOutcome: q.get('has_outcome') || '', minConf: q.get('min_conf') || '',
