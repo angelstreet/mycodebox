@@ -2,6 +2,7 @@
 # A fresh idle snapshot is required twice; this is a guard, not an atomic deploy lease.
 #   scripts/safe-restart.sh            refuse while work can run
 #   scripts/safe-restart.sh --wait 15  wait up to 15 minutes for work to finish
+# A running lane UI review is waited for too, GHOSTY_REVIEW_WAIT_MIN minutes at most (default 10, 0 = do not wait).
 set -euo pipefail
 WAIT_MIN=0
 if [ "$#" -gt 0 ]; then
@@ -16,6 +17,27 @@ if [ "$#" -gt 0 ]; then
   WAIT_MIN=$((10#$WAIT_MIN))
 fi
 BASE="${GHOSTY_URL:-http://localhost:7777}"
+REVIEW_WAIT="${GHOSTY_REVIEW_WAIT_MIN:-10}"
+if ! [[ "$REVIEW_WAIT" =~ ^[0-9]{1,2}$ ]] || [ "$((10#$REVIEW_WAIT))" -gt 60 ]; then
+  echo 'GHOSTY_REVIEW_WAIT_MIN must be an integer from 0 to 60' >&2; exit 2
+fi
+REVIEW_WAIT=$((10#$REVIEW_WAIT))
+REVIEWS="${GHOSTY_STATE_DIR:-${HOME:-}/.local/state/ghosty}/integration/ui-review/"
+
+# A restart throws a running review away and the resumed request starts it over (one review restarted 5 times, 2026-11-28).
+# Read-only look at /proc: the reviewer writing under THIS install's state dir. Cannot tell = no review: never blocks.
+review_running() {
+  python3 -c '
+import os, sys
+for pid in os.listdir("/proc"):
+    if not pid.isdigit(): continue
+    try: a = open("/proc/" + pid + "/cmdline", "rb").read().decode(errors="replace").split("\0")
+    except OSError: continue
+    if any(os.path.basename(v) == "ui_review_gate.py" for v in a) and any(v == "--out" and n.startswith(sys.argv[1]) for v, n in zip(a, a[1:])):
+        sys.exit(0)
+sys.exit(1)
+' "$REVIEWS"
+}
 
 check_idle() {
   local response now
@@ -72,8 +94,23 @@ sys.exit(1 if busy else 0)
 }
 
 deadline=$(( $(date +%s) + WAIT_MIN * 60 ))
+review_deadline=''
 while :; do
   if check_idle; then
+    if [ "$REVIEW_WAIT" -gt 0 ] && review_running; then
+      now=$(date +%s)
+      if [ -z "$review_deadline" ]; then
+        review_deadline=$(( now + REVIEW_WAIT * 60 ))
+        echo "a UI review is running, waiting up to $REVIEW_WAIT min for it..." >&2
+      fi
+      if [ "$now" -lt "$review_deadline" ]; then
+        sleep 15
+        deadline=$(( deadline + 15 ))   # time spent on a review does not use up the deploy wait
+        continue                        # the deploy guard is read again from the start
+      fi
+      echo "a UI review is still running after $REVIEW_WAIT min: going ahead (the resumed request reviews again)" >&2
+      REVIEW_WAIT=0
+    fi
     # Recheck immediately before the operation; a subsequent deploy race still requires a lease to prevent.
     if check_idle; then break; else status=$?; fi
   else

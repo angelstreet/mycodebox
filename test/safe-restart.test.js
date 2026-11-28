@@ -3,17 +3,16 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 
 const NOW = 1791201600000;
+const tempDir = (t) => { const d = mkdtempSync(join(tmpdir(), 'mycodebox-restart-')); t.after(() => rmSync(d, { recursive: true, force: true })); return d; };
 const snapshot = (patch = {}) => ({
   ok: true, error: '', at: NOW, deploys: [], enabled: false, running: {}, envs: ['test'], ...patch,
 });
 const deploy = (state, o = {}) => ({ id: 'test-deploy', env: 'test', state, ...o });
 
-function invoke(t, responses, args = [], sudoCode = 0) {
-  const dir = mkdtempSync(join(tmpdir(), 'mycodebox-restart-'));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+function invoke(t, responses, args = [], sudoCode = 0, { dir = tempDir(t), env = {} } = {}) {
   writeFileSync(join(dir, 'input.json'), JSON.stringify({ responses, sudoCode }));
   const fake = `#!${process.execPath}
 const fs = require('node:fs');
@@ -28,12 +27,22 @@ fs.appendFileSync(path.join(dir, 'calls'), JSON.stringify([command, ...args]) + 
 if (command === 'curl') {
   const n = Number(read('polls', 0)); write('polls', n + 1);
   const r = input.responses[Math.min(n, input.responses.length - 1)];
-  process.stdout.write(typeof r.body === 'string' ? r.body : JSON.stringify(r.body));
+  // like the live API, a snapshot asked for later is stamped later (only where a test waits past the 60 s freshness window)
+  const body = process.env.FAKE_FRESH && r.body && typeof r.body === 'object' ? { ...r.body, at: r.body.at + Number(read('elapsed', 0)) } : r.body;
+  process.stdout.write(typeof body === 'string' ? body : JSON.stringify(body));
   if (args.includes('--write-out')) process.stdout.write('\\n' + (r.http || 200));
   process.exit(r.code || 0);
 }
 if (command === 'date') console.log(args[0] === '+%s%3N' ? ${NOW} + Number(read('elapsed', 0)) : Math.floor((${NOW} + Number(read('elapsed', 0))) / 1000));
-if (command === 'sleep') write('elapsed', Number(read('elapsed', 0)) + Number(args[0]) * 1000);
+if (command === 'sleep') {
+  write('elapsed', Number(read('elapsed', 0)) + Number(args[0]) * 1000);
+  // a fake review that "finishes" after N polls: stop that process (this test's own) and wait until its command line is gone
+  if (process.env.FAKE_REVIEW_PID && Number(read('elapsed', 0)) >= Number(process.env.FAKE_REVIEW_ENDS_S) * 1000) {
+    try { process.kill(Number(process.env.FAKE_REVIEW_PID)); } catch {}
+    const gone = () => { try { return !fs.readFileSync('/proc/' + process.env.FAKE_REVIEW_PID + '/cmdline').length; } catch { return true; } };
+    while (!gone()) {}
+  }
+}
 if (command === 'sudo') { const n = Number(read('sudos', 0)); write('sudos', n + 1); process.exit(Array.isArray(input.sudoCode) ? input.sudoCode[Math.min(n, input.sudoCode.length - 1)] : input.sudoCode); }
 if (command === 'systemctl') console.log('0');
 `;
@@ -42,7 +51,7 @@ if (command === 'systemctl') console.log('0');
   }
   const result = spawnSync('/bin/bash', [resolve('scripts/safe-restart.sh'), ...args], {
     env: { PATH: `${dir}:/usr/bin:/bin`, LANG: 'C.UTF-8', GHOSTY_STATE_DIR: dir, FAKE_DIR: dir,
-      GHOSTY_URL: 'http://localhost:7777' }, encoding: 'utf8', timeout: 20000,   // several fake commands start per wait loop; 5 s was too tight under a loaded run
+      GHOSTY_URL: 'http://localhost:7777', ...env }, encoding: 'utf8', timeout: 60000,   // several fake commands start per wait loop; 5 s was too tight under a loaded run
   });
   assert.ifError(result.error);
   let calls = [];
@@ -317,3 +326,70 @@ test('a failed usage tailer restart (or no such unit) only warns: exit 0, dashbo
   assert.match(r.stdout, /restarted via systemctl/);
   assert.match(r.stderr, /usage tailer restart failed \(ghosty-sessions was restarted\)/);
 });
+
+// A restart throws a running UI review away (2026-11-28: one review started over 5 times). The guard waits for it, with a limit.
+async function fakeReview(t, outDir) {
+  const p = spawn('python3', ['-c', 'import time; print(1, flush=True); time.sleep(90)', '/somewhere/scripts/review/ui_review_gate.py', 'live', '--out', outDir], { stdio: ['ignore', 'pipe', 'ignore'] });
+  t.after(() => p.kill('SIGKILL'));
+  await new Promise((r) => p.stdout.once('data', r));
+  return p;
+}
+const sleeps = (r) => r.calls.filter(([c]) => c === 'sleep').length;
+
+test('a running UI review is waited for, then the restart goes ahead after a fresh idle check', async (t) => {
+  const dir = tempDir(t);
+  const p = await fakeReview(t, join(dir, 'integration', 'ui-review', 'int-x', 'live'));
+  const r = invoke(t, [response()], [], 0, { dir, env: { FAKE_REVIEW_PID: String(p.pid), FAKE_REVIEW_ENDS_S: '45' } });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /a UI review is running, waiting up to 10 min/);
+  assert.doesNotMatch(r.stderr, /going ahead/);
+  assert.equal(sleeps(r), 3);
+  assert.equal(r.calls.filter(([c]) => c === 'curl').length, 5, 'idle is read again after every wait, and twice before the restart');
+  assert.equal(restarts(r).length, 1);
+});
+
+test('the UI review wait has a limit: a review that never ends does not hold the restart', async (t) => {
+  const dir = tempDir(t);
+  await fakeReview(t, join(dir, 'integration', 'ui-review', 'int-x', 'pre-merge'));
+  const r = invoke(t, [response()], [], 0, { dir, env: { GHOSTY_REVIEW_WAIT_MIN: '2', FAKE_FRESH: '1' } });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(sleeps(r), 8);
+  assert.match(r.stderr, /still running after 2 min: going ahead/);
+  assert.equal(restarts(r).length, 1);
+});
+
+test('the UI review wait never gets past the deploy guard, and does not use up the --wait time', async (t) => {
+  const dir = tempDir(t);
+  await fakeReview(t, join(dir, 'integration', 'ui-review', 'int-x', 'live'));
+  const busy = response(snapshot({ running: { test: 'test-deploy' } }));
+  // idle (review wait), then a deploy runs: still refused without --wait
+  const refused = invoke(t, [response(), busy], [], 0, { dir, env: { GHOSTY_REVIEW_WAIT_MIN: '1' } });
+  assert.equal(refused.status, 1, refused.stderr);
+  assert.equal(restarts(refused).length, 0);
+  // 8 review polls (2 min) are longer than --wait 1: a deploy seen afterwards still gets its minute
+  const dir2 = tempDir(t);
+  await fakeReview(t, join(dir2, 'integration', 'ui-review', 'int-x', 'live'));
+  const ok = invoke(t, [...Array(8).fill(response()), busy, response()], ['--wait', '1'], 0, { dir: dir2, env: { GHOSTY_REVIEW_WAIT_MIN: '2', FAKE_FRESH: '1' } });
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.equal(restarts(ok).length, 1);
+});
+
+test('a review of another state dir, or GHOSTY_REVIEW_WAIT_MIN=0, does not delay the restart', async (t) => {
+  const dir = tempDir(t);
+  await fakeReview(t, join(tempDir(t), 'integration', 'ui-review', 'int-x', 'live'));
+  const other = invoke(t, [response()], [], 0, { dir });
+  assert.equal(other.status, 0, other.stderr);
+  assert.equal(sleeps(other), 0);
+  await fakeReview(t, join(dir, 'integration', 'ui-review', 'int-y', 'live'));
+  const off = invoke(t, [response()], [], 0, { dir, env: { GHOSTY_REVIEW_WAIT_MIN: '0' } });
+  assert.equal(off.status, 0, off.stderr);
+  assert.equal(sleeps(off), 0);
+});
+
+for (const bad of ['-1', '61', 'abc', '1.5']) {
+  test(`rejects GHOSTY_REVIEW_WAIT_MIN=${bad}`, (t) => {
+    const r = invoke(t, [response()], [], 0, { env: { GHOSTY_REVIEW_WAIT_MIN: bad } });
+    assert.equal(r.status, 2);
+    assert.equal(r.calls.length, 0);
+  });
+}

@@ -1367,6 +1367,12 @@ The manager sheet keeps only the "Runs deploys" switch and a link to Platforms.
   copy it and `systemctl daemon-reload` (no restart needed for the unit text to be read; it applies at the next stop/start).
 - API: `GET /api/deploys`, `POST /api/deploys/:id/approve|cancel`, `GET /api/deploys/:id/log?tail=200`; `{type:'deploys'}` on `/ws/status`.
 - **Restart guard** (`scripts/safe-restart.sh`): busy = a `running` deploy, or an `approved` one, or a `queued` one while the runner is on, each deploy item except when it carries `blocked: true` (its last start attempt was refused because a lease or a ticket held it, so it cannot start before the restart; Q199, owner 2026-10-20). A `running` item is busy even when blocked; a missing `blocked` field counts as not blocked (an older server keeps today's safe rule) and a non-boolean one is an invalid snapshot (exit 2). A snapshot with `ok: false` and an error text (the runner could not read the lease registry, e.g. the service on proxmox was down after a deploy; bug-cdbffcbb) is a transient unknown: the guard prints "lease registry unavailable (<cause>)", never reads it as idle, and under `--wait` retries every 15 s until the deadline (then exits 2 naming the cause); without `--wait`, or with a stale timestamp, it refuses at once.
+  **A running UI review is waited for** (2026-11-28): a restart throws it away and the resumed request starts it over (one
+  review started over about 5 times behind other deploys). While the guard is idle and the lane's reviewer
+  (`ui_review_gate.py`, `--out` under this state dir's `integration/ui-review/`, read from `/proc`) runs, the script polls every
+  15 s for at most `GHOSTY_REVIEW_WAIT_MIN` minutes (default 10, 0-60, 0 = do not wait), then restarts anyway. The limit
+  counts from the first wait, so back-to-back reviews cannot hold a restart forever. It applies with and without `--wait`,
+  does not use up the `--wait` minutes, and the deploy guard is read again after every poll and twice before the restart.
 
 ## Platforms page, lease ownership, waiting for a deploy (TASK-44)
 

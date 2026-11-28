@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A dashboard restart waits for a running UI review** — a restart threw the review away and the request started it over (one started over about 5 times while other changes deployed). `scripts/safe-restart.sh` now waits for it, 10 minutes at most (`GHOSTY_REVIEW_WAIT_MIN`, 0 = off), then restarts anyway; the deploy guard is unchanged and read again before the restart. Tests in `test/safe-restart.test.js` · area: integration lane
+
 - **`page publish folder/index.md` is named after the folder** — every lone `index.md` / `index.html` was published as `/p/index/`, so the next one replaced it · area: pages
 
 - **Cloud branches are read before the lane runs them** — a security review found that a branch pushed from a Claude Code cloud session was installed and tested on codebox like any other, with the dev user's files and the tailnet in reach. A request queued with `--mac cloud-<label>` now goes to the manager first and runs only after the manager approves that exact commit. `cloud-start` also writes its log line as real JSON in a private file, refuses odd labels and a task starting with `-`, and the cloud setup installs an exact Node version. · area: lane
