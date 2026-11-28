@@ -132,6 +132,7 @@ import { createFoundBugs, sessionOfRequest, unreportedBugOf, sendBackOf, sendBac
 import { goalOf as goalOfPrompt, blockedOrUnknownStatus, lastStatus, headlineOf } from './status-honesty.js';
 import { createGoalGate, createGoalStore, approvedRound, worthAGoal } from './goal-check.js';
 import { createSuggestionTriage, askOpusOnAccounts } from './suggestion-triage.js';
+import { createOwnerStopTriage, SYSTEM as OWNER_STOP_SYSTEM } from './owner-stop-triage.js';
 import { createSuggestions, createTypedLog, isOwnerTyped, answersOf, ambiguousAnswer, bareNumbersOk } from './suggestions.js';
 import { createManagerOwned, forManagerSession, MANAGER_ACTOR } from './manager-owned.js';
 import { createFinalAccept, isTaskActor, isTaskMessage } from './final-accept.js';
@@ -1317,6 +1318,22 @@ const suggestionTriage = createSuggestionTriage({ stateDir: STATE_DIR, ledger: s
       await managerEvents.record({ key: `suggestions-triaged:${name}`, title: `${name}: Opus answered its suggestions (pass it on with SendMessage)`, body: text.slice(0, 1800), url: '/', priority: 'default' });
     }
   } });
+// Needs-owner stops of owner-started sessions are checked first (owner-stop-triage.js, owner / manager 2026-11-28): a technical ask goes to the
+// manager and is shown in "Decided for you"; the floor, owner-reserved approvals (a tool's person-only confirm), doubt and every failure reach the owner.
+const ownerStopTriageMode = () => { try { return JSON.parse(readFileSync(managerConfigFile, 'utf8')).ownerStopTriage === 'off' ? 'off' : 'live'; } catch { return 'live'; } };
+const ownerStopTriage = createOwnerStopTriage({ stateDir: STATE_DIR, mode: ownerStopTriageMode, timeoutMs: 420000,   // Opus (180 s) then Fable on a doubt (180 s), then the owner anyway
+  ask: (prompt) => askOpusOnAccounts(prompt, { system: OWNER_STOP_SYSTEM, accounts: () => usableAccounts(STATE_DIR), onLimit: (a, next) => { recordSwitch(STATE_DIR, a, next, 'owner-stop-triage'); if (a) claudeAccounts.markExhausted(a.id, { reason: 'usage limit in owner-stop triage' }).catch(() => {}); } }),
+  askSecond: (prompt) => askOpusOnAccounts(prompt, { system: OWNER_STOP_SYSTEM, model: 'fable', accounts: () => usableAccounts(STATE_DIR), onLimit: (a, next) => { recordSwitch(STATE_DIR, a, next, 'owner-stop-triage-fable'); if (a) claudeAccounts.markExhausted(a.id, { reason: 'usage limit in owner-stop triage (Fable)' }).catch(() => {}); } }),
+  toManager: ({ session, question, why }) => {
+    const tail = ` [model check: technical (${String(why || '').slice(0, 80)}). You answer: POST /api/send/${session} {"keys":"...","by":"${MANAGER_ACTOR}"}; owner-only after all: manager-ask.js --source ${session}]`;
+    managerEvents.record({ key: `${session}:needs-manager`, title: `${session}: a technical question for you (asked the owner)`, url: `/?s=${encodeURIComponent(session)}`, priority: 'default',
+      body: `${`${session} asked the owner: ${String(question).replace(/\s+/g, ' ')}`.slice(0, Math.max(60, 300 - tail.length))}${tail}` }).catch((e) => console.error('[owner-stop-triage] event', e.message));
+  },
+  decided: ({ session, question, why, answer, kind }) => fileDecision(join(STATE_DIR, 'manager-decisions.jsonl'), { session,
+    decision: kind === 'answered' ? `${session} asked you "${String(question).slice(0, 200)}": the manager answered "${String(answer).replace(/\s+/g, ' ').slice(0, 120)}"`
+      : `${session} asked you "${String(question).slice(0, 200)}": routed to the manager (technical)`,
+    why: `the Opus / Fable check read it as technical${why ? ` (${String(why).slice(0, 100)})` : ''}; technical calls are the manager's (owner 2026-11-28).`,
+    undo: `Answer ${session} yourself, and tell the manager if this kind of question is yours.` }).catch((e) => console.error('[owner-stop-triage] decision', e.message)) });
 // The owner's yes / no to an item the Opus triage parked with the owner (dashboard NEEDS YOU "suggestions" chip). Only the owner's browser answers it.
 // A yes becomes a new round for the session (told at once; a Mac row or a closed session: the manager is told instead).
 async function answerParked(req, body = {}) {
@@ -1397,6 +1414,7 @@ function managerChoice(session, open, payload) {
 }
 // What a delivered send says about the open suggestions: the owner's dashboard, or the manager for a session it started. Nobody else.
 function recordChoice(req, session, by, payload) {
+  if (by === MANAGER_ACTOR) ownerStopTriage.managerAnswered(session, payload.keys ?? payload.key);   // a routed stop: its answer joins "Decided for you"
   if (payload.key !== undefined) return;
   if (fromOwnerUi(req, by)) ownerAnswered(session, String(payload.keys || ''), 'dashboard');
   else if (by === MANAGER_ACTOR && managerOwned(session) && suggestions.openOf(session).length) ownerAnswered(session, String(payload.keys || ''), 'send', 'manager');
@@ -1729,13 +1747,15 @@ const heldDone = (session) => {
   return pendingDone.has(session) || (remote.owns(session) && !!suggestionHold(session, remote.lastText(session) || ''));
 };
 const pendingDone = new Set();   // panes whose newest turn is a held done: known at the transition, before the status row is rebuilt
-function notifySession(session, kind, body, meta, stateHint = null, reviewed = false) {
+function notifySession(session, kind, body, meta, stateHint = null, reviewed = false, stopChecked = false) {
   if ((kind === 'waiting' || kind === 'asks') && finalAccepted(session) && !suggestions.openOf(session).length) return;   // accepted final: no new ask, no push
   if (kind === 'done' && heldDone(session)) return;   // not done while the suggestions question is not answered (suggestions.js)
   if ((kind === 'waiting' || kind === 'asks') && loadOwnerHiddenSessions().includes(session)) return;   // the manager's own session (and the shadow standby) never pushes the owner
   // a needs-owner stop on something to look at is reviewed by ghosty before the owner hears of it (ui-review-ask.js)
   if (!reviewed && askReviewOn() && askReview.takeAlert(session, { kind, state: stateHint, status: meta?.status, text: meta?.closing || closingTextOf(latest?.status?.[session]?.stall) },
     (note) => notifySession(session, kind, note ? `${note.split('\n')[0]}\n${body || ''}\n${note.split('\n').slice(1).join('\n')}` : body, meta, stateHint, true))) return;
+  // a needs-owner stop under the Opus check is held until its verdict: the owner's -> sent now; the manager's -> dropped (owner-stop-triage.js)
+  if (!stopChecked && (kind === 'waiting' || kind === 'asks' || kind === 'done') && ownerStopTriage.takeAlert(session, () => notifySession(session, kind, body, meta, stateHint, reviewed, true))) return;
   // a session the manager started asks the manager, never the owner (manager-owned.js)
   if ((kind === 'waiting' || kind === 'asks') && managerOwned(session)) return askManager(session, meta?.question || body);
   if (askFold.folds(session, kind)) return;   // folded into the session's open ask: no new push, no new event until it is answered or superseded
@@ -1919,6 +1939,10 @@ async function pollOnce() {
     const doneText = state === 'done' && isAgent && !offline ? closingLines(plain, 90).join('\n') : '';
     const heldNow = doneText ? suggestionHold(s.name, doneText, t.doneAt) : null;
     if (heldNow) pendingDone.add(s.name); else pendingDone.delete(s.name);
+    // a needs-owner stop of an owner-started session: checked before the owner hears of it (owner-stop-triage.js); a new turn drops the old check
+    const stopLine = doneText ? lastStatus(doneText) : null;
+    if (stopLine?.kind === 'needs-owner' && !managerOwned(s.name) && !loadOwnerHiddenSessions().includes(s.name) && !/^improvement suggestions\b/i.test(stopLine.text || '')) ownerStopTriage.check(s.name, { question: stopLine.text, context: doneText });
+    else if (state === 'working' || (state === 'done' && doneText)) ownerStopTriage.clear(s.name);
 
     // Notifications: transitions only, never on first sight.
     if (t.prevState !== undefined && t.prevState !== state) {
@@ -1966,6 +1990,7 @@ async function pollOnce() {
     status[s.name] = {
       state, agent, agentCmd, waitReason,
       ...(managerOwned(s.name) ? { managerStarted: true } : {}),   // never the owner's turn (public/ask-model.js)
+      ...(ownerStopTriage.stateOf(s.name) ? { ownerStop: ownerStopTriage.stateOf(s.name) } : {}),   // 'pending' (Opus checks it) | 'manager' (technical): not the owner's turn
       ...(() => { const f = standbyFlagsOf(s.name); return { managerSession: loadManagerSessions().includes(s.name) || f.standby, standby: f.standby, hidden: f.hidden }; })(),   // operational manager stops are not NEEDS YOU; a standby in shadow is hidden entirely
       stall: stallOf(s.name),
       triage: triageOf(s.name),

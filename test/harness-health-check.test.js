@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import {
   askStats, laneStats, ciStats, loadAvgs, memAvailableMb, diskPct, inWindow,
   fetchSessions, collect, summarize, prevLine, run, FINAL_STATES, MEM_MIN_MB, hiddenAgentWork, hiddenAgentStats,
-  unitState, FAILOVER_UNIT,
+  unitState, FAILOVER_UNIT, ownerStopStats, OWNER_STOP_UNCHECKED_MAX,
 } from '../scripts/harness-health-check.js';
 import { tmp } from './helpers-tmp.js';
 
@@ -457,4 +457,37 @@ test('collect: an injected failover state is recorded; the env switch off record
   const box = { load1: 1, memAvailableMb: 4096, diskPct: 50 };
   assert.deepEqual(collect({ stateDir: dir, now: NOW, box, failover: { unit: 'x', state: 'inactive' } }).failover, { unit: 'x', state: 'inactive' });
   assert.equal(collect({ stateDir: dir, now: NOW, box }).failover, null, 'HARNESS_FAILOVER_UNIT empty: not checked');
+});
+
+// ---- needs-owner stops (owner-stop-triage.jsonl) --------------------------------------------------------------------
+test('ownerStopStats: counts the stops routed, kept by the owner and those that reached the owner unchecked, with their questions', () => {
+  const L = [
+    line({ at: ago(3600e3), session: 'a', question: 'retry or raise the timeout?', verdict: 'manager', source: 'opus' }),
+    line({ at: ago(3600e3), session: 'b', question: 'reply with x to confirm the publish', verdict: 'owner', source: 'reserved' }),
+    line({ at: ago(3600e3), session: 'c', question: 'which retry wait?', verdict: 'owner', source: 'timeout' }),
+    line({ at: ago(3600e3), session: 'd', question: 'merge now?', verdict: 'owner', source: 'error' }),
+    line({ at: ago(3600e3), session: 'e', question: 'product scope?', verdict: 'owner', source: 'fable' }),
+    line({ at: ago(3600e3), session: 'a', question: 'retry or raise the timeout?', verdict: 'manager-answered', answer: 'retry' }),
+    line({ at: ago(30 * 3600e3), session: 'old', question: 'q', verdict: 'owner', source: 'error' }),
+    'not json',
+  ];
+  const r = ownerStopStats(L, win);
+  assert.deepEqual([r.checked, r.toManager, r.toOwner, r.unchecked], [5, 1, 4, 2]);
+  assert.deepEqual(r.ownerBy, { reserved: 1, timeout: 1, error: 1, fable: 1 });
+  assert.deepEqual(r.uncheckedQuestions, ['c: which retry wait?', 'd: merge now?']);
+  const base = { asked: 0, answered: 0, open: 0, decisions: 0, states: {}, ci: {}, box: {}, notFound: [] };
+  const many = { ...r, unchecked: OWNER_STOP_UNCHECKED_MAX + 1 };
+  const s = summarize({ ...base, ownerStops: many }, null);
+  assert.ok(s.findings.some((f) => f.key === 'harness-health:owner-stops-unchecked' && /which retry wait/.test(f.body)));
+  assert.match(s.report, /needs-owner stops checked \| 5 \(1 to the manager, 4 to the owner: reserved 1, timeout 1, error 1, fable 1\)/);
+  assert.ok(!summarize({ ...base, ownerStops: r }, null).findings.some((f) => /owner-stops/.test(f.key)));
+});
+
+test('collect reads owner-stop-triage.jsonl; a missing file is no stop, not a missing source', () => {
+  const dir = tmp('hh-ownerstop-');
+  const c0 = collect({ stateDir: dir, now: NOW, box: {}, transcriptDir: join(dir, 'none'), failover: null });
+  assert.equal(c0.ownerStops.checked, 0);
+  assert.ok(!c0.notFound.includes('owner-stop-triage.jsonl'));
+  writeFileSync(join(dir, 'owner-stop-triage.jsonl'), line({ at: ago(60e3), session: 'a', question: 'q', verdict: 'manager', source: 'opus' }) + '\n');
+  assert.equal(collect({ stateDir: dir, now: NOW, box: {}, transcriptDir: join(dir, 'none'), failover: null }).ownerStops.toManager, 1);
 });

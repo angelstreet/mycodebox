@@ -141,13 +141,13 @@ export function claudeBin({ env = process.env, home = homedir(), exists = exists
   return exists(local) ? local : 'claude';
 }
 // The one Opus call, async (the server must not block): claude -p --model opus, no tools, an empty cwd. -> { ok, text } | { ok: false, error }
-// env: the child's environment (the server adds CLAUDE_CONFIG_DIR of the active Claude account).
-export function claudeOpus(prompt, { bin = claudeBin(), env = process.env, timeoutMs = Number(process.env.ASK_OPUS_TIMEOUT_MS) || 180000 } = {}) {
+// env: the child's environment (the server adds CLAUDE_CONFIG_DIR of the active Claude account). system: the system prompt and model (owner-stop-triage.js passes its own, and 'fable' for its second opinion).
+export function claudeOpus(prompt, { bin = claudeBin(), env = process.env, timeoutMs = Number(process.env.ASK_OPUS_TIMEOUT_MS) || 180000, system = SYSTEM, model = 'opus' } = {}) {
   return new Promise((resolve) => {
     const cwd = mkdtempSync(join(tmpdir(), 'triage-opus-'));
     let out = '', err = '', settled = false;
     const finish = (r) => { if (settled) return; settled = true; clearTimeout(t); rmSync(cwd, { recursive: true, force: true }); resolve(r); };
-    const p = spawn(bin, ['-p', '--model', 'opus', '--tools', '', '--no-session-persistence', '--disable-slash-commands', '--strict-mcp-config', '--setting-sources', '', '--output-format', 'text', '--system-prompt', SYSTEM], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
+    const p = spawn(bin, ['-p', '--model', model, '--tools', '', '--no-session-persistence', '--disable-slash-commands', '--strict-mcp-config', '--setting-sources', '', '--output-format', 'text', '--system-prompt', system], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
     const t = setTimeout(() => { p.kill('SIGTERM'); finish({ ok: false, error: `timeout after ${timeoutMs} ms` }); }, timeoutMs);
     p.stdout.on('data', (d) => { out += d; });
     p.stderr.on('data', (d) => { err += d; });

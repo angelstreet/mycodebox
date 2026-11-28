@@ -227,6 +227,12 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
   report. `STATUS: waiting` / `blocked` on a deploy, lease, integration id or an ask already filed is a system wait, not a question:
   do not repeat the ask. At most one open ask per session; say what happens if the owner does not answer
   ([REFERENCE](docs/REFERENCE.md#fewer-better-owner-questions-owner-2026-10-31)).
+  **A technical step is not an owner question (owner / manager 2026-11-28):** a reversible technical step backed by evidence (a fix,
+  a retry, a merge, deploy or test step, an approach you recommend) ends `needs-manager`, never `needs-owner`. Unsure: ask Opus
+  (`scripts/ask-opus.js`), and if Opus is unsure too, the server's check asks Fable; only then does it reach the owner. A confirmation a tool
+  accepts only from a person (VirtualPyTest's publish confirm, `user_ok`) stays the owner's. The server checks every `needs-owner` stop of an
+  owner-started session before the owner sees it (`owner-stop-triage.js`; switch `ownerStopTriage: off` in `manager.json`)
+  ([REFERENCE](docs/REFERENCE.md#needs-owner-stops-are-checked-first-owner--manager-2026-11-28)).
 
 - The server has no login; Tailscale policy is the only user-access gate. Do not expose it publicly.
   The source defaults to loopback (`127.0.0.1`); follow INSTALL for private Tailscale access.

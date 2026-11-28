@@ -142,7 +142,7 @@ export function unknownStatusWordOf(text) {
 export const blockedOrUnknownStatus = (text) => { const st = lastStatus(text); return !!st && (st.kind === 'blocked' || st.kind === 'failed' || !TOLERATED.has(st.kind)); };
 export function unknownStatusWordMessage(f) {
   return `Status check: \`STATUS: ${f.word}\` is not a STATUS word. The seven: done (goal reached, proof in hand, nothing of yours running) · running (work of yours still goes: your background job, a worker you started) · `
-    + 'waiting (you depend on something not yours that ends by itself: lane, deploy, lease ticket, another session, a time) · needs-manager (you need a decision or an answer) · needs-owner (money, customers, deleting shared data, an owner-only credential, a physical action) · '
+    + 'waiting (you depend on something not yours that ends by itself: lane, deploy, lease ticket, another session, a time) · needs-manager (you need a decision or an answer) · needs-owner (money, customers, deleting shared data, an owner-only credential, a physical action, a confirmation a tool accepts only from a person; a reversible technical step with evidence is needs-manager) · '
     + 'blocked (you cannot work and nothing running will fix it: `blocked: <what stops you> · tried: <list> · need: <who must do what>`) · failed (`failed — goal not achieved: <why> · tried: <list> · cause: <what your investigation found> · plan: <next approach, who does it>`). Rewrite your STATUS line with the true one of the seven. One push only.';
 }
 // Pure. `STATUS: failed — goal not achieved: <why> · tried: <list> · cause: <what your investigation found> · plan: <next approach, who does it>` -> { why, tried } | null.
