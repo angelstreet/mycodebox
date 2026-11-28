@@ -24,6 +24,7 @@ import { copyPromptButtonHtml, wireCopyPrompt } from '/copy-prompt.js';
 import { uploadOne, uploadType, UPLOAD_ACCEPT, UPLOAD_HINT } from '/upload.js';
 import { renderMd } from '/md.js';
 import { decideReaderPaint, autoFullDue, autoFullDone } from '/reader-paint.js';
+import { spokenStatusOf } from '/status-line.js';
 import { localScrollEnters, localScrollExits, flingVelocity, flingStep, ENTER_PX } from '/local-scroll.js';
 import { chipModel, machinesOf, holdingsOf, blocksDeploy, shortResource, ttlText, shortRef, leaseHostSummary } from '/platforms.js';
 import { displayStateOf, STATE_RANK, STATE_LABEL, isRoutineAlert } from '/state.js';
@@ -2860,8 +2861,11 @@ function paintReader(cell, n, opts = {}) {
   // were missing. Strip leading/trailing whitespace so the copied text
   // looks the same as what the user sees on screen.
   const audioText = String(text || '').trim();
+  // The play button reads the STATUS line only, never the reply (owner 2026-11-28, docs/READER-SUMMARY.md): the whole loaded conversation of a
+  // Claude card was over tts.js MAX_TEXT, so the chip spun and failed. The newest STATUS wins: the last reply first, else the conversation's end.
+  const spoken = spokenStatusOf(c?.text || '') || spokenStatusOf(audioText.slice(-8000));
   const actions = audioText
-    ? `<div class="rd-actions">${copyPromptButtonHtml({ text: audioText, label: 'Copy reply' })}${audioChipHtml({ text: audioText, label: 'Read reply aloud' })}</div>`
+    ? `<div class="rd-actions">${copyPromptButtonHtml({ text: audioText, label: 'Copy reply' })}${spoken ? audioChipHtml({ text: spoken, label: 'Read status aloud' }) : ''}</div>`
     : '';
   const more = full && c.fullPartial ? '<button class="rd-more" data-act="older">\u2191 older conversation</button>' : '';
   const html = `<button class="rd-more" data-act="${full ? 'less' : 'more'}">${full ? 'last reply only' : '\u2191 earlier conversation'}</button>${more}${body}${actions}`;
