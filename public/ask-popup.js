@@ -145,7 +145,8 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     const jl = (v.jev?.choice && Number.isFinite(jp[v.jev.choice]) && jp[v.jev.choice] > 0)
       ? `Jev: ${JEV_PLAIN[v.jev.choice] || v.jev.choice} ${Math.round(jp[v.jev.choice] * 100)}%`   // footer stays one short line; the Why section lists all three
       : jevLine(v.jev);
-    const a = v.aiId ? `AI ★ ${Math.round((v.aiConf || 0) * 100)}%` : 'AI suggestions';
+    const by = v.why?.ai?.source === 'MiniMax, free fallback' ? ' (MiniMax)' : '';
+    const a = v.aiId ? `AI ★ ${Math.round((v.aiConf || 0) * 100)}%${by}` : v.why?.ai?.present ? `AI suggestion${by}` : v.why?.ai?.missing && /^failed/.test(v.why.ai.missing) ? 'AI failed' : 'AI suggestions';
     return jl ? `${a}  ·  ${jl}` : a;
   }
 
@@ -156,9 +157,9 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     let aiRow;
     if (ai.present) {
       const conf = ai.conf != null ? `${Math.round(ai.conf * 100)}%` : '–';
-      aiRow = `<div class="ap-why-row"><span class="ap-why-name">AI</span><span class="ap-why-pick">${esc(ai.label)}</span><span class="ap-why-conf">${esc(conf)}</span></div>`;
+      aiRow = `<div class="ap-why-row"><span class="ap-why-name">AI</span><span class="ap-why-pick">${esc(ai.label)}</span><span class="ap-why-conf">${esc(conf)}</span>${ai.source ? `<span class="ap-why-conf">by ${esc(ai.source)}</span>` : ''}</div>`;
     } else {
-      aiRow = `<div class="ap-why-row"><span class="ap-why-name">AI</span><span class="ap-why-missing">not run yet</span></div>`;
+      aiRow = `<div class="ap-why-row"><span class="ap-why-name">AI</span><span class="ap-why-missing">${esc(ai.missing || 'not run yet')}</span></div>`;
     }
     const aiReason = (ai.present && ai.reasoning)
       ? `<div class="ap-why-reason">${esc(truncText(ai.reasoning, 240))}</div>`
@@ -173,9 +174,9 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
         .filter((k) => k !== mainKey && Number.isFinite(probs[k]) && probs[k] > 0)
         .map((k) => `${esc(JEV_PLAIN[k] || k)} ${Math.round(probs[k] * 100)}%`)
         .join('  ·  ');
-      jevRow = `<div class="ap-why-row"><span class="ap-why-name">Jev</span><span class="ap-why-pick">${esc(main)}</span><span class="ap-why-conf">${esc(mainPct)}</span>${others ? `<span class="ap-why-probs">${others}</span>` : ''}</div>`;
+      jevRow = `<div class="ap-why-row"><span class="ap-why-name">Jev</span><span class="ap-why-pick">${esc(main)}</span><span class="ap-why-conf">${esc(mainPct)}</span>${jev.source && jev.source !== 'Jev' ? `<span class="ap-why-conf">by ${esc(jev.source)}</span>` : ''}${others ? `<span class="ap-why-probs">${others}</span>` : ''}</div>`;
     } else {
-      jevRow = `<div class="ap-why-row"><span class="ap-why-name">Jev</span><span class="ap-why-missing">not asked</span></div>`;
+      jevRow = `<div class="ap-why-row"><span class="ap-why-name">Jev</span><span class="ap-why-missing">${esc(jev.missing || 'not asked')}</span></div>`;
     }
     return `<div class="ap-why">${aiRow}${aiReason}${jevRow}</div>`;
   }
@@ -313,7 +314,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     const wasHidden = el.classList.contains('hidden');
     el.classList.toggle('hidden', minimised);
     el.classList.toggle('ap-big', expanded);
-    const sig = JSON.stringify([item.key, state.rename?.[item.name] || '', idx, q.items.length, v.question, v.questions, v.prio, v.details, detOpen, expanded, [...exOpen].join(','), v.form && [JSON.stringify(picks.get(item.key) || {}), [...fqOpen].join(','), v.form.questions.map((fq) => [fq.n, fq.label, fq.aiPick, fq.options.map((o) => [o.n, o.short, o.recommended])])], v.suggestion, v.buttons.map((b) => [b.id, b.label, b.hl, b.sug, b.confirm, b.muted, b.rec, b.desc]), metaText(v), v.items && v.items.map((it) => [it.letter, it.severity, it.title, (it.body || '').slice(0, 80)]), v.recommendation && [v.recommendation.n, v.recommendation.text.slice(0, 120)], v.why && { ai: { present: v.why.ai.present, conf: v.why.ai.conf, reasoning: v.why.ai.reasoning }, jev: { present: v.why.jev.present, choice: v.why.jev.choice, probs: v.why.jev.probs } }]);
+    const sig = JSON.stringify([item.key, state.rename?.[item.name] || '', idx, q.items.length, v.question, v.questions, v.prio, v.details, detOpen, expanded, [...exOpen].join(','), v.form && [JSON.stringify(picks.get(item.key) || {}), [...fqOpen].join(','), v.form.questions.map((fq) => [fq.n, fq.label, fq.aiPick, fq.options.map((o) => [o.n, o.short, o.recommended])])], v.suggestion, v.buttons.map((b) => [b.id, b.label, b.hl, b.sug, b.confirm, b.muted, b.rec, b.desc]), metaText(v), v.items && v.items.map((it) => [it.letter, it.severity, it.title, (it.body || '').slice(0, 80)]), v.recommendation && [v.recommendation.n, v.recommendation.text.slice(0, 120)], v.why && { ai: { present: v.why.ai.present, conf: v.why.ai.conf, reasoning: v.why.ai.reasoning, source: v.why.ai.source, missing: v.why.ai.missing }, jev: { present: v.why.jev.present, choice: v.why.jev.choice, probs: v.why.jev.probs, source: v.why.jev.source, missing: v.why.jev.missing } }]);
     if (sig !== renderedKey || force) {
       renderedKey = sig;
       const opts = v.buttons.filter((b) => !b.reply);

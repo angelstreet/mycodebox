@@ -15,7 +15,7 @@ const FAKE = join(work, 'mcode');
 writeFileSync(FAKE, `#!${process.execPath}
 const fs = require('fs');
 const args = process.argv.slice(2);
-if (args[0] === 'exec' && args[1] === '--help') { fs.appendFileSync(process.env.MCODE_FAKE_LOG, JSON.stringify({ args }) + '\\n'); console.log(!process.env.MCODE_FAKE_NOLIGHT ? '  --mode <mode>  lightweight or full\\n  --permission <p>' : '  --permission <p>'); process.exit(0); }
+if (args[0] === 'exec' && args[1] === '--help') { fs.appendFileSync(process.env.MCODE_FAKE_LOG, JSON.stringify({ args }) + '\\n'); console.log(!process.env.MCODE_FAKE_NOLIGHT ? '  --mode <mode>  lightweight or full\\n  --permission <p>' + (process.env.MCODE_FAKE_07 ? '\\n  --prompt-mode <mode>\\n  --output-schema <schema>' : '') : '  --permission <p>'); process.exit(0); }
 const mode = process.env.MCODE_FAKE_MODE || 'ok';
 fs.appendFileSync(process.env.MCODE_FAKE_LOG, JSON.stringify({ args, cwd: process.cwd(), cwdFiles: fs.readdirSync(process.cwd()), mode, leaked: Object.keys(process.env).filter((k) => /KEY|TOKEN|SECRET/.test(k)) }) + '\\n');
 const prompt = args[args.length - 1];
@@ -27,6 +27,7 @@ else if (mode === 'fail') { out({ type: 'exec.failed', error: { message: 'plan u
 else {
   let text;
   if (mode === 'junk') text = 'I think you should continue.';
+  else if (mode === 'junkonce') { const f = process.env.MCODE_FAKE_LOG + '.once'; if (!fs.existsSync(f)) { fs.writeFileSync(f, '1'); text = 'Yes, continue.'; } else text = JSON.stringify({ proposed_reply: 'Yes, continue.', reasoning: 'Planned work.', confidence: 0.9, owner_needed: false, owner_needed_why: '' }); }
   else if (prompt.includes('Choices:')) text = JSON.stringify({ choice: mode === 'badchoice' ? 'nope' : 'ask_owner', confidence: 0.99, probabilities: { continue: 0.1, take_recommended: 0.1, ask_owner: 0.8 } });
   else text = JSON.stringify({ proposed_reply: 'Use Postgres.', reasoning: 'Already in the stack.', confidence: 0.9, owner_needed: false, owner_needed_why: '', options: [] });
   out({ type: 'exec.started', sessionId: 's1' });
@@ -37,7 +38,7 @@ else {
 chmodSync(FAKE, 0o755);
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 const calls = () => (existsSync(LOG) ? readFileSync(LOG, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
-const decider = (mode, o = {}) => createFallbackDecider({ bin: FAKE, env: { PATH: process.env.PATH, HOME: work, MCODE_FAKE_MODE: mode, MCODE_FAKE_LOG: LOG, ...(o.nolight ? { MCODE_FAKE_NOLIGHT: '1' } : {}), JEV_API_KEY: 'must-not-leak', OPENROUTER_TOKEN: 'x' }, tmpRoot: work, ...(({ nolight, ...rest }) => rest)(o) });   // leak-scan: allow (fake values)
+const decider = (mode, o = {}) => createFallbackDecider({ bin: FAKE, env: { PATH: process.env.PATH, HOME: work, MCODE_FAKE_MODE: mode, MCODE_FAKE_LOG: LOG, ...(o.nolight ? { MCODE_FAKE_NOLIGHT: '1' } : {}), ...(o.v07 ? { MCODE_FAKE_07: '1' } : {}), JEV_API_KEY: 'must-not-leak', OPENROUTER_TOKEN: 'x' }, tmpRoot: work, ...(({ nolight, v07, ...rest }) => rest)(o) });   // leak-scan: allow (fake values)
 const BODY = { state: '{"x":1}', questions: { choice: { type: 'choice', instructions: 'What next?', criteria: { continue: 'carry on', take_recommended: 'take it', ask_owner: 'owner decides' } } } };
 const FACTS = { session: 's', agent: 'claude', project: 'p', priority: 'P2', state: 'done', case: 'owner_decision', source: 'rule', flags: [], text: 'Redis or Postgres for the cache?' };
 
@@ -59,7 +60,7 @@ test('parseChoice: only listed choices, probabilities normalised, confidence cap
   assert.equal(b.confidence, 0.6); assert.equal(b.probabilities.ask_owner, 0.6);
 });
 
-test('reviewer(): same prompt and parser, headless and sandboxed: smart permission, empty temp cwd, one step, 20 s, no secrets in the environment', async () => {
+test('reviewer(): same prompt and parser, headless and sandboxed: smart permission, empty temp cwd, one step, 40 s, no secrets in the environment', async () => {
   const d = decider('ok');
   const r = await d.reviewer({ facts: FACTS });
   assert.equal(r.source, 'minimax-fallback'); assert.equal(r.cost, 0);
@@ -69,9 +70,10 @@ test('reviewer(): same prompt and parser, headless and sandboxed: smart permissi
   assert.equal(c.args[c.args.indexOf('--permission') + 1], 'smart'); assert.ok(!c.args.includes('full'));
   assert.equal(c.args[c.args.indexOf('--max-steps') + 1], '1');
   assert.equal(c.args[c.args.indexOf('--model') + 1], 'minimax/MiniMax-M3');
-  assert.equal(c.args[c.args.indexOf('--timeout') + 1], '20s');
+  assert.equal(c.args[c.args.indexOf('--timeout') + 1], '40s');
   assert.match(c.args.at(-1), /Redis or Postgres/);
-  assert.match(c.args[c.args.indexOf('--system-prompt') + 1], /operations supervisor/);
+  assert.match(c.args.at(-1), /^You are the operations supervisor[\s\S]*=== Input ===[\s\S]*JSON object only\.$/, 'the instructions travel in the user turn');
+  assert.ok(!c.args.includes('--system-prompt'), 'mcode 0.7 reads --system-prompt as background: not used');
   assert.deepEqual(c.cwdFiles, [], 'an empty directory');
   assert.ok(c.cwd.startsWith(tmpdir()) || c.cwd.startsWith('/tmp'), 'not the repo');
   assert.ok(!existsSync(c.args[c.args.indexOf('--cwd') + 1]), 'removed afterwards');
@@ -273,4 +275,33 @@ test('merge / push / deploy evaluations never use the fallback: with Jev unavail
   assert.ok(calls().length - n0 <= 1 && records().filter((r) => r.type === 'fallback').length - f0 <= 1, 'at most the stop\'s own choice');
   const j = readFileSync(join(dir, 'manager-decisions.jsonl'), 'utf8');
   assert.doesNotMatch(j, /minimax-fallback/);
+});
+
+test('mcode 0.7: --prompt-mode work and --output-schema when exec --help lists them; the schema file is outside the empty cwd', async () => {
+  const d = decider('ok', { v07: true });
+  const r = await d.reviewer({ facts: FACTS });
+  assert.equal(r.ai.proposed_reply, 'Use Postgres.');
+  const c = calls().at(-1);
+  assert.equal(c.args[c.args.indexOf('--prompt-mode') + 1], 'work');
+  const sf = c.args[c.args.indexOf('--output-schema') + 1];
+  assert.ok(sf && !sf.startsWith(c.args[c.args.indexOf('--cwd') + 1]), 'schema next to the cwd, not in it');
+  assert.deepEqual(c.cwdFiles, []);
+  assert.ok(!existsSync(sf), 'removed afterwards');
+  const old = decider('ok');   // an mcode without them: neither flag
+  await old.reviewer({ facts: FACTS });
+  const c2 = calls().at(-1);
+  assert.ok(!c2.args.includes('--prompt-mode') && !c2.args.includes('--output-schema'));
+});
+
+test('an answer that does not parse gets ONE more try; a second junk answer is the error', async () => {
+  const n0 = calls().filter((c) => c.args[1] !== '--help').length;
+  const r = await decider('junkonce').reviewer({ facts: FACTS });
+  assert.equal(r.ai?.proposed_reply, 'Yes, continue.'); assert.equal(r.tries, 2);
+  const n1 = calls().filter((c) => c.args[1] !== '--help').length;
+  assert.equal(n1 - n0, 2);
+  const bad = await decider('junk').reviewer({ facts: FACTS });
+  assert.equal(bad.error, 'answer is not JSON'); assert.equal(bad.tries, 2);
+  assert.equal(calls().filter((c) => c.args[1] !== '--help').length - n1, 2, 'never a third');
+  const f = await decider('fail').reviewer({ facts: FACTS });
+  assert.ok(f.error && f.tries === 1, 'a failed run is not retried');
 });
