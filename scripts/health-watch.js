@@ -490,7 +490,7 @@ export const TMP_PREFIXES = ['altscroll-', 'srvreply-', 'triage-acct-', 'ft-', '
   'v2-lease-', 'v2-lease-verify-', 'v2-lease-verify2-', 'v2-lease-verify3-', 'v2-lease-verify4-',
   'v2-lease-verify5-', 'v2-live-smoke-', 'v2-loop-', 'v2-mcode-node-', 'v2-policy-', 'v2-r3-verify-', 'v2-r4-',
   'v2-r4gl-', 'v2-r5-', 'v2-score-', 'v2-score-v-', 'v2-store-', 'v2-store-api-', 'v2-sysops-', 'v2-sysops-verify-',
-  'v2-sysops-verify2-', 'v2-ui-shots-', 'v2-ui-work-', 'v2-verify-', 'v2-verify06-', 'v2-verify2-', 'v2-verify3-',
+  'v2-sysops-verify2-', 'ui-overflow-', 'v2-ui-shots-', 'v2-ui-work-', 'v2-verify-', 'v2-verify06-', 'v2-verify2-', 'v2-verify3-',
   'v2-verify4-', 'v2-wiring-', 'v2-wt-', 'v2-wtr-', 'v2-wtverify-', 'voice-push-', 'vpt-lease-test-',
 ];
 export const TMP_MAX_AGE_MS = 2 * 3600e3, TMP_MAX_REMOVALS = 2000, TMP_BUDGET_MS = 20000;
