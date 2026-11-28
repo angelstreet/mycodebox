@@ -9,6 +9,7 @@
     { "id": "decisions", "url": "/?decisions=1", "wait": ".sheet" },
     { "id": "decided", "url": "/?decided=1", "wait": ".sheet" },
     { "id": "leases", "url": "/?leases=1", "wait": ".sheet" },
+    { "id": "cloud", "url": "/?cloud=1", "wait": ".sheet" },
     { "id": "integration", "url": "/?integration=1", "wait": ".sheet" },
     { "id": "platforms", "url": "/?platforms=1", "wait": ".sheet" },
     { "id": "deploys", "url": "/?deploys=1", "wait": ".sheet" }

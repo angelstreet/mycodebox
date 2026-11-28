@@ -72,6 +72,11 @@ async function main() {
   mkdirSync(stateDir, { recursive: true }); mkdirSync(home, { recursive: true });
   writeFileSync(join(stateDir, 'usage-summary.json'), JSON.stringify(syntheticSummary(Date.now())));
   // the Waste tab's advisory lines read the manager feed: a long session name on one kind, none on the others
+  // the Cloud view (/?cloud=1): one row with a long label and task that must wrap, one with no hand-off
+  writeFileSync(join(stateDir, 'cloud-sessions.jsonl'), [
+    { at: new Date(Date.now() - 2 * 36e5).toISOString(), id: 'session_01Synthetic', url: 'https://claude.ai/code/session_01Synthetic', repo: 'synthetic-repo', base: 'feat/a-really-long-branch-name-that-must-wrap-20261128', label: 'cloud-check-with-a-really-long-label', by: 'synthetic-session', task: 'Run the setup script, the whole Python suite and the frontend typecheck, then push a report branch with the numbers and every failing test listed by name.' },
+    { at: new Date(Date.now() - 9 * 6e4).toISOString(), id: 'session_02Synthetic', url: 'https://claude.ai/code/session_02Synthetic', repo: 'demo', base: 'main', label: 'fix-b', by: 'cli', task: 'Fix b' },
+  ].map((o) => JSON.stringify(o)).join('\n') + '\n');
   writeFileSync(join(stateDir, 'manager-events.jsonl'), `${JSON.stringify({ at: new Date(Date.now() - 5 * 36e5).toISOString(), key: 's:context-advisory', kind: 'context-advisory', session: 'synthetic-session-with-a-really-long-name-that-must-wrap', priority: 'low' })}\n`);
   const wrapper = join(work, 'tmux-wrapper.sh');   // a private tmux server: never the live one
   const realTmux = ['/usr/bin/tmux', '/usr/local/bin/tmux', '/bin/tmux'].find(existsSync) || 'tmux';
@@ -99,6 +104,7 @@ async function main() {
           const label = st.name ? `${pg.id}/${st.name}` : pg.id;
           if (st.name) { const tab = page.locator(`.uv-navb:has-text("${st.name}")`).first(); if (await tab.count()) { await tab.click(); await page.waitForTimeout(500); } }
           const m = await page.evaluate(MEASURE);
+          if (process.argv[2]) { mkdirSync(process.argv[2], { recursive: true }); await page.screenshot({ path: join(process.argv[2], `${label.replace(/\//g, '-')}.png`), fullPage: true }).catch(() => {}); }   // [outDir]: one frame per view
           let why = verdict(m) || (errs.length ? `page error: ${errs[0].slice(0, 120)}` : '');
           if (!why && st.name === 'Waste') { const t = await page.evaluate(() => document.body.innerText); if (!/advisories/i.test(t) || !/manager restart\s+never/i.test(t) || !/context\s+5 h ago/i.test(t)) why = 'the Advisories section (last fired per kind) is missing or wrong'; }
           lines.push(`${why ? 'FAIL' : 'PASS'}  ${label}  (doc ${m.doc}/${m.vw}${why ? `; ${why}` : ''})`);

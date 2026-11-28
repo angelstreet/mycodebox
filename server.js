@@ -229,6 +229,7 @@ import { createIntegrationDeploys } from './integration-deploys.js';
 import { createDeployLive } from './deploy-live.js';
 import { createMockups } from './mockups.js';
 import { PAGE_CSP, indexHtml, listPages, resolvePageFile } from './pages.js';
+import { readCloudSessions } from './cloud-sessions.js';
 import { createContextAdvisory, lastFired } from './context-advisory.js';
 import { createRestartCheck } from './restart-check.js';
 import { createVoice, feedActions, stopItem as voiceStopItem, decidedFor as voiceDecidedFor } from './voice.js';
@@ -3028,6 +3029,10 @@ async function handleHttp(req, res) {
   if (req.method === 'GET' && (p === '/p' || p === '/p/')) {   // the list of shared pages (pages.js; More menu > Pages)
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': "default-src 'self'; style-src 'unsafe-inline'; script-src 'none'" });
     return res.end(indexHtml(listPages(STATE_DIR)));
+  }
+  if (req.method === 'GET' && p === '/api/cloud-sessions') {   // the Cloud view (cloud-sessions.js; More menu > Cloud): read-only, cloud-start's log + hand-off
+    let requests = []; try { requests = integrationLane.list({ limit: 500 }); } catch { /* lane down: rows show no hand-off */ }
+    return json(res, 200, { ok: true, sessions: readCloudSessions(STATE_DIR, { limit: Number(url.searchParams.get('limit')) || 50, requests }) });
   }
   if (req.method === 'GET' && p === '/api/pages') return json(res, 200, { ok: true, base: PUBLIC_URL || null, pages: listPages(STATE_DIR) });
   if (req.method === 'GET' && p.startsWith('/p/')) {   // a shared page or one of its files: sandboxed, no API access (pages.js)
