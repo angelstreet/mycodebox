@@ -48,3 +48,17 @@ test('scanner: per session from transcript files, subagent files roll up to the 
   assert.equal(r[0].count, 10);
   assert.deepEqual(await scan(), r);
 });
+
+test('scanner: a cached file that stopped growing is re-cut to the moving window (no stale loop counts)', async () => {
+  const dir = await tmp('loops-window');
+  await fs.mkdir(join(dir, 'proj'), { recursive: true });
+  const old = Array.from({ length: 6 }, () => bash('scripts/manager-wait.sh', '2026-11-26T02:00:00Z'));
+  const recent = Array.from({ length: 4 }, () => bash('scripts/manager-wait.sh', '2026-11-27T20:00:00Z'));
+  await fs.writeFile(join(dir, 'proj', 'mgr.jsonl'), [...old, ...recent].join('\n') + '\n');
+  let t = Date.parse('2026-11-28T01:00:00Z');                  // window from 26 Nov 01:00: all 10 count
+  const scan = createLoopScanner({ claudeDir: dir, now: () => t, opts: { windowH: 48, minCommand: 8 } });
+  assert.equal((await scan())[0]?.count, 10);
+  t = Date.parse('2026-11-28T12:00:00Z');                      // window from 26 Nov 12:00: the 6 old waits fall out, file unchanged
+  assert.deepEqual(await scan(), []);
+  assert.equal((await createLoopScanner({ claudeDir: dir, now: () => t, opts: { windowH: 48, minCommand: 4 } })())[0]?.count, 4);
+});

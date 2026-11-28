@@ -3,6 +3,8 @@
 The release note of this repo (owner 2026-11-13). Every merged code change (not docs-only) adds one entry at the top of
 `## Unreleased`; the done-check reads the merged diff for this file (REFERENCE "Closing review"). Entry form: one line,
 
+- **Loop findings follow the 48 h window** — the usage loop detector cached each transcript's commands without their time, so a session whose transcript stopped growing kept counting commands older than 48 h until the file's mtime left the window (seen while re-measuring: a manager transcript last written 28 Nov 00:10 still listed 81 waits, 73 of them inside the window). Cached items now carry their time and are cut to the window on every pass (`usage/loops.js`, test in `test/usage-loops.test.js`) · area: usage
+
 - **Usage & cost is wide and centered, table cells no longer overlap** — the full usage page sat in the 560px sheet; it now opens up to 1180px wide, centered (`.sheet.uv-sheet` in `public/style.css`), and the agent name / plan label in the "Where it goes" table shrink with an ellipsis instead of running over the Tokens column.
 
 - **Suggestion rows are short** — the popup no longer prints "Owner only: …" / "Opus in doubt: …" (now the row's hover text), the green line is just Opus's proposal ("yes" / "no", no "Opus proposes:"), and the button reads "Yes" instead of "Yes, build it". `public/parked-view.js`.

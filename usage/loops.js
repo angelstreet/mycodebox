@@ -32,18 +32,20 @@ export function loopsOf(items, o = {}) {
 }
 
 // One transcript line -> items. Only lines that can hold a Bash call or a typed user prompt are parsed.
-export function itemsOfLine(line, sinceMs = 0) {
+// withAt: also carry the line's time (ms) as `at`, so a cached file can be re-cut when the window moves.
+export function itemsOfLine(line, sinceMs = 0, withAt = false) {
   const isTool = line.includes('"name":"Bash"'), isUser = line.includes('"role":"user"');
   if (!isTool && !isUser) return [];
   let o; try { o = JSON.parse(line); } catch { return []; }
   if (sinceMs && o.timestamp && Date.parse(o.timestamp) < sinceMs) return [];
-  const content = o?.message?.content, out = [];
+  const content = o?.message?.content, out = [], at = withAt && o.timestamp ? Date.parse(o.timestamp) : NaN;
   if (o?.message?.role === 'assistant' && Array.isArray(content)) {
     for (const b of content) if (b?.type === 'tool_use' && b.name === 'Bash' && typeof b.input?.command === 'string') out.push({ kind: 'command', text: b.input.command });
   } else if (o?.message?.role === 'user' && !o.isMeta && !o.toolUseResult) {
     const t = typeof content === 'string' ? content : Array.isArray(content) && content.length === 1 && content[0]?.type === 'text' ? content[0].text : '';
     if (t && !t.startsWith('<') && !t.startsWith('[SYSTEM')) out.push({ kind: 'prompt', text: t });
   }
+  if (Number.isFinite(at)) for (const it of out) it.at = at;
   return out;
 }
 
@@ -57,7 +59,9 @@ async function* files(dir, sinceMs) {
   }
 }
 
-// Scans claudeDir; per-file results are cached by size+mtime so a repeat pass only re-reads files that grew.
+// Scans claudeDir; per-file results are cached by size+mtime so a repeat pass only re-reads files that grew. Cached items keep their
+// time and are cut to the current window on every pass: a file that stopped growing (a finished session) must not keep counting
+// commands older than windowH hours until its mtime ages out (token audit re-measure 2026-11-28).
 export function createLoopScanner({ claudeDir, now = () => Date.now(), opts = {} }) {
   const cache = new Map();
   return async function scan() {
@@ -69,9 +73,10 @@ export function createLoopScanner({ claudeDir, now = () => Date.now(), opts = {}
       else {
         items = [];
         const rl = createInterface({ input: createReadStream(f.p, { encoding: 'utf8' }), crlfDelay: Infinity });
-        for await (const l of rl) for (const it of itemsOfLine(l, since)) items.push(it);
+        for await (const l of rl) for (const it of itemsOfLine(l, since, true)) items.push(it);
         cache.set(f.p, { size: f.size, mtime: f.mtime, items });
       }
+      items = items.filter((it) => !(it.at < since));
       // subagent transcripts live in <session>/subagents/*.jsonl: they belong to their parent session
       const parts = f.p.split('/'), sid = parts.includes('subagents') ? parts[parts.indexOf('subagents') - 1] : basename(f.p, '.jsonl');
       (bySession.get(sid) || bySession.set(sid, []).get(sid)).push(...items);
