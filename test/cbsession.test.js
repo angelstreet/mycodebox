@@ -40,7 +40,7 @@ test('dry run per provider writes the launch file and starts nothing', () => {
 test('billing: sub drops env keys, -b NAME points apiKeyHelper at the key file', () => {
   let r = run('-x', '-n', 'cb-sub', '-d', work, '-t', 'x');
   assert.equal(r.status, 0, r.stderr);
-  assert.match(launch('cb-sub'), /env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN \S+\/claude --dangerously/);
+  assert.match(launch('cb-sub'), /env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN (?:CLAUDE_CODE_SUBAGENT_MODEL=sonnet )?\S+\/claude --dangerously/);
   const kd = path.join(home, '.config', 'anthropic'); fs.mkdirSync(kd, { recursive: true });
   fs.writeFileSync(path.join(kd, 'team.key'), 'sk-ant-secret\n', { mode: 0o600 });
   fs.writeFileSync(path.join(kd, 'team.workspace'), 'wrkspc_abc\n');
@@ -163,4 +163,20 @@ test('a manager start is on record before the tmux session exists; an owner star
   assert.match(fs.readFileSync(seen, 'utf8'), /"session":"cb-early","by":"manager"/);
   start('cb-early-own', 'dashboard');
   assert.doesNotMatch(fs.readFileSync(children, 'utf8'), /cb-early-own/);
+});
+
+test('token audit: -m fable starts on opus unless -F, subagents on sonnet unless haiku or overridden', () => {
+  let r = run('-x', '-n', 'cb-fable', '-d', work, '-m', 'fable', '-t', 'x');
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /-m fable -> opus/);
+  assert.match(launch('cb-fable'), /--model opus/);
+  assert.match(launch('cb-fable'), /env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_SUBAGENT_MODEL=sonnet /);
+  r = run('-x', '-n', 'cb-fable-ok', '-d', work, '-m', 'fable', '-F', '-t', 'x');
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(launch('cb-fable-ok'), /--model fable/);
+  r = run('-x', '-n', 'cb-haiku-sub', '-d', work, '-m', 'haiku', '-t', 'x');
+  assert.doesNotMatch(launch('cb-haiku-sub'), /CLAUDE_CODE_SUBAGENT_MODEL/);
+  r = spawnSync('bash', [SCRIPT, '-x', '-n', 'cb-inherit', '-d', work, '-t', 'x'], { encoding: 'utf8', env: { PATH: process.env.PATH, HOME: home, GHOSTY_STATE_DIR: path.join(home, 'state'), CBSESSION_SUBAGENT_MODEL: 'inherit' } });
+  assert.equal(r.status, 0, r.stderr);
+  assert.doesNotMatch(launch('cb-inherit'), /CLAUDE_CODE_SUBAGENT_MODEL/);
 });

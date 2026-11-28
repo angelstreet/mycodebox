@@ -31,6 +31,9 @@
 #   -w  worktree branch (default <type>/<name>: fix/ for BUG*, docs/ for docs*, else feat/; name lowercased)
 #   -N  no worktree: start in DIR itself
 #   -x  dry run: print the launch command (and the worktree step), start nothing
+#   -F  allow Fable: without it `-m fable` starts on Opus (token audit 2026-11-28: Fable by exception, manager-approved;
+#       CBSESSION_ALLOW_FABLE=1 does the same). Claude sessions also get CLAUDE_CODE_SUBAGENT_MODEL=sonnet (subagents on
+#       Sonnet) unless the model is Haiku or CBSESSION_SUBAGENT_MODEL says otherwise (empty or "inherit" = leave unset).
 # Worktree (before the first prompt): when DIR is the main checkout of a git repo (not a linked worktree) and is not
 #   listed in ~/.config/cbsession/no-worktree (one path per line: live checkouts of services), cbsession runs
 #   `git worktree add ~/<repo>-<name> -b <branch> main` (origin/main when it exists) and starts the session there.
@@ -38,13 +41,18 @@
 # Env: MCODE_NODE_DIR (node bin dir for mcode), GHOSTY_STATE_DIR, GHOSTY_PORT (default $PORT or 7777) (to report the start to the dashboard history).
 set -euo pipefail
 q() { printf '%q' "$1"; }
-NAME= DIR= PROV=claude MODEL= BILL=sub HANDOVER= PFILE= TEXT= DRY=0 WAIT=0 WTB= NOWT=0 GOAL= TIMEBOX= AUTOMATION=0 WORKERS=0 DONEWHEN=()
-while getopts "n:d:p:m:b:H:f:t:w:g:D:T:ANKxWh" o; do case $o in
+NAME= DIR= PROV=claude MODEL= BILL=sub HANDOVER= PFILE= TEXT= DRY=0 WAIT=0 WTB= NOWT=0 GOAL= TIMEBOX= AUTOMATION=0 WORKERS=0 FABLE_OK=${CBSESSION_ALLOW_FABLE:-0} DONEWHEN=()
+while getopts "n:d:p:m:b:H:f:t:w:g:D:T:ANKFxWh" o; do case $o in
   n) NAME=$OPTARG;; d) DIR=$OPTARG;; p) PROV=$OPTARG;; m) MODEL=$OPTARG;; b) BILL=$OPTARG;; H) HANDOVER=$OPTARG;;
-  f) PFILE=$OPTARG;; t) TEXT=$OPTARG;; w) WTB=$OPTARG;; N) NOWT=1;; x) DRY=1;; W) WAIT=1;; g) GOAL=$OPTARG;; D) DONEWHEN+=("$OPTARG");; T) TIMEBOX=$OPTARG;; A) AUTOMATION=1;; K) WORKERS=1;; *) sed -n 2,40p "$0"; exit 2;; esac; done
+  f) PFILE=$OPTARG;; t) TEXT=$OPTARG;; w) WTB=$OPTARG;; N) NOWT=1;; x) DRY=1;; W) WAIT=1;; g) GOAL=$OPTARG;; D) DONEWHEN+=("$OPTARG");; T) TIMEBOX=$OPTARG;; A) AUTOMATION=1;; K) WORKERS=1;; F) FABLE_OK=1;; *) sed -n 2,44p "$0"; exit 2;; esac; done
 [[ $NAME =~ ^[A-Za-z0-9_-]{1,40}$ ]] || { echo "cbsession: -n NAME required (A-Z a-z 0-9 _ -, max 40)" >&2; exit 2; }
 [ -d "$DIR" ] || { echo "cbsession: -d DIR must be an existing directory" >&2; exit 2; }
 DIR=$(cd "$DIR" && pwd)
+if [ "$PROV" = claude ] && [ "$FABLE_OK" != 1 ] && [[ ${MODEL,,} == *fable* ]]; then
+  echo "cbsession: -m $MODEL -> opus (Fable by exception, token audit 2026-11-28); pass -F to really use Fable" >&2; MODEL=opus
+fi
+SUBM=sonnet; [ -n "${CBSESSION_SUBAGENT_MODEL+x}" ] && SUBM=$CBSESSION_SUBAGENT_MODEL
+{ [[ ${MODEL,,} == *haiku* ]] || [ "$SUBM" = inherit ]; } && SUBM=
 [[ $BILL =~ ^[A-Za-z0-9_-]{1,40}$ ]] || { echo "cbsession: -b BILLING must be sub or a key name (A-Z a-z 0-9 _ -)" >&2; exit 2; }
 KF="$HOME/.config/anthropic/$BILL.key"
 if [ "$BILL" != sub ]; then
@@ -316,7 +324,7 @@ if [ "$BILL" != sub ]; then
   CS=" --settings $(q "$SJ")"
 fi
 case $PROV in
-  claude)   CMD="env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN $(q "$HOME")/.local/bin/claude${CS} --dangerously-skip-permissions --remote-control $(q "$NAME") -n $(q "$NAME")${MODEL:+ --model $(q "$MODEL")} \"\$(cat $(q "$P"))\"";;
+  claude)   CMD="env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN${SUBM:+ CLAUDE_CODE_SUBAGENT_MODEL=$(q "$SUBM")} $(q "$HOME")/.local/bin/claude${CS} --dangerously-skip-permissions --remote-control $(q "$NAME") -n $(q "$NAME")${MODEL:+ --model $(q "$MODEL")} \"\$(cat $(q "$P"))\"";;
   codex)    CMD="$(q "$HOME")/.local/bin/codex --dangerously-bypass-approvals-and-sandbox${MODEL:+ -m $(q "$MODEL")} \"\$(cat $(q "$P"))\"";;
   minimax)  M=${MODEL:-MiniMax-M3}; [[ $M == */* ]] || M="minimax/$M"
             # MCODE_NODE_DIR wins; else the newest ~/.local/node-v24* (an upgrade replaces the dir, so no version is hardcoded).

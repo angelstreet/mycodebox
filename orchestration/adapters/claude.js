@@ -41,6 +41,21 @@ function claudeUsage(o) {
   return u;
 }
 
+// Token audit 2026-11-28 (docs/token-audit-20261128.md, savings #1 and #3, manager-approved):
+// - Fable is the exception, not the default: a run asking for Fable gets Opus unless it says allow_fable (Fable was 11% of the
+//   calls and 32% of the cost, mostly on ordinary coding turns).
+// - Subagents run on Sonnet (30.6% of the context tokens were subagent calls) unless the caller's env already chooses a model,
+//   or the main model is Haiku (no upgrade).
+export function claudeModel(model, allowFable = false) {
+  if (!model || allowFable || !/fable/i.test(model)) return model || null;
+  return 'opus';
+}
+export function claudeEnv(o = {}, source = {}) {
+  if (source.CLAUDE_CODE_SUBAGENT_MODEL || o.env?.CLAUDE_CODE_SUBAGENT_MODEL) return {};
+  if (/haiku/i.test(o.model || '')) return {};
+  return { CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet' };
+}
+
 export const createAdapter = makeCliAdapter({
   id: 'claude',
   provider_ids: ['anthropic'],
@@ -52,9 +67,11 @@ export const createAdapter = makeCliAdapter({
   resume: true,
   usageMode: 'last',
   parse,
+  env: claudeEnv,
   head(o) {
     const args = ['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'acceptEdits'];
-    if (o.model) args.push('--model', o.model);
+    const model = claudeModel(o.model, o.allow_fable === true);
+    if (model) args.push('--model', model);
     if (o.effort) args.push('--effort', o.effort);
     if (o.resume_id) args.push('--resume', o.resume_id);
     else if (o.session_id) args.push('--session-id', o.session_id);
