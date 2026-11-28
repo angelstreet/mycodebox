@@ -31,3 +31,11 @@ test('hourMetrics: fable, >300k, poll-size and subagent shares over the window o
   assert.match(txt, /waste findings \(48 h window\): 12 \(last check 18, -6\), audit 18 \(better\)/);
   assert.match(txt, /Fable 1 calls, 37.5% of cost/);
 });
+
+test('top sessions carry subagent calls per model, and the report names them', () => {
+  const now = Date.now(), row = (o) => ({ ts: now - 1000, agent: 'claude', label: 'ui', model: 'claude-opus-5-5', usage: { input: 1, output: 500, cache_read: 50e3 }, cost: { total: 0.1 }, ...o });
+  const h = hourMetrics([row({}), row({ subagent: true, model: 'claude-sonnet-5-5' }), row({ subagent: true, model: 'claude-sonnet-5-5' }), row({ subagent: true })], now - 3600e3, now);
+  assert.deepEqual(h.claude.top[0].subModels, { 'claude-sonnet-5-5': 2, 'claude-opus-5-5': 1 });
+  const text = report({ at: now, waste: { total: 18, counts: {} }, hour: h }, null);
+  assert.match(text, /ui \$[\d.]+ 4c \d+k sub3\(sonnet2,opus1\)/);
+});

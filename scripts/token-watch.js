@@ -35,8 +35,8 @@ export function hourMetrics(rows, from, to) {
   const sessions = new Map();
   for (const r of cl) {
     const k = r.label || String(r.session || '').slice(0, 8);
-    const s = sessions.get(k) || { session: k, calls: 0, cost: 0, ctx: 0, fable: 0, polls: 0, sub: 0 };
-    s.calls++; s.cost += cost(r); s.ctx += ctxOf(r); if (/fable/i.test(r.model || '')) s.fable++; if (isPoll(r)) s.polls++; if (r.subagent) s.sub++;
+    const s = sessions.get(k) || { session: k, calls: 0, cost: 0, ctx: 0, fable: 0, polls: 0, sub: 0, subModels: {} };
+    s.calls++; s.cost += cost(r); s.ctx += ctxOf(r); if (/fable/i.test(r.model || '')) s.fable++; if (isPoll(r)) s.polls++; if (r.subagent) { s.sub++; s.subModels[r.model] = (s.subModels[r.model] || 0) + 1; }
     sessions.set(k, s);
   }
   const top = [...sessions.values()].sort((a, b) => b.cost - a.cost).slice(0, 5)
@@ -78,7 +78,7 @@ export function report(entry, prev) {
     `  poll-size calls ${h.pollCalls}, ${pct(h.pollCallShare)} of calls (audit ${pct(b.pollCallShare)})${arrow(h.pollCallShare, b.pollCallShare)}`,
     `  subagent ctx ${pct(h.subagentCtxShare)} (audit ${pct(b.subagentCtxShare)})${arrow(h.subagentCtxShare, b.subagentCtxShare)}; subagent models ${JSON.stringify(h.subagentModels)}`,
     `  cache writes 1h ${Math.round(h.cacheWrite1h / 1000)}k / 5m ${Math.round(h.cacheWrite5m / 1000)}k`,
-    `  top: ${h.top.map((s) => `${s.session} $${s.cost} ${s.calls}c ${Math.round(s.avgCtx / 1000)}k${s.fable ? ` fable${s.fable}` : ''}${s.polls ? ` poll${s.polls}` : ''}`).join('; ')}`,
+    `  top: ${h.top.map((s) => `${s.session} $${s.cost} ${s.calls}c ${Math.round(s.avgCtx / 1000)}k${s.fable ? ` fable${s.fable}` : ''}${s.polls ? ` poll${s.polls}` : ''}${s.sub ? ` sub${s.sub}(${Object.entries(s.subModels).map(([k, v]) => `${k.replace(/^claude-|-\d.*$/g, '')}${v}`).join(',')})` : ''}`).join('; ')}`,
     `last hour MiniMax: ${m.calls} calls, polls ${pct(m.pollShare)} (audit ~${pct(b.minimaxPollShare)})${m.calls ? arrow(m.pollShare, b.minimaxPollShare) : ''}; ${m.top.map((s) => `${s.session} ${s.calls}c poll${s.polls}`).join('; ')}`,
   ].join('\n');
 }
