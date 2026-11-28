@@ -43,9 +43,9 @@ The 7.0.14-26-pve kernel is **not** the cause: the same "crash" rows exist on 6.
 
 ## How it came back
 
-The owner rebooted it at 08:43Z, 95 min after the stop: nothing (watchdog, panic reboot, Hetzner) brought it back on its own.
+The owner revived it at 08:43Z with a Hetzner Robot hardware reset (the reset button), 95 min after the stop: nothing (watchdog, panic reboot, Hetzner) brought it back on its own.
 On 2026-11-17 a Robot hardware reset did not revive it either; only a Hetzner cold power cycle did (register row 13).
-Still unknown: whether the owner's Robot action at 08:43Z was a reset or a power on (Robot → History).
+So this time the board was powered but frozen, in a state the 10 s watchdog could not clear.
 
 ## Proposal
 
@@ -58,17 +58,13 @@ Owner-only items (credential, money, physical):
 1. **Hetzner hardware ticket of 2026-11-17** ("Server - Not Stable", full CPU/RAM/PSU/board check, already sent): record the
    answer and test date in the register; if nothing was tested, chase it with rows 13 and 14. Ask for a BIOS newer than L0.34
    and Power Supply Idle Control = Typical Current Idle. A replacement or server swap is a money decision.
-2. **Robot → History**: was 08:43Z a reset or a power on (hang vs power loss)?
-3. **Watchdog test**: with approval, in a deploy window, trigger the watchdog once on purpose to prove it can reset this board.
+2. **Watchdog test**: with approval, in a deploy window, trigger the watchdog once on purpose to prove it can reset this board.
 
-## Applied 2026-11-28 (manager go, no reboot)
+## Applied, then removed, 2026-11-28 (no reboot)
 
-- `/etc/sysctl.d/90-crash-forensics.conf`: `kernel.softlockup_panic=1`, `kernel.hardlockup_panic=1`, `kernel.nmi_watchdog=1`, live
-  and persistent. Only `softlockup_panic` is new: the other two were already in effect (`90-crash-capture.conf`, kernel default).
-- **Risk, open for the owner:** with `kernel.panic=10`, a soft lockup now reboots node1 (and every VM on it, codebox and the DB
-  included) instead of recovering on its own, which is likelier at 89 % RAM under heavy I/O. Evidence 3 already shows the stops
-  are not kernel-visible lockups, so the forensic gain is small. Recommended: remove the file.
-- Rollback: `sudo rm /etc/sysctl.d/90-crash-forensics.conf` and `echo 0 | sudo tee /proc/sys/kernel/softlockup_panic`
-  (leave `hardlockup_panic` at 1: `90-crash-capture.conf` sets it).
+- `/etc/sysctl.d/90-crash-forensics.conf` (`kernel.softlockup_panic=1`; the other two lines were already in effect) was applied
+  in the morning, then **deleted on the owner's go** and `softlockup_panic` set back to 0 live: with `kernel.panic=10` a soft
+  lockup would have rebooted node1 and every VM on it, for little forensic gain (Evidence 3). `99-*.conf` already persists
+  `softlockup_panic = 0`. Still on from Oct 29: `hardlockup_panic=1`, all-CPU backtraces, netconsole.
 - A staged `/etc/systemd/system.conf.d/90-hw-watchdog.conf` (`RuntimeWatchdogSec=30`) was written, then removed the same day
   before any boot used it (see Proposal); the directory is empty now.
