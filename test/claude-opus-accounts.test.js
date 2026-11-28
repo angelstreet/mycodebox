@@ -90,3 +90,24 @@ test('sweep retries a triage that errored once retryMs has passed, and starts li
   assert.deepEqual(tri.sweep(), ['s1']); await tri.triage('s1');
   assert.equal(n, 2); assert.equal(ledger.openOf('s1').length, 0);
 });
+
+test('a limit switch is recorded, ask-opus uses the shared helper, and /api/health data says when every account is used up (2026-11-28)', async () => {
+  const { accountsHealth, recordSwitch, onAccounts, usableAccounts: ua } = await import('../claude-accounts.js');
+  const r = rig({ active: 'team1' }); writeFileSync(join(r.dirs.team1, 'limit'), '');
+  const out = spawnSync(process.execPath, ['scripts/ask-opus.js', '--session', 's', '--question', 'which is better?'], { encoding: 'utf8', env: { ...process.env, HOME: r.home, GHOSTY_STATE_DIR: r.state, CLAUDE_BIN: r.bin } });
+  assert.equal(r.calls()[0], r.dirs.team1);
+  assert.equal(r.calls().length, 2, out.stderr);   // team1 limit, then the next account
+  const rows = readFileSync(join(r.state, 'manager-asks.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  const sw = rows.find((x) => x.point === 'claude-account-switch');
+  assert.equal(sw.from, 'team1'); assert.equal(sw.source, 'ask-opus'); assert.ok(sw.to);
+  // onLimit receives the next account (the server records the same row)
+  const seen = []; await onAccounts([{ id: 'a' }, { id: 'b' }], async () => ({ ok: false, error: "You've hit your weekly limit" }), { onLimit: (a, n) => seen.push([a.id, n?.id ?? null]) });
+  assert.deepEqual(seen, [['a', 'b'], ['b', null]]);
+  // every account used up: allUsedUp; one free: not; no file: not
+  const all = rig({ marks: { default: { until: NOW + 3600e3 }, team1: { until: NOW + 3600e3 }, team2: { until: NOW + 3600e3 } } });
+  const h = accountsHealth(all.state, { now: () => NOW });
+  assert.deepEqual([h.total, h.usable.length, h.allUsedUp], [3, 0, true]);
+  assert.equal(accountsHealth(rig({}).state, { now: () => NOW }).allUsedUp, false);
+  assert.deepEqual(accountsHealth(tmp('none-')), { total: 0, usable: [], allUsedUp: false });
+  assert.ok(ua && recordSwitch);
+});

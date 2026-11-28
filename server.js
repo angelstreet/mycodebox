@@ -172,7 +172,7 @@ import { uploadTarget } from './upload-kind.js';
 import { createHistoryView } from './history-view.js';
 import { createQuota, defaults as quotaDefaults } from './quota.js';
 import { createManagerRotation, parisTime } from './manager-rotation.js';
-import { createClaudeAccounts, rateFile as claudeRateFile, accountOfPid, scanClaudeLimit, usableAccounts, DEFAULT_ID as CLAUDE_DEFAULT_ACCOUNT } from './claude-accounts.js';
+import { createClaudeAccounts, rateFile as claudeRateFile, accountOfPid, scanClaudeLimit, usableAccounts, accountsHealth, recordSwitch, DEFAULT_ID as CLAUDE_DEFAULT_ACCOUNT } from './claude-accounts.js';
 import { createMinimaxMeter, meterConfig, newShareAlerts, newPollAlerts } from './minimax-meter.js';
 import { createCredits } from './credits.js';
 import { createAnthropicSpend } from './anthropic-spend.js';
@@ -1280,7 +1280,7 @@ function suggestionHold(name, text, doneAt = null) {
 const suggestionTriageMode = () => { try { return JSON.parse(readFileSync(managerConfigFile, 'utf8')).suggestionTriage === 'off' ? 'off' : 'live'; } catch { return 'live'; } };
 const suggestionTriage = createSuggestionTriage({ stateDir: STATE_DIR, ledger: suggestions, logEvent: (e) => logEvent(e),
   // on a Claude account with headroom (claude-accounts.js usableAccounts: active first, used-up ones skipped), the next one once on a limit error; the binary is found outside the service's PATH (claudeBin)
-  ask: (prompt) => askOpusOnAccounts(prompt, { accounts: () => usableAccounts(STATE_DIR), onLimit: (a) => { claudeAccounts.markExhausted(a.id, { reason: 'usage limit in suggestion triage' }).catch(() => {}); } }),
+  ask: (prompt) => askOpusOnAccounts(prompt, { accounts: () => usableAccounts(STATE_DIR), onLimit: (a, next) => { recordSwitch(STATE_DIR, a, next, 'suggestion-triage'); if (a) claudeAccounts.markExhausted(a.id, { reason: 'usage limit in suggestion triage' }).catch(() => {}); } }),
   mode: () => (suggestionTriageMode() === 'live' && reflectionMode() === 'live' ? 'live' : 'off'),
   goalOf: (name) => goalForSession(name).catch(() => ''),
   apply: async (name, decisions) => {
@@ -3610,7 +3610,7 @@ async function handleHttp(req, res) {
   }
   if (req.method === 'GET' && p === '/api/health') {
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, sessions: lastSnapshots.size, port: PORT, eventLoop: lagMonitor.snapshot() }));
+    res.end(JSON.stringify({ ok: true, sessions: lastSnapshots.size, port: PORT, eventLoop: lagMonitor.snapshot(), claudeAccounts: (({ total, usable, allUsedUp }) => ({ total, usable: usable.length, allUsedUp }))(accountsHealth(STATE_DIR)) }));
     return;
   }
 
