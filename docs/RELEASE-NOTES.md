@@ -3,6 +3,8 @@
 The release note of this repo (owner 2026-11-13). Every merged code change (not docs-only) adds one entry at the top of
 `## Unreleased`; the done-check reads the merged diff for this file (REFERENCE "Closing review"). Entry form: one line,
 
+- **The reader's "last reply only" / "earlier conversation" switch is also under the composer** — a pill at the left of the line that shows the provider and model ("Claude Sonnet 5.5 · medium"), always in reach while the conversation scrolls; same action as the button inside the reader (`switchReaderMode`). Desktop only: that line is hidden on phones, where the sticky in-reader button stays. `public/app.js`, `public/style.css`.
+
 - **The reader's "last reply only" button stays in view** — it was the first line of the scrolling conversation, so after scrolling down it took a long scroll back up to reach it. The switch ("last reply only" / "earlier conversation") is now sticky at the top of the reader. `public/style.css`.
 
 - **NEEDS YOU shows 0 when only suggestions are open** — the headline count added 1 for the "suggestions · N" chip, so the strip read "NEEDS YOU 1" while nothing needed the owner. The chip stays, the count no longer includes it. `public/app.js` `renderAttention`.
