@@ -45,6 +45,7 @@ import { createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { effectiveLabels, outcomeFromReplyKind } from './decisions.js';
 import { OWNER_THRESHOLD } from './router-shadow.js';
+import { buildWaste, wasteLine } from './usage/waste.js';
 import { computeShare, summarizeShare } from './scripts/decision-share.js';
 
 const DAY_MS = 86400000;
@@ -441,6 +442,7 @@ export function buildScorecard({ ledgerRows = [], stallRecs = [], eventRecs = []
     g8: from != null && to != null ? g8Section({ stallRecs, actionRecs, regretRecs, from, to, managerSessions }) : null,
     router: routerSection({ stallRecs, from, to }),
     wakeShadow: wakeShadowSection({ eventRecs, stallRecs, from, to }),
+    waste: wasteSection({ ledgerRows, from, to }),
   };
 }
 
@@ -763,3 +765,12 @@ export function langfuseScoreEvents(scorecard, { traceId = 'manager-scorecard', 
 // Trace id for one UTC day (so the Langfuse trace name is "manager-scorecard" and the id is
 // `manager-scorecard-<YYYY-MM-DD>`; upserts overwrite).
 export const scorecardTraceId = (ts = Date.now()) => `manager-scorecard-${new Date(ts).toISOString().slice(0, 10)}`;
+// Daily waste line (owner 2026-11-28): the usage waste detectors over this day's ledger rows, one line plus the top findings.
+// Thresholds scale with the window: a day holds half of the 48 h the defaults are tuned for, so counts are per this window only.
+export function wasteSection({ ledgerRows = [], from, to } = {}) {
+  if (from == null || to == null) return null;
+  const rows = ledgerRows.filter((r) => r.ts >= from && r.ts < to);
+  if (!rows.length) return { line: 'waste (day): no rows', findings: 0, counts: {}, top: [] };
+  const w = buildWaste(rows, to, { windowH: Math.max(1, Math.round((to - from) / 3600e3)), minTurns: 20, churnWrite: 1.5e6, subMinCtx: 50e6 });
+  return { line: wasteLine(w).replace(/^waste \(\d+ h\)/, 'waste (day)'), findings: w.findings.length, counts: w.counts, top: w.findings.slice(0, 5).map(({ kind, session, agent, detail, cost }) => ({ kind, session, agent, detail, cost })) };
+}
