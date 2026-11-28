@@ -109,12 +109,28 @@ export function inputBox(rawLines) {
   };
 }
 
-// Body = everything above the input box's top rule (or the whole pane when there is no box).
+// Claude Code's own notices printed under a finished turn (a resumed session: an Artifact monitor that did not restart, the
+// Remote Control banner). They are not the agent's words: left in, they pushed the turn marker and the STATUS line out of
+// the closing text, and a needs-owner stop showed idle and grey (owner 2026-11-28).
+const NOTICE_START = /^\s*(?:[⏺●•]\s+)?(?:Artifact comment monitor for\b|\/remote-control is active\b)/i;
+// End index (exclusive) of `lines[0, end)` with trailing notice paragraphs (blank-line separated) removed.
+export function noticeEnd(lines, end = lines.length) {
+  for (;;) {
+    let e = end;
+    while (e > 0 && !String(lines[e - 1]).trim()) e--;
+    let s = e;
+    while (s > 0 && String(lines[s - 1]).trim()) s--;
+    if (s === e || !NOTICE_START.test(stripAnsi(lines[s]))) return end;
+    end = s;
+  }
+}
+
+// Body = everything above the input box's top rule (or the whole pane when there is no box), Claude Code's trailing notices dropped.
 export function bodyLines(plain) {
   const i = inputLineIndex(plain);
   let end = i > 0 ? i - 1 : plain.length;
   while (i > 0 && end > 0 && !RULE_LINE.test(plain[end])) end--;
-  return plain.slice(0, end);
+  return plain.slice(0, noticeEnd(plain, end));
 }
 
 // The agent's closing text: last `n` meaningful lines of the body, chrome and timers dropped,

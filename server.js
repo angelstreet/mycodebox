@@ -140,7 +140,7 @@ import { createLeftovers, pushableItems } from './done-leftovers.js';
 import { scanTaskDocs, withHomeDirs, computeUnfinished, docLeftoversFor, createUnfinished, taskRe } from './unfinished.js';
 import { pushOf, replyFor } from './owner-push.js';
 import { createWorkerAutoClose, shouldClose as shouldCloseWorker, politeClose, LEFTOVERS_WINDOW_MS } from './worker-auto-close.js';
-import { statusLine, inputBox, endsHandedOver, closingLines } from './stall.js';
+import { statusLine, inputBox, endsHandedOver, closingLines, noticeEnd } from './stall.js';
 import { liveState } from './pane-state.js';
 import { verifyDelivered, confirmDelivered, waitSettled, settleBudgetMs, pasteTextOf } from './send-verify.js';
 import { machinesOf, holdingsOf, deployWaitOf, agentSession, agentSessionCandidates, holderSession } from './public/platforms.js';
@@ -543,12 +543,12 @@ function plainLines(pane) {
 const oneLine = (s, n) => s.replace(/[│┃]/g, ' ').replace(/\s{2,}/g, ' ').trim().slice(0, n);
 
 // lines = ANSI-stripped pane lines. Returns the index where the input box starts
-// (the second rule from the bottom, within the last 14 lines), else lines.length.
+// (the second rule from the bottom, within the last 14 lines), else lines.length; Claude Code's notices under the turn excluded.
 function bodyEnd(lines) {
   for (let i = lines.length - 1, seen = 0; i >= 0 && i >= lines.length - 14; i--) {
-    if (RULE_LINE.test(lines[i]) && ++seen === 2) return i;
+    if (RULE_LINE.test(lines[i]) && ++seen === 2) return noticeEnd(lines, i);
   }
-  return lines.length;
+  return noticeEnd(lines, lines.length);
 }
 
 function lastMessageOf(lines, end) {
