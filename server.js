@@ -2428,16 +2428,11 @@ async function resumeSession(name, { claudeAccount, model } = {}) {
   const acct = agent === 'claude' ? (claudeAccount || claudeAccounts.config().active) : null;
   const base = acct ? claudeAccounts.commandFor(AGENT_CMDS[agent], acct) : AGENT_CMDS[agent];
   const trustAgent = agent;
+  // folder removed while parked: recreate it at the same path so `claude --resume` still finds its transcript
+  if (!existsSync(rec.cwd || '')) { const back = await restoreGoneCwd(rec.cwd, HOME, { exists: existsSync, run: (c, a) => exec(c, a, { timeout: 30000 }), mkdir }); if (back) rec.cwd = back; }
   const out = await parking.resume(name, {
     base, model,
-    validate: async (r) => {
-      try { r.cwd = await sessionDirectory(r.cwd, HOME); } catch (e) {
-        // folder removed while parked: recreate it at the same path so `claude --resume` still finds its transcript
-        const back = e.status === 400 ? await restoreGoneCwd(r.cwd, HOME, { exists: existsSync, run: (c, a) => exec(c, a, { timeout: 30000 }), mkdir }) : null;
-        if (!back) throw e;
-        r.cwd = await sessionDirectory(back, HOME);
-      }
-    },
+    validate: async (r) => { r.cwd = await sessionDirectory(r.cwd, HOME); },
     start: async (n, r, cmd) => {
       try { await trustFolder(trustAgent, r.cwd); } catch { /* best effort */ }
       const acctJson = acct ? claudeAccounts.claudeJsonFor(acct) : null;
