@@ -157,7 +157,7 @@ import { trustFolder, trustClaude } from './trust.js';
 import { sessionDirectory } from './session-directory.js';
 import { createLayoutStore } from './layout.js';
 import { createSessionMeta } from './session-meta.js';
-import { goneCwd, projectCandidates } from './cwd-gone.js';
+import { goneCwd, projectCandidates, restoreGoneCwd } from './cwd-gone.js';
 import { maybeGzip, acceptsGzip } from './gzip-send.js';
 import { logUpload, readUploadLog, cleanReport, clientOf } from './upload-log.js';
 import { pickableProject, launchArgs, codexModels, CLAUDE_MODELS, MINIMAX_MODELS, DEFAULT_MODELS, aiNamePrompt, cleanAiName, nameFromWords } from './new-session.js';
@@ -2430,7 +2430,14 @@ async function resumeSession(name, { claudeAccount, model } = {}) {
   const trustAgent = agent;
   const out = await parking.resume(name, {
     base, model,
-    validate: async (r) => { r.cwd = await sessionDirectory(r.cwd, HOME); },
+    validate: async (r) => {
+      try { r.cwd = await sessionDirectory(r.cwd, HOME); } catch (e) {
+        // folder removed while parked: recreate it at the same path so `claude --resume` still finds its transcript
+        const back = e.status === 400 ? await restoreGoneCwd(r.cwd, HOME, { exists: existsSync, run: (c, a) => exec(c, a, { timeout: 30000 }), mkdir }) : null;
+        if (!back) throw e;
+        r.cwd = await sessionDirectory(back, HOME);
+      }
+    },
     start: async (n, r, cmd) => {
       try { await trustFolder(trustAgent, r.cwd); } catch { /* best effort */ }
       const acctJson = acct ? claudeAccounts.claudeJsonFor(acct) : null;
