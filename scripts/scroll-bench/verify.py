@@ -46,8 +46,19 @@ def main(args):
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
 
-            # --- default (no saved setting): on
+            # --- default (no saved setting): off; terminal scrolling stays in the terminal
             ctx, page, cdp, box = open_card(browser, rig, None)
+            v = view(page)
+            check('default opens on the terminal', not v['rd'] and v['est'], v)
+            swipe(cdp, box['x'], box['y'], 300, 500, 20); time.sleep(1.2)
+            v = view(page)
+            check('default scroll keeps the terminal view and forwards to the app', not v['rd'] and v['reqs'] > 0, v)
+            check('smooth scroll remains unset until explicitly chosen', page.evaluate("localStorage.getItem('ghosty.smoothScroll')") is None)
+            ctx.close()
+            rig.bottom(); time.sleep(0.5)  # isolate the opt-in case from the real terminal scroll above
+
+            # --- explicitly enabled: retain the local conversation scroll behavior
+            ctx, page, cdp, box = open_card(browser, rig, True)
             v = view(page)
             check('opens on the terminal, live end', not v['rd'] and v['est'], v)
             shot(page, '1-terminal-live.png')
@@ -96,7 +107,7 @@ def main(args):
             # the switch: the More menu on a phone (the text popover is desktop only)
             page.evaluate("() => document.querySelector('#moreBtn').click()"); time.sleep(0.4)
             on = page.evaluate("() => { const b = document.querySelector('#smoothBtn'); const r = b.getBoundingClientRect(); return { on: b.classList.contains('on'), vis: r.width > 0 && r.height > 0 && r.bottom <= innerHeight, text: b.textContent.trim() }; }")
-            check('the "Smooth scroll" switch is in the More menu, on by default', on['on'] and on['vis'] and on['text'] == 'Smooth scroll: on', on)
+            check('the explicitly enabled "Smooth scroll" switch is on in the More menu', on['on'] and on['vis'] and on['text'] == 'Smooth scroll: on', on)
             shot(page, '5-setting.png')
             page.evaluate("() => document.querySelector('#smoothBtn').click()"); time.sleep(0.3)
             check('switching it off is saved', page.evaluate("localStorage.getItem('ghosty.smoothScroll')") == '0')
