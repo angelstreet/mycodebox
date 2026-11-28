@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readRequests } from '../integration-log.js';
 
 const PLAN_MAX_AGE_MS = 24 * 36e5;
 const CACHE = /^(node_modules|dist|build|\.cache|\.next|\.vite|coverage|\.turbo|__pycache__|\.pytest_cache|\.venv|venv)(\/|$)/;
@@ -82,7 +83,7 @@ export async function liveRefs({ state, url = process.env.GHOSTY_URL || 'http://
   } catch { /* reported as an unverified item */ }
   try {
     const last = new Map();
-    for (const l of fs.readFileSync(path.join(state, 'integration', 'requests.jsonl'), 'utf8').split('\n')) { try { const j = JSON.parse(l); last.set(j.id, j); } catch { /* skip */ } }
+    for (const [id, j] of readRequests(fs.readFileSync(path.join(state, 'integration', 'requests.jsonl'), 'utf8').split('\n'))) last.set(id, j);
     for (const j of last.values()) if (!['deployed', 'merged', 'failed', 'returned', 'cancelled', 'done', 'rejected'].includes(j.state)) { if (j.branch) refs.branches.add(j.branch); if (j.worktree) refs.worktrees.add(j.worktree); }
   } catch { /* none */ }
   try { refs.leaseText = fs.readFileSync(path.join(state, 'leases', 'snapshot.json'), 'utf8'); } catch { /* none */ }

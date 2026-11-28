@@ -1,4 +1,5 @@
 // The integration lane against real throwaway git repos (a bare remote + clones); CI, deploys and notify are fakes.
+import { readRequests } from '../integration-log.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
@@ -489,7 +490,7 @@ test('restart after the push: the remote is read, nothing is pushed twice, CI co
   const r = await again.lane.wait(q.id, 30000);
   assert.equal(r.state, 'merged'); assert.equal(ran, 0); assert.equal(w.count(), count); assert.equal(r.sha, sha);
   const lines = readFileSync(join(stateDir, 'integration', 'requests.jsonl'), 'utf8').trim().split('\n');
-  assert.equal(JSON.parse(lines.at(-1)).state, 'merged');     // append-only snapshots, the last line wins
+  assert.equal(readRequests(lines).get(q.id).state, 'merged');     // append-only: full and change lines (integration-log.js)
 });
 
 test('a duplicate queued request returns the same id; final states are stable', async () => {

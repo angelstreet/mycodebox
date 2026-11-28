@@ -93,7 +93,7 @@ as before; no second event.
 ## Not in the timer (owner or later)
 
 `~/.minimax/v2/sqlite/backups` (3.0 GB, a pre-migration copy), docker images/volumes, the dispatcher work dirs under
-`~/.local/share`, playwright browsers and gradle caches, and `integration/requests.jsonl` (needs a lane-side rotation).
+`~/.local/share`, playwright browsers and gradle caches, and `integration/requests.jsonl` (needs a lane-side rotation; since 2026-11-28 it grows by changes only, `integration-log.js`; never cut its head).
 
 ## First dry run (2026-11-11 ~13:00 UTC)
 

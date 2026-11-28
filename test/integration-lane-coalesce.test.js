@@ -68,17 +68,17 @@ test('a request for a branch whose request is running becomes a second entry, ma
 
 test('a queued request waits out its settle window, and a coalesce restarts it', async () => {
   const w = makeWorld(); w.branch('feat', { 'a.js': '1\n' });
-  const { lane } = mk(w, { cfg: { settleMs: 700 }, lane: { settleQuietMs: 0 } });
+  const { lane } = mk(w, { cfg: { settleMs: 3000 }, lane: { settleQuietMs: 0 } });
   const base = w.main();
   const q = lane.enqueue({ repo: 'env-a', branch: 'feat' });
-  await tick(300);
+  await tick(1000);
   assert.equal(lane.get(q.id).state, 'queued', 'not picked while the window is open');
   assert.equal(w.main(), base, 'nothing merged yet');
 
-  await tick(350);                                   // 650 ms in: the first window would have ended
+  await tick(1000);                                  // 2 s in: still inside the first window, with 1 s to spare on a loaded host
   const again = lane.enqueue({ repo: 'env-a', branch: 'feat' });
   assert.equal(again.id, q.id);
-  await tick(300);                                   // 300 ms into the restarted window
+  await tick(2000);                                  // 4 s in: past the first window, 1 s before the restarted one ends
   assert.equal(lane.get(q.id).state, 'queued', 'a coalesce restarts the window');
 
   const r = await lane.wait(q.id, 30000);

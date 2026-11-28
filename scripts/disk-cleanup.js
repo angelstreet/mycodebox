@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readRequests } from '../integration-log.js';
 import { plan, apply, writePlan, listWorktrees, inUse, usedCwds, liveRefs, lastChangeMs, fetchOrigin } from './worktree-prune.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -147,7 +148,7 @@ export async function planCleanup({ policy = loadPolicy(), state = stateDir(), n
   const wtDir = path.join(state, 'integration', 'wt');
   let ids = []; try { ids = fs.readdirSync(wtDir); } catch { /* none */ }
   const last = new Map();
-  try { for (const l of fs.readFileSync(path.join(state, 'integration', 'requests.jsonl'), 'utf8').split('\n')) { try { const j = JSON.parse(l); last.set(j.id, j); } catch { /* skip */ } } } catch { /* none */ }
+  try { for (const [id, j] of readRequests(fs.readFileSync(path.join(state, 'integration', 'requests.jsonl'), 'utf8').split('\n'))) last.set(id, j); } catch { /* none */ }
   for (const id of ids) {
     const d = path.join(wtDir, id), st = last.get(id)?.state;
     if (!['deployed', 'merged', 'failed', 'returned', 'cancelled', 'done', 'rejected'].includes(st)) { skipped.push({ step: 'lane', path: d, why: `request state ${st || 'unknown'}` }); continue; }
