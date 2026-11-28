@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { normalizeExtra, createAnthropicSpend, HOUR } from '../anthropic-spend.js';
-import { anthropicChips, apiCreditChips } from '../public/anthropic-chips.js';
+import { apiCreditChips } from '../public/anthropic-chips.js';
 
 const usage = { extra_usage: { is_enabled: false, monthly_limit: 20000, used_credits: 2008, currency: 'EUR', decimal_places: 2, disabled_reason: 'out_of_credits' } };
 const creds = () => { const d = mkdtempSync(join(tmpdir(), 'ghosty-ds-')); const f = join(d, 'c.json'); writeFileSync(f, JSON.stringify({ claudeAiOauth: { accessToken: 'fake-token', expiresAt: 9e15 } })); return { d, f }; };
@@ -42,27 +42,23 @@ test('an expired or missing Claude login is an error, never a fetch', async () =
   let calls = 0; const s = createAnthropicSpend({ stateDir: d, credentialsFile: f, fetchFn: async () => { calls++; return resp(usage); } });
   assert.equal((await s.get()).extra.error, 'Claude login expired'); assert.equal(calls, 0);
 });
-test('chips: extra left in its currency, warn at 80 % used, nothing without a reading', () => {
-  assert.equal(anthropicChips(null), '');
-  assert.match(anthropicChips({ ok: true, extra: { limit: 200, used: 20.08, left: 179.92, currency: 'EUR' } }), /qi ok[^>]*>extra €180 left/);
-  assert.match(anthropicChips({ ok: true, extra: { limit: 200, used: 170, left: 30, currency: 'EUR' } }), /qi warn[^>]*>extra €30 left/);
-  assert.equal(anthropicChips({ ok: true, extra: { error: 'x' } }), '');
-});
-test('API credit chips: one per org with a reading, short name, spent (budget in the title), warn at 80 %, stale marked', () => {
+test('API spend groups: the owner\'s names, spent/budget for the Claude API, spent only for the team, warn at 80 %, stale marked', () => {
   assert.equal(apiCreditChips(null), '');
   const c = { ok: true, orgs: [
-    { org: 'max', label: 'Virtualpytest API org', budgetUsd: 200, spentUsd: 0, leftUsd: 200, usedPercent: 0 },
+    { org: 'max', label: 'Virtualpytest API org', budgetUsd: 200, spentUsd: 94.27, leftUsd: 105.73, usedPercent: 47 },
     { org: 'team', label: 'AngelStreet API org', budgetUsd: 1000, spentUsd: 850.5, leftUsd: 149.5, usedPercent: 85.05, stale: true, error: 'timeout' },
     { org: 'x', label: 'No key', budgetUsd: 50, spentUsd: null, noKey: true },
   ] };
   const h = apiCreditChips(c);
-  assert.match(h, /class="qi ok"[^>]*>Virtualpytest \$0</);
-  assert.match(h, /class="qi warn old"[^>]*>AngelStreet \$851</);
+  assert.match(h, /<b>Claude API<\/b><span class="qi ok">94\/200\$</);
+  assert.match(h, /<b>Claude team API<\/b><span class="qi warn old">851\$</);
+  assert.match(h, /\$850\.50 of \$1000\.00/, 'the title keeps the cents');
   assert.doesNotMatch(h, /No key/);
-  assert.match(apiCreditChips({ ok: true, orgs: [{ org: 'm', label: '<b>', spentUsd: 3.5 }] }), />&lt;b&gt; \$3\.50</);
+  assert.match(apiCreditChips({ ok: true, orgs: [{ org: 'max', label: 'm', budgetUsd: 200, spentUsd: null }] }), /qi na">\?\/200\$</);
+  assert.match(apiCreditChips({ ok: true, orgs: [{ org: 'm', label: '<b>', spentUsd: 3.5 }] }), /<b>&lt;b&gt;<\/b><span class="qi ok">4\$</);
 });
 test('static: wired in server.js and the app, precached', () => {
   const rd = (p) => readFileSync(new URL(p, import.meta.url), 'utf8');
   assert.match(rd('../server.js'), /anthropicSpend\.start\(\)/); assert.match(rd('../server.js'), /\/api\/anthropic-spend/);
-  assert.match(rd('../public/app.js'), /anthropicChips\(state\.anthropic\)/); assert.match(rd('../public/app.js'), /apiCreditChips\(state\.apiCredit\)/); assert.match(rd('../public/sw.js'), /'\/anthropic-chips\.js'/);
+  assert.match(rd('../public/app.js'), /apiCreditChips\(state\.apiCredit\)/); assert.match(rd('../public/sw.js'), /'\/anthropic-chips\.js'/);
 });
