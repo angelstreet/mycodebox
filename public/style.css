@@ -1718,6 +1718,7 @@ a.sbtn{ display:inline-flex; align-items:center; justify-content:center; text-de
 
 /* usage sheet keeps one height on every tab (no jump when switching Today / 14 days / Jev) */
 .sheet.usage{ height:min(86dvh, 780px); }
+.sheet.uv-sheet{ width:min(100%, 1180px); max-width:min(1180px, 96vw); margin-left:auto; margin-right:auto; }
 .tk{ font-variant-numeric:tabular-nums; font-weight:600; }
 
 /* icons: one set (icons.js); svgs inherit the text colour */
@@ -2785,7 +2786,8 @@ body:not(.res-hidden) .fgrp{ display:none; }
 .uv-tr.out{ box-shadow:inset 3px 0 0 var(--waiting); }
 .uv-name{ display:flex; align-items:center; gap:8px; min-width:0; }
 .uv-name b{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.uv-name .dim{ font-size:10px; white-space:nowrap; }
+.uv-name .dim{ font-size:10px; white-space:nowrap; min-width:0; flex:0 1 auto; overflow:hidden; text-overflow:ellipsis; }
+.uv-name b{ flex:0 1 auto; min-width:0; }
 .uv-tr .tk{ color:var(--ink); }
 .uv-out{ grid-column:1 / -1; font-size:11px; color:var(--waiting); }
 .uv-models{ grid-column:1 / -1; background:var(--bg-2); border-radius:8px; padding:4px 6px; margin:6px 0; }
