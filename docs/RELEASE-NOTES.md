@@ -6,6 +6,10 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **Disk cleanup frees space again, and `--help` no longer deletes** — merged worktrees were kept only for tsc's `*.tsbuildinfo` (and one generated API spec), so the run freed 0 items while `/` was at 93 % and new sessions were paused; both now count as cache (`.env` and every other ignored file still keep a worktree). `--help` ran a live cleanup: it now prints usage, and an unknown flag is refused. The run also collects reviewer exports a killed UI review left behind (about 170 MB each, idle over 24 h) · area: harness
+
+- **A new worktree gets a copy of `node_modules`, not a link** · `npm ci` in a linked worktree emptied the live checkout's `node_modules` and crash-looped the dashboard and the integration lane (2026-11-28). `cbsession` now copies it, and disk cleanup keeps any cache another worktree links to · area: harness
+
 - **The token audit can be run again** — `scripts/token-audit.js` prints the audit figures, models, top sessions and waste findings for any time windows from the usage ledger; the steps and traps are in [TOKEN-AUDIT](TOKEN-AUDIT.md).
 
 - **The API spend values carry a dollar sign** — "put dollars in both it is money" (owner 2026-11-28): the top bar reads `Claude API 94/945$ - 200/200$` · area: usage

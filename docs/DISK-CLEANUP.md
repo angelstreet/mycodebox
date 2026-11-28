@@ -55,6 +55,13 @@ Install like the daily timer (`ghosty-disk-sweep.{service,timer}`); rollback: `s
 | b caches | `node_modules`, `.vite`, `.playwright` (depth <= 3) of worktrees that stay | worktree idle > 3 days and not busy; the dir is gitignored and holds no tracked file |
 | c logs | the head of listed logs over their cap (keeps the tail, cut at a line) | file is named in the policy and sits directly in the state dir |
 | d lane trees (the lane itself now also drops `wt/<id>` at every final transition, 2026-11-11; this step is the safety net) | `<state>/integration/wt/<id>` with `git worktree remove` (no `--force`) | request `merged`/`deployed`/`failed`/... and idle > 24 h |
+| e review exports | `<state>/integration/ui-review/reviewer/<id>` (a `git archive` copy of the reviewer, about 170 MB; the lane removes its own, a restart that kills a review leaves it) | idle > 24 h and no process cwd in it |
+
+Ignored files that count as cache, so they do not keep a merged worktree (2026-11-28): anything under `node_modules`, `.cache`, `.vite`, `.playwright`,
+`coverage`, `dist`, `build`, `__pycache__`, `.turbo`, `.next` and the Python tool caches, any `*.tsbuildinfo` (tsc incremental cache) and
+the generated `frontend/public/docs/api/specs/server-all.yaml`. Every other ignored file keeps the worktree.
+
+`--help` / `-h` prints usage; an unknown argument or a flag without its value exits 2. Neither starts a run (before 2026-11-28 `--help` ran a live cleanup).
 
 Never touched: the policy `never` list (live checkouts `~/ghosty-sessions`, `~/virtualpytest`, `~/vpt-private`, `~/vpt-backups`,
 `~/vpt-deliverables`), any path named in `parked-worktrees-review.md`, `parked-sessions.json` or `parked.json` (state dir), `.env` files,

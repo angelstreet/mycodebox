@@ -65,7 +65,7 @@ test('no worktree for -N, a linked worktree, a non-git dir, or a listed live che
   assert.doesNotMatch(r.stdout, /worktree:/); assert.match(launch('n5'), new RegExp(`cd ${repo}\n`));
 });
 
-test('a new worktree gets the checkout\'s node_modules linked, so npm test works at once (bug-222245ca)', () => {
+test('a new worktree gets its own copy of the checkout\'s node_modules, so npm test works at once (bug-222245ca)', () => {
   const r2 = path.join(home, 'deprepo');
   fs.mkdirSync(r2);
   git(home, 'init', '-q', '-b', 'main', r2);
@@ -75,6 +75,9 @@ test('a new worktree gets the checkout\'s node_modules linked, so npm test works
   const r = run('-n', 'BUG77-z', '-d', r2, '-p', 'codex', '-t', 'go');
   assert.equal(r.status, 0, r.stderr);
   const wt = path.join(home, 'deprepo-BUG77-z');
-  assert.ok(fs.lstatSync(path.join(wt, 'node_modules')).isSymbolicLink());
+  assert.ok(!fs.lstatSync(path.join(wt, 'node_modules')).isSymbolicLink(), 'a real copy, never a link into the checkout');
   assert.ok(fs.existsSync(path.join(wt, 'node_modules', 'ws')));
+  // what `npm ci` does first: delete every entry of <worktree>/node_modules. The checkout's install must survive it.
+  for (const e of fs.readdirSync(path.join(wt, 'node_modules'))) fs.rmSync(path.join(wt, 'node_modules', e), { recursive: true, force: true });
+  assert.ok(fs.existsSync(path.join(r2, 'node_modules', 'ws')), 'checkout node_modules untouched');
 });
