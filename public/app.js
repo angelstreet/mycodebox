@@ -2882,7 +2882,9 @@ function paintReader(cell, n, opts = {}) {
   if (el.dataset.h === effective && !el.dataset.pending) return;
   if (opts.keepTop && el.dataset.h !== undefined) {   // smooth scroll: newer text swapped in under the reader's position (it is added at the end)
     const top = el.scrollTop;
-    el.dataset.pending = ''; el.dataset.h = html; el.innerHTML = html; el.scrollTop = top;
+    el.dataset.pending = ''; el.dataset.h = html; el.innerHTML = html;
+    wireAudioChips(el);
+    el.scrollTop = top;
     return;
   }
   if (!el._wired) {
@@ -2919,7 +2921,7 @@ function paintReader(cell, n, opts = {}) {
       const target = el.dataset.pending; el.dataset.pending = '';
       el.dataset.h = target;
       el.innerHTML = target;
-      if (!el._chipsWired) { wireAudioChips(el); el._chipsWired = true; }
+      wireAudioChips(el);   // every rebuild makes new chip elements: wire them each time (idempotent per chip)
       el.scrollTop = el.scrollHeight;
     };
     for (const ev of ['touchstart', 'touchmove', 'wheel', 'scroll']) el.addEventListener(ev, (e) => {
@@ -2950,10 +2952,9 @@ function paintReader(cell, n, opts = {}) {
   el.dataset.pending = '';
   el.dataset.h = effective;
   el.innerHTML = effective;
-  // Wire the freshly-painted audio chip. `wireAudioChips` is idempotent
-  // (it tags each chip with `data-wired`); re-running on every paint is
-  // harmless but pointless, so just call it once on first render.
-  if (!el._chipsWired) { wireAudioChips(el); el._chipsWired = true; }
+  // Wire the freshly-painted audio chip on EVERY rebuild: innerHTML makes new chip elements, and a chip first painted after a "no reply
+  // yet" paint was never wired, so play did nothing (2026-11-28, headless check of the deployed reader). Idempotent per chip (data-wired).
+  wireAudioChips(el);
   // newest content is at the bottom: jump there after each rebuild (the user
   // is at the bottom when we got here, see decideReaderPaint)
   el.scrollTop = el.scrollHeight;
