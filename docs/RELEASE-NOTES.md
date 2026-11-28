@@ -69,6 +69,7 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The reader's play button reads the agent's summary only** — owner: "has to be the summary only". It no longer falls back to the STATUS line; a turn without a `Summary:` block has no play button (`public/app.js` paintReader, `test/reader-chip-wiring.test.js`) · area: reader
 - **The reader's play button works after the reader repaints** — the chip was wired only on the reader's first paint, so a chip painted later (after "no reply yet", or after a smooth-scroll swap) did nothing on tap. Every reader rebuild now wires its chips (`public/app.js` paintReader, test `test/reader-chip-wiring.test.js`) · area: reader
 
 - **The suggestion-triage owner floor matches real data deletion, not the word "drops"** — on 2026-11-28 a dashboard suggestion ("the state frame drops managerAsk") went to the owner as "owner floor (\"drops\")". The data floor now needs a deletion verb aimed at data (tables, rows, records, history, logs, recordings, backups, branches, sessions...) or `rm -rf` / `drop table`; "drops" / "remove" / "delete" in a UI, journal or code sense is no floor, and the other ownerOnly floors see those words masked. On the live ledger this changes three past items only (the two "drops" items and one "overwrites" item). `suggestion-triage.js` `isDataDeletion`, `maskNonData` · tests: `test/suggestion-triage.test.js` · area: harness

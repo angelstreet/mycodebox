@@ -1,6 +1,6 @@
 # Reader mode: filtered view, agent summary, audio from the summary (proposal, 2026-11-28)
 
-Status: **step 1 built (2026-11-28)**: the `Summary:` parser, the `summary` / `status` fields of `/api/reply`, the done-check (R) in `dry`, the rule in AGENTS.md and the `cbsession` brief, and a play button that reads the summary, else the STATUS line (REFERENCE "Owner summary before the STATUS"). The Brief / All / `>_` reader view (step 2) is not built. Owner request (2026-11-28): the terminal may show every log line, but the reader
+Status: **step 1 built (2026-11-28)**: the `Summary:` parser, the `summary` / `status` fields of `/api/reply`, the done-check (R) in `dry`, the rule in AGENTS.md and the `cbsession` brief, and a play button that reads the summary only (owner 2026-11-28; REFERENCE "Owner summary before the STATUS"). The Brief / All / `>_` reader view (step 2) is not built. Owner request (2026-11-28): the terminal may show every log line, but the reader
 should show only what the owner needs to read. The STATUS line comes last and is the most important thing. Each agent
 writes a short summary for a human, 10 lines at most. The play button reads that summary, never the full last response.
 
@@ -141,9 +141,8 @@ shipped as `dry` for one day (journal only), then `live`.
 
 ### Old sessions and a missing summary
 
-- No `Summary:` block: the summary card says "No summary in this reply." in muted text, and the play button reads the
-  STATUS headline only ("Status: needs-manager. Pick the cap for the night account."). With no STATUS line either, the
-  play button is hidden. The reader never falls back to reading the whole reply.
+- No `Summary:` block: the summary card says "No summary in this reply." in muted text, and there is no play
+  button (owner 2026-11-28: "has to be the summary only"; the STATUS headline is not read either). The reader never falls back to reading the whole reply.
 - Running sessions are not migrated: they get the rule through the gate's push the next time they end a turn, and new
   sessions get it from AGENTS.md and the `cbsession` brief.
 - Considered and rejected: a server-side model call that writes the summary for an old session. It costs tokens on every

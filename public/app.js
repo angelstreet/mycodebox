@@ -24,7 +24,6 @@ import { copyPromptButtonHtml, wireCopyPrompt } from '/copy-prompt.js';
 import { uploadOne, uploadType, UPLOAD_ACCEPT, UPLOAD_HINT } from '/upload.js';
 import { renderMd } from '/md.js';
 import { decideReaderPaint, autoFullDue, autoFullDone } from '/reader-paint.js';
-import { spokenStatusOf } from '/status-line.js';
 import { spokenSummaryOf } from '/reader-summary.js';
 import { localScrollEnters, localScrollExits, flingVelocity, flingStep, ENTER_PX } from '/local-scroll.js';
 import { chipModel, machinesOf, holdingsOf, blocksDeploy, shortResource, ttlText, shortRef, leaseHostSummary } from '/platforms.js';
@@ -2864,13 +2863,11 @@ function paintReader(cell, n, opts = {}) {
   // were missing. Strip leading/trailing whitespace so the copied text
   // looks the same as what the user sees on screen.
   const audioText = String(text || '').trim();
-  // The play button reads the STATUS line only, never the reply (owner 2026-11-28, docs/READER-SUMMARY.md): the whole loaded conversation of a
-  // Claude card was over tts.js MAX_TEXT, so the chip spun and failed. The newest STATUS wins: the last reply first, else the conversation's end.
-  // The agent's own `Summary:` lines (from /api/reply) win over the STATUS line when the turn has them.
-  const fromSummary = spokenSummaryOf(c?.summary);
-  const spoken = fromSummary || spokenStatusOf(c?.text || '') || spokenStatusOf(audioText.slice(-8000));
+  // The play button reads the agent's `Summary:` lines only (owner 2026-11-28: "has to be the summary only ... I read it then I click play"):
+  // never the reply (over tts.js MAX_TEXT, the chip spun and failed) and never the STATUS line. No summary in the turn = no play chip.
+  const spoken = spokenSummaryOf(c?.summary);
   const actions = audioText
-    ? `<div class="rd-actions">${copyPromptButtonHtml({ text: audioText, label: 'Copy reply' })}${spoken ? audioChipHtml({ text: spoken, label: fromSummary ? 'Read summary aloud' : 'Read status aloud' }) : ''}</div>`
+    ? `<div class="rd-actions">${copyPromptButtonHtml({ text: audioText, label: 'Copy reply' })}${spoken ? audioChipHtml({ text: spoken, label: 'Read summary aloud' }) : ''}</div>`
     : '';
   const more = full && c.fullPartial ? '<button class="rd-more" data-act="older">\u2191 older conversation</button>' : '';
   const html = `<button class="rd-more" data-act="${full ? 'less' : 'more'}">${full ? 'last reply only' : '\u2191 earlier conversation'}</button>${more}${body}${actions}`;
