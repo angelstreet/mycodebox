@@ -62,6 +62,7 @@ export async function copyText(text) {
   } catch {}
   try {
     if (typeof document === 'undefined') return false;
+    const previousFocus = document.activeElement;
     const ta = document.createElement('textarea');
     ta.value = text;
     ta.setAttribute('readonly', '');
@@ -71,11 +72,14 @@ export async function copyText(text) {
     ta.style.opacity = '0';
     ta.style.pointerEvents = 'none';
     document.body.appendChild(ta);
-    ta.focus();
-    ta.select();
-    const ok = document.execCommand('copy');
-    document.body.removeChild(ta);
-    return !!ok;
+    try {
+      ta.focus();
+      ta.select();
+      return !!document.execCommand('copy');
+    } finally {
+      document.body.removeChild(ta);
+      previousFocus?.focus({ preventScroll: true });
+    }
   } catch {
     return false;
   }

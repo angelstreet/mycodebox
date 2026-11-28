@@ -21,6 +21,7 @@ import { jevTabHtml, jevRowHtml, creditRowHtml, filtersHtml, decisionsHtml, cred
 import { anthropicChips } from '/anthropic-chips.js';
 import { audioChipHtml, wireAudioChips } from '/audio-chip.js';
 import { copyPromptButtonHtml, wireCopyPrompt } from '/copy-prompt.js';
+import { readerCopyButtonHtml, wireReaderCopy } from '/reader-copy.js';
 import { uploadOne, uploadType, UPLOAD_ACCEPT, UPLOAD_HINT } from '/upload.js';
 import { renderMd } from '/md.js';
 import { decideReaderPaint, autoFullDue, autoFullDone } from '/reader-paint.js';
@@ -47,6 +48,15 @@ const phoneView = matchMedia('(max-width: 720px), (hover: none) and (pointer: co
 
 hydrateIcons();
 wireCopyPrompt();
+wireReaderCopy({
+  replyOf: (n) => state.replies.get(n)?.text || '',
+  summaryOf: (n) => state.replies.get(n)?.summary || [],
+  fullOf: async (n, signal) => {
+    const d = await getJson(`/api/transcript/${encodeURIComponent(n)}`, 30000, signal);
+    if (d.partial) throw new Error('Incomplete session text');
+    return d.text || '';
+  },
+});
 const els = {
   topbar:      $('#topbar'),
   appTitle:    $('#appTitle'),
@@ -2779,9 +2789,9 @@ function toggleReader() {
 const TAIL_CHARS = 40000;
 // A request over a relayed link can stall for good (lost packets, no error): without a deadline `busy` stays set, the reader says "no reply yet"
 // and never asks again (owner 2026-11-23). The answer is dropped after `ms` and counts as a failure, so the next tick retries.
-function getJson(url, ms) {
+function getJson(url, ms, signal = null) {
   const ac = new AbortController(), timer = setTimeout(() => ac.abort(), ms);
-  return fetch(url, { signal: ac.signal }).then((r) => r.ok ? r.json() : Promise.reject(r.status)).finally(() => clearTimeout(timer));
+  return fetch(url, { signal: signal ? AbortSignal.any([signal, ac.signal]) : ac.signal }).then((r) => r.ok ? r.json() : Promise.reject(r.status)).finally(() => clearTimeout(timer));
 }
 function loadTranscript(n, c, opts) {
   const tail = opts?.full ? false : c.full == null ? !(c.wantFull || state.terms.get(n)?.alt) : !!c.fullPartial;
@@ -2852,6 +2862,7 @@ async function switchReaderMode(n, act) {
 function paintReader(cell, n, opts = {}) {
   const c = state.replies.get(n);
   const el = cell.querySelector('.reader');
+  const copyFocus = document.activeElement?.matches('.rd-copy-trigger') && el.contains(document.activeElement);
   let text = c ? c.text : '';
   // While waiting, the reply alone hides what is being asked: append the
   // prompt itself (last lines of the pane) as a code block.
@@ -2871,11 +2882,7 @@ function paintReader(cell, n, opts = {}) {
   if (full && c.full) text = c.full;
   if (!state.toolOpen.has(n)) state.toolOpen.set(n, new Set());
   const body = text && text.trim() ? withFileLinks(renderReply(text, sendersOf(n), state.toolOpen.get(n), n), n) : '<div class="rd-empty">' + (!c || c.busy || c.failed ? (c && c.failed ? 'could not load \u2014 retrying\u2026' : 'loading\u2026') : 'no reply yet \u2014 tap &gt;_ for terminal') + '</div>';
-  // QF-16 — copy the reply to the clipboard and read it aloud. Both are
-  // present on the popup / task doc / multi-question popover via
-  // copy-prompt.js + audio-chip.js; the reader was the only place they
-  // were missing. Strip leading/trailing whitespace so the copied text
-  // looks the same as what the user sees on screen.
+  // The clipboard menu selects reply, full transcript or summary independently of the current reader mode.
   const audioText = String(text || '').trim();
   // The play button reads the agent's `Summary:` lines only (owner 2026-11-28: "has to be the summary only ... I read it then I click play"):
   // never the reply (over tts.js MAX_TEXT, the chip spun and failed) and never the STATUS line. No summary in the turn = no play chip.
@@ -2883,7 +2890,7 @@ function paintReader(cell, n, opts = {}) {
   // where the play button would be: a muted hint, so a reply without a `Summary:` block does not look like a missing button (owner triage 2026-11-28)
   const NO_SUMMARY_HINT = '<span class="rd-nosum" title="The agent wrote no Summary: block in this reply, so there is nothing to read aloud">no summary yet</span>';
   const actions = audioText
-    ? `<div class="rd-actions">${copyPromptButtonHtml({ text: audioText, label: 'Copy reply' })}${spoken ? audioChipHtml({ text: spoken, label: 'Read summary aloud' }) : NO_SUMMARY_HINT}</div>`
+    ? `<div class="rd-actions">${readerCopyButtonHtml(n)}${spoken ? audioChipHtml({ text: spoken, label: 'Read summary aloud' }) : NO_SUMMARY_HINT}</div>`
     : '';
   const more = full && c.fullPartial ? '<button class="rd-more" data-act="older">\u2191 older conversation</button>' : '';
   const html = `<button class="rd-more" data-act="${full ? 'less' : 'more'}">${full ? 'last reply only' : '\u2191 earlier conversation'}</button>${more}${body}${actions}`;
@@ -2894,10 +2901,12 @@ function paintReader(cell, n, opts = {}) {
   // same-fresh-html isn't treated as a no-op.
   const effective = el.dataset.pending || html;
   if (el.dataset.h === effective && !el.dataset.pending) return;
+  if (el.querySelector('.rd-copy-trigger[aria-expanded="true"]')) { el.dataset.pending = html; return; }
   if (opts.keepTop && el.dataset.h !== undefined) {   // smooth scroll: newer text swapped in under the reader's position (it is added at the end)
     const top = el.scrollTop;
     el.dataset.pending = ''; el.dataset.h = html; el.innerHTML = html;
     wireAudioChips(el);
+    if (copyFocus) el.querySelector('.rd-copy-trigger')?.focus({ preventScroll: true });
     el.scrollTop = top;
     return;
   }
@@ -2921,13 +2930,15 @@ function paintReader(cell, n, opts = {}) {
     // thumb. paintReader now defers those rebuilds; the scroll handler below
     // drains the deferred update the moment they reach the bottom again.
     const flushPending = () => {
-      if (!el.dataset.pending) return;
+      if (!el.dataset.pending || el.querySelector('.rd-copy-trigger[aria-expanded="true"]')) return;
       const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
       if (!atBottom) return;
+      const copyFocus = document.activeElement?.matches('.rd-copy-trigger') && el.contains(document.activeElement);
       const target = el.dataset.pending; el.dataset.pending = '';
       el.dataset.h = target;
       el.innerHTML = target;
       wireAudioChips(el);   // every rebuild makes new chip elements: wire them each time (idempotent per chip)
+      if (copyFocus) el.querySelector('.rd-copy-trigger')?.focus({ preventScroll: true });
       el.scrollTop = el.scrollHeight;
     };
     for (const ev of ['touchstart', 'touchmove', 'wheel', 'scroll']) el.addEventListener(ev, (e) => {
@@ -2961,6 +2972,7 @@ function paintReader(cell, n, opts = {}) {
   // Wire the freshly-painted audio chip on EVERY rebuild: innerHTML makes new chip elements, and a chip first painted after a "no reply
   // yet" paint was never wired, so play did nothing (2026-11-28, headless check of the deployed reader). Idempotent per chip (data-wired).
   wireAudioChips(el);
+  if (copyFocus) el.querySelector('.rd-copy-trigger')?.focus({ preventScroll: true });
   // newest content is at the bottom: jump there after each rebuild (the user
   // is at the bottom when we got here, see decideReaderPaint)
   el.scrollTop = el.scrollHeight;
@@ -5980,6 +5992,7 @@ els.sendInput.onkeydown = onDockKey;
 // swallow the keydown before we see it. (Verified with Playwright trace:
 // capture-phase handler fires, bubble-phase does not.)
 document.addEventListener('keydown', (e) => {
+  if (e.target.closest?.('.rd-copy, .rd-copy-pop')) return;   // clipboard menu keys must never be typed into the session
   if (COARSE) return;
   if (state.mode !== 'card' || !state.active) return;
   if (sheetEl) return;

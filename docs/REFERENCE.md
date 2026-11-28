@@ -2780,6 +2780,15 @@ later reader view: [READER-SUMMARY](READER-SUMMARY.md).
   done-check reads), else the reply (a Mac session's last stop).
 - The reader's play button reads the summary only (owner 2026-11-28: "has to be the summary only"); never the STATUS line, the reply
   or the conversation. No summary in the turn: no play button, a muted "no summary yet" hint (`.rd-nosum`) in its place.
+- The reader clipboard icon (`public/reader-copy.js`) opens three choices: latest reply, full session, or summary lines.
+  Reply uses `/api/reply` independently of reader mode; full session fetches `/api/transcript/<s>` without a `max` limit when
+  the menu opens, and refuses a partial result. It becomes available when loaded so the clipboard write remains in a user
+  gesture on Safari. Missing summaries and unavailable transcripts are disabled; failed clipboard writes show a retryable
+  message. The menu supports arrows, Home/End, Escape, Tab and outside dismissal, with native popover/invoker support and
+  fallbacks. The shared HTTP clipboard fallback restores focus and removes its temporary textarea even after failure.
+- `scripts/reader-copy-check.js <baseUrl> [outDir]` (`PLAYWRIGHT_CORE`): headless desktop and phone proof of all three copy
+  payloads, complete-history loading, keyboard/focus behavior, viewport placement and missing/failed sources. All API calls
+  and WebSockets are answered with synthetic fixtures: live panes, layout, send and TTS are never touched.
 - `scripts/reader-audio-check.js <baseUrl> <session> [outDir]` (dev-only, `PLAYWRIGHT_CORE` like `reader-width-check.js`): opens the
   reader of one session on a running dashboard, desktop width, with `/api/tts`, `/api/resize` and layout writes answered in the browser.
   With a summary it clicks play and checks the one TTS request is `spokenSummaryOf(summary)`; without one it checks the hint. Prints
