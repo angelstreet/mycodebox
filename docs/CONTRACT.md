@@ -98,6 +98,7 @@ Dated exceptions (not floor):
 | 2026-10-28 | A non-secret `.env` key (endpoint, port, flag): backup, change that line only, never print the file, rollback line |
 | 2026-10-29 | Using a credential already on the box, through the service's own environment, for an idempotent additive write |
 | 2026-10-30 | A one-time SMS / 2FA code the owner gives in chat: pass it on, it is not a secret |
+| 2026-11-28 | A VirtualPyTest dev -> prod userinterface publish (a navigation tree's nodes and edges, an operator's tree included: "Should not require me here i never said we cannot publish"): the session publishes through `POST /server/userinterface/publish/<dev id>` with `require_evidence=true` and excludes the items without a fresh passing run (virtualpytest `docs/agent/navigation/PUBLISH_DELTA.md`). Never through the MCP `publish_userinterface` confirm form: only a person fills it, and no agent types into it. Publishing a package, a release, a video or a post stays floor |
 | 2026-11-06 | Account rotation restart of a session stopped on a usage limit |
 | 2026-11-26 | The fresh restart of the manager on another Claude account (usage-limit stop, or idle at the account exhaustion threshold; `manager-rotation.js`) |
 

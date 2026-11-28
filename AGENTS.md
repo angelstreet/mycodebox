@@ -230,7 +230,9 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
   **A technical step is not an owner question (owner / manager 2026-11-28):** a reversible technical step backed by evidence (a fix,
   a retry, a merge, deploy or test step, an approach you recommend) ends `needs-manager`, never `needs-owner`. Unsure: ask Opus
   (`scripts/ask-opus.js`), and if Opus is unsure too, the server's check asks Fable; only then does it reach the owner. A confirmation a tool
-  accepts only from a person (VirtualPyTest's publish confirm, `user_ok`) stays the owner's. The server checks every `needs-owner` stop of an
+  accepts only from a person (`user_ok`) is never filled by an agent. A VirtualPyTest dev -> prod userinterface publish is not an owner
+  question (owner 2026-11-28): publish it yourself through the HTTP route with `require_evidence=true`, never the MCP confirm form
+  ([CONTRACT](docs/CONTRACT.md#hard-floor) dated exceptions). The server checks every `needs-owner` stop of an
   owner-started session before the owner sees it (`owner-stop-triage.js`; switch `ownerStopTriage: off` in `manager.json`)
   ([REFERENCE](docs/REFERENCE.md#needs-owner-stops-are-checked-first-owner--manager-2026-11-28)).
 
