@@ -400,6 +400,21 @@ test('R8-r3-2: stallOf never hands the previous stop\'s id to a new stop\'s cont
   assert.equal(m.stallOf('sid1').id, null);
 });
 
+// The board shows why a session needs the manager: stallOf carries managerAsk for needs_manager only (2026-11-28).
+test('stallOf: a done with unverified items carries its managerAsk; a plain done carries none', async () => {
+  const obs = (name, body, now) => m.observe({ name, state: 'done', agent: 'claude', plain: pane(body), raw: pane(body), changed: true, realWork: false, project: 'p', cwd: makeRepo(), now });
+  for (const [n, body] of [['nm1', '1. pass — x\n\nSTATUS: done — x · closing review: docs none needed · leftovers none · unverified live path not run · bugs: none'],
+    ['nm2', '1. pass — x\n\nSTATUS: done — x · closing review: docs none needed · leftovers none · unverified none · bugs: none']]) {
+    m.observe({ name: n, state: 'working', agent: 'claude', plain: ['busy'], raw: ['busy'], changed: true, realWork: true, project: 'p', cwd: makeRepo(), now: 0 });
+    obs(n, body, 1000); obs(n, body, 2500);
+  }
+  await until(() => m.stallOf('nm1')?.case && m.stallOf('nm2')?.case);
+  assert.equal(m.stallOf('nm1').case, 'needs_manager');
+  assert.match(m.stallOf('nm1').managerAsk, /^said done, not fully confirmed: unverified: live path not run/);
+  assert.equal(m.stallOf('nm2').case, 'done');
+  assert.equal(m.stallOf('nm2').managerAsk, null);
+});
+
 test('R8-r4: "Should I run the deploy tests?" is not a deploy request: nothing is typed, the owner gets it (runner on, ledger known, tests green)', async () => {
   const repo = withOrigin();
   snapshot = { ...snapshot, deployed: { 'env-a': { server: { ref: 'main', commit: git(repo, 'rev-list', '--max-parents=0', 'HEAD').trim() } } } };
