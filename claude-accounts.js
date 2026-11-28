@@ -11,7 +11,7 @@
 // State: $GHOSTY_STATE_DIR/claude-accounts.json { auto, autoSwapSessions, active, accounts:[{id,label,configDir}], marks:{id:{until,reason}} }
 // Per-account limits: claude-rate-limits.json (default) / claude-rate-limits.<id>.json, written by the status-line script
 // (scripts/claude-statusline-ratelimits.sh reads GHOSTY_CLAUDE_ACCOUNT, which the launch prefix sets).
-import { promises as fs, existsSync, readFileSync } from 'node:fs';
+import { promises as fs, existsSync, readFileSync, appendFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
@@ -160,16 +160,24 @@ export function activeAccount(stateDir, { home = homedir(), id = null } = {}) {
 // The accounts a one-shot `claude -p` (suggestion triage, ask-opus) may run on, best first, read from disk so a script outside the server
 // sees the same choice: the active account first, then the others in list order; an account marked used up, over its limit in its own
 // rate file, or without a login is skipped. None usable: [] (the caller then runs on the active one anyway). -> [{ id, configDir|null }]
-export function usableAccounts(stateDir, { home = homedir(), now = Date.now, exclude = [] } = {}) {
+export function usableAccounts(stateDir, opts = {}) { return accountsHealth(stateDir, opts).usable; }
+// { total, usable: [{ id, configDir|null }], allUsedUp } for /api/health: allUsedUp is true only when accounts are configured and none has headroom,
+// so "every Claude account is used up" shows as one state, not as repeated triage errors (2026-11-28). No account file: total 0, allUsedUp false.
+export function accountsHealth(stateDir, { home = homedir(), now = Date.now, exclude = [] } = {}) {
   let cfg;
-  try { cfg = normalize(JSON.parse(readFileSync(join(stateDir, 'claude-accounts.json'), 'utf8')), home); } catch { return []; }
+  try { cfg = normalize(JSON.parse(readFileSync(join(stateDir, 'claude-accounts.json'), 'utf8')), home); } catch { return { total: 0, usable: [], allUsedUp: false }; }
   const t = now();
   const ok = cfg.accounts.filter((a) => !exclude.includes(a.id) && hasLogin(a)).filter((a) => {
     let windows = [];
     try { windows = windowsOf(JSON.parse(readFileSync(rateFile(stateDir, a.id), 'utf8')), t); } catch { /* no reading yet: usable */ }
     return !accountState({ windows, mark: cfg.marks[a.id], now: t }).exhausted;
   });
-  return [...ok.filter((a) => a.id === cfg.active), ...ok.filter((a) => a.id !== cfg.active)].map((a) => ({ id: a.id, configDir: a.configDir || null }));
+  const usable = [...ok.filter((a) => a.id === cfg.active), ...ok.filter((a) => a.id !== cfg.active)].map((a) => ({ id: a.id, configDir: a.configDir || null }));
+  return { total: cfg.accounts.length, usable, allUsedUp: cfg.accounts.length > 0 && !usable.length };
+}
+// A switch to the next account after a limit error, as one manager-asks.jsonl row (point 'claude-account-switch'), so it can be found later.
+export function recordSwitch(stateDir, from, to, source, now = Date.now) {
+  try { appendFileSync(join(stateDir, 'manager-asks.jsonl'), JSON.stringify({ at: new Date(now()).toISOString(), point: 'claude-account-switch', source, from: from?.id ?? null, to: to?.id ?? null }) + '\n'); } catch { /* best effort */ }
 }
 // The child environment for an account: its CLAUDE_CONFIG_DIR, or none for the default account.
 export function envFor(acct, base = process.env) {
@@ -178,14 +186,15 @@ export function envFor(acct, base = process.env) {
   return env;
 }
 // Runs run(env, acct) on the usable accounts in order; on a limit error (r.error text) it tries the next account, once (two tries at most).
-// onLimit(acct) lets the caller mark the account used up. run -> { ok, text } | { ok:false, error }; no account: one try on the process env.
+// onLimit(acct, nextAcct|null) lets the caller mark the account used up. run -> { ok, text } | { ok:false, error }; no account: one try on the process env.
 export async function onAccounts(accts, run, { onLimit = () => {}, base = process.env, tries = 2 } = {}) {
   const list = accts.length ? accts.slice(0, tries) : [null];
   let r = null;
-  for (const a of list) {
+  for (let i = 0; i < list.length; i++) {
+    const a = list[i];
     r = await run(a ? envFor(a, base) : base, a);
     if (r?.ok || !isLimitText(r?.error)) return { ...r, account: a?.id ?? null };
-    try { onLimit(a); } catch { /* best effort */ }
+    try { onLimit(a, list[i + 1] || null); } catch { /* best effort */ }
   }
   return { ...r, account: list[list.length - 1]?.id ?? null };
 }
