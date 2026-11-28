@@ -150,8 +150,8 @@ Wait loops, checked in the transcripts: `manager-wait.sh` runs went from about 1
 | Usage page phone fixes, `ui-overflow` daily check | merged |
 | `integrate status` polling | already answered in the tool: a non-final status prints "do not poll status, run ONE integrate wait in the background" |
 | Loop detector inflated counts: cached file items had no time, and `api-request-blob` lines (request snapshots without a timestamp) were read as turns, so they bypassed the window (manager transcript: 81 waits listed, 48 real) | fixed in this round, two merges (`usage/loops.js`, tests `test/usage-loops.test.js`); the `loops` list of `/api/usage` before 28 Nov 14:00 UTC overstates repeats |
-| Usage changes never went live: `safe-restart.sh` restarted only the dashboard unit, while the usage tailer (`ghosty-usage`, which writes `usage-summary.json`) ran 09:45 code; after both loop merges the summary still said 81 while the merged scanner gives 48 | fixed in this round: safe-restart now also runs `try-restart ghosty-usage` (test `test/safe-restart.test.js`) |
-| 1 h cache TTL (proposal 5) | switch built (`cache-ttl.js`, default off); measured below; owner question with a proposed answer |
+| Usage changes never went live: `safe-restart.sh` restarted only the dashboard unit, while the usage tailer (`ghosty-usage`, which writes `usage-summary.json`) ran 09:45 code; after both loop merges the summary still said 81 while the merged scanner gives 48 | fixed in this round: safe-restart now also runs `try-restart ghosty-usage` (test `test/safe-restart.test.js`); live 28 Nov 13:49 UTC: the summary lists 48 manager waits (was 81) |
+| 1 h cache TTL (proposal 5) | closed 28 Nov: decided no (manager, technical call); switch stays built and off (`cache-ttl.js`) |
 | Manager restarts at 09:16 and 09:45 | why not: account rotation at the weekly limit (owner rule 2026-11-06), not a harness loop |
 | `userinterface-audit` / `mcp-server-audit` prompts, the task263 night overseer, the coc-daily / rtsp nightly sleeps, the codex sessions' polling | why not: not harness code; started by hand or by the session owners; token rules handed to them (`~/handovers/*token-rules-20261128.md`) |
 
@@ -161,7 +161,7 @@ Main-session cache writes in the last 48 h (transcripts, `cache_creation` split)
 - subagents: 11.7 M, all at 5 min, but bursty (14 gaps of 5 to 60 min over 2,829 calls). A 1 h write costs 2.0x the input price against 1.25x for 5 min, so 1 h would cost more there.
 - the TASK-263 night overseer (`~/task263-night/overseer2.sh`, `claude -p` on the paid API key, a fresh session every 10 minutes): its first call writes about 12k tokens each check; with 1 h those would be read, but the rest of each 5-call check would then be written at 2.0x. Net about $0.02 per check, about $1 a night. Not worth a change.
 
-Proposed answer: no. Keep `CBSESSION_CACHE_1H` / `cache-1h.json` off and close proposal 5; the switch stays for a future session with long idle gaps on the 5-minute TTL.
+Decision (manager, 28 Nov, technical call): no, closed. Keep `CBSESSION_CACHE_1H` / `cache-1h.json` off and close proposal 5; the switch stays for a future session with long idle gaps on the 5-minute TTL.
 
 ## Next 3 waste items (28 Nov 13:32 UTC, 48 h window)
 
