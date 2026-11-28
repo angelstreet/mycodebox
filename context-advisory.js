@@ -52,14 +52,16 @@ export function advisoryEvent(f, startedBy = 'unknown', at = new Date().toISOStr
 }
 
 // Pure: which findings are due. sent: { id: ms }. Returns the findings to send now.
+// Dedupe key: the trace id is shared by every finding of one session, so a kind other than high-avg-context gets its own key (the old id-only key stays for high-avg-context: state files already hold it).
+export const sentKey = (f) => (f.kind === 'high-avg-context' ? f.id : `${f.kind}:${f.id}`);
 export function dueFindings(findings, sent, now, { cooldownMs = COOLDOWN_MS, isLive = () => true } = {}) {
   const out = [], ids = new Set();
   for (const f of findings || []) {
-    if (!f || (f.kind !== 'high-avg-context' && f.kind !== 'subagent-heavy') || !f.id || !f.session || ids.has(f.id)) continue;
+    if (!f || (f.kind !== 'high-avg-context' && f.kind !== 'subagent-heavy') || !f.id || !f.session || ids.has(sentKey(f))) continue;
     if (!isLive(f.session)) continue;
-    const prev = sent[f.id];
+    const prev = sent[sentKey(f)];
     if (Number.isFinite(prev) && now - prev < cooldownMs) continue;
-    ids.add(f.id); out.push(f);
+    ids.add(sentKey(f)); out.push(f);
   }
   return out;
 }
@@ -84,7 +86,7 @@ export function createContextAdvisory({ stateDir, getSummary, record, startedBy 
         let by = 'unknown';
         try { by = startedBy(f.session) || 'unknown'; } catch { /* unknown */ }
         await record(advisoryEvent(f, by, new Date(t).toISOString()));
-        sent[f.id] = t; n++;
+        sent[sentKey(f)] = t; n++;
       }
       for (const [id, at] of Object.entries(sent)) if (!Number.isFinite(at) || t - at > 4 * cooldownMs) delete sent[id];
       if (n) { await fs.mkdir(stateDir, { recursive: true }); await fs.writeFile(file, JSON.stringify(sent)); }
