@@ -90,3 +90,10 @@ export function isRoutineAlert(item) {
   // Real titles: "deploy <env> <scope> started" or "... done", optionally "done (<version>)"; a ", N host(s) skipped" suffix makes it count.
   return /\b(started|done( \([^)]*\))?)$/.test(title);
 }
+// Why a session reads 'manager': the STATUS needs-manager text, or "said done, not fully confirmed: ..." for a done with open items.
+// '' when the session is not a manager item or the server sent no reason (2026-11-28, triage: the card said manager without why).
+export function managerReasonOf(status) {
+  if (!status || displayState(status) !== 'manager') return '';
+  const a = String(status.stall?.managerAsk || '').replace(/\s+/g, ' ').trim();
+  return a ? `needs the manager: ${a}` : '';
+}

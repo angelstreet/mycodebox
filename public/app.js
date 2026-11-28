@@ -27,7 +27,7 @@ import { decideReaderPaint, autoFullDue, autoFullDone } from '/reader-paint.js';
 import { spokenStatusOf } from '/status-line.js';
 import { localScrollEnters, localScrollExits, flingVelocity, flingStep, ENTER_PX } from '/local-scroll.js';
 import { chipModel, machinesOf, holdingsOf, blocksDeploy, shortResource, ttlText, shortRef, leaseHostSummary } from '/platforms.js';
-import { displayStateOf, STATE_RANK, STATE_LABEL, isRoutineAlert } from '/state.js';
+import { displayStateOf, STATE_RANK, STATE_LABEL, isRoutineAlert, managerReasonOf } from '/state.js';
 import { fmtTok, fmtUsd, sessionRows, topEntries, dayBars, summaryFresh, managerBlockHtml } from '/usage.js';
 import '/tip.js';
 import { mountAskPopup } from '/ask-popup.js';
@@ -2257,7 +2257,7 @@ function syncSide() {
     li.classList.toggle('shown', n !== state.active && shownNames.has(n));
     const dotEl = li.querySelector('.dot');
     dotEl.className = `dot ${listStateOf(n)}`;
-    dotEl.title = listStateOf(n) === 'waiting' ? 'needs you' : listStateOf(n);
+    dotEl.title = listStateOf(n) === 'waiting' ? 'needs you' : managerReasonOf(state.status[n]) || listStateOf(n);
     const ag = agentBadgeHtml(n, { model: false });
     const agEl = li.querySelector('.ag');
     if (agEl.innerHTML !== ag) agEl.innerHTML = ag;
@@ -3161,6 +3161,8 @@ function rowLast(n) {
   const st = state.status[n] || {};
   const s = stateOf(n);
   if (s === 'waiting' && st.waitReason) return st.waitReason;
+  const mr = managerReasonOf(st);
+  if (mr) return mr;
   if (s === 'working' && st.activity) return st.activity;
   if ((s === 'done' || s === 'waiting') && st.lastTurn?.line) return st.lastTurn.line;   // STATUS: verdict · elapsed · tokens · the agent's info
   return st.lastMessage || lastLine(state.paneText.get(n) || '') || ' ';

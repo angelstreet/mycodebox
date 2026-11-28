@@ -1632,7 +1632,8 @@ export function stallOf(name) {
   return { case: st.case, status: st.status || null, systemWait: st.systemWait || null, no_status: !!st.no_status, source: st.source, would: st.would || null, question: st.question, excerpt: st.excerpt || st.question || null, closing: st.closing && st.closing !== st.excerpt ? st.closing : null,
     id: w.pending && w.pending.key === stopKey(st.excerpt) ? w.pending.id : null,   // the previous stop's id never rides on a new stop's content
     options: st.options || null, suggestion: st.suggestion || null, suggestionForbidden: st.suggestion ? forbiddenMatch(st.suggestion) : null,
-    forbidden: st.forbidden || w.cls?.forbidden || null, escalated: escalatedStops.has(w.pending && w.pending.key === stopKey(st.excerpt) ? w.pending.id : null), escalatedTo: escalatedTargetOf(w.pending && w.pending.key === stopKey(st.excerpt) ? w.pending.id : null), queued: st.queued === true, draft: !!(w.cls?.draft), jev: st.jev || null };
+    forbidden: st.forbidden || w.cls?.forbidden || null, escalated: escalatedStops.has(w.pending && w.pending.key === stopKey(st.excerpt) ? w.pending.id : null), escalatedTo: escalatedTargetOf(w.pending && w.pending.key === stopKey(st.excerpt) ? w.pending.id : null), queued: st.queued === true, draft: !!(w.cls?.draft), jev: st.jev || null,
+    managerAsk: st.case === 'needs_manager' && st.managerAsk ? String(st.managerAsk).slice(0, 600) : null };   // why it needs the manager, for the card (2026-11-28)
 }
 
 // The AI reviewer's view for the UI: { id, state: pending|done|skipped|error, ai?, skipped?, error?, ... } for the current stop, or null.

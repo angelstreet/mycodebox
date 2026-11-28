@@ -14,6 +14,17 @@ import { ownerOnly } from './doubt.js';
 import { saysBuilt, refOf } from './suggestions.js';
 import { usableAccounts, onAccounts } from './claude-accounts.js';
 
+// A destruction word in a suggestion is the data floor only when data follows it in the same sentence ("drop the users table",
+// "delete old recordings"); "the state frame drops managerAsk" or "the journal records these drops" is not deleting data. The
+// asks' hard floor (ownerOnly) counts every bare drop / remove / delete, so those words are masked before it reads a suggestion;
+// its other floors (credentials, money, customers, publishing, git main, rm) still apply. 2026-11-28: a dashboard suggestion
+// went to the owner as "owner floor ("drops")".
+const DESTROY_RE = /\b(?:delet(?:e|es|ed|ing|ion)|remov(?:e|es|ed|ing|al)|drop(?:s|ped|ping)?|prun(?:e|es|ed|ing)|truncat\w*|wip(?:e|es|ed|ing)|overwrit\w*|purg\w*|eras(?:e|es|ed|ing|ure)|destr(?:oy\w*|uction)|nuk(?:e|es|ed|ing))\b/gi;
+const DATA_AFTER_RE = /^[^.\n]{0,40}?\b(?:data|datasets?|records?|rows?|tables?|database|db|schema|columns?|users?|accounts?|backups?|history|logs?|journals?|jsonl|ledgers?|recordings?|captures?|videos?|screenshots?|sessions?|branch(?:es)?|worktrees?|commits?|tags?|messages?|emails?|buckets?|volumes?|disks?|snapshots?|archives?|uploads?|everything|all of)\b/i;
+const maskNonData = (t) => t.replace(DESTROY_RE, (w, at) => (DATA_AFTER_RE.test(t.slice(at + w.length)) ? w : 'leaves out'));
+const isDataDeletion = (t) => /\brm -rf\b|\bdrop (?:the |a )?(?:table|database|db|column|index)\b/i.test(t)
+  || [...String(t).matchAll(DESTROY_RE)].some((m) => DATA_AFTER_RE.test(t.slice(m.index + m[0].length)));
+
 // The five owner floors of a suggestion, in plain words. A hit is never approved, whatever Opus says.
 const FLOORS = [
   // spending, not a word about prices: "describe the price (0)" or "that is what cost the A57 its run" are not money decisions (2026-11-27, coc-daily)
@@ -21,13 +32,14 @@ const FLOORS = [
   ['customers', /\b(?:customers?|clients?(?! side| ?-side| cert| library| code| lib)|client install|end ?users?|tell (?:the )?users|e-?mail (?:the )?users|notify (?:the )?users)\b/i],
   ['publishing', /\b(?:publish\w*|public(?:ly)? (?:post|release|announce)|announce\w*|post (?:it |this )?(?:on|to) (?:youtube|linkedin|twitter|x|reddit|the blog|social)|youtube|linkedin|tweet|blog post|press release|open[- ]source it|make (?:the )?repo public|app store|play store)\b/i],
   ['credentials', /\b(?:credentials?|passwords?|secrets?|api[- ]?keys?|tokens? (?:rotat|renew|revok|new)|rotat\w* (?:the |a )?(?:key|token|secret)|private keys?|ssh keys?|logins? for|2fa|oauth (?:app|client))\b/i],
-  ['deleting data', /\b(?:delet\w*|drop(?:ping)? (?:the |a )?(?:table|database|db|column|index)|purg\w*|wip(?:e|ing)\b|truncat\w*|remov\w* (?:old |stale |the )?(?:data|records?|rows?|logs?|history|backups?|recordings?|captures?|users?)|rm -rf|prune (?:old )?(?:data|records|history|backups?))\b/i],
+  ['deleting data', { test: (t) => isDataDeletion(t) }],   // a destruction word with data after it, see DATA_AFTER_RE (2026-11-28)
 ];
 // Pure. text: one suggestion -> the floor it hits ('money' | ... ) or null. ownerOnly (doubt.js) adds the hard floor of asks (sudoers, force-push ...).
+
 export function floorOf(text) {
   const t = String(text || '');
   for (const [name, re] of FLOORS) if (re.test(t)) return name;
-  const o = ownerOnly({ text: t });
+  const o = ownerOnly({ text: maskNonData(t) });
   return o ? `owner floor (${o.replace(/^owner floor wording: /, '')})` : null;
 }
 

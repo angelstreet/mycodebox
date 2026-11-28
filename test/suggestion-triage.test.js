@@ -390,3 +390,25 @@ test('the triage record names the Claude account Opus answered on, also on an er
   const recs = readFileSync(join(stateDir, 'manager-asks.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
   assert.deepEqual(recs.map((x) => [x.verdict, x.account]), [['error', 'team1'], ['yes', 'team2']]);
 });
+
+// 2026-11-28: "Show why a session is needs-manager on its dashboard card. The state frame drops `managerAsk`, ..." went to the owner
+// as "owner floor ("drops")". The data floor is real data deletion, not a UI or journal sense of drop / remove.
+test('floorOf: drop / remove / delete in a UI or journal sense is not the data floor; real data deletion still is', () => {
+  for (const t of [
+    'Show why a session is needs-manager on its dashboard card. The state frame drops `managerAsk`, so the card says needs-manager without the reason',
+    'When the done check drops a finding because main changed meanwhile, also count it in /api/done-check',
+    'The journal already records these drops',
+    'remove the duplicate chip from the phone summary bar',
+    'drop the hedge word list now that the strict none rule covers it',
+    'delete the dead code path in stall.js',
+  ]) assert.equal(floorOf(t), null, t);
+  for (const [t, f] of [
+    ['drop the users table after the migration', 'deleting data'],
+    ['delete old recordings older than 30 days to free the disk', 'deleting data'],
+    ['purge the manager-events history', 'deleting data'],
+    ['wipe the backups on node1', 'deleting data'],
+  ]) assert.equal(floorOf(t), f, t);
+  for (const t of ['remove the stale sessions from the dashboard', 'drop the old branches on origin', 'rm -rf the old capture folder'])
+    assert.match(floorOf(t) || '', /deleting data|owner floor/, t);
+  for (const t of ['force-push main to fix history', 'kill the prod server', 'git reset --hard on main']) assert.match(floorOf(t) || '', /owner floor/, `the other hard floors still apply: ${t}`);
+});
