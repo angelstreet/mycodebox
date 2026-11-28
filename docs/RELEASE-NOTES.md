@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The Anthropic cache audit can be run again** — `scripts/anthropic-cache-audit.py` prints cache use and cost per organisation, API key, model and day or hour from the Admin API reports (read-only, keys never printed); the steps and traps are in [ANTHROPIC-CACHE-AUDIT](ANTHROPIC-CACHE-AUDIT.md).
+
 - **API credit shows spend / credit left, with the real limits** — "better show spending / credit ... 94/945 we round numbers" (owner 2026-11-28). The header reads `Claude API 94/945$ · Claude team API 200/11$`: spent this month / prepaid credit left, whole dollars, red when the org hit its monthly limit or has no credit left. The Admin API has no balance endpoint, so the credit is the Console figure written in `quota-budgets.json` (`creditUsd`, `creditAt`) minus the cost recorded since; the popup shows it with the limit. The budgets had the two orgs' limits swapped (AngelStreet is capped at $200 and stopped until Dec 1, not $1000) · area: usage
 
 - **The top bar is shorter and easier to read** — one block per source; the quota strip now reads `CLAUDE 5% wk · MINIMAX 8% 5h · OPENROUTER -$0.20 · CLAUDE API 94/200$ · CLAUDE TEAM API 212$` and wraps to a second row instead of clipping; the extra-usage "left" chip and unlimited windows are gone from it; CPU / RAM / disk details show only on an amber or red value (always in the tooltip); amber values are no longer bigger than the rest (an unrelated `.warn` style leaked in) · area: dashboard
