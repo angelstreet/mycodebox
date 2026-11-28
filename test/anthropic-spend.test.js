@@ -52,10 +52,20 @@ test('API spend groups: the owner\'s names, spent/budget for the Claude API, spe
   const h = apiCreditChips(c);
   assert.match(h, /<b>Claude API<\/b><span class="qi ok">94\/200\$</);
   assert.match(h, /<b>Claude team API<\/b><span class="qi warn old">851\$</);
-  assert.match(h, /\$850\.50 of \$1000\.00/, 'the title keeps the cents');
+  assert.match(h, /\$850\.50 of the \$1000\.00 limit/, 'the title keeps the cents');
   assert.doesNotMatch(h, /No key/);
   assert.match(apiCreditChips({ ok: true, orgs: [{ org: 'max', label: 'm', budgetUsd: 200, spentUsd: null }] }), /qi na">\?\/200\$</);
   assert.match(apiCreditChips({ ok: true, orgs: [{ org: 'm', label: '<b>', spentUsd: 3.5 }] }), /<b>&lt;b&gt;<\/b><span class="qi ok">4\$</);
+});
+test('API spend groups with credit: spent / credit left, red at the limit or with no credit, limit and credit in the title', () => {
+  const h = apiCreditChips({ ok: true, orgs: [
+    { org: 'max', label: 'Virtualpytest API org', budgetUsd: 1000, spentUsd: 94.27, leftUsd: 905.73, usedPercent: 9.4, creditLeftUsd: 945.09 },
+    { org: 'team', label: 'AngelStreet API org', budgetUsd: 200, spentUsd: 200.2, leftUsd: -0.2, usedPercent: 100.1, creditLeftUsd: 10.85 },
+    { org: 'dry', label: 'Dry org', budgetUsd: 1000, spentUsd: 10, usedPercent: 1, creditLeftUsd: -2.4 },
+  ] });
+  assert.match(h, /<b>Claude API<\/b><span class="qi ok">94\/945\$</);
+  assert.match(h, /title="AngelStreet API org: API spend this month \$200\.20 of the \$200\.00 limit \(100%, API calls stopped until the 1st\), credit left about \$10\.85"><b>Claude team API<\/b><span class="qi crit">200\/11\$</);
+  assert.match(h, /<b>Dry org<\/b><span class="qi crit">10\/-2\$</);
 });
 test('static: wired in server.js and the app, precached', () => {
   const rd = (p) => readFileSync(new URL(p, import.meta.url), 'utf8');

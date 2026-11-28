@@ -3,8 +3,10 @@
 //            Analytics API), falling back to the older /v1/organizations/cost_report when that is not open to the org.
 //            Each org needs an admin key (sk-ant-admin..., or an organization-scoped sk-ant-usr key) in ~/.config/anthropic/<org>.admin.key, read at request time,
 //            never logged, never cached, sent only to api.anthropic.com. No key = a row that says how to add one.
-//   budgets  $GHOSTY_STATE_DIR/quota-budgets.json (not secret), e.g. {"max":{"label":"Max account","budgetUsd":200,"period":"month"}};
-//            the defaults below when the file is absent.
+//   budgets  $GHOSTY_STATE_DIR/quota-budgets.json (not secret), e.g. {"max":{"label":"Max account","budgetUsd":200,"period":"month",
+//            "creditUsd":945.09,"creditAt":"2026-11-28T16:48:00Z"}}; the defaults below when the file is absent. budgetUsd is the org's
+//            monthly spend limit (Console > Limits). creditUsd is the prepaid credit the Console showed at creditAt: no Admin API
+//            endpoint returns the balance, so the credit left is that reading minus the cost recorded since creditAt.
 // Asked at most every 15 minutes, cached on disk; a failed pull keeps the last good figure marked stale.
 // Amounts in both reports are decimal strings in cents (USD), after discounts and before credits.
 import { promises as fs } from 'node:fs';
@@ -50,8 +52,10 @@ export function normalizeBudgets(raw) {
   const out = [];
   for (const [org, b] of Object.entries(src)) {
     if (!ORG_RE.test(org) || !b || typeof b !== 'object') continue;
-    const budget = Number(b.budgetUsd);
-    out.push({ org, label: String(b.label || DEFAULT_BUDGETS[org]?.label || org), budgetUsd: Number.isFinite(budget) && budget > 0 ? budget : null, period: 'month' });
+    const budget = Number(b.budgetUsd), credit = Number(b.creditUsd), at = Date.parse(b.creditAt);
+    const row = { org, label: String(b.label || DEFAULT_BUDGETS[org]?.label || org), budgetUsd: Number.isFinite(budget) && budget > 0 ? budget : null, period: 'month' };
+    if (b.creditUsd != null && b.creditUsd !== '' && Number.isFinite(credit) && Number.isFinite(at)) Object.assign(row, { creditUsd: credit, creditAt: new Date(at).toISOString().replace('.000Z', 'Z') });
+    out.push(row);
   }
   return out;
 }
@@ -86,26 +90,37 @@ export function createApiCredit({
     }
     return { cents: total, rows, refreshedAt, partial: true };
   }
-  async function spentOf(org, t) {
-    const key = await readKey(org);
-    if (!key) return { error: keyHint(org), noKey: true };
-    const from = monthStart(t);
+  // cost since `from` (ISO): { value:{ cents, rows, source, refreshedAt } } or { error }
+  async function costSince(key, org, from) {
     try {
       let r = await pages('/v1/organizations/analytics/cost', { starting_at: from }, key), source = 'Admin API cost analytics';
       if (r.status === 404 || r.status === 400) { r = await pages('/v1/organizations/cost_report', { starting_at: from, bucket_width: '1d', limit: '31' }, key); source = 'Admin API cost report (to last UTC midnight)'; }
       if (r.status === 401 || r.status === 403) return { error: `key refused (http ${r.status})${r.reason ? `: ${r.reason}` : ''} — ~/.config/anthropic/${org}.admin.key needs an sk-ant-admin key or an org-scoped key` };
       if (r.status) return { error: `http ${r.status}${r.reason ? `: ${r.reason}` : ''}` };
-      return { value: { spentUsd: Math.round(r.cents) / 100, source, refreshedAt: r.refreshedAt, ...(r.rows ? {} : { note: 'no cost recorded yet this month (data lands 4 to 24 h late)' }) } };
+      return { value: { cents: r.cents, rows: r.rows, source, refreshedAt: r.refreshedAt } };
     } catch (e) { return { error: e.name === 'TimeoutError' ? 'timeout' : String(e.message || e).replace(/sk-ant-[\w-]+/g, '***') }; }
+  }
+  async function spentOf(b, t) {
+    const key = await readKey(b.org);
+    if (!key) return { error: keyHint(b.org), noKey: true };
+    const m = await costSince(key, b.org, monthStart(t));
+    if (m.error) return m;
+    const v = m.value, value = { spentUsd: Math.round(v.cents) / 100, source: v.source, refreshedAt: v.refreshedAt, ...(v.rows ? {} : { note: 'no cost recorded yet this month (data lands 4 to 24 h late)' }) };
+    if (b.creditUsd != null && Date.parse(b.creditAt) <= t) {
+      const c = await costSince(key, b.org, b.creditAt);
+      if (c.value) value.creditLeftUsd = Math.round(b.creditUsd * 100 - c.value.cents) / 100;
+      else value.creditError = c.error;
+    }
+    return { value };
   }
   async function load() {
     const t = now(), month = monthStart(t).slice(0, 7), prev = cached?.month === month ? cached : null;
     const orgs = [];
     for (const b of await budgets()) {
-      const x = await spentOf(b.org, t), old = prev?.orgs?.find((o) => o.org === b.org && o.spentUsd != null);
+      const x = await spentOf(b, t), old = prev?.orgs?.find((o) => o.org === b.org && o.spentUsd != null);
       let row;
-      if (x.value) row = { ...b, ...x.value };
-      else if (old && !x.noKey) row = { ...b, spentUsd: old.spentUsd, source: old.source, refreshedAt: old.refreshedAt ?? null, stale: true, error: x.error };
+      if (x.value) row = { ...b, ...x.value, ...(x.value.creditError && old?.creditLeftUsd != null ? { creditLeftUsd: old.creditLeftUsd } : {}) };
+      else if (old && !x.noKey) row = { ...b, spentUsd: old.spentUsd, source: old.source, refreshedAt: old.refreshedAt ?? null, ...(old.creditLeftUsd != null ? { creditLeftUsd: old.creditLeftUsd } : {}), stale: true, error: x.error };
       else row = { ...b, spentUsd: null, error: x.error, ...(x.noKey ? { noKey: true } : {}) };
       if (row.spentUsd != null && row.budgetUsd) { row.leftUsd = Math.round((row.budgetUsd - row.spentUsd) * 100) / 100; row.usedPercent = Math.round((row.spentUsd / row.budgetUsd) * 1000) / 10; }
       orgs.push(row);

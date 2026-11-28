@@ -107,3 +107,22 @@ test('force (the popup refresh button): a new key shows at once, but at most one
   assert.equal(calls, 1);
   assert.ok(FORCE_MIN_MS < POLL_MS);
 });
+
+test('credit left: the Console reading minus the cost since it was read; a failed credit pull keeps the last figure', async () => {
+  const { state, keyDir } = dirs({ max: 'k' }); const froms = []; let fail = false;
+  writeFileSync(join(state, 'quota-budgets.json'), JSON.stringify({ max: { label: 'Virtualpytest API org', budgetUsd: 1000, creditUsd: 945.09, creditAt: '2026-11-27T16:48:00Z' } }));
+  let t = NOW;
+  const c = createApiCredit({ stateDir: state, keyDir, now: () => t, fetchFn: async (u) => {
+    const from = new URL(u).searchParams.get('starting_at'); froms.push(from);
+    if (from === '2026-11-01T00:00:00Z') return resp({ data: [{ cost: { amount: '9427' } }] });
+    return fail ? resp({ error: { message: 'boom' } }, false, 500) : resp({ data: [{ cost: { amount: '1234.5' } }] });
+  } });
+  const r = await c.get();
+  assert.deepEqual(froms, ['2026-11-01T00:00:00Z', '2026-11-27T16:48:00Z']);
+  const o = r.orgs[0];
+  assert.deepEqual([o.spentUsd, o.budgetUsd, o.usedPercent, o.creditUsd, o.creditLeftUsd], [94.27, 1000, 9.4, 945.09, 932.75]);
+  fail = true; t += POLL_MS;
+  const o2 = (await c.get()).orgs[0];
+  assert.equal(o2.creditLeftUsd, 932.75); assert.equal(o2.creditError, 'http 500: boom');
+  assert.deepEqual(normalizeBudgets({ a: { budgetUsd: 1, creditUsd: 5 } })[0].creditUsd, undefined, 'no creditAt: no credit');
+});
