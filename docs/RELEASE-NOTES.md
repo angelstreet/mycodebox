@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **Cloud sessions start on Sonnet too** — `scripts/cloud-start` now passes `--model sonnet` instead of leaving the model to the account's default; the new `-m <model>` chooses another one · area: cloud sessions
+
 - **The token audit can be run again** — `scripts/token-audit.js` prints the audit figures, models, top sessions and waste findings for any time windows from the usage ledger; the steps and traps are in [TOKEN-AUDIT](TOKEN-AUDIT.md).
 
 - **The API spend values carry a dollar sign** — "put dollars in both it is money" (owner 2026-11-28): the top bar reads `Claude API 94/945$ - 200/200$` · area: usage
