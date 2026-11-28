@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **One reader clipboard icon copies the reply, full session, or summary** — the icon beside the audio controls now opens three choices. Reply always copies the latest answer, full session loads the unbounded transcript, and summary copies only its lines. Missing or failed sources stay unavailable, copy failures can be retried, and keyboard and HTTP clipboard fallbacks preserve focus. · area: reader
+
 - **Cloud sessions for code fixes** — Claude Code cloud sessions (claude.ai/code, `claude --cloud`) can now fix mycodebox and VirtualPyTest code off the codebox VM: `scripts/cloud-setup.sh` installs each repo's test dependencies (idempotent, a no-op outside the cloud), `scripts/cloud-start` starts one session from codebox and logs it to `cloud-sessions.jsonl`, `AGENTS.md` carries the code-only rule, and branches come back through `integrate request --mac cloud-<slug>` (docs/CLOUD.md). Two tests that failed only on Node 22 (the cloud's Node) are fixed: the external-result sweep treated an ack written a fraction of a millisecond early as missing, and the lane's red-test check now pins the spec reporter · area: cloud
 
 - **Shared pages play video on Safari** — `/p/<slug>/` files now answer HTTP Range requests (206 / 416, `accept-ranges: bytes`): Safari on an iPhone or a Mac plays a `<video>` only with them, so a published episode page showed a dead player. Test in `test/pages.test.js` · area: pages

@@ -86,3 +86,28 @@ test('wireCopyPrompt: is idempotent (second call does not throw / not a double-w
   // flag; both calls return without error.
   assert.doesNotThrow(() => { wireCopyPrompt(); wireCopyPrompt(); wireCopyPrompt(); });
 });
+
+test('HTTP clipboard fallback restores focus and cleans up after success or failure', async () => {
+  const before = Object.getOwnPropertyDescriptors(globalThis);
+  const calls = [];
+  let field, children = 0, throws = false;
+  const previous = { focus: (options) => { calls.push(options.preventScroll); } };
+  Object.defineProperty(globalThis, 'navigator', { value: {}, configurable: true });
+  globalThis.document = {
+    activeElement: previous,
+    createElement: () => (field = { style: {}, setAttribute() {}, focus() {}, select() {} }),
+    body: { appendChild: () => { children++; }, removeChild: (ta) => { assert.equal(ta, field); children--; } },
+    execCommand: () => { if (throws) throw new Error('synthetic denial'); return true; },
+  };
+  try {
+    assert.equal(await copyText('exact source'), true);
+    assert.equal(field.value, 'exact source'); assert.equal(children, 0);
+    throws = true;
+    assert.equal(await copyText('retry source'), false);
+    assert.equal(children, 0); assert.deepEqual(calls, [true, true]);
+  } finally {
+    for (const key of ['navigator', 'document']) {
+      if (before[key]) Object.defineProperty(globalThis, key, before[key]); else delete globalThis[key];
+    }
+  }
+});

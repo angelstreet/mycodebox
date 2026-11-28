@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 const src = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 
 test('reply and transcript go through getJson with an abort deadline', () => {
-  assert.match(src, /function getJson\(url, ms\)[\s\S]{0,200}ac\.abort\(\)/);
+  assert.match(src, /function getJson\(url, ms, signal = null\)[\s\S]{0,200}ac\.abort\(\)/);
   assert.match(src, /getJson\(`\/api\/reply\//);
   assert.match(src, /getJson\(`\/api\/transcript\//);
   assert.doesNotMatch(src, /fetch\(`\/api\/(reply|transcript)\//);

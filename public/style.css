@@ -377,7 +377,7 @@ body{ display:flex; flex-direction:column; }
    gap; on narrow widths the audio chip wraps under without breaking the
    row. */
 .reader .rd-actions{
-  display:flex; align-items:center; gap:8px; justify-content:flex-end;
+  display:flex; align-items:center; gap:8px; justify-content:flex-end; flex-wrap:wrap;
   margin:14px 0 0; padding-top:10px; border-top:1px solid var(--line);
 }
 .reader .rd-actions .copy-prompt{ float:none; margin:0; }   /* override the mdbody float-right so the chip + button sit on one row */
@@ -3083,3 +3083,22 @@ body.fv-page{ margin:0; background:var(--bg); }
 @media (max-width:720px){ .tl-row{ grid-template-columns:78px 1fr; } .tl-row span{ grid-column:1 / -1; } }
 .mdbar .sbtn.on{ border-color:var(--accent); }
 .sheet .mdbar{ display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px; }
+
+/* The reader keeps one clipboard icon; its popup copies an explicit source. */
+.rd-copy{ display:inline-flex; align-items:center; gap:6px; }
+.rd-copy-trigger{ display:inline-flex; align-items:center; justify-content:center; min-inline-size:26px; min-block-size:26px; padding:0; background:var(--bg-2); color:var(--ink-3); border:1px solid var(--line-2); border-radius:6px; cursor:pointer; }
+.rd-copy-trigger[aria-expanded="true"]{ color:var(--accent); border-color:var(--accent); }
+.rd-copy-trigger:focus-visible,.rd-copy-pop button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
+.rd-copy-pop{ position:fixed; inset:auto; margin:0; padding:6px; min-inline-size:210px; max-inline-size:calc(100vw - 16px); max-block-size:calc(100dvh - 16px); overflow:auto; background:var(--bg-2); color:var(--ink); border:1px solid var(--line-2); border-radius:10px; box-shadow:0 8px 28px #0006; z-index:10000; }
+.rd-copy-pop:not([data-open]):not(:popover-open){ display:none; }
+.rd-copy-pop button{ display:block; width:100%; text-align:left; min-block-size:40px; padding:8px 12px; color:inherit; background:transparent; border:0; border-radius:6px; cursor:pointer; font:inherit; }
+.rd-copy-pop button:disabled{ opacity:.45; cursor:default; }
+.rd-copy-note{ display:block; font-size:12px; line-height:1.4; color:var(--ink-3); max-inline-size:240px; padding:0 12px; }
+.rd-copy-note:empty{ padding:0; }
+.rd-copy-status{ font-size:12px; color:var(--ink-3); }
+@supports (position-area: block-end){
+  .rd-copy-pop{ position-area:block-start span-inline-end; position-try-fallbacks:flip-block,flip-inline,flip-block flip-inline; margin-block:6px; }
+}
+@supports not selector(:popover-open){ .rd-copy-pop:not([data-open]){ display:none; } }
+@media (hover:hover) and (pointer:fine){ .rd-copy-trigger:hover{ color:var(--accent); border-color:var(--accent); } .rd-copy-pop button:hover:not(:disabled){ background:var(--bg-3); } }
+@media (max-width:720px){ .rd-copy-trigger{ min-inline-size:30px; min-block-size:30px; } }
