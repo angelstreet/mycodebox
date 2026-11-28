@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **`page publish folder/index.md` is named after the folder** — every lone `index.md` / `index.html` was published as `/p/index/`, so the next one replaced it · area: pages
+
 - **The lane's request log records only what changed** — every save appended the whole request with all its step output, so `integration/requests.jsonl` reached 444 MB. It now writes a full line on a change of state (and after a restart) and only the changes otherwise; existing lines stay as they are. Replaying the real history this way: 427 MB becomes 89 MB, with the same requests rebuilt · area: harness
 
 - **Click an option in the NEEDS YOU question list to answer it** — "i shoud be able toclick to seelct a decision" (owner 2026-11-28). The options in the strip popup were plain text; each is now a button that sends the same answer as the bottom-right popup, marks the choice, says when a send failed, and the popup stays open for the next question · area: dashboard

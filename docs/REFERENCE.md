@@ -2216,7 +2216,8 @@ whose reply approves the plan around the question (round 9 `approvedAction`).
   `settings.json`). `page publish <file.html|file.md|folder> [--slug s] [--title t] [--asset f ...]` copies the page into
   `<state>/pages/<slug>/site/` (Markdown rendered to a phone-width HTML page; files the page names by a relative path are copied beside it; a folder
   is copied whole, dot files and symlinks skipped; 200 files / 50 MB at most) with `meta.json` (`title`, `session`, `account`, `version`, times), and
-  prints `<PUBLIC_URL>/p/<slug>/`. The same slug again replaces the files atomically: the URL stays. `page list`, `page url <slug>`.
+  prints `<PUBLIC_URL>/p/<slug>/`. The slug defaults to the file name, or the folder name for a folder or a lone `index.html` / `index.md`
+  (2026-11-28: every `index.md` had shared the slug `index`, so a second one replaced the first). The same slug again replaces the files atomically: the URL stays. `page list`, `page url <slug>`.
   Routes: `GET /p/` (the list, server-made, no script; More menu > Pages), `GET /p/<slug>/<path>`, `GET /api/pages` (`{ base, pages }`).
   HTML and SVG there and under `/files/` carry `PAGE_CSP`: `sandbox` without `allow-same-origin` (opaque origin) plus `connect-src 'none'`,
   `form-action 'none'`, `worker-src 'none'`: scripts run, images / CSS / fonts / CDN scripts load, but no fetch, XHR, WebSocket, beacon or form

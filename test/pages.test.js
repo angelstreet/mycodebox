@@ -31,6 +31,17 @@ test('slugify and markdownToHtml', () => {
   assert.match(h, /<a href="#">bad<\/a>/);
 });
 
+test('publishPage: a lone index.md / index.html is named by its folder, not "index"', () => {
+  const state = tmp('pages-state-'), parent = tmp('pages-src-');
+  const a = path.join(parent, 'Cloud Review'); fs.mkdirSync(a);
+  fs.writeFileSync(path.join(a, 'index.md'), '# A\n');
+  assert.equal(publishPage(state, path.join(a, 'index.md')).slug, 'cloud-review');
+  const b = path.join(parent, 'other'); fs.mkdirSync(b);
+  fs.writeFileSync(path.join(b, 'index.html'), '<title>B</title>');
+  assert.equal(publishPage(state, path.join(b, 'index.html')).slug, 'other');
+  assert.equal(publishPage(state, path.join(b, 'index.html'), { slug: 'kept' }).slug, 'kept');
+});
+
 test('localRefs: relative files only, never outside the folder', () => {
   const r = localRefs('<img src="a.png"><link href="css/s.css"><a href="https://x/y">x</a><img src="/etc/x.png"><img src="../up.png"><img src=".env/x.png"><div style="background:url(\'bg.jpg\')"></div> ![m](img/b%20c.png)');
   assert.deepEqual(r.sort(), ['a.png', 'bg.jpg', 'css/s.css', 'img/b c.png']);

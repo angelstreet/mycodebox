@@ -142,7 +142,9 @@ export function publishPage(stateDir, src, { slug, title, session = '', account 
   }
   const ext = extname(entry).toLowerCase();
   if (!['.html', '.htm', '.md', '.markdown'].includes(ext)) throw new Error(`${src}: publish an .html or .md file (or a folder with index.html)`);
-  const s = slug ? String(slug) : slugify(isDir ? basename(abs) : basename(entry, extname(entry)));
+  // A lone index.html / index.md is named by its folder: every "index" would otherwise share (and overwrite) one slug.
+  const stem = basename(entry, extname(entry));
+  const s = slug ? String(slug) : slugify(isDir ? basename(abs) : /^index$/i.test(stem) ? basename(dirname(abs)) : stem);
   if (!SLUG_RE.test(s)) throw new Error(`bad slug "${s}": lower-case letters, digits and dashes, 60 at most`);
   const raw = readFileSync(entry, 'utf8');
   const isMd = ext === '.md' || ext === '.markdown';
