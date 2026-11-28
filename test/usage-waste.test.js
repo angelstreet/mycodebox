@@ -80,3 +80,14 @@ test('scorecard has a daily waste line from the day rows', async () => {
   assert.equal(wasteSection({ ledgerRows: [], from, to }).findings, 0);
   assert.equal(buildScorecard({ ledgerRows: rows, from, to, now: to }).waste.findings, 1);
 });
+
+test('usage page: Waste view renders accounts, burn, findings and loops; escapes names; says so without data', async () => {
+  const { wasteHtml, pageHtml } = await import('../public/usage-view.js');
+  assert.match(wasteHtml({}), /no waste data yet/);
+  const w = buildWaste(many(40, { session: 'a', label: '<b>big</b>', trace: 'ta', usage: { cache_read: 400e3 } }), NOW, {}, { a: [{ account: 'team1', at: 0 }] });
+  const u = { waste: w, perAccount: w.perAccount, wasteLine: wasteLine(w), burn: burnVsLimit({ team1: { five_hour: { used_percentage: 90, resets_at: (NOW + 4 * H) / 1000 } } }, w.hourly, NOW), loops: [{ kind: 'test-loop', count: 9, sample: 'npm test <x>', label: 'sess' }] };
+  const h = wasteHtml(u);
+  for (const s of ['By account', 'team1', 'Burn vs plan limit', 'hits the limit first', 'big context', 'test loop', '9× npm test &lt;x&gt;']) assert.ok(h.includes(s), s);
+  assert.ok(!h.includes('<b>big</b>'));
+  assert.match(pageHtml({ usage: u, tab: '14d', ui: { view: 'waste' } }), /data-view="waste"/);
+});

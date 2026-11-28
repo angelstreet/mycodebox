@@ -321,11 +321,42 @@ export function minimaxHtml(mm) {
     <div class="uv-note dim">${esc(mm.note || '')}</div></section>`;
 }
 
+// ---------- Waste (owner 2026-11-28): where the tokens go and what is waste; data = usage-summary `waste`, `perAccount`, `burn`, `loops` ----------
+const KIND_LABEL = { 'high-avg-context': 'big context', 'low-cache-hit': 'cache miss', 'cache-churn': 'cache churn', 'subagent-heavy': 'subagents', 'idle-polling': 'idle polling', 'expensive-model-cheap-work': 'big model, small work', 'test-loop': 'test loop', 'wait-loop': 'wait loop', 'command-loop': 'command loop', 'prompt-repeat': 'repeated prompt' };
+const hrs = (h) => (h == null ? 'n/a' : h < 1 ? `${Math.round(h * 60)} min` : `${Math.round(h * 10) / 10} h`);
+export function wasteHtml(u) {
+  const w = u?.waste;
+  if (!w) return '<div class="uv-empty">no waste data yet — needs the updated ghosty-usage tailer (restart the unit)</div>';
+  const accs = Object.entries(u.perAccount || w.perAccount || {}).map(([k, v]) => `<div class="urow"><div class="u1"><b>${esc(k)}</b><span class="grow"></span><b>${v.share}%</b><span class="dim">&nbsp;of context</span></div>
+      <div class="uv-bar sm"><i style="width:${Math.min(100, v.share)}%"></i></div>
+      <div class="u2">${esc(String(v.turns))} calls &middot; ctx ${fmtTok(v.context)} &middot; ${v.cost ? `$${(Math.round(v.cost * 100) / 100).toFixed(0)}` : 'unpriced'} &middot; subagents ${v.context ? Math.round((v.subagentContext / v.context) * 100) : 0}%${k === 'unknown' ? ' &middot; <span class="dim">sessions not seen alive yet; shrinks as they run</span>' : ''}</div></div>`).join('');
+  const burn = (u.burn || []).map((b) => {
+    if (b.stale) return `<div class="urow"><div class="u1"><b>${esc(b.account)}</b> <span class="dim">${esc(b.window.replace('_', ' '))}</span><span class="grow"></span><span class="dim">reading is from a finished window</span></div></div>`;
+    const bad = b.hitsBeforeReset;
+    return `<div class="urow${bad ? ' out' : ''}"><div class="u1">${bad ? `<span class="uw" title="at this pace the limit is hit before the reset">${icon('alert', 12)}</span>` : ''}<b>${esc(b.account)}</b> <span class="dim">${esc(b.window.replace('_', ' '))}</span><span class="grow"></span><b>${Math.round(b.usedPct)}%</b></div>
+      <div class="uv-bar sm"><i style="width:${Math.min(100, Math.max(0, b.usedPct))}%"></i></div>
+      <div class="u2">${b.avgPctPerHour} %/h avg &middot; 100% in ${hrs(b.etaHours)} &middot; resets in ${hrs(b.hoursToReset)}${bad ? ' &middot; <b>hits the limit first</b>' : ''}${b.recentCostPerHour ? ` &middot; last 3 h $${b.recentCostPerHour}/h` : ''}</div></div>`;
+  }).join('') || '<div class="dim">no rate-limit reading</div>';
+  const byHour = new Map();
+  for (const h of w.hourly || []) byHour.set(h.hour, (byHour.get(h.hour) || 0) + h.context);
+  const hours = [...byHour].sort((a, b) => a[0] - b[0]), max = Math.max(1, ...hours.map((x) => x[1]));
+  const bars = hours.length ? `<div class="uv-bars" style="position:relative;inset:auto;height:64px;margin:6px 0">${hours.map(([t, c]) => `<i title="${esc(new Date(t).toISOString().slice(5, 13))}h UTC: ${esc(fmtTok(c))} context" style="flex:1;height:${Math.max(2, Math.round((c / max) * 100))}%;background:var(--accent);border-radius:2px 2px 0 0"></i>`).join('')}</div><div class="uv-note dim">context tokens read per hour, last ${w.windowH} h (all agents)</div>` : '';
+  const row = (kind, name, agent, detail, extra = '') => `<div class="urow"><div class="u1"><span class="tag" style="white-space:nowrap;font-size:11px;padding:1px 6px;border-radius:8px;background:var(--bg-3);color:var(--ink)">${esc(KIND_LABEL[kind] || kind)}</span> <i class="adot ${esc(agent || '')}"></i><b>${esc(name)}</b>${extra}</div><div class="u2">${esc(detail)}</div></div>`;
+  const finds = (w.findings || []).slice(0, 30).map((f) => row(f.kind, f.session, f.agent, f.detail, f.cost ? `<span class="grow"></span><span class="dim">$${Math.round(f.cost)}</span>` : '')).join('') || '<div class="dim">no waste found in this window</div>';
+  const loops = (u.loops || []).slice(0, 15).map((l) => row(l.kind, l.label || l.session, 'claude', `${l.count}× ${l.sample}`)).join('') || '<div class="dim">no repeated commands or prompts</div>';
+  const th = w.thresholds || {};
+  return `<section class="uv-sec"><h2>Waste &mdash; last ${esc(String(w.windowH))} h</h2><div class="uv-note dim">${esc(u.wasteLine || '')}</div>${bars}</section>
+    <section class="uv-sec"><h2>Burn vs plan limit</h2>${burn}</section>
+    <section class="uv-sec"><h2>By account</h2>${accs}</section>
+    <section class="uv-sec"><h2>Findings (${(w.findings || []).length})</h2>${finds}<div class="uv-note dim">rules: avg context &gt; ${Math.round((th.avgCtx || 0) / 1e3)}k &middot; cache hit &lt; ${Math.round((th.hitBelow || 0) * 100)}% &middot; cache writes &ge; ${fmtTok(th.churnWrite || 0)} &middot; subagents &ge; ${Math.round((th.subShare || 0) * 100)}% &middot; polling calls &ge; ${Math.round((th.pollShare || 0) * 100)}%</div></section>
+    <section class="uv-sec"><h2>Loops</h2>${loops}<div class="uv-note dim">same command or prompt repeated in one session (transcripts)</div></section>`;
+}
+
 // ---------- the page ----------
 
 // ui = { tab, view, dim, range, selDay, f: {agent, project, q}, openAgents: Set, langfuse }
 export function pageHtml({ usage, tab = 'today', score = null, jev = null, quota = null, ui = {}, rows = [], live = () => false, links = {} }) {
-  const today = tab === 'today' && (ui.view || 'overview') !== 'minimax';
+  const today = tab === 'today' && !['minimax', 'waste'].includes(ui.view || 'overview');
   if (today && !usage) return '<div class="uv-empty">loading…</div>';
   if (today && usage && !summaryFresh(usage, Date.now())) return '<div class="uv-empty">no usage today yet — the summary is from an earlier day</div>';
   if (today && usage && !usage.today) return '<div class="uv-empty">today needs the updated ghosty-usage tailer (restart the unit)</div>';
@@ -333,7 +364,7 @@ export function pageHtml({ usage, tab = 'today', score = null, jev = null, quota
   const view = ui.view || 'overview';
   const head = `<div class="uv-head">
     <div class="uv-tabs">${[['today', 'Today'], ['14d', '14 days']].map(([k, l]) => `<button class="uv-tab${tab === k ? ' on' : ''}" data-tab="${k}">${l}</button>`).join('')}</div>
-    <div class="uv-nav">${[['overview', 'Overview'], ['time', 'Over time'], ['trend', 'Trending'], ['sessions', 'Sessions'], ['minimax', 'MiniMax']].map(([k, l]) => `<button class="uv-navb${view === k ? ' on' : ''}" data-view="${k}">${l}</button>`).join('')}</div>
+    <div class="uv-nav">${[['overview', 'Overview'], ['time', 'Over time'], ['trend', 'Trending'], ['sessions', 'Sessions'], ['waste', 'Waste'], ['minimax', 'MiniMax']].map(([k, l]) => `<button class="uv-navb${view === k ? ' on' : ''}" data-view="${k}">${l}</button>`).join('')}</div>
     <span class="grow"></span>
     ${links.langfuse ? `<a class="uv-lf" href="${esc(links.langfuse)}" target="_blank" rel="noopener">Langfuse ↗</a>` : ''}
   </div>`;
@@ -345,7 +376,8 @@ export function pageHtml({ usage, tab = 'today', score = null, jev = null, quota
   </div>` : '';
 
   let bodyHtml;
-  if (view === 'minimax') bodyHtml = minimaxHtml(usage?.minimax);
+  if (view === 'waste') bodyHtml = wasteHtml(usage);
+  else if (view === 'minimax') bodyHtml = minimaxHtml(usage?.minimax);
   else if (view === 'time') bodyHtml = overTimeHtml(usage, tab, ui, rows);
   else if (view === 'trend') bodyHtml = trendHtml(usage);
   else if (view === 'sessions') bodyHtml = projectsHtml(usage, tab, rows, ui) + sessionsHtml(rows, ui, live);
