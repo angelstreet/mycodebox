@@ -21,13 +21,25 @@ import { usableAccounts, onAccounts } from './claude-accounts.js';
 // went to the owner as "owner floor ("drops")".
 const DESTROY_RE = /\b(?:delet(?:e|es|ed|ing|ion)|remov(?:e|es|ed|ing|al)|drop(?:s|ped|ping)?|prun(?:e|es|ed|ing)|truncat\w*|wip(?:e|es|ed|ing)|overwrit\w*|purg\w*|eras(?:e|es|ed|ing|ure)|destr(?:oy\w*|uction)|nuk(?:e|es|ed|ing))\b/gi;
 const DATA_AFTER_RE = /^[^.\n]{0,40}?\b(?:data|datasets?|records?|rows?|tables?|database|db|schema|columns?|users?|accounts?|backups?|history|logs?|journals?|jsonl|ledgers?|recordings?|captures?|videos?|screenshots?|sessions?|branch(?:es)?|worktrees?|commits?|tags?|messages?|emails?|buckets?|volumes?|disks?|snapshots?|archives?|uploads?|everything|all of)\b/i;
-const maskNonData = (t) => t.replace(DESTROY_RE, (w, at) => (DATA_AFTER_RE.test(t.slice(at + w.length)) ? w : 'leaves out'));
+// "the ingest parser drops request-snapshot lines" is code filtering its input, whatever data word names the lines. All of it
+// must hold: the verb is drop, a parser-like part does it, it drops input units (lines, entries ...) and the sentence names no
+// stored data (2026-11-28, harness-audit suggestion 7 went to the owner for "drops request-snapshot").
+const FILTER_SUBJECT_RE = /\b(?:pars(?:er|ing)|filter|ingest(?:er|or|ion)?|reader|scanner|tokeni[sz]er|decoder|extractor|matcher)(?:\s+(?:still|also|now|only|silently|correctly|always|never|must|should|will|can|may|does|not|to))*\s+$/i;
+const INPUT_UNITS_RE = /^(?:(?!\s+(?:and|or|then|from)\b)\s+[\w'-]+){0,4}?\s+(?:lines?|entr(?:y|ies)|blocks?|events?|chunks?|fields?)\b/i;
+const STORED_RE = /\b(?:old(?:er|est)?|stored|saved|existing|expired|archived|tables?|database|db|schema|columns?|disk|from (?:the |our |a )?(?:[\w-]+ )?(?:ledger|journal|jsonl|logs?|history|store|state|files?|backups?))\b/i;
+const filtersInput = (t, w, at) => {
+  const rest = t.slice(at + w.length).split(/[.;\n](?:\s|$)/)[0];
+  return /^drop/i.test(w) && FILTER_SUBJECT_RE.test(t.slice(0, at)) && INPUT_UNITS_RE.test(rest) && !STORED_RE.test(rest);
+};
+// The data that destruction word w (at index at) destroys: DATA_AFTER_RE's match, or null.
+const dataAfter = (t, w, at) => (filtersInput(t, w, at) ? null : DATA_AFTER_RE.exec(t.slice(at + w.length)));
+const maskNonData = (t) => t.replace(DESTROY_RE, (w, at) => (dataAfter(t, w, at) ? w : 'leaves out'));
 // The words that make it data deletion ("rm -rf", "drop the users table", "purge the manager-events history"), or null.
 const dataDeletionWords = (t) => {
   const hard = /\brm -rf\b|\bdrop (?:the |a )?(?:table|database|db|column|index)\b/i.exec(t);
   if (hard) return hard[0];
   for (const m of String(t).matchAll(DESTROY_RE)) {
-    const after = DATA_AFTER_RE.exec(t.slice(m.index + m[0].length));
+    const after = dataAfter(t, m[0], m.index);
     if (after) return `${m[0]}${after[0]}`.replace(/\s+/g, ' ').trim();
   }
   return null;

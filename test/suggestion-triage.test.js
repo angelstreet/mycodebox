@@ -436,3 +436,25 @@ test('floorMatchOf: each floor names its rule and the words it matched; decide c
   const [n] = decide([{ n: 2, text: 'add a test for the parser' }], { 2: { verdict: 'yes', proposed: 'yes', why: 'x' } });
   assert.equal(n.floorRule, undefined);
 });
+
+// 2026-11-28: harness-audit-20261128 suggestion 7 went to the owner as "deleting data" (floorWords "drops request-snapshot").
+test('floorOf: a parser or filter that drops input lines is not the data floor; real data deletion still is', () => {
+  for (const t of [
+    'Add a regression test that the ingest parser drops request-snapshot lines. I checked this on real transcripts (0 of 1,802 kept), but nothing pins it if the transcript format starts adding usage blocks',
+    'Pin with a test that the transcript parser silently drops session-snapshot lines',
+    'The log filter should drop screenshot upload events before counting',
+  ]) assert.equal(floorOf(t), null, t);
+  for (const t of [
+    'delete old recordings',
+    'drop the table',
+    'Add a test, then delete old recordings',
+    'The ingest parser drops request-snapshot lines; also delete old recordings',
+    'The retention filter drops old session lines',
+    'The ingest filter drops lines from the ledger and drops history entries from disk',
+    'The parser drops the users table',
+    'The log filter drops old backups',
+    'After ingest, drop the session rows',
+    'The cleanup job drops history lines',
+    'The parser drops lines and deletes the recordings',
+  ]) assert.match(floorOf(t) || '', /deleting data|owner floor/, t);
+});
