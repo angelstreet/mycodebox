@@ -2741,8 +2741,8 @@ later reader view: [READER-SUMMARY](READER-SUMMARY.md).
 - `GET /api/reply/<s>` adds `summary: string[] | null` and `status: { kind, headline } | null`, read from a Claude session's own file
   (`conversation.js` `lastReplyText`: the assistant text since the owner's last prompt), else the pane's closing text (the one the
   done-check reads), else the reply (a Mac session's last stop).
-- The reader's play button reads the summary when the turn has one, else the STATUS line; never the reply or the conversation. No
-  STATUS either: no play button.
+- The reader's play button reads the summary only (owner 2026-11-28: "has to be the summary only"); never the STATUS line, the reply
+  or the conversation. No summary in the turn: no play button.
 - `done-check.js` (R) `summaryGapOf` / `summaryMessage`: a closing turn with no summary or a too long one gets one push per distinct
   STATUS line, at most `SUMMARY_PUSHES_PER_DAY` (2) a day, while idle, no draft, the host quiet. When the closing-review push (C) fires
   for the same line, it carries the ask ("Also: ..."), so the session gets one message. The first run records the lines it finds and

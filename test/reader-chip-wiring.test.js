@@ -21,3 +21,11 @@ test('paintReader wires the audio chips after every rebuild, not once per reader
     assert.match(next, /^wireAudioChips\(el\);/, `not wired after: ${m[0]}`);
   }
 });
+
+test('the reader play chip reads the Summary: lines only, never the STATUS line or the reply (owner 2026-11-28)', () => {
+  const start = src.indexOf('function paintReader(');
+  const body = src.slice(start, src.indexOf('\n}\n', start));
+  assert.match(body, /const spoken = spokenSummaryOf\(c\?\.summary\);/);
+  assert.doesNotMatch(body, /spokenStatusOf|Read status aloud/);
+  assert.match(body, /audioChipHtml\(\{ text: spoken, label: 'Read summary aloud' \}\)/);
+});
