@@ -222,6 +222,7 @@ import { createExternalResult } from './external-result.js';
 import { createIntegrationNotify, integrationDigestEnabled, isQuietState } from './integration-notify.js';
 import { createCrashResumer, findClaudeSessionId } from './crash-resume.js';
 import { createQuotaResumer } from './quota-resume.js';
+import { createClaudeRotation } from './claude-rotation.js';
 import { createIntegrationDeploys } from './integration-deploys.js';
 import { createDeployLive } from './deploy-live.js';
 import { createMockups } from './mockups.js';
@@ -2493,9 +2494,6 @@ async function swapClaudeAccount(name, account, by, { limitStop = false, force =
   const parkedArgs = String((await parking.get(name))?.args || '');
   const out = await resumeSession(name, { claudeAccount: account, ...(/--model[= ]fable/i.test(parkedArgs) ? { model: 'opus' } : {}) });
   logEvent({ type: 'claude-account-swap', session: name, by, account, ...(force ? { killed: parkOut.killed, leases: parkOut.leases } : {}) });
-  if (limitStop && !sessionMeta.isPaused(name)) {
-    setTimeout(() => { sendKeys(name, 'continue', true).then(() => logSend(name, 'claude-accounts', { keys: 'continue' })).catch((e) => console.error('[claude-accounts] continue', e.message)); }, 15000).unref?.();
-  }
   return { ok: true, session: name, claudeAccount: account, resumed: out.resumed, ...(force ? { killed: parkOut.killed, leases: parkOut.leases } : {}) };
 }
 // A Claude session stopped on its usage limit: mark that account used up and, with another account free, restart the session
@@ -2510,37 +2508,21 @@ const managerRotation = createManagerRotation({
       (err, stdout, stderr) => { console.log(`[manager-rotation] ${session}: ${`${stdout} ${stderr}`.trim().slice(-300)}`); done(err ? (Number.isInteger(err.code) ? err.code : 1) : 0); });
   }),
 });
-const claudeLimitSeen = new Map();
-const claudeLimitRetryAt = new Map();   // a failed switch is tried again after 5 min (not every tick: each failure alerts)
+const claudeRotation = createClaudeRotation({
+  file: join(STATE_DIR, 'claude-limit-stops.json'), accounts: claudeAccounts, refresh: () => claudeAccountsRefresh(),
+  swap: (name, account, opts) => swapClaudeAccount(name, account, 'claude-accounts', opts),
+  sendContinue: async (name) => { await sendKeys(name, 'continue', true); logSend(name, 'claude-accounts', { keys: 'continue' }); },
+  isPaused: (name) => sessionMeta.isPaused(name),
+  notice: (e) => push.record(e), record: (e) => managerEvents.record(e),
+});
 async function claudeLimitTick(status) {
   const managers = new Set(loadManagerSessions());
-  const several = claudeAccounts.config().accounts.length > 1;
   for (const [name, v] of Object.entries(status)) {
     if (v.agent !== 'claude') continue;
     const st = crashResumeStates.get(name);
     const limitStop = !!st && st.agent === 'claude' && scanClaudeLimit(st.lines);
     if (managers.has(name)) { await managerRotation.tick(name, v, { limitStop, paused: sessionMeta.isPaused(name) }); continue; }
-    if (!several) continue;
-    if (!limitStop) { claudeLimitSeen.delete(name); claudeLimitRetryAt.delete(name); continue; }
-    const acct = v.claudeAccount || CLAUDE_DEFAULT_ACCOUNT;
-    if (claudeLimitSeen.get(name) === acct && !(claudeLimitRetryAt.has(name) && Date.now() >= claudeLimitRetryAt.get(name))) continue;
-    claudeLimitRetryAt.delete(name);
-    claudeLimitSeen.set(name, acct);
-    await claudeAccounts.markExhausted(acct, { reason: `usage limit stop in ${name}` });
-    await claudeAccountsRefresh();
-    const next = claudeAccounts.nextFor(acct);
-    const label = (id) => claudeAccounts.byId(id)?.label || id;
-    const url = `/?s=${encodeURIComponent(name)}`;
-    if (!next) { push.record({ title: `Every Claude account is used up: ${name} waits`, body: `${label(acct)} hit its limit and no other account has headroom`, url, tag: 'claude-account' }); continue; }
-    const why = !claudeAccounts.config().autoSwapSessions ? 'automatic switch is off' : sessionMeta.isPaused(name) ? 'paused' : null;
-    if (why) { push.record({ title: `${name} hit the ${label(acct)} limit`, body: `${label(next)} has headroom; not switched (${why}). Use "Switch account" on the card.`, url, tag: 'claude-account' }); continue; }
-    try {
-      await swapClaudeAccount(name, next, 'claude-accounts', { limitStop: true });
-      await managerEvents.record({ key: `health:claude-account-swap:${name}`, kind: 'health', title: `session moved to ${label(next)}: ${name}`, body: `${label(acct)} hit its usage limit; same conversation resumed on ${label(next)}` });
-    } catch (e) {
-      claudeLimitRetryAt.set(name, Date.now() + 5 * 60e3);   // a failed switch is retried in 5 min, not forgotten
-      push.record({ title: `${name} hit the ${label(acct)} limit, switch failed`, body: `to ${label(next)}: ${String(e.message).slice(0, 250)}`, url, tag: 'claude-account' });
-    }
+    await claudeRotation.tick(name, v, { limitStop, lines: st?.lines || [], paused: sessionMeta.isPaused(name) });
   }
 }
 

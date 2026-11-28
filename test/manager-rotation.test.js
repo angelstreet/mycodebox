@@ -39,10 +39,10 @@ test('limit stop: the account is marked and the manager restarts on the next one
   assert.equal((await e.tick({}, { limitStop: true })).action, 'cooldown', 'the same stop does not restart twice');
 });
 
-test('past 95 % while idle: restart without the limit-stop path; busy or with a draft: left alone', async (t) => {
+test('at 99 % while idle: restart without the limit-stop path; busy or with a draft: left alone', async (t) => {
   const e = await setup(t, { week: { default: 94 } });
   assert.equal((await e.tick({})).action, 'none');
-  e.usage('default', 96); await e.m.refresh();
+  e.usage('default', 99); await e.m.refresh();
   assert.equal((await e.tick({ state: 'working' })).action, 'busy');
   assert.equal((await e.tick({ stall: { draft: true } })).action, 'busy');
   assert.equal((await e.tick({ claudeAccount: null })).action, 'none', 'a dead manager is manager-watch\'s');
@@ -66,7 +66,7 @@ test('an account without a login is skipped; a not-idle exit retries soon, a fai
 });
 
 test('no account free: one alert with the next reset, then it restarts by itself once one frees up', async (t) => {
-  const e = await setup(t, { week: { team1: 100, team2: 97 } });
+  const e = await setup(t, { week: { team1: 100, team2: 99 } });
   const r = await e.tick({}, { limitStop: true });
   assert.equal(r.action, 'no-account');
   assert.equal(r.reset, NOW + 3600e3, 'the stop with no known reset blocks for an hour: the earliest');
@@ -90,16 +90,16 @@ test('switch off or paused manager: alert, no restart', async (t) => {
 
 test('weekLeft: a 5 h block keeps its week, a weekly block leaves nothing', () => {
   const week = (p) => [{ name: 'week', usedPercent: p }];
-  assert.equal(weekLeft([{ windows: week(45) }, { windows: [] }], NOW), 145);
-  assert.equal(weekLeft([{ exhausted: true, reset: NOW + 3600e3, windows: week(45) }, { exhausted: true, reset: NOW + 86400e3, windows: week(10) }, { exhausted: true, reset: null }], NOW), 50);
+  assert.equal(weekLeft([{ windows: week(45) }, { windows: [] }], NOW), 153);
+  assert.equal(weekLeft([{ exhausted: true, reset: NOW + 3600e3, windows: week(45) }, { exhausted: true, reset: NOW + 86400e3, windows: week(10) }, { exhausted: true, reset: null }], NOW), 54);
 });
 
 test('early alert: once, while a spare account is still free, persisted, and re-armed after resets', async (t) => {
-  const e = await setup(t, { week: { default: 80 } });   // 15 + 95 + 95
+  const e = await setup(t, { week: { default: 80 } });   // 19 + 99 + 99
   assert.equal(await e.m.earlyAlert(), null);
-  e.usage('team1', 100); await e.m.refresh();            // 15 + 0 + 95 = 110
+  e.usage('team1', 100); await e.m.refresh();            // 19 + 0 + 99 = 118
   assert.equal(await e.m.earlyAlert(), null);
-  e.usage('default', 90); await e.m.refresh();           // 5 + 0 + 95 = 100: team2 is the last switch and it is still ahead
+  e.usage('default', 98); await e.m.refresh();           // 1 + 0 + 99 = 100: team2 is the last switch and it is still ahead
   const a = await e.m.earlyAlert();
   assert.equal(a.left, 100); assert.equal(a.nextReset, WEEK_RESET * 1000);
   assert.equal(e.m.states().team2.exhausted, false);
@@ -107,7 +107,7 @@ test('early alert: once, while a spare account is still free, persisted, and re-
   const again = createClaudeAccounts({ file: join(a.accounts[1].configDir, '..', 'claude-accounts.json'), stateDir: join(a.accounts[1].configDir, '..'), now: () => e.clock.t });
   await again.refresh();
   assert.equal(await again.earlyAlert(), null, 'a server restart does not repeat it');
-  e.usage('team1', 0); await e.m.refresh();              // 195: re-armed
+  e.usage('team1', 0); await e.m.refresh();              // 199: re-armed
   await e.m.earlyAlert();
   e.usage('team1', 100); await e.m.refresh();
   assert.equal((await e.m.earlyAlert()).left, 100);

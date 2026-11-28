@@ -1,6 +1,6 @@
 // The manager moves to another Claude account (owner 2026-11-26). It is never parked like a worker (claudeLimitTick): its state is
 // in files, so it is restarted fresh through scripts/manager-fresh.sh, on a usage-limit stop, or while idle on an account at the
-// 95 % threshold. No account free: the owner is alerted with the next reset, and the move happens by itself once one frees up.
+// exhaustion threshold. No account free: the owner is alerted with the next reset, and the move happens by itself once one frees up.
 import { hasLogin, nextReset, DEFAULT_ID } from './claude-accounts.js';
 
 export const RETRY_MS = 10 * 60e3;        // after a restart (done or failed): time for the new pane to show up
@@ -25,7 +25,7 @@ export function createManagerRotation({ accounts, restart, alert, record = async
     if (!from) return { action: 'none' };   // no claude process: manager-watch.sh relaunches a dead manager
     if (limitStop && marked.get(session) !== from) {
       marked.set(session, from);
-      await accounts.markExhausted(from, { reason: `usage limit stop in ${session}` });
+      await accounts.markExhausted(from, { reason: `usage limit stop in ${session}`, confirmed: true });
       await refresh();
     }
     const view = accounts.view();

@@ -79,6 +79,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **Claude usage-limit stops switch account and resume automatically, or wait for the earliest reset** — accounts below 99% remain usable (95% is a warning); a confirmed stop overrides its preceding quota reading. Stopped conversations are reconsidered each tick without extending their limit mark, including across service restarts, then resume on an account with room and receive `continue`. Pause, switch-off, lease and job guards remain in effect. Tests use temporary account and parking stores plus an isolated server for `/api/quota` and `/api/health`.
+
 - **The usage page survives a missing summary, and the daily report has a results table** — `/api/usage` keeps serving the last good summary when `usage-summary.json` is missing or half-written (404 only if none was ever read), and the page says "no usage summary yet" instead of an endless "loading…". The daily report now opens with a `Check results` table (one row per check, including `ui-overflow`: pass / FAIL / BROKEN), so a phone overflow failure shows in the table.
 
 - **"no summary yet" where the play button would be** — a reply without a `Summary:` block now shows a muted hint instead of no button at all, so it does not look broken. `spokenStatusOf` (unused since the summary-only play button) is gone from `public/status-line.js`. New dev check `scripts/reader-audio-check.js <baseUrl> <session>`: the reader's play button on a running dashboard, headless, read-only · area: reader

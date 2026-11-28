@@ -43,6 +43,10 @@ test('scanClaudeLimit: the weekly stop of Claude Code 2.x, with the window or th
   // ordinary text that mentions a limit is not a stop
   assert.ok(!scanClaudeLimit(['we set the rate limit to 40 requests per minute', 'the limit is fine']));
   assert.ok(!scanClaudeLimit(['the weekly plan has a usage limit of 500 messages', 'nothing is stopped']));
+  assert.ok(!scanClaudeLimit(["❯ You've hit your weekly limit is what the other pane says"]));
+  assert.ok(!scanClaudeLimit(["  ⎿  const stop = \"You've hit your weekly limit\";"]));
+  assert.ok(!scanClaudeLimit(["● The error was: You've hit your weekly limit"]));
+  assert.ok(scanClaudeLimit(["  ⎿  Error: You've hit your weekly limit"]));
 });
 
 test('scanClaudeLimit: a resumed pane replays the old stop, and that replay is not a new stop', () => {
@@ -137,7 +141,7 @@ test('manager: add, rotate on a full window, mark a limit stop, go back after th
     assert.equal(m.active().id, 'default');
     assert.equal(m.commandFor('claude'), 'claude');
 
-    await writeFile(rateFile(state, 'default'), JSON.stringify(rl(97, 40)));
+    await writeFile(rateFile(state, 'default'), JSON.stringify(rl(99, 40)));
     let r = await m.refresh();
     assert.deepEqual([r.changed, r.from, r.to], [true, 'default', 'team1']);
     assert.match(m.commandFor('claude'), /^CLAUDE_CONFIG_DIR='.*\/\.claude-accounts\/team1' GHOSTY_CLAUDE_ACCOUNT=team1 claude$/);
@@ -208,7 +212,7 @@ test('false stop: a limit stop seen in a pane does not exhaust an account whose 
     await mkdir(state, { recursive: true });
     const m = createClaudeAccounts({ file: join(state, 'claude-accounts.json'), stateDir: state, home, now: () => now });
     await m.add({ id: 'team1', label: 'Team 1' });
-    await writeFile(rateFile(state, 'default'), JSON.stringify(rl(97, 40)));
+    await writeFile(rateFile(state, 'default'), JSON.stringify(rl(99, 40)));
     await writeFile(rateFile(state, 'team1'), JSON.stringify(rl(27, 21)));
     await m.refresh();
     assert.equal(m.active().id, 'team1');

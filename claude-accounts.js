@@ -15,7 +15,7 @@ import { promises as fs, existsSync, readFileSync, appendFileSync } from 'node:f
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
-export const LIMIT_PCT = 95;                 // a window at or above this counts as used up (quota.js CRIT_PCT)
+export const LIMIT_PCT = 99;                 // warning percentages are not exhaustion: 95 % still has useful room
 export const MARK_DEFAULT_MS = 60 * 60e3;    // a limit stop with no known reset blocks the account this long
 export const DEFAULT_ID = 'default';
 export const EARLY_LEFT_PCT = 100;           // early alert: all accounts together hold no more than one fresh account's week
@@ -38,10 +38,14 @@ const LIMIT_RE = /\b(?:claude(?: ai)? usage limit reached|usage limit reached|(?
 const AGENT_OUT_RE = /^\s*[●⏺⎿◐]/;
 const TAIL = 12;
 export const isLimitText = (t) => LIMIT_RE.test(String(t || ''));
+const isLimitLine = (line) => {
+  const message = line.trim().replace(/^[●⏺⎿◐]\s*/, '').replace(/^(?:Error|API Error):\s*/i, '');
+  return message.search(LIMIT_RE) === 0;   // quoted source, a user prompt, or prose mentioning a stop is not the stop itself
+};
 export function scanClaudeLimit(lines) {
   const tail = (Array.isArray(lines) ? lines : String(lines || '').split('\n')).map((x) => String(x ?? '')).filter((l) => l.trim()).slice(-TAIL);
   let stop = -1;
-  for (let i = tail.length - 1; i >= 0; i--) if (LIMIT_RE.test(tail[i])) { stop = i; break; }
+  for (let i = tail.length - 1; i >= 0; i--) if (isLimitLine(tail[i])) { stop = i; break; }
   if (stop < 0) return false;
   // The stop must be the agent's last output. A resumed pane replays the whole conversation, so the old stop sits above
   // the park's "/exit" and "Catch you later!": that replay is not a new stop and must not swap the session a second time
@@ -269,15 +273,18 @@ export function createClaudeAccounts({ file, stateDir, home = homedir(), now = D
     claudeJsonFor(id = load().active) { const a = byId(id); return a?.configDir ? join(a.configDir, '.claude.json') : null; },
     refresh,
     // The account behind `id` hit its limit: block it until `until` (ms) or its window's reset, then re-pick.
-    async markExhausted(id, { until = null, reason = 'usage limit reached' } = {}) {
+    async markExhausted(id, { until = null, reason = 'usage limit reached', confirmed = false, window = null } = {}) {
       const c = load(), t = now();
       if (!byId(id)) return null;
-      if (hasHeadroom(readings[id], t)) {   // its own windows have room: the stop on screen is not this account's
+      if (!confirmed && hasHeadroom(readings[id], t)) {   // an unverified sighting can be an old stop replay
         if (c.marks[id]) { delete c.marks[id]; await save(); }
         return refresh();
       }
-      const reset = accountState({ windows: readings[id]?.windows || [], now: t }).reset;
-      c.marks[id] = { until: until || reset || t + MARK_DEFAULT_MS, reason, at: t };
+      const windows = readings[id]?.windows || [];
+      const reset = accountState({ windows, now: t }).reset;
+      const known = windows.filter((w) => !w.expired && w.resetsAt && (!window || w.name === window)).map((w) => w.resetsAt * 1000);
+      const stopReset = known.length ? Math.min(...known) : null;
+      c.marks[id] = { until: until || (window && stopReset) || reset || stopReset || t + MARK_DEFAULT_MS, reason, at: t };
       await save();
       return refresh();
     },
