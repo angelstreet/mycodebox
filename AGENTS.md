@@ -109,7 +109,8 @@ Never hand the owner commands to run; run them yourself, or ask only about a har
   `layout.json`.
 - A headless browser never resizes a live pane (2026-11-27): the server refuses `POST /api/resize/<s>` from a `HeadlessChrome` user agent except for
   throwaway `zz-` sessions (`GHOSTY_HEADLESS_RESIZE=1` on a temp test server). Stubbing `/api/sessions` does not hide live cards: the list comes over
-  the `/ws/status` websocket. Verify UI on a temp-state server, or block `/ws/status` with `route_web_socket`.
+  the `/ws/status` websocket. Verify UI on a temp-state server, or block `/ws/status` with `route_web_socket` and a silent handler
+  (`lambda ws: None`): a sync-API handler that calls `ws.close()` stalls the Playwright run (2026-11-28).
 - The service is `ghosty-sessions` (systemd). Restart it with `scripts/safe-restart.sh`, never during a deploy.
   The guard requires a fresh successful deploy snapshot and refuses unknown or active deployment state.
 - Kill only your own processes: `kill <pid>`, `pkill -P <your pid>`, or a pattern naming your own worktree path. Never
