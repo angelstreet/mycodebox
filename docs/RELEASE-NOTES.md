@@ -6,7 +6,7 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
-- **Header shows the API spend of each Anthropic org** — the quota row only showed the Claude extra-usage budget; it now also shows one chip per org with an admin key, `<org> $spent/$budget` this month (amber at 80 %, red at 95 %, dimmed when not live), from `api-credit.js`. It updates when the server pushes `apiCredit` and when the quota popup's refresh is pressed. Test in `test/anthropic-spend.test.js` · area: usage
+- **Header shows the API spend of each Anthropic org** — the quota row only showed the Claude extra-usage budget; it now also shows one chip per org with an admin key, `<org> $spent` this month (budget in the hover title) (amber at 80 %, red at 95 %, dimmed when not live), from `api-credit.js`. It updates when the server pushes `apiCredit` and when the quota popup's refresh is pressed. Test in `test/anthropic-spend.test.js` · area: usage
 
 - **Reader copy keeps its focus while history loads** — opening the clipboard menu now protects it from a conversation repaint immediately, preserving keyboard focus when an early copy overlaps the history load. · area: reader
 

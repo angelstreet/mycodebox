@@ -15,8 +15,8 @@ export function anthropicChips(a) {
   return out.join('<i class="sep">&middot;</i>');
 }
 
-// Quota-row chips for the API spend per Anthropic org this month (api-credit.js): "<org> $12/$200", one per org that has a
-// reading; an org with no admin key (or never read) is left out, the quota popup says how to add the key.
+// Quota-row chips for the API spend per Anthropic org this month (api-credit.js): "<org> $12", one per org that has a
+// reading (the budget is in the colour and the title: with it the row overflowed below 1920 px); an org with no admin key (or never read) is left out, the quota popup says how to add the key.
 const usd = (x) => `$${Number(x).toFixed(Number(x) >= 100 || Number.isInteger(Number(x)) ? 0 : 2)}`;
 const orgName = (label) => String(label).replace(/\s+(API\s+)?(org|organi[sz]ation|account)$/i, '').trim() || String(label);
 export function apiCreditChips(c) {
@@ -25,6 +25,6 @@ export function apiCreditChips(c) {
     const name = orgName(o.label || o.org);
     const pct = o.usedPercent ?? 0;
     const tip = `${o.label}: API spend this month ${usd(o.spentUsd)}${o.budgetUsd ? ` of ${usd(o.budgetUsd)} (${usd(o.leftUsd ?? 0)} left)` : ''}${o.stale ? `, not live: ${o.error || 'last pull failed'}` : ''}${o.note ? ` — ${o.note}` : ''}`;
-    return `<span class="qi ${o.budgetUsd ? level(pct) : 'ok'}${o.stale ? ' old' : ''}" title="${esc(tip)}">${esc(name)} ${usd(o.spentUsd)}${o.budgetUsd ? `/${usd(o.budgetUsd)}` : ''}</span>`;
+    return `<span class="qi ${o.budgetUsd ? level(pct) : 'ok'}${o.stale ? ' old' : ''}" title="${esc(tip)}">${esc(name)} ${usd(o.spentUsd)}</span>`;
   }).join('<i class="sep">&middot;</i>');
 }
