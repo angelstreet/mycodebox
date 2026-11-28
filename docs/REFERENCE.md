@@ -1435,7 +1435,12 @@ the limit stop waives the "waiting" and pending-question checks, never the lease
 resumed on that account, then gets `continue` after 15 s. The stop must be the agent's last output: a resumed pane replays the
 whole conversation, so the old stop sits above the park's "/exit" and "Catch you later!", and that replay is not a new stop (it must not
 swap the session a second time). A confirmed stop takes precedence over a quota reading taken before it; a newer reading
-with headroom can still clear the mark. A limit phrase quoted inside prose, source code or a user prompt does not count as a stop.
+with headroom clears the mark in both the account view and `/api/health`, even before the next quota poll.
+An explicitly recorded reset that has passed also clears an older fallback mark, including an expired-only reading
+that has not been rewritten yet (`resetAt` retains that boundary in milliseconds). Both session and manager rotation
+compare refill evidence with the session's last activity; rediscovering an old stop line after a reset or service
+restart cannot create a new mark. A genuinely newer stop still marks the account. A waiting manager refreshes the
+account readings each tick, so it recovers without a manual clear or a periodic quota poll. A limit phrase quoted inside prose, source code or a user prompt does not count as a stop.
 The warning level (95 %) is separate from exhaustion (99 % or a real limit mark), so an account at week 95 % remains usable in
 `/api/quota` and `/api/health`. Paused sessions and `autoSwapSessions:false` defer the switch. A failed park is retried after 5 min,
 with the existing lease, running-job and attached-terminal checks preserved. With no account free, `claude-rotation.js` checks

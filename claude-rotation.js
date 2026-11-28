@@ -51,7 +51,7 @@ export function createClaudeRotation({ file = null, accounts, swap, sendContinue
       if (!stop || stop.from !== from) {
         stop = { from, retryAt: 0, told: null, done: false };
         // Save the sighting only after its mark succeeds, so a write failure can be retried.
-        await accounts.markExhausted(from, { reason: `usage limit stop in ${name}`, confirmed: true,
+        await accounts.markExhausted(from, { reason: `usage limit stop in ${name}`, confirmed: true, observedAt: row.lastActivity,
           window: /weekly limit/i.test(lines.join('\n')) ? 'week' : /5-hour limit/i.test(lines.join('\n')) ? '5h' : null });
         stops.set(name, stop);
         save();
