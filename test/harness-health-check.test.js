@@ -228,8 +228,31 @@ test('fetchSessions: counts sessions and the needs-you states, never throws', as
 
 test('fetchSessions: an error, a non-200 or a changed shape gives null, never a fabricated zero', async () => {
   for (const f of [async () => { throw new Error('ECONNREFUSED'); }, jsonFetch({}, false), jsonFetch({ nope: 1 })]) {
-    assert.deepEqual(await fetchSessions(f, 'http://127.0.0.1:1/api/sessions'), { sessions: null, needsYou: null });
+    assert.deepEqual(await fetchSessions(f, 'http://127.0.0.1:1/api/sessions'), { sessions: null, needsYou: null, hiddenStops: null });
   }
+});
+
+test('fetchSessions: an idle agent whose pane ends on needs-owner is a hidden stop; done, unreadable or stalled panes are not', async () => {
+  const panes = {
+    hid: '● Publish?\n\n  STATUS: needs-owner: reply yes to publish.\n\n✻ Baked for 1m 2s\n\n● Some notice Claude printed later.\n',
+    fine: '● All good.\n\n  STATUS: done — shipped\n',
+    shown: '  STATUS: needs-owner: reply yes.\n',
+    gone: null,
+  };
+  const r = await fetchSessions(jsonFetch({
+    sessions: [{ name: 'hid' }, { name: 'fine' }, { name: 'shown' }, { name: 'gone' }, { name: 'sh' }],
+    status: {
+      hid: { state: 'idle', agent: 'claude', stall: null },
+      fine: { state: 'idle', agent: 'claude', stall: null },
+      shown: { state: 'waiting', agent: 'claude', stall: { case: 'owner_decision' } },
+      gone: { state: 'idle', agent: 'claude', stall: null },
+      sh: { state: 'idle', agent: 'bash', stall: null },
+    },
+  }), 'http://127.0.0.1:1/api/sessions', (name) => panes[name] ?? null);
+  assert.deepEqual(r.hiddenStops, ['hid (needs-owner)']);
+  const { findings, report } = summarize({ ...base, hiddenStops: r.hiddenStops }, null);
+  assert.ok(findings.some((f) => f.key === 'harness-health:hidden-stop' && /hid \(needs-owner\)/.test(f.body)));
+  assert.match(report, /hidden stops \(idle on a hand-over line\) \| 1 \|/);
 });
 
 // ---- summarize (pure) ----------------------------------------------------------------------------------------------

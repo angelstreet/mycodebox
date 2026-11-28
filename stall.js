@@ -112,7 +112,14 @@ export function inputBox(rawLines) {
 // Claude Code's own notices printed under a finished turn (a resumed session: an Artifact monitor that did not restart, the
 // Remote Control banner). They are not the agent's words: left in, they pushed the turn marker and the STATUS line out of
 // the closing text, and a needs-owner stop showed idle and grey (owner 2026-11-28).
+// Two layers: the known wordings below, and by position: whatever Claude prints under its finished-turn marker
+// ("✻ Cooked for 7m 7s") with no prompt, tool call or spinner after it is not a new turn, so a wording Claude adds later
+// is cut too (owner-approved suggestion 2026-11-28).
 const NOTICE_START = /^\s*(?:[⏺●•]\s+)?(?:Artifact comment monitor for\b|\/remote-control is active\b)/i;
+const CLAUDE_TURN_DONE = /^\s*[✻✶✳✢✽]\s+\S+ for \d+\s*[smh]/;
+// A line that means a new turn runs or ran after the marker: the owner's prompt or a menu cursor, a tool call, a spinner.
+const NEW_TURN = /^\s*[❯›>]\s*\S|^\s*[⏺●•]\s+(?:[A-Za-z_][\w.:-]*\(|Calling\b)|^\s*⎿|^\s*[✻✶✳✢✽*·]\s+\S+…|esc to interrupt|^\s*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s/i;
+const NOTICE_SCAN = 120;   // lines looked back for the marker: notices are a few short paragraphs
 // End index (exclusive) of `lines[0, end)` with trailing notice paragraphs (blank-line separated) removed.
 export function noticeEnd(lines, end = lines.length) {
   for (;;) {
@@ -120,9 +127,15 @@ export function noticeEnd(lines, end = lines.length) {
     while (e > 0 && !String(lines[e - 1]).trim()) e--;
     let s = e;
     while (s > 0 && String(lines[s - 1]).trim()) s--;
-    if (s === e || !NOTICE_START.test(stripAnsi(lines[s]))) return end;
+    if (s === e || !NOTICE_START.test(stripAnsi(lines[s]))) break;
     end = s;
   }
+  for (let i = end - 1; i >= 0 && i >= end - NOTICE_SCAN; i--) {
+    const l = stripAnsi(lines[i]);
+    if (CLAUDE_TURN_DONE.test(l)) return i + 1;
+    if (NEW_TURN.test(l)) break;
+  }
+  return end;
 }
 
 // Body = everything above the input box's top rule (or the whole pane when there is no box), Claude Code's trailing notices dropped.
