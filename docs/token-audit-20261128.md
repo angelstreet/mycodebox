@@ -116,3 +116,56 @@ All findings of one session carry the same trace id, and the advisory state was 
 ## Follow-up round (28 Nov, owner-triaged suggestions)
 
 Built: (a) `advisory-kinds.js` single list + drift test (the filter regex, the feed and the builder agree); (b) `scripts/ui-pages.json` + `scripts/ui-overflow-check.js`, a 390 px headless check over every deep-linked view, also the daily check `ui-overflow` (proved by reverting the two usage-page CSS fixes: it then fails with `div.uv-root reaches 530px` and `svg reaches 397px`); (c) `manager-fresh.sh` prints the handover line it tells the manager to read; (d) the Waste tab shows "last fired" per advisory kind from `manager-events.jsonl` (manager decision: one line per kind, 390 px checked). The live tmux restart with a real handover log stays deferred to the manager's next natural restart.
+
+## 48 h re-measure (28 Nov 13:32 UTC, harness-audit-20261128)
+
+Source: `/api/usage` (generated 13:32 UTC: `waste` findings and counts, `burn`, `loops`, `perAccount`) and, for the ratios `/api/usage` does not expose per window, the same `usage-ledger.jsonl` rows it is built from (Claude rows; MiniMax counted apart). "After" starts at the last wait fix (token-fix-b-waits, 28 Nov 01:07 UTC); the matching hours of Friday 27 Nov are the fair baseline, since Saturday morning had many short sessions shipping.
+
+| Metric | Audit 48 h (26 00:00 to 28 00:14) | Now 48 h (26 13:32 to 28 13:32) | Same hours 27 Nov (01:07 to 13:32) | After the fixes 28 Nov (01:07 to 13:32) |
+|---|---|---|---|---|
+| Claude calls per hour | 324 | 231 | 100 | 239 |
+| Context M tokens per hour | 70.5 | 43.0 | 11.3 | 24.9 |
+| Avg context per call | 218k | 186k | 113k | 104k |
+| Calls above 300k | 21.4% | 15.8% | 3.5% | 0.0% |
+| Cache hit | 98.4% | 98.2% | 96.5% | 97.8% |
+| Subagent share of context | 30.6% | 33.2% | 2.6% | 21.7% |
+| Tiny turns (<150 out) of Opus/Fable calls | 10.9% | 13.9% | 13.9% | 18.4% |
+| API-equivalent cost per hour | $29.5 | $15.3 | $5.4 | $9.3 |
+| Manager-labelled calls per hour | 45 | 34 | 13 | 33 |
+| MiniMax calls per hour / share under 150 out | 65 / 33% | 56 / 36% | 47 / 32% | 50 / 30% |
+| `waste` findings (`/api/usage`) | 19 | 14 (4 high-avg-context, 1 subagent-heavy, 6 idle-polling, 1 cache-churn, 2 low-cache-hit) | | |
+
+Weekly plan per account (`burn`, 13:32 UTC): default 100% (resets 15:00 Paris today), team1 99% (5 h window 94%), team2 96% (5 h 54%), MiniMax 5 h 30%. The accounts are at their limits from the load of 26 to 28 Nov; the swap moved sessions to team2.
+
+Reading: the large-context waste is gone where the harness acts (0 calls above 300k after the fixes against 21% in the audit; avg context halved, 218k to 104k; cost per hour of the whole window halved, $29.5 to $15.3). Saturday morning still cost more per hour than Friday's same hours ($9.3 against $5.4) because it had 2.4 times the calls (many small shipping sessions), at a lower context per call. Two things did not move and are not harness changes: subagent share (the `userinterface-audit` history, 62% subagents, still in the window) and tiny turns on Opus/Fable, which rose to 18.4% (saving #5's model half: worker model choice, the manager's).
+
+Wait loops, checked in the transcripts: `manager-wait.sh` runs went from about 165 in the 12 h of 26 Nov to 2 to 8 per hour on 28 Nov, with deliveries spaced 4 to 6 minutes at the busiest hour (the 300 s minimum spacing working); the two spikes (00h, 09h) are manager restarts on the account swap (several waits in a row while the old one still held the lock). Harness-check nudges to the manager ("stop with no message") fell from about 20 on 26 Nov to 3 on 27 Nov and 4 on 28 Nov. The repeated "Integration ... merged" prompts the loop list shows are distinct requests (one session made 9 in an hour), not the lane re-sending one result.
+
+### Harness-owned waste items: state
+
+| Item | State |
+|---|---|
+| Fix A / B / C (fewer model wakes, smaller context, model-free waits) | merged 28 Nov; measured above |
+| Subagent watch, context / subagent / manager-restart advisories, advisory feed fixes | merged; `advisories` in `/api/usage` shows the last fire per kind (subagent advisory has not fired: its only finding, `userinterface-audit`, is not a live session, by design) |
+| Usage page phone fixes, `ui-overflow` daily check | merged |
+| `integrate status` polling | already answered in the tool: a non-final status prints "do not poll status, run ONE integrate wait in the background" |
+| Loop detector counted commands older than the window (cached file items had no time) | fixed in this round (`usage/loops.js`, test `test/usage-loops.test.js`) |
+| 1 h cache TTL (proposal 5) | switch built (`cache-ttl.js`, default off); measured below; owner question with a proposed answer |
+| Manager restarts at 09:16 and 09:45 | why not: account rotation at the weekly limit (owner rule 2026-11-06), not a harness loop |
+| `userinterface-audit` / `mcp-server-audit` prompts, the task263 night overseer, the coc-daily / rtsp nightly sleeps, the codex sessions' polling | why not: not harness code; started by hand or by the session owners; token rules handed to them (`~/handovers/*token-rules-20261128.md`) |
+
+### Proposal 5 (1 h cache TTL), measured
+
+Main-session cache writes in the last 48 h (transcripts, `cache_creation` split): 19.0 M at 1 h, 6.8 M at 5 min. Claude Code already picks 1 h by itself on a subscription account within its limits; every interactive session wrote only 1 h. The 5-minute writes come from two places only:
+- subagents: 11.7 M, all at 5 min, but bursty (14 gaps of 5 to 60 min over 2,829 calls). A 1 h write costs 2.0x the input price against 1.25x for 5 min, so 1 h would cost more there.
+- the TASK-263 night overseer (`~/task263-night/overseer2.sh`, `claude -p` on the paid API key, a fresh session every 10 minutes): its first call writes about 12k tokens each check; with 1 h those would be read, but the rest of each 5-call check would then be written at 2.0x. Net about $0.02 per check, about $1 a night. Not worth a change.
+
+Proposed answer: no. Keep `CBSESSION_CACHE_1H` / `cache-1h.json` off and close proposal 5; the switch stays for a future session with long idle gaps on the 5-minute TTL.
+
+## Next 3 waste items (28 Nov 13:32 UTC, 48 h window)
+
+| # | Item | Size | Who |
+|---|---|---|---|
+| 1 | `userinterface-audit` history: 311k avg context over 3,204 calls, 62% of it subagents, $289 in the window (plus `artifact` 511k avg, `nightly-new-stbs` 517k, `mcp-server-audit` 596k). None is live now; the risk is a resume of the same long conversation. | the largest single cost | session owners: start fresh with the token rules file, do not resume |
+| 2 | Tiny turns on Opus/Fable rose to 18.4% of their calls after the fixes (13.9% before). | about 2% of cost | manager: Sonnet by default for workers doing admin, waiting, shipping; Opus/Fable by exception |
+| 3 | Polling on long contexts outside Claude: MiniMax `rtsp-nightly` 40%, `coc-daily-20261127` 33%, `coc-daily-20261128` 26% of calls under 150 out (the waiting section reached the coc-daily prompt at 09:55 on 28 Nov, after that run started); codex `codex-gpt-61-sol` 28 to 32%, `nvidia-autonantology` 43%. | about a third of those plans' calls | nightly owners; re-measure on the 29 Nov coc-daily run |
