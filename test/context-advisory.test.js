@@ -115,3 +115,14 @@ test('tick end to end: the manager-restart and subagent advisories reach the fee
   assert.deepEqual(lines.map((l) => l.kind).sort(), ['manager-restart-advisory', 'subagent-advisory']);
   assert.ok(lines.every((l) => l.advisory && l.advisory.findingId));
 });
+
+test('a session with both findings (one shared trace id) gets both advisories, and neither repeats', async () => {
+  const dir = tmp('ghosty-ctxadv3-');
+  const me = createManagerEvents({ stateDir: dir, managerSessions: () => [], now: () => NOW });
+  const waste = { findings: [
+    { kind: 'high-avg-context', id: 'T1', session: 'ui', value: 350000, detail: 'avg 350k' },
+    { kind: 'subagent-heavy', id: 'T1', session: 'ui', value: 61, detail: 'subagents 61%' }] };
+  const mk = () => createContextAdvisory({ stateDir: dir, getSummary: async () => ({ waste }), record: (e) => me.record(e), startedBy: () => 'owner', now: () => NOW });
+  assert.equal(await mk().tick(), 2);
+  assert.equal(await mk().tick(), 0);
+});

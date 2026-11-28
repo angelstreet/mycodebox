@@ -108,3 +108,7 @@ The subagent and manager-restart advisories I shipped earlier would have been dr
 ## coc-daily prompt generator and the deferred check (28 Nov)
 
 The coc-daily prompt comes from `~/.local/share/coc-daily-review/run.sh` (unit `coc-daily-review.service`, TASK-164), which feeds `prompt.md` of that folder to `cbsession`; the installed copy mirrors `features/clashofclans/scripts/agent/coc_daily_review/prompt.md` in virtualpytest. The "Waiting without the model" section is now in both (virtualpytest integration `int-1a221946494486783` for the source, installed copy updated in place). Dry run: the real `run.sh` with `cbsession` and the clone sync stubbed wrote the prompt to a temp path: 84 lines, section present once, identical to the repo source. Deferred to the manager: the live `manager-fresh.sh` tmux restart with the handover-log kickoff is checked at the next natural manager restart.
+
+## Second correction: shared trace id (28 Nov)
+
+All findings of one session carry the same trace id, and the advisory state was keyed by id alone, so the context advisory already sent for `userinterface-audit` (id 7bdb4de4) suppressed its subagent-heavy advisory for 24 h. The state key is now `<kind>:<id>` for every kind except `high-avg-context` (old key kept so existing state files stay valid). Test: both findings of one session produce two advisories and neither repeats.
