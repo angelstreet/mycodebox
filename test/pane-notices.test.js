@@ -38,7 +38,7 @@ test('trailing Claude Code notices do not hide the hand-over STATUS line', () =>
 
 test('noticeEnd stops at the first paragraph that is not a notice', () => {
   const end = noticeEnd(pane, 19);
-  assert.equal(pane[end - 2], '✻ Cooked for 7m 7s · done 7:01 AM');
+  assert.equal(pane[end - 1], '✻ Cooked for 7m 7s · done 7:01 AM');
   const plain = ['● Done.', '', '  STATUS: done — x'];
   assert.equal(noticeEnd(plain), plain.length);
   // the agent's own words about the monitor (not at the paragraph start) are kept
@@ -67,4 +67,29 @@ test('an MCP input form asks its field, not the menu footer', async () => {
   const r = classifyStall({ plain: form, state: 'waiting' });
   assert.equal(r.case, 'owner_decision');
   assert.equal(r.question, "Type the name 'example-tree' to confirm:");
+});
+
+test('a notice wording Claude adds later is cut by position, under the finished-turn marker', () => {
+  const p = [
+    '● Ready.',
+    '',
+    '  STATUS: needs-manager: pick A or B.',
+    '',
+    '✻ Baked for 2m 3s',
+    '',
+    '● Some brand-new Claude Code notice about a plugin that did not load,',
+    '  printed after the turn.',
+    '',
+    '  Another unknown banner line',
+  ];
+  assert.equal(noticeEnd(p), 5);
+  assert.equal(statusLine(closingLines(p, 16))?.kind, 'needs-manager');
+});
+
+test('a new turn after the marker is never cut: prompt, tool call, spinner', () => {
+  const base = ['● Old.', '', '✻ Baked for 2m 3s', ''];
+  for (const tail of [['❯ do the next thing', '', '● Sure, on it.'], ['● Bash(ls)', '  ⎿  a'], ['● Working text', '', '✻ Cooking… (12s · esc to interrupt)']]) {
+    const p = [...base, ...tail];
+    assert.equal(noticeEnd(p), p.length, tail[0]);
+  }
 });

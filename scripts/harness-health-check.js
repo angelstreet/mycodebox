@@ -17,6 +17,7 @@
 //   owner-stop-triage.jsonl   {at,session,question,verdict,source} per needs-owner stop checked (owner-stop-triage.js); missing = no stop yet
 //   /proc/loadavg, /proc/meminfo, statfs('/')  box
 //   GET ${GHOSTY_URL:-http://127.0.0.1:7777}/api/sessions  {sessions[], status{name:{state}}}, best effort
+//   tmux capture-pane of each idle agent session with no stall: a hand-over STATUS line there is a hidden stop (finding)
 //
 // Thresholds (a finding only above them): ONE session's owner asks > 3 (the limit is a per-session budget, so parallel
 // topic sessions each get their own), lane returned > 5 (a return that a later request for the same repo+branch landed is
@@ -30,6 +31,7 @@ import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { FLOORS } from '../owner-asks.js';
+import { closingLines, statusLine } from '../stall.js';
 
 export const HOURS = 24;
 export const ASKS_MAX = 3;
@@ -198,21 +200,46 @@ export function boxStats() {
 // ---- sessions (best effort) -----------------------------------------------------------------------------------------
 // Never fails the check: no server, a timeout or a changed response shape gives sessions: null (reported as "n/a"), never
 // a crash and never a fabricated 0.
-export async function fetchSessions(fetchImpl = fetch, url = sessionsUrl()) {
+export async function fetchSessions(fetchImpl = fetch, url = sessionsUrl(), capture = tmuxCapture) {
+  const none = { sessions: null, needsYou: null, hiddenStops: null };
   try {
     const r = await fetchImpl(url, { signal: AbortSignal.timeout(5000) });
-    if (!r || !r.ok) return { sessions: null, needsYou: null };
+    if (!r || !r.ok) return none;
     const b = await r.json();
     const list = Array.isArray(b?.sessions) ? b.sessions : null;
-    if (!list) return { sessions: null, needsYou: null };
+    if (!list) return none;
     const status = b?.status && typeof b.status === 'object' ? b.status : {};
     // The dashboard's NEEDS YOU strip is a session in state 'waiting' (a stop the owner can answer) or 'asks'.
     const needsYou = list.filter((s) => {
       const st = status[s?.name]?.state || s?.state;
       return st === 'waiting' || st === 'asks';
     }).length;
-    return { sessions: list.length, needsYou };
-  } catch { return { sessions: null, needsYou: null }; }
+    return { sessions: list.length, needsYou, hiddenStops: hiddenStops(list, status, capture) };
+  } catch { return none; }
+}
+
+// ---- hidden stops (pure over panes) -----------------------------------------------------------------------------------
+// Owner 2026-11-28: a pane that ends on a needs-owner / needs-manager / blocked STATUS line while the server classes the session
+// idle with no stall shows a grey LED and no NEEDS YOU chip: the stop is invisible (Claude Code notices under the turn did
+// it once). `capture(name)` returns the pane text or null; a pane that cannot be read is skipped, never a finding.
+export const HIDDEN_STOP_KINDS = new Set(['needs-owner', 'needs-manager', 'blocked']);
+const AGENTS = new Set(['claude', 'codex', 'minimax']);
+export function hiddenStops(list, status, capture) {
+  const out = [];
+  for (const s of list) {
+    const name = s?.name; const st = status[name];
+    if (!name || !st || st.state !== 'idle' || st.stall || !AGENTS.has(st.agent)) continue;
+    let text; try { text = capture(name); } catch { text = null; }
+    if (!text) continue;
+    const plain = String(text).split('\n').map((l) => l.replace(/\s+$/, ''));
+    while (plain.length && !plain[plain.length - 1]) plain.pop();
+    const kind = statusLine(closingLines(plain, 16))?.kind;
+    if (HIDDEN_STOP_KINDS.has(kind)) out.push(`${name} (${kind})`);
+  }
+  return out;
+}
+export function tmuxCapture(name) {
+  try { return execFileSync('tmux', ['capture-pane', '-p', '-t', `=${name}:`, '-S', '-150'], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }); } catch { return null; }
 }
 
 // ---- hidden agent work (pure over transcript lines) ------------------------------------------------------------------
@@ -338,6 +365,7 @@ export function summarize(today, prev) {
   if ((today.hiddenAgentWork || 0) > 0) add('hidden-agent-work', `hidden-agent-work: ${today.hiddenAgentWork}`, `${today.hiddenAgentWork} manager Agent-tool subagent(s) returned fix/recommend results with no cbsession start in the same turn: ${(today.hiddenAgentNames || []).join(', ')}. Work that changes something must be a named session on the dashboard (manual §5).`);
   const os = today.ownerStops;
   if ((os?.unchecked || 0) > OWNER_STOP_UNCHECKED_MAX) add('owner-stops-unchecked', `${os.unchecked} needs-owner stops reached the owner unchecked`, `The Opus check failed (error, timeout or unreadable reply) on ${os.unchecked} of ${os.checked} stops, so technical asks may have reached the owner: ${os.uncheckedQuestions.join(' | ')}`);
+  if ((today.hiddenStops?.length || 0) > 0) add('hidden-stop', `${today.hiddenStops.length} stop(s) hidden from NEEDS YOU`, `The pane ends on a hand-over STATUS line but the dashboard shows the session idle (grey LED, no NEEDS YOU chip): ${today.hiddenStops.join(', ')}. The pane parser (stall.js closingLines / noticeEnd) misread the end of the pane.`);
   const fo = today.failover;
   if (fo?.unit && fo.state && !FAILOVER_OK.includes(fo.state)) add('manager-failover', `${fo.unit} is ${fo.state}`, `With every Claude account used up, the MiniMax standby (mm-manager) cannot take over: the manager waits for the reset. Fix: sudo systemctl enable --now ${fo.unit} (REFERENCE "Manager failover").`);
   if ((today.approvalRefused || 0) > 0) add('approval-refused', `${today.approvalRefused} lane approval(s) refused`, `${today.approvalRefused} integration request(s) carried approvalRefused: the lane was asked to push or deploy and stopped. A refusal is a floor stop, not a bug — but a day with several means the autonomy switches disagree with the requesters.`);
@@ -359,6 +387,7 @@ export function summarize(today, prev) {
     ['manager failover unit', today.failover ? `${today.failover.unit} ${n(today.failover.state)}` : 'not checked', p ? (p.failover ? n(p.failover.state) : 'not checked') : 'n/a'],
     ['needs-owner stops checked', os ? `${os.checked} (${os.toManager} to the manager, ${os.toOwner} to the owner${os.toOwner ? `: ${Object.entries(os.ownerBy).map(([k, v]) => `${k} ${v}`).join(', ')}` : ''})` : 'n/a', p?.ownerStops ? `${n(p.ownerStops.checked)} (${n(p.ownerStops.toManager)} to the manager)` : 'n/a'],
     ['sessions (needs you)', `${n(today.sessions)} (${n(today.needsYou)})`, p ? `${n(p.sessions)} (${n(p.needsYou)})` : 'n/a'],
+    ['hidden stops (idle on a hand-over line)', today.hiddenStops == null ? 'n/a' : String(today.hiddenStops.length), p ? (p.hiddenStops == null ? 'n/a' : String(p.hiddenStops.length)) : 'n/a'],
   ];
   const report = ['| metric | today (24 h) | previous day |', '| --- | --- | --- |',
     ...rows.map(([k, t, pv]) => `| ${k} | ${t} | ${pv} |`),
@@ -381,11 +410,11 @@ export function prevLine(path) {
   return null;
 }
 
-export async function run({ stateDir: dir = stateDir(), now = Date.now(), hours = HOURS, out = console.log, fetchImpl = fetch } = {}) {
+export async function run({ stateDir: dir = stateDir(), now = Date.now(), hours = HOURS, out = console.log, fetchImpl = fetch, capture = tmuxCapture } = {}) {
   const file = join(dir, 'harness-health.jsonl');
   const prev = prevLine(file);
   const today = collect({ stateDir: dir, now, hours });
-  Object.assign(today, await fetchSessions(fetchImpl)); // sessions may be null: a best-effort source, never a failure
+  Object.assign(today, await fetchSessions(fetchImpl, sessionsUrl(), capture)); // sessions may be null: a best-effort source, never a failure
   const record = { ...today };
   try { appendFileSync(file, JSON.stringify(record) + '\n'); } catch (e) { out(`harness-health: could not append to ${file}: ${e.message}`); }
   const result = summarize(record, prev);

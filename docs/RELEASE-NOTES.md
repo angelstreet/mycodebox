@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **Claude Code notices under a finished turn are cut by position, and a nightly check catches hidden stops** — any paragraph Claude prints below its `✻ … for 7m` marker with no prompt, tool call or spinner after it is now dropped before the STATUS line is read, so a notice wording Claude adds later cannot grey a needs-owner LED again. The daily harness-health check reads the pane of every idle agent session and reports `harness-health:hidden-stop` when one ends on a needs-owner / needs-manager / blocked line the dashboard does not show. · area: status
+
 - **API credit shows the real spend** — the live Usage and Cost Analytics API puts each row's amount under `cost` (`{cost:{amount, list_amount, currency, requests}}`), while the parser read only a top-level `amount`, so every org showed $0 with "no cost recorded yet" (the AngelStreet org had $200 this month). `parseCostReport` now reads `cost.amount`; a fixture of the live shape is in `test/api-credit.test.js` · area: usage
 
 - **Cloud view and Node 24 in cloud sessions** — the More menu has a read-only Cloud view (`/?cloud=1`): every Claude Code cloud session started with `cloud-start`, its task, a link to it and the integration that handed its branch back. Cloud sessions were only visible in the claude.ai sidebar. `scripts/cloud-setup.sh` now switches the cloud VM from Node 22 to Node 24 like codebox, so tests behave the same in both places · area: cloud
