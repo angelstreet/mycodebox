@@ -1050,7 +1050,10 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
     const c = repoCfg(r.repo);
     if (!c) { transition(r, 'returned', { reason: `repo ${r.repo} is not configured` }); return; }
     if (r.state === 'queued') { r.startedAt = iso(); r.steps = []; r.attempt = 0; transition(r, 'running', {}, {}); }
-    else { r.resumed = (r.resumed || 0) + 1; emit(r, { kind: 'resumed', state: 'running', final: false }); }
+    else {
+      r.resumed = (r.resumed || 0) + 1; emit(r, { kind: 'resumed', state: 'running', final: false });
+      await ui.stopLeftover?.(r.id)?.catch((e) => log('ui review leftover', r.id, e.message));   // before any of its trees is dropped or rebuilt
+    }
     try {
       if (!r.pushed) {
         // restart check: a recorded merge may already be on the remote (the push step finished but was not recorded)

@@ -1860,6 +1860,14 @@ waives it and the request records `uiReview.verdict: waived`. Config per repo in
 Journals: `<state>/integration/ui-review/<request id>/` (table, frames, `result.json`), `<state>/ui-review-ask.jsonl`.
 The lane is serial per repo: a review adds about 3 minutes to a graphical request and nothing to any other.
 
+**A restart during a review** (2026-11-28): the service unit is `KillMode=process`, so the running review (its own process
+group) outlives the restart while the resumed request reuses its paths. Its preview saw the tree replaced and left a real
+`frontend/node_modules/.vite` there; the new review then did not link the packages and its preview failed with
+`Cannot find package '@vitejs/plugin-react'`. A resumed request now stops that group first (`stopLeftover`, matched by a
+`--out` / `--config` argument under that request's own review folder or lane trees), as does every new review of the same
+id. A leftover's own verdict (`~/.local/state/ui-review/uir-gate-*.json`) reached nobody and ran on replaced folders: do not
+rely on it. Test: `test/ui-review-leftover.test.js`.
+
 ## Done check (owner/manager, 2026-10-15)
 
 A session's `STATUS: done` is checked against git, not trusted (TASK59 said "shipped, nothing pending" with 7 commits

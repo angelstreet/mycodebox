@@ -34,8 +34,36 @@ export function parseUiReview(raw) {
 
 export const touchesVisual = (cfg, files) => files.some((f) => cfg.paths.some((p) => new RegExp(p).test(f)) && !/\.(test|spec)\.[jt]sx?$|\.md$/.test(f));
 
+// Process groups of a review still running on paths under `prefixes` (its --out folder, or a preview serving one of its trees).
+export function leftoverGroups(prefixes, proc = '/proc') {
+  const pgrpOf = (pid) => { try { const t = fs.readFileSync(path.join(proc, pid, 'stat'), 'utf8'); return Number(t.slice(t.lastIndexOf(')') + 2).split(' ')[2]); } catch { return 0; } };
+  const own = pgrpOf('self');
+  const found = new Set();
+  let pids = []; try { pids = fs.readdirSync(proc).filter((n) => /^\d+$/.test(n)); } catch { return []; }
+  for (const pid of pids) {
+    let a; try { a = fs.readFileSync(path.join(proc, pid, 'cmdline'), 'utf8').split('\0'); } catch { continue; }
+    if (!a.some((v, i) => (v === '--out' || v === '--config') && prefixes.some((p) => a[i + 1]?.startsWith(p)))) continue;
+    const g = pgrpOf(pid);
+    if (g > 1 && g !== own) found.add(g);
+  }
+  return [...found];
+}
+
 export function createUiReview({ stateDir, git, run, log = () => {} }) {
   const root = path.join(stateDir, 'integration', 'ui-review');
+
+  // A service restart (KillMode=process, so deploys survive it) leaves a running review behind, and the resumed request reuses
+  // its paths. Its Vite then saw the tree replaced and wrote a real frontend/node_modules/.vite there, so the new review did
+  // not link the packages: "Cannot find package '@vitejs/plugin-react'", twice on 2026-11-28. Nobody reads the old verdict:
+  // stop that whole process group BEFORE any of those paths is touched. -> the groups stopped
+  async function stopLeftover(id) {
+    const wt = path.join(stateDir, 'integration', 'wt', id);
+    const groups = leftoverGroups([path.join(root, id) + path.sep, wt + path.sep, `${wt}-live${path.sep}`]);
+    const alive = (g) => { try { process.kill(-g, 0); return true; } catch { return false; } };
+    for (const g of groups) { log('ui review', id, `stopping a leftover review (process group ${g})`); try { process.kill(-g, 'SIGKILL'); } catch { /* gone */ } }
+    for (let i = 0; i < 200 && groups.some(alive); i++) await new Promise((r) => setTimeout(r, 50));
+    return groups;
+  }
 
   // The reviewer as it is on the product's target branch, in its own folder. -> { home } | { missing } (not on that branch yet)
   async function exportReviewer(cfg, id) {
@@ -69,6 +97,7 @@ export function createUiReview({ stateDir, git, run, log = () => {} }) {
   // partial: nothing got worse, but part was NOT reviewed (a sign-in the review cannot fix): the request goes on and says so
   async function review(cfg, { id, mode, tree = null, base = null, head = null, onData }) {
     const dir = path.join(root, id, mode);
+    await stopLeftover(id);
     fs.rmSync(dir, { recursive: true, force: true });
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     let home = null;
@@ -91,7 +120,7 @@ export function createUiReview({ stateDir, git, run, log = () => {} }) {
       return { verdict: 'cannot', broke: true, summary: e.message.slice(0, 300), table: '', dir };
     } finally { if (home) fs.rmSync(home, { recursive: true, force: true }); }
   }
-  return { review, exportReviewer };
+  return { review, exportReviewer, stopLeftover };
 }
 
 // What the session reads: the verdict, where the full table and frames are, and the failing rows.
