@@ -2184,6 +2184,11 @@ whose reply approves the plan around the question (round 9 `approvedAction`).
   next stop: a logged stop whose STATUS is `done` / `running` / `waiting` (not `needs-*`, `blocked`, `failed`, not a wait that names the ask id or the owner)
   and is later than the ask (30 s) appends `{state:"resolved", via:"session-moved-on", reason, at}` (`resolveMovedOn` in `owner-asks.js`, called from `manager.js`
   through `onAskMovedOn`). **Second trigger, the item acted on**: the session's own integration request reaching `merged` / `deployed` (a real merge, not `alreadyMerged`) calls `onMerged` in `integration-notify.js`, which resolves the session's older open asks with the branch in the reason; the open view, `manager-ask-scan.sh`, the stale list and the ask fold read the ledger, so the item is gone from all of them.
+- **Cloud sessions** (`cloud-sessions.js`, `public/cloud-view.js`, owner 2026-11-28; runbook [CLOUD](CLOUD.md)): `scripts/cloud-start` logs each
+  Claude Code cloud session to `<state>/cloud-sessions.jsonl` (`at, id, url, repo, base, label, by, task`). `GET /api/cloud-sessions[?limit=n]` returns
+  them newest first (`{ sessions }`; a torn line is skipped; `url` kept only when it is a `https://claude.ai/code/session_…` link) with `handoff`:
+  the newest lane request whose `externalLabel` is `cloud-<label>` (`{ id, state, branch, repo, sha }`, else null). The Cloud view (More menu,
+  `/?cloud=1`) lists them read-only. `scripts/cloud-setup.sh` switches the VM to Node 24 (codebox's major) from the `node-linux-<arch>` npm package.
 - **Shared pages** (`pages.js`, `scripts/page`, owner 2026-11-28): claude.ai Artifacts and Claude Docs are private to the Claude account that made
   them (three logins), so agents publish pages here instead and the Artifact tool is off for the three logins (`"enableArtifact": false` in each
   `settings.json`). `page publish <file.html|file.md|folder> [--slug s] [--title t] [--asset f ...]` copies the page into

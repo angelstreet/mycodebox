@@ -31,7 +31,8 @@ parked on usage limits and their environments would be personal to them anyway. 
   The install is then cached in the environment snapshot (about 7 days) instead of running in each session
   (VirtualPyTest: about 90 s). Leave *Network access* on Limited + package managers, *Environment variables* and
   *Network secrets* empty.
-- Repo setup scripts: `scripts/cloud-setup.sh` in each repo. mycodebox: `npm ci` (then `npm test`). VirtualPyTest:
+- Repo setup scripts: `scripts/cloud-setup.sh` in each repo. mycodebox: Node 24 like codebox (the VM ships 22; the binary comes from the
+  `node-linux-<arch>` npm package, the npm registry being allowed), then `npm ci` (then `npm test`). VirtualPyTest:
   a venv in `~/.venvs/vpt-cloud` with the server + host requirements and pytest, and `frontend/node_modules` with the
   CI's vitest/testing-library extras (then `pytest tests/rollout tests/shared`, `tsc --noEmit`).
 
@@ -61,8 +62,10 @@ tmux, prints the session URL and appends one line to `$GHOSTY_STATE_DIR/cloud-se
 (`at, id, url, repo, base, label, by, task`). Run it once per task for parallel agents. Interactive alternative: type
 `claude --cloud "task"` in a terminal. From a phone or browser: claude.ai/code on the default login.
 
-Where they show up: the claude.ai/code sidebar of the default login (owner, phone app too), the URL printed by
-`cloud-start`, and `cloud-sessions.jsonl` for the manager. They are not tmux cards on the dashboard.
+Where they show up: the dashboard's **Cloud** view (More menu > Cloud, `/?cloud=1`: each session started with `cloud-start`, its task, a link
+to it on claude.ai and its hand-off integration, read-only), the claude.ai/code sidebar of the default login (owner, phone app too), the URL
+printed by `cloud-start`, and `cloud-sessions.jsonl`. They are not tmux cards. The hand-off shows when the request used `--mac cloud-<label>`
+with the label given to `cloud-start -l`.
 Follow-up message to a running one: `claude -p "<text>" --cloud <session-id>`; take it over locally:
 `claude --teleport <session-id>`.
 

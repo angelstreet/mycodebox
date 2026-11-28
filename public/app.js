@@ -4710,6 +4710,25 @@ async function openLeasesView() {
   });
 }
 $('#leasesBtn').onclick = openLeasesView;
+// ----- Cloud (⋮ menu, /?cloud=1): GET /api/cloud-sessions; public/cloud-view.js is loaded on first use. Read-only (docs/CLOUD.md) -----
+async function openCloudView() {
+  let cv;
+  try { cv = await import('/cloud-view.js'); } catch { toast('cloud view unavailable', 2500); return; }
+  openSheet('Cloud sessions', ({ body, foot, close }) => {
+    body.closest('.sheet').classList.add('history');
+    foot.classList.remove('hidden');
+    foot.innerHTML = '<button class="sbtn" data-a="refresh">refresh</button><span class="grow"></span><button class="sbtn" data-a="close">close</button>';
+    let data = null;
+    const paint = () => { body.innerHTML = data ? cv.viewHtml(data, { now: Date.now() }) : '<div class="sheet-empty">loading…</div>'; };
+    const load = async () => {
+      try { const r = await fetch('/api/cloud-sessions'); data = await r.json(); } catch (e) { data = { ok: false, error: `cloud sessions unavailable: ${e.message}` }; }
+      if (body.isConnected) paint();
+    };
+    foot.onclick = (e) => { const a = e.target.closest('[data-a]')?.dataset.a; if (a === 'close') close(); else if (a === 'refresh') load(); };
+    paint(); load();
+  });
+}
+$('#cloudBtn').onclick = openCloudView;
 // ----- Integration (⋮ menu, /?integration=1): GET /api/integration/requests; public/integration-view.js is loaded on first use. Cancel of a queued request needs a second tap -----
 async function openIntegrationView() {
   let iv;
@@ -6228,6 +6247,7 @@ if ('serviceWorker' in navigator) {
   if (new URLSearchParams(location.search).get('decisions')) openDecisions();
   if (new URLSearchParams(location.search).get('decided')) openDecidedView();
   if (new URLSearchParams(location.search).get('leases')) openLeasesView();
+  if (new URLSearchParams(location.search).get('cloud')) openCloudView();
   if (['usage-page', 'usage'].some((k) => new URLSearchParams(location.search).get(k))) openUsagePage();   // /?usage=1 is the documented alias
   if (new URLSearchParams(location.search).get('integration')) openIntegrationView();
   if (new URLSearchParams(location.search).get('voice')) openVoiceMode();
