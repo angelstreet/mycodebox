@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { pagePathOf } from './pages.js';
 
 export const MAX_ROUNDS = 2;
 export const ROUND_TTL_MS = 12 * 3600 * 1000;
@@ -109,7 +110,7 @@ export function createAskReview({ stateDir, review, run, branchOf, send, journal
 }
 
 // The review the asks use: the exported reviewer, on the files named (one run per kind) or on the session's branch (the gate, before/after).
-export function createAskRunner({ lane, cfg, stateDir, run }) {
+export function createAskRunner({ lane, cfg, stateDir, run, publicUrl = '' }) {
   return async function review({ id, files = null, tree = null, base = null }) {
     const conf = cfg();
     if (!conf) return { verdict: 'absent', summary: 'no uiReview block configured' };
@@ -127,7 +128,10 @@ export function createAskRunner({ lane, cfg, stateDir, run }) {
         const said = /^ui-review: uir-\S+ (pass-with-exceptions|pass|fail)\b/m.exec(x.out)?.[1];
         const verdict = x.code === 0 && said?.startsWith('pass') ? 'pass' : x.code === 1 && said === 'fail' ? 'fail' : 'cannot';
         if (verdict === 'fail' || (verdict === 'cannot' && worst === 'pass')) worst = verdict;
-        out.push(x.out.split('\n').filter((l) => /^## |\| FAIL \||^ui-review: /.test(l)).slice(0, 14).map((l) => l.slice(0, 400)).join('\n') || x.out.slice(-600));
+        const shown = x.out.split('\n').filter((l) => /^## |\| FAIL \||^ui-review: /.test(l)).slice(0, 14).map((l) => l.slice(0, 400)).join('\n') || x.out.slice(-600);
+        // the table is read in the dashboard: a shared page is named by its URL, never by its stored file (that link is refused)
+        const url = pagePathOf(stateDir, f.file);
+        out.push(url ? shown.split(f.file).join(`${publicUrl.replace(/\/+$/, '')}${url}`) : shown);
       }
     } finally { fs.rmSync(exported.home, { recursive: true, force: true }); }
     return { verdict: worst, summary: `${files.length} file(s) reviewed: ${worst}`, table: out.join('\n'), dir };

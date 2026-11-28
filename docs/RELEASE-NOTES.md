@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **A shared page no longer opens as "hidden folder"** — the UI review send-back typed a shared page's stored file path into the session, the reader turned it into a /files/ link, and that link answered 403, so the owner thought the agent had sent a broken link (it had not; 2026-11-28). The review table now names the public /p/ URL, and an old /files/ link to a shared page's file redirects to it · area: pages
+
 - **A restart no longer breaks the UI review** — a ghosty restart left the running review alive, and the resumed request rebuilt the same tree under it. The old preview then wrote a real `frontend/node_modules` folder there, so the new review did not link the packages and the lane said "the preview did not start" (`Cannot find package '@vitejs/plugin-react'`): one frontend merge was returned and one live page got no delivered verdict on 2026-11-28. The lane now stops the leftover review's process group before it touches that request's trees. Test in `test/ui-review-leftover.test.js` · area: integration lane
 
 - **New Claude sessions run on Sonnet** — "i prefer to have sonnet" (owner 2026-11-28). `cbsession` without `-m` and `POST /api/sessions` without a model now pass `--model sonnet`; a chosen model and an `AGENT_CMD_CLAUDE` override win, and resume keeps the conversation's own model. Also fixed: crash resume put the pane footer's model name on the command line (`--model Opus 5.5`, a stray `5.5` prompt) and now passes only the launch line's `--model` · area: sessions

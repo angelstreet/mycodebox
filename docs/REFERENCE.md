@@ -2218,6 +2218,8 @@ whose reply approves the plan around the question (round 9 `approvedAction`).
   `form-action 'none'`, `worker-src 'none'`: scripts run, images / CSS / fonts / CDN scripts load, but no fetch, XHR, WebSocket, beacon or form
   reaches the dashboard (and a write would also fail the Origin and JSON content-type checks). A page that needs data carries it inline.
   `POST /api/mockups` with a `/p/<slug>/` url (path or full URL) lints the published file; a needs-owner UI review reads it too (`ui-review-ask.js`).
+  A shared page's stored file (`<state>/pages/<slug>/site/...`) is never named to anyone (2026-11-28: it sits in a dot folder, so its `/files/` link
+  answers "hidden folder"): the UI review send-back names the public `/p/` URL (`pagePathOf`), and `GET /files/` of such a file is a 302 to that URL.
 - **Mockup-first** (`mockups.js`; `mockupFirst`, `mockupWindowMin` default 10): `POST /api/mockups` (loopback + reporter token) records a feed item
   `kind: mockup` with a link and a deadline ([a session the manager started](#sessions-the-manager-started-owner-2026-11-26): a manager event instead); a stop asking to show the mockup before building is answered "post it to the feed and build"; the owner's
   "Object" (notification button or `POST /api/mockups/<id>/object`) sends the session "The owner objects to the mockup: wait for their notes."

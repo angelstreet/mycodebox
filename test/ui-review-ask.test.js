@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createAskReview, visualAskOf, kindOf, MAX_ROUNDS } from '../ui-review-ask.js';
+import { createAskReview, createAskRunner, visualAskOf, kindOf, MAX_ROUNDS } from '../ui-review-ask.js';
 import { tmp } from './helpers-tmp.js';
 
 const ask = (extra = '') => `The poster is ready. ${extra}\nSTATUS: needs-owner: poster mockup; 1 = ship / 2 = change`;
@@ -93,4 +93,14 @@ test('a shared page named by its /p/<slug>/ URL is reviewed from its published f
   const site = join(dir, 'pages', 'mock-1', 'site'); mkdirSync(site, { recursive: true }); writeFileSync(join(site, 'index.html'), '<p>x</p>');
   const r = await a.handle('s1', 'The mockup is at https://box.example.ts.net/p/mock-1/\nSTATUS: needs-owner: mockup; 1 = ship / 2 = change');
   assert.equal(r.push, true); assert.equal(reviewed[0].files[0].file, join(site, 'index.html'));
+});
+
+test('the review table names a shared page by its URL, never by its stored file', async () => {
+  const dir = tmp('ask-run-'), home = tmp('ask-exp-');
+  const file = join(dir, 'pages', 'wk', 'site', 'index.html');
+  const run = createAskRunner({ stateDir: dir, publicUrl: 'https://box.example.ts.net/', cfg: () => ({ timeoutMin: 1 }), lane: { exportReviewer: async () => ({ home }) },
+    run: async () => ({ code: 1, out: `## ${file}\n| text.repeated | FAIL | shown 2 times |\nui-review: uir-1 fail` }) });
+  const u = await run({ id: 'x', files: [{ file, kind: 'mockup' }] });
+  assert.match(u.table, /^## https:\/\/box\.example\.ts\.net\/p\/wk\/$/m);
+  assert.ok(!u.table.includes(file));
 });

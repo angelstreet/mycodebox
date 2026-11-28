@@ -192,6 +192,17 @@ export function publishPage(stateDir, src, { slug, title, session = '', account 
   } catch (e) { rmSync(tmp, { recursive: true, force: true }); throw e; }
 }
 
+// A published page named by its stored file (<state>/pages/<slug>/site/...) -> its dashboard URL path, '' for anything else.
+// The stored path is under a dot folder, so a /files/ link to it answers "hidden folder" (owner 2026-11-28: a broken index.html link).
+export function pagePathOf(stateDir, file) {
+  const root = pagesDir(stateDir) + sep, f = normalize(String(file || ''));
+  if (!f.startsWith(root)) return '';
+  const [slug, site, ...rel] = f.slice(root.length).split(sep);
+  if (!SLUG_RE.test(slug) || site !== 'site' || !rel.length) return '';
+  const tail = rel.join('/') === 'index.html' ? '' : rel.map(encodeURIComponent).join('/');
+  return `/p/${slug}/${tail}`;
+}
+
 // urlPath after /p/ ("<slug>/<path>") -> { file, type, sandbox, size } | { redirect } | { status, error }
 export function resolvePageFile(stateDir, rest) {
   let p; try { p = decodeURIComponent(String(rest || '')); } catch { return { status: 400, error: 'bad path' }; }
