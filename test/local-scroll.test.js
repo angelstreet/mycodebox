@@ -43,7 +43,7 @@ test('fling: velocity of the last samples, none when the finger rested, a decay 
 
 test('wiring: behind the setting, per card and never saved, in the settings popover and the offline shell', () => {
   const app = fs.readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
-  assert.match(app, /state\.smoothScroll = lsGet\(LS_SMOOTH, '1'\) !== '0'/);
+  assert.match(app, /state\.smoothScroll = lsGet\(LS_SMOOTH, '0'\) === '1'/, 'scrolling stays in the terminal unless the owner enables Smooth scroll');
   assert.match(app, /function readerOn\(n\) \{ return state\.reader \|\| state\.scrollRd\.has\(n\)/, 'the card shows the reader without touching the saved view');
   assert.doesNotMatch(app, /lsSet\(LS_READER[^\n]*scrollRd/, 'a smooth scroll never saves the reader / terminal choice');
   const enter = app.slice(app.indexOf('function localScrollEnter('), app.indexOf('function localScrollExit('));

@@ -40,6 +40,7 @@ The release note of this repo (owner 2026-11-13). Every merged code change (not 
 what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
+- **Fullscreen terminal scrolling stays in the terminal by default** — Smooth scroll had switched the card to Reader on any upward scroll; the optional setting is now off by default · area: dashboard
 - **Mobile session actions use the requested Archive, Delete, Edit, Swap order** — the icon buttons sit edge to edge with 24 px horizontal targets, keeping the sidebar compact · area: dashboard
 - **Mobile session actions are closer together and include Park** — the sidebar keeps the archive icon available on touch screens for sessions that can be parked, while narrowing the gaps between row actions · area: dashboard
 
