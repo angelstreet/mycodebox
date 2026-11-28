@@ -1422,7 +1422,7 @@ links `projects`, `sessions`, `settings.json`, `CLAUDE.md`, `hooks`, `agents`, `
 other conversation data from `~/.claude`, so a conversation resumes on any account and the board keeps finding its
 sessions; the login (`.credentials.json`, `.claude.json`) is never linked, read or copied. New Claude sessions, resumes
 and crash resumes start as `CLAUDE_CONFIG_DIR=<dir> GHOSTY_CLAUDE_ACCOUNT=<id> claude ...` on the **active** account:
-the first one in list order whose 5 h and weekly windows are under 95 % and that carries no limit mark (list order is
+the first one in list order whose 5 h and weekly windows are under 99 % and that carries no limit mark (list order is
 the preference, so new sessions go back to the first account once its window resets). A session started by
 `scripts/cbsession` reads the same account from `$GHOSTY_STATE_DIR/claude-accounts.json` and exports the same two
 variables (a session on the subscription billing only; an API key is its own billing, and an account without a login is
@@ -1430,25 +1430,31 @@ not used). The status-line script writes
 each account's windows to `claude-rate-limits.<id>.json` (the default keeps `claude-rate-limits.json`); the `claude`
 quota plan shows the active account and lists all of them. A Claude pane whose tail shows a usage-limit stop
 ("usage limit reached", "5-hour / weekly limit reached", "You've hit your limit", "You hit your weekly limit" without the apostrophe, "You're out of usage credits", "You've hit your weekly limit · resets Nov 21, 2pm (UTC)")
-marks its account used up (until the window's reset, else 1 h) and, with `autoSwapSessions` on (default) and another account free, is parked (Escape first;
+marks its account used up (until the blocked window's reset, or the named window's reset when its reading still shows room, else 1 h) and, with `autoSwapSessions` on (default) and another account free, is parked (Escape first;
 the limit stop waives the "waiting" and pending-question checks, never the lease, job or attached-terminal ones) and
 resumed on that account, then gets `continue` after 15 s. The stop must be the agent's last output: a resumed pane replays the
 whole conversation, so the old stop sits above the park's "/exit" and "Catch you later!", and that replay is not a new stop (it must not
-swap the session a second time). A paused session, a failed park, or no account
-left is pushed to the owner instead.
+swap the session a second time). A confirmed stop takes precedence over a quota reading taken before it; a newer reading
+with headroom can still clear the mark. A limit phrase quoted inside prose, source code or a user prompt does not count as a stop.
+The warning level (95 %) is separate from exhaustion (99 % or a real limit mark), so an account at week 95 % remains usable in
+`/api/quota` and `/api/health`. Paused sessions and `autoSwapSessions:false` defer the switch. A failed park is retried after 5 min,
+with the existing lease, running-job and attached-terminal checks preserved. With no account free, `claude-rotation.js` checks
+again each pane tick without extending the original mark, and resumes on the first account with room after a reset, including
+the stopped account itself. Waiting stops and pending continuation are saved in `$GHOSTY_STATE_DIR/claude-limit-stops.json`
+so a service restart does not forget the wait. No login or credential is read or copied.
 **The manager moves too (`manager-rotation.js`, owner 2026-11-26).** Every launch through `scripts/manager-fresh.sh`
 (nightly, `manager-watch.sh` relaunch, context cap, manager-resume) gets the active account from
 `scripts/manager-command.js` (same two variables as cbsession; an account without a login is not used; an
 `AGENT_CMD_CLAUDE` that sets its own `CLAUDE_CONFIG_DIR` wins) and trusts the folder in that account's `.claude.json`.
 The manager is never parked: a session in `managerSessions` is restarted **fresh** through the same script
 (`MANAGER_FRESH_ACCOUNT=<id>`), (1) on a usage-limit stop (`MANAGER_FRESH_LIMIT=1`: no idle wait, Escape, C-u, `/exit`),
-or (2) while `done` / `idle` / `waiting` with no draft on an account at the 95 % threshold or marked used up. The target
+or (2) while `done` / `idle` / `waiting` with no draft on an account at the exhaustion threshold or marked used up. The target
 is the first account in list order with headroom and a login. One restart per 10 min (1 min after "not idle", exit 3);
 a failed one alerts the owner and is retried after 5 min; a Fable session is resumed on `--model opus` (the Fable usage-credits prompt would stop it). No account free, `autoSwapSessions` off or the manager paused: one high-priority alert
 (no account: with the next reset time, Paris), and it restarts by itself once an account frees up. A dead manager stays
 `manager-watch.sh`'s job.
 **Early alert:** one high-priority alert when all logged-in accounts together hold no more than 100 points of one fresh
-account's week up to 95 % (for example the last-but-one at 90 % with one untouched account left: before the last
+account's week up to 99 % (for example the last-but-one at 98 % with one untouched account left: before the last
 switch). A 5 h block still counts its week; a block ending more than 6 h away counts 0. It re-arms above 120 points
 (`earlyAlerted` in the state file). Tests: `test/manager-account.test.js`, `test/manager-rotation.test.js`. Each row shows its account; the row's switch button moves a session by hand.
 State: `$GHOSTY_STATE_DIR/claude-accounts.json`. API: `GET/POST /api/claude-accounts`, `POST /api/claude-accounts/settings`

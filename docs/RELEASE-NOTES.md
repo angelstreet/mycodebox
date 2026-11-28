@@ -3,6 +3,8 @@
 The release note of this repo (owner 2026-11-13). Every merged code change (not docs-only) adds one entry at the top of
 `## Unreleased`; the done-check reads the merged diff for this file (REFERENCE "Closing review"). Entry form: one line,
 
+- **Claude usage-limit stops switch account and resume automatically, or wait for the earliest reset** — accounts below 99% remain usable (95% is a warning); a confirmed stop overrides its preceding quota reading. Stopped conversations are reconsidered each tick without extending their limit mark, including across service restarts, then resume on an account with room and receive `continue`. Pause, switch-off, lease and job guards remain in effect. Tests use temporary account and parking stores plus an isolated server for `/api/quota` and `/api/health`.
+
 - **Usage & cost is wide and centered, table cells no longer overlap** — the full usage page sat in the 560px sheet; it now opens up to 1180px wide, centered (`.sheet.uv-sheet` in `public/style.css`), and the agent name / plan label in the "Where it goes" table shrink with an ellipsis instead of running over the Tokens column.
 
 - **Suggestion rows are short** — the popup no longer prints "Owner only: …" / "Opus in doubt: …" (now the row's hover text), the green line is just Opus's proposal ("yes" / "no", no "Opus proposes:"), and the button reads "Yes" instead of "Yes, build it". `public/parked-view.js`.
