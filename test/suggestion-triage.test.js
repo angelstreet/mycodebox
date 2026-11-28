@@ -6,7 +6,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmp } from './helpers-tmp.js';
 import { createSuggestions } from '../suggestions.js';
-import { createSuggestionTriage, parseVerdicts, decide, floorOf, sessionMessage, ownerRow, promptOf } from '../suggestion-triage.js';
+import { createSuggestionTriage, parseVerdicts, decide, floorOf, floorMatchOf, sessionMessage, ownerRow, promptOf } from '../suggestion-triage.js';
 import { createGoalGate } from '../goal-check.js';
 import { ASK_WORDS } from '../reflection.js';
 
@@ -110,6 +110,9 @@ test('owner floors are never approved, whatever Opus says', async () => {
   }
   assert.ok(!r.applied[0].approved.some((i) => [4, 5, 6].includes(i.n)));
   assert.ok(r.owner[0].rows.some((x) => /floor: money/.test(x)));
+  // the record says which rule and which words made each floor (2026-11-28)
+  const rec = Object.fromEntries(asks(r.dir).filter((a) => a.n).map((a) => [a.n, a]));
+  for (const n of [4, 5, 6]) { assert.match(rec[n].floorRule, /^suggestion-triage FLOORS\./, `item ${n}`); assert.ok(rec[n].floorWords, `item ${n}`); }
   assert.equal(floorOf('rotate the API key for the ntfy reporter'), 'credentials');
   assert.equal(floorOf('email the customers about the new version'), 'customers');
   assert.equal(floorOf('add a regression test for the parser'), null);
@@ -411,4 +414,25 @@ test('floorOf: drop / remove / delete in a UI or journal sense is not the data f
   for (const t of ['remove the stale sessions from the dashboard', 'drop the old branches on origin', 'rm -rf the old capture folder'])
     assert.match(floorOf(t) || '', /deleting data|owner floor/, t);
   for (const t of ['force-push main to fix history', 'kill the prod server', 'git reset --hard on main']) assert.match(floorOf(t) || '', /owner floor/, `the other hard floors still apply: ${t}`);
+});
+
+// The triage record names the rule and the words behind an owner floor, so a false floor is found by reading it (triage YES 2026-11-28).
+test('floorMatchOf: each floor names its rule and the words it matched; decide carries them to the record', () => {
+  assert.deepEqual(floorMatchOf('drop the users table before the migration'), { floor: 'deleting data', rule: 'suggestion-triage FLOORS.deleting data', words: 'drop the users' });   // up to the first data noun: the words that fired
+  assert.deepEqual(floorMatchOf('purge the manager-events history weekly'), { floor: 'deleting data', rule: 'suggestion-triage FLOORS.deleting data', words: 'purge the manager-events history' });
+  const money = floorMatchOf('buy a bigger plan for the runner');
+  assert.equal(money.rule, 'suggestion-triage FLOORS.money');
+  assert.equal(money.words, 'buy');
+  const hard = floorMatchOf('force-push main to clean history');
+  assert.match(hard.floor, /^owner floor \(/);
+  assert.equal(hard.rule, 'doubt.js ownerOnly (ownerFloorMatch / hardMatch)');
+  assert.ok(hard.words && !/^"/.test(hard.words), hard.words);
+  assert.equal(floorMatchOf('Show why a session is needs-manager: the state frame drops managerAsk'), null);
+  assert.equal(floorOf('drop the users table'), 'deleting data');
+  const [d] = decide([{ n: 1, text: 'wipe the backups older than a week' }], { 1: { verdict: 'yes', proposed: 'yes', why: 'x' } });
+  assert.equal(d.decision, 'owner');
+  assert.equal(d.floorRule, 'suggestion-triage FLOORS.deleting data');
+  assert.equal(d.floorWords, 'wipe the backups');
+  const [n] = decide([{ n: 2, text: 'add a test for the parser' }], { 2: { verdict: 'yes', proposed: 'yes', why: 'x' } });
+  assert.equal(n.floorRule, undefined);
 });

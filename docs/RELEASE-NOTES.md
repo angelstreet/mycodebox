@@ -69,6 +69,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The triage record says which rule and which words sent a suggestion to the owner** — each floor item's `manager-asks.jsonl` line (`point: suggestion-triage`) now has `floorRule` (`suggestion-triage FLOORS.<name>` or `doubt.js ownerOnly (ownerFloorMatch / hardMatch)`) and `floorWords` (the matched words, e.g. "wipe the backups"), so a false floor like the 2026-11-28 "drops" is found by reading the record, not by the owner. `suggestion-triage.js` `floorMatchOf` (`floorOf` is now its `.floor`) · tests: `test/suggestion-triage.test.js` · area: harness
+
 - **The reader's play button reads the agent's summary only** — owner: "has to be the summary only". It no longer falls back to the STATUS line; a turn without a `Summary:` block has no play button (`public/app.js` paintReader, `test/reader-chip-wiring.test.js`) · area: reader
 - **The reader's play button works after the reader repaints** — the chip was wired only on the reader's first paint, so a chip painted later (after "no reply yet", or after a smooth-scroll swap) did nothing on tap. Every reader rebuild now wires its chips (`public/app.js` paintReader, test `test/reader-chip-wiring.test.js`) · area: reader
 

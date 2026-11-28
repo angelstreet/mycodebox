@@ -2435,7 +2435,7 @@ Opus call (`claude -p --model opus`, no tools, empty cwd, async; one at a time p
 - **Context:** Opus reads the closing text the items came from (`context` in the ledger record, the last 2,000 characters, as data), with
   the session's goal.
 - **Account:** the Opus call runs on the first Claude account with headroom (`usableAccounts`: active first; used-up, over-limit or login-less accounts skipped; `CLAUDE_CONFIG_DIR` set for the child) and retries once on the next after a limit error, marking the first used up. `scripts/ask-opus.js` does the same. A 5-minute `sweep()` retries lists whose triage errored after the cool-down. Each switch is one `manager-asks.jsonl` row (`point: claude-account-switch`, from, to, source); `/api/health` has `claudeAccounts: { total, usable, allUsedUp }`.
-- **Record:** one `manager-asks.jsonl` line per item (`point: suggestion-triage`, verdict, opus, proposed, why, floor, source `opus`, `account` the call ran on; an `error` line too), the
+- **Record:** one `manager-asks.jsonl` line per item (`point: suggestion-triage`, verdict, opus, proposed, why, floor with `floorRule` (the FLOORS entry or `doubt.js ownerOnly`) and `floorWords` (the words it matched), source `opus`, `account` the call ran on; an `error` line too), the
   actions log (`suggestion-triage`, `suggestions-answered` by `opus`), `suggestions.jsonl`, and "Decided for you" for the yes / no.
 - **Fallback:** an Opus error is recorded (`verdict: error`) and leaves the items open for the old flow below; the same items are tried
   again after 30 min. Switch `manager.json` `suggestionTriage`: `live` (default) | `off` (also off with `reflection` not `live`).
