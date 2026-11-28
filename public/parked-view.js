@@ -9,11 +9,12 @@ export function parkedChipHtml(items = []) {
   return `<button data-parked="1" title="${esc(title)}">suggestions · ${items.length}</button>`;
 }
 
-// One row per item: session, the suggestion, why it is the owner's (a floor, or Opus's doubt), Opus's proposal, then Yes / No.
+// One row per item: session, the suggestion, Opus's proposal (green), then Yes / No; why it is the owner's is the row's hover text.
 export function parkedRowsHtml(items = [], { name = (s) => s } = {}) {
   const why = (i) => (i.open ? 'Not triaged yet; no session waits on it' : i.floor ? `Owner only: ${i.floor}` : `Opus in doubt${i.why ? `: ${i.why}` : ''}`);
   return '<div class="qrow1"><b>Suggestions for you</b><div class="qwhy">The Opus triage left these to you. No session waits on them.</div></div>'
-    + items.map((i) => `<div class="qrow1 prk" data-s="${esc(i.session)}" data-n="${esc(i.n)}"><b>${esc(name(i.session))} · ${esc(i.n)}</b> ${esc(i.text)}`
-      + `<div class="qwhy">${esc(why(i))}</div>${i.open ? '' : `<div class="qrec">Opus proposes: ${esc(i.proposed || 'no')}</div>`}`
-      + `<div class="prkbtns"><button class="prk-yes" data-a="yes">Yes, build it</button><button class="prk-no" data-a="no">No</button></div></div>`).join('');
+    // short rows (owner 2026-11-28): the reason (a floor, or Opus's doubt) is only the hover text; the green line is Opus's proposal alone
+    + items.map((i) => `<div class="qrow1 prk" data-s="${esc(i.session)}" data-n="${esc(i.n)}" title="${esc(why(i))}"><b>${esc(name(i.session))} · ${esc(i.n)}</b> ${esc(i.text)}`
+      + `${i.open ? '' : `<div class="qrec">${esc(i.proposed || 'no')}</div>`}`
+      + `<div class="prkbtns"><button class="prk-yes" data-a="yes">Yes</button><button class="prk-no" data-a="no">No</button></div></div>`).join('');
 }
