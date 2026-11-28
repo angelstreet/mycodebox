@@ -175,11 +175,11 @@ export function doneWithoutGoalMessage(f) {
 // The closing review of a done line says `leftovers none` and `unverified none`. A filed bug id in leftovers is still work left; an unverified list is
 // a check not made. (A bug outside the task goes in `bugs: reported <id>`, which does not hold the line.) Before this, `leftovers <filed ids>` and any
 // `unverified` list passed: a Mac session wrote done with a hook not installed, two bugs open and three items unverified.
-const NOTHING_RE = /^(?:none|nothing|n\/a|-)(?:\b|$)/i;
-// "none" that goes on to name open work is not none (2026-11-28: "unverified none for the task (live manager restart path
-// deferred-to-manager; the two new advisories not yet fired live)" kept a session done).
-const HEDGE_RE = /\b(?:not\s+(?:yet|live|tested|exercised|verified|confirmed|run|fired|reachable)|deferred|unconfirmed|untested|unverified|pending|to\s+be\s+(?:checked|verified|confirmed|tested)|still\s+(?:open|to))/i;
-const isNothing = (x) => NOTHING_RE.test(x) && !HEDGE_RE.test(x.replace(NOTHING_RE, ''));
+// leftovers / unverified count as nothing only when bare: "none" (or nothing, n/a, -), or "none (checked: <what>)". Anything else after
+// none names open work and holds the done line (triage YES 2026-11-28: live lines read "none (only the PDF preview ... can't ...)",
+// "none for me (...)", "none beyond the open ...", "none I can act on (6 hosts unreachable ...)"; a hedge word list missed most).
+const NOTHING_RE = /^(?:none|nothing|n\/a|-)(?:\s*\(\s*checked\s*:[^)]*\))?$/i;
+const isNothing = (x) => NOTHING_RE.test(x.replace(/\s+/g, ' ').trim());
 // Pure. -> null (not a done line, no closing review, or nothing open) | { open: ['leftovers: ...', 'unverified: ...'], ids: n }.
 export function doneWithOpenOf(text) {
   const st = lastStatus(text);
@@ -196,7 +196,7 @@ export function doneWithOpenOf(text) {
 }
 export function doneWithOpenMessage(f) {
   return `Status check: done is only for a task with nothing open, and your done line lists ${f.open.join(' · ')}. A filed bug is not a finished task and an unverified item is a check not made. `
-    + 'Finish or verify each one now (a bug of yours: `found-bug --claim <id>`, fix, ship, `found-bug --resolve <id> --commit <sha|integration id>`), then write the done line with `leftovers none · unverified none`. '
+    + 'Finish or verify each one now (a bug of yours: `found-bug --claim <id>`, fix, ship, `found-bug --resolve <id> --commit <sha|integration id>`), then write the done line with `leftovers none · unverified none` (bare, or `none (checked: <what>)`; anything else after none counts as open). '
     + 'If you cannot, the status is not done: `running` / `waiting` (something is going), `needs-manager`, `blocked: ... · tried: ... · need: ...`, or `failed — goal not achieved: <why> · tried: <list> · cause: <what you found> · plan: <next approach, who does it>`. One push only.';
 }
 

@@ -37,3 +37,8 @@ test('ticket: two slots, a third waits, a dead holder is taken over', async () =
   assert.equal(readFileSync(path.join(dir, 'slot-0'), 'utf8'), String(process.pid));
   r4(); assert.equal(existsSync(path.join(dir, 'slot-0')), false);
 });
+
+test('the scope is repeated under the totals in their ℹ form', async () => {
+  const { scopeLine } = await import('../scripts/test-run.js');
+  assert.equal(scopeLine('50 of 330 test files (changed-only vs abc)'), 'ℹ scope 50 of 330 test files (changed-only vs abc)');
+});

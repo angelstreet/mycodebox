@@ -60,6 +60,8 @@ export async function ticket({ dir = process.env.TEST_SLOT_DIR || path.join(os.t
   }
 }
 
+export const scopeLine = (scope) => `ℹ scope ${scope}`;
+
 async function main() {
   const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
   const all = tests(root);
@@ -73,7 +75,8 @@ async function main() {
     if (s.full) { files = all; why = `full: ${s.full}`; }
     else { files = s.files; why = `changed-only vs ${base}; the full suite runs daily on main`; }
   }
-  console.log(`test-run: ${files.length} of ${all.length} test files (${why})`);
+  const scope = `${files.length} of ${all.length} test files (${why})`;
+  console.log(`test-run: ${scope}`);
   if (!files.length) return 0;
   const release = files.length >= BIG_RUN ? await ticket() : () => {};
   const tmp = mkdtempSync(path.join(os.tmpdir(), 'gtr-'));   // short: unix socket paths under it must stay < 104 chars; distinct so health-watch can sweep it
@@ -84,6 +87,9 @@ async function main() {
   const code = await new Promise((r) => child.on('exit', (c, s) => r(c ?? (s ? 1 : 0))));
   release();
   rmSync(tmp, { recursive: true, force: true });
+  // again under node's totals, in their "ℹ" form: a `tail` or `grep ℹ` of the run shows what the pass count covers (2026-11-28:
+  // changed-only totals of 1346, 1218 and 50 read as a shrinking full suite)
+  console.log(scopeLine(scope));
   return code;
 }
 if (import.meta.url === `file://${process.argv[1]}`) process.exit(await main());
