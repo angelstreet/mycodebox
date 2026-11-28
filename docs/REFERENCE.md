@@ -1627,9 +1627,9 @@ or the feed drifts from it (two bugs of the token audit were a kind added in one
 `scripts/ui-pages.json` is the page map of the dashboard's deep-linked views; `scripts/ui-overflow-check.js` opens each at 390 px
 headless against a throw-away server with a synthetic usage summary and fails on a document wider than the screen or an unclipped
 element past the edge (verified: it fails on the old `.uv-root` and sparkline CSS). It is also the built-in daily check `ui-overflow`
-(skips as healthy without a playwright-core), and `test/ui-pages-map.test.js` fails when a deep link in `public/app.js` is not in the map.
+(skips as healthy without a playwright-core; its row, like every check's, is in the daily report's `Check results` table), and `test/ui-pages-map.test.js` fails when a deep link in `public/app.js` is not in the map.
 `scripts/manager-handover-line.sh` prints the handover line the restart kickoff tells the manager to read; `manager-fresh.sh`
-runs it before the kickoff, so a restart is confirmed from its log. `/api/usage` carries `advisories` (`lastFired()` over
+runs it before the kickoff, so a restart is confirmed from its log. `/api/usage` keeps the last good summary when the file goes missing; it carries `advisories` (`lastFired()` over
 `manager-events.jsonl`, memoised 60 s) and the Waste tab shows one line per kind: "5 h ago · session" or "never since <date>".
 
 **1-hour prompt cache TTL (#5), default off.** For Claude sessions whose turns are more than 5 minutes apart (the 5-minute
