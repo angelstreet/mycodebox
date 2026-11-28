@@ -35,7 +35,9 @@ else {
 }
 `);
 chmodSync(FAKE, 0o755);
-const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+// A zombie is dead: where PID 1 does not reap orphans (the Claude Code cloud VM), a killed child stays a zombie and kill(0) still succeeds.
+const zombie = (pid) => { try { return /^\d+ \(.*\) Z/.test(fs.readFileSync(`/proc/${pid}/stat`, 'utf8')); } catch { return false; } };
+const alive = (pid) => { try { process.kill(pid, 0); } catch { return false; } return !zombie(pid); };
 const calls = () => (existsSync(LOG) ? readFileSync(LOG, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
 const decider = (mode, o = {}) => createFallbackDecider({ bin: FAKE, env: { PATH: process.env.PATH, HOME: work, MCODE_FAKE_MODE: mode, MCODE_FAKE_LOG: LOG, ...(o.nolight ? { MCODE_FAKE_NOLIGHT: '1' } : {}), JEV_API_KEY: 'must-not-leak', OPENROUTER_TOKEN: 'x' }, tmpRoot: work, ...(({ nolight, ...rest }) => rest)(o) });   // leak-scan: allow (fake values)
 const BODY = { state: '{"x":1}', questions: { choice: { type: 'choice', instructions: 'What next?', criteria: { continue: 'carry on', take_recommended: 'take it', ask_owner: 'owner decides' } } } };
