@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **Click an option in the NEEDS YOU question list to answer it** — "i shoud be able toclick to seelct a decision" (owner 2026-11-28). The options in the strip popup were plain text; each is now a button that sends the same answer as the bottom-right popup, marks the choice, says when a send failed, and the popup stays open for the next question · area: dashboard
+
 - **The token audit can be run again** — `scripts/token-audit.js` prints the audit figures, models, top sessions and waste findings for any time windows from the usage ledger; the steps and traps are in [TOKEN-AUDIT](TOKEN-AUDIT.md).
 
 - **The API spend values carry a dollar sign** — "put dollars in both it is money" (owner 2026-11-28): the top bar reads `Claude API 94/945$ - 200/200$` · area: usage

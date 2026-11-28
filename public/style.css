@@ -2595,7 +2595,15 @@ body:not(.res-hidden) .fgrp{ display:none; }
 .attnpop.qpop{ max-width:min(430px, calc(100vw - 16px)); max-height:60vh; overflow-y:auto; gap:10px; }
 .qpop .qrow1{ font-size:12px; line-height:1.45; color:var(--ink); }
 .qpop .qrow1 b{ color:var(--accent); margin-right:4px; }
-.qpop .qopts{ display:flex; flex-direction:column; gap:1px; color:var(--ink-2); padding:2px 0 0 14px; }
+.qpop .qopts{ display:flex; flex-direction:column; gap:5px; padding:5px 0 0 14px; }
+.qpop .qopts button{ background:var(--bg-3); color:var(--ink); border:1px solid var(--line-2); border-radius:8px; padding:6px 10px; min-height:32px; font-size:12px; font-weight:500; white-space:normal; cursor:pointer; }
+.qpop .qopts button.rec{ border-color:var(--working); }
+@media (hover:hover) and (pointer:fine){ .qpop .qopts button:not(:disabled):hover{ border-color:var(--accent); } }
+.qpop .qopts button:disabled{ opacity:.5; cursor:default; }
+.qpop .qopts button.picked{ opacity:1; background:var(--accent); border-color:var(--accent); color:#1a0f06; font-weight:700; }
+.qpop .qsent{ font-size:11px; color:var(--working); }
+.qpop .qsent:empty{ display:none; }
+.qpop .qsent.bad{ color:var(--waiting); }
 .qpop .qwhy{ color:var(--ink-2); padding-left:14px; }
 .qpop .qrec{ color:var(--working); padding-left:14px; }
 /* suggestions parked with the owner by the Opus triage (parked-view.js): Yes / No per item */
