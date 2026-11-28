@@ -326,7 +326,7 @@ import { doneWithOpenOf, doneWithOpenMessage } from '../status-honesty.js';
 test('doneWithOpenOf: filed leftovers or an unverified list hold a done line; leftovers none + unverified none does not', () => {
   const head = 'STATUS: done — harness rules merged · goal: achieved · evidence: int-1a1ceef9ed9027539 · closing review: docs TASK-239';
   assert.equal(doneWithOpenOf(head + ' · leftovers none · unverified none · bugs: none'), null);
-  assert.equal(doneWithOpenOf(head + ' · leftovers none · unverified none new · bugs: reported bug-aaaaaaaa'), null, 'a reported bug outside the task does not hold the line');
+  assert.equal(doneWithOpenOf(head + ' · leftovers none · unverified none · bugs: reported bug-aaaaaaaa'), null, 'a reported bug outside the task does not hold the line');
   const a = doneWithOpenOf(head + ' · leftovers bug-67c65223, bug-04d3f3c9 · unverified: Mac guard hook not installed, live wake share · bugs: fixed bug-ceb8ffff');
   assert.deepEqual(a.open, ['leftovers: bug-67c65223, bug-04d3f3c9', 'unverified: Mac guard hook not installed, live wake share']); assert.equal(a.ids, 2);
   assert.match(doneWithOpenMessage(a), /done is only for a task with nothing open/);

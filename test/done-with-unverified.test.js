@@ -54,7 +54,23 @@ test('done-with-unverified: "none" that goes on to name deferred or unfired work
   assert.match(r.doneWithOpen[0], /^unverified: none for the task \(live manager restart path deferred/);
 });
 
-test('done-with-unverified: "none (all checked live)" stays none', () => {
-  const r = classifyStall({ plain: pane(['STATUS: done — x · closing review: docs none needed · leftovers none · unverified none (all three checked live) · bugs: none']), raw: null, state: 'done' });
+test('done-with-unverified: "none (checked: ...)" stays none', () => {
+  const r = classifyStall({ plain: pane(['STATUS: done — x · closing review: docs none needed · leftovers none · unverified none (checked: all three live) · bugs: none']), raw: null, state: 'done' });
   assert.equal(r.case, 'done');
+});
+
+// strict none (triage YES 2026-11-28): the live hedges a word list missed
+for (const v of ['none (only the PDF preview inside the sign page cannot be shown)', 'none for me (the production observation is tracked by the manager)',
+  'none beyond the open Power auto-match', 'none I can act on (6 hosts unreachable)', 'none new', 'none (all three checked live)']) {
+  test(`done-with-unverified: strict none: "unverified ${v}" is open`, () => {
+    const r = classifyStall({ plain: pane([`STATUS: done — x · closing review: docs none needed · leftovers none · unverified ${v} · bugs: none`]), raw: null, state: 'done' });
+    assert.equal(r.case, 'needs_manager');
+  });
+}
+
+test('done-with-unverified: bare none variants stay none', () => {
+  for (const v of ['none', 'none.', 'nothing', 'n/a', '-', 'None (Checked: live proof at 10:11 UTC)']) {
+    const r = classifyStall({ plain: pane([`STATUS: done — x · closing review: docs none needed · leftovers ${v} · unverified none · bugs: none`]), raw: null, state: 'done' });
+    assert.equal(r.case, 'done', v);
+  }
 });
