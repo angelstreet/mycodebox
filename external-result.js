@@ -60,7 +60,8 @@ export function createExternalResult({ stateDir, managerEvent = async () => {}, 
     let names = []; try { names = fsMod.readdirSync(dir); } catch { return pushed; }
     for (const f of names.filter((x) => x.endsWith('.txt'))) {
       const id = f.slice(0, -4), t = mtime(p(id, 'txt'));
-      if (mtime(p(id, 'ack')) >= t || mtime(p(id, 'pushed')) >= t || now() - t < ackMs) continue;
+      // +1 ms: utimes() takes float seconds and can land a hair below the .txt's nanosecond mtime (seen on Node 22)
+      if (mtime(p(id, 'ack')) + 1 >= t || mtime(p(id, 'pushed')) + 1 >= t || now() - t < ackMs) continue;
       let text = ''; try { text = fsMod.readFileSync(p(id, 'txt'), 'utf8').trim(); } catch { continue; }
       try { ownerPush({ title: `Unrelayed integration result ${id}`, body: `${text}\nThe manager has not relayed it in ${Math.round(ackMs / 60000)} min; file ${p(id, 'txt')}.`.slice(0, 600), url: '/?integration=1', tag: `external-result-${id}`, priority: 'high', kind: 'integration' }); touch(p(id, 'pushed'), Math.max(now(), t)); pushed.push(id); } catch (e) { log({ type: 'external_result_push_failed', id, error: String(e?.message || e).slice(0, 160) }); }
     }
