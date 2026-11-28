@@ -1,0 +1,9 @@
+{
+  "data": [
+    { "amount": "12345.67", "list_amount": "13000.00", "currency": "USD", "model": "claude-opus-5-5", "workspace_id": null },
+    { "amount": "4400", "list_amount": "4400", "currency": "USD", "model": "claude-sonnet-5-5", "workspace_id": null }
+  ],
+  "data_refreshed_at": "2026-11-28T06:00:00Z",
+  "has_more": false,
+  "next_page": null
+}

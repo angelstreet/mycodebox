@@ -21,7 +21,7 @@
 //   DELETE /api/sessions/:name?confirm=<name> → kill session
 //   POST /api/sessions/:name/park   → record the conversation (Claude id / Codex id / MiniMax cwd), quit the agent (/exit, /quit), kill the tmux session (refuses when not idle / lease held / job running)
 //   (auto) a Claude session archived in the Claude app (Claude sessions API status archived, polled every 60 s, or Remote Control code 4090 in its transcript) is parked every 30 s when done and lease-free; manager.json autoParkArchived:false turns it off; an archived `mac:` row is removed (archiveSync:false turns the API poll off)
-//   GET  /api/claude-accounts   → Claude account rotation: {auto, autoSwapSessions, active, accounts:[{id,label,configDir,active,exhausted,reset,why,windows}]}
+//   GET  /api/claude-accounts   → Claude account rotation: {auto, autoSwapSessions, active, accounts:[{id,label,configDir,active,exhausted,reset,why,windows,mark}]}
 //   POST /api/claude-accounts   → {id, label, configDir?} add an account (creates its config dir, links ~/.claude's shared parts)
 //   POST /api/claude-accounts/settings → {active?, auto?, autoSwapSessions?, order?, clearMark?}
 //   DELETE /api/claude-accounts/:id → forget an account (its config dir and login stay on disk)
@@ -87,6 +87,7 @@
 //   GET  /api/reporter/:session → latest reported turn / prompt / waiting / agents of a session
 //   GET  /api/usage also carries `minimax` (per-session calls this 5h window / 24 h, minimax-meter.js)
 //   GET  /api/quota             → plan windows (codex / claude / minimax); also pushed on /ws/status
+//   GET  /api/api-credit        → {at, month, orgs:[{org,label,budgetUsd,spentUsd,leftUsd,usedPercent,source,stale?,error?}]} Anthropic API spend this month per org (Admin API cost report, 15 min cache); pushed as apiCredit on /ws/status
 //   GET  /api/usage             → usage-summary.json (API-equivalent cost / tokens) + `sessions` {name:{todayCost, days[14]}} for live sessions; 404 when absent
 //   GET  /api/vm                → codebox health: cpu %, load vs cores, RAM, disks (also pushed on /ws/status)
 //   GET  /api/disk              → the disk-space policy: level, thresholds and the top consumers (also pushed on /ws/status)
@@ -175,6 +176,7 @@ import { createClaudeAccounts, rateFile as claudeRateFile, accountOfPid, scanCla
 import { createMinimaxMeter, meterConfig, newShareAlerts } from './minimax-meter.js';
 import { createCredits } from './credits.js';
 import { createAnthropicSpend } from './anthropic-spend.js';
+import { createApiCredit } from './api-credit.js';
 import { createUsage, usageFile } from './usage-view.js';
 import { createTurnMeter, statusMeterLine } from './turn-meter.js';
 import { evaluatePolicy } from './public/policy.js';
@@ -1655,6 +1657,8 @@ const sharedCheckoutGuard = createSharedCheckoutGuard({
   mode: () => { try { const m = JSON.parse(readFileSync(managerConfigFile, 'utf8')).sharedCheckoutGuard; return m === 'dry' || m === 'off' ? m : 'live'; } catch { return 'live'; } },
 });
 const anthropicSpend = createAnthropicSpend({ stateDir: STATE_DIR, onChange: (a) => broadcastStatus({ type: 'anthropic', anthropic: a }) });
+// API credit per Anthropic org this month vs its budget (api-credit.js): Admin API cost report, every 15 min, shown atop the quota popup.
+const apiCredit = createApiCredit({ stateDir: STATE_DIR, onChange: (c) => broadcastStatus({ type: 'apiCredit', apiCredit: c }) });
 const credits = createCredits({ jevUrl: process.env.JEV_URL || '', apiKey: process.env.JEV_API_KEY || '', alert, onChange: (c) => broadcastStatus({ type: 'credits', credits: c }) });
 // Claude account rotation (claude-accounts.js, owner 2026-11-06): new Claude sessions start on the first account with headroom;
 // the `claude` quota plan shows that account, with every account listed under it.
@@ -3432,6 +3436,7 @@ async function handleHttp(req, res) {
   if (req.method === 'GET' && p === '/api/jev-ai') return json(res, 200, { ...await jevAiTab(), credits: await credits.get() });
   if (req.method === 'GET' && p === '/api/credits') return json(res, 200, await credits.get());
   if (req.method === 'GET' && p === '/api/anthropic-spend') return json(res, 200, await anthropicSpend.get() || { ok: false });
+  if (req.method === 'GET' && p === '/api/api-credit') return json(res, 200, await apiCredit.get() || { ok: false });
   if (req.method === 'GET' && p === '/api/decisions') {
     const q = url.searchParams;
     return json(res, 200, await decisionsView({ usage: q.get('usage') || '', ok: q.get('ok') || '', hasOutcome: q.get('has_outcome') || '', minConf: q.get('min_conf') || '',
@@ -3801,6 +3806,7 @@ server.on('upgrade', (req, socket, head) => {
       ws.send(JSON.stringify({ type: 'deploys', deploys: deployRunner.snapshot() }));
       if (credits.peek()) ws.send(JSON.stringify({ type: 'credits', credits: credits.peek() }));
       if (anthropicSpend.peek()) ws.send(JSON.stringify({ type: 'anthropic', anthropic: anthropicSpend.peek() }));
+      if (apiCredit.peek()) ws.send(JSON.stringify({ type: 'apiCredit', apiCredit: apiCredit.peek() }));
       if (quota.get().at) ws.send(JSON.stringify({ type: 'quota', quota: quota.get() }));
       ws.on('close', () => statusSubs.delete(ws));
       ws.on('message', () => {}); // no-op
@@ -4068,6 +4074,7 @@ server.listen(PORT, HOST, async () => {
   setInterval(() => handoffs.tick().catch((e) => console.error('[handoffs] tick', e.message)), 60000).unref?.();
   credits.start();
   anthropicSpend.start();
+  apiCredit.start();
   // Jev circuit breaker (jev-breaker.js): the 3rd error in a row opens it (also when scripts/jev-ask.js was the caller). Announce once:
   // ONE alert (digest tier) + the jev:down event (the alert feeds the manager feed), and a jev:up event when it closes.
   const jevBreakerTick = () => jevBreaker.announce(({ kind, state }) => {

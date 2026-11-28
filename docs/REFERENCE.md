@@ -2267,6 +2267,22 @@ repository, run by the server in its own clone, one request at a time per repo (
 
 `anthropic-spend.js` pulls at most once an hour (the disk cache `anthropic-spend.json` survives a restart): the Claude Max account's monthly extra-usage budget (`extra €180 left`, from `api.anthropic.com/api/oauth/usage` with the Claude Code login token, read in the server only). `GET /api/anthropic-spend` returns the cached reading; a failed pull keeps the last good one, marked stale; an expired Claude login shows no chip.
 
+### Quota popup: API credit and every Claude account (owner, 2026-11-28)
+
+The quota button opens a centred dialog (`.sheet-back.center`, `.quota-sheet`), not a bottom sheet. Top to bottom:
+
+- **API credit · <month>**: one row per Anthropic org from `api-credit.js`: spent this month (UTC month start), budget, left, a bar. Source:
+  `GET api.anthropic.com/v1/organizations/analytics/cost` (beta `analytics-usage-cost-2026-08-24`; amounts are cents strings, data lands 4 to 24 h
+  late), falling back to `/v1/organizations/cost_report` on 404/400. The key (an `sk-ant-admin` key or an organization-scoped key) is read per request from `~/.config/anthropic/<org>.admin.key`,
+  sent only in `x-api-key` to api.anthropic.com, never cached or logged. No key: the row says `no admin key: add ~/.config/anthropic/<org>.admin.key`
+  and no request is made; a refused key shows the API's own 401 reason. Budgets: `<state>/quota-budgets.json` (`{"max":{"label":"Max account","budgetUsd":200,"period":"month"},"team":{...}}`),
+  defaults max 200 / team 1000 USD. Pulled at most every 15 min, cached in `<state>/api-credit.json` (a restart reads it); a failure keeps the
+  last figure with `stale` + `error`. `GET /api/api-credit`, pushed as `apiCredit` on `/ws/status`. No local estimate: the usage ledger has no
+  billing field, so API-key (`cbsession -b`) spend cannot be told apart from subscription use.
+- **Claude accounts**: one block per account of `claude-accounts.json` (`claudeAccounts.view()`, now with `mark: {until, reason}`): 5h and week
+  bars with reset times, `● active` on the active one, `limit until <time> — <reason>` while a mark is live.
+- **Plans**: Codex, MiniMax (and the Claude plan when there is a single account).
+
 ## STATUS vocabulary (owner, 2026-11-11)
 
 Owner: "done and goal not achieved should not be a done status: it should be blocked or failure, which means the agent needs help and the

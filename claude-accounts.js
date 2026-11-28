@@ -291,7 +291,7 @@ export function createClaudeAccounts({ file, stateDir, home = homedir(), now = D
       return {
         auto: c.auto, autoSwapSessions: c.autoSwapSessions, active: c.active,
         accounts: c.accounts.map((a) => ({ id: a.id, label: a.label, configDir: a.configDir, active: a.id === c.active,
-          windows: readings[a.id]?.windows || [], at: readings[a.id]?.at ?? null, ...(states[a.id] || { exhausted: false, reset: null, why: null }) })),
+          windows: readings[a.id]?.windows || [], at: readings[a.id]?.at ?? null, mark: c.marks[a.id] || null, ...(states[a.id] || { exhausted: false, reset: null, why: null }) })),
       };
     },
     async add({ id, label, configDir } = {}) {

@@ -1075,11 +1075,13 @@ function connectStatus() {
       } else if (msg.type === 'disk') {
         onDisk(msg.disk);
       } else if (msg.type === 'quota') {
-        onQuota(msg.quota);
+        onQuota(msg.quota); quotaRerender?.();
       } else if (msg.type === 'anthropic') {
         state.anthropic = msg.anthropic; onQuota(state.quota);
       } else if (msg.type === 'credits') {
         state.credits = msg.credits; onQuota(state.quota);
+      } else if (msg.type === 'apiCredit') {
+        state.apiCredit = msg.apiCredit; quotaRerender?.();
       }
     } catch {}
   };
@@ -3590,24 +3592,65 @@ const resetText = (w) => {
   const when = new Date(w.resetsAt * 1000).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
   return `reset ${when} - ${left} left`;
 };
+const qUsd = (v) => (v == null ? '?' : `$${Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
+const atText = (t) => new Date(t).toLocaleString([], { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short', hour12: false });
+const winRow = (w) => (w.usedPercent == null
+  ? `<div class="qw na"><span>${escapeHtml(w.name)}</span><span>${w.unlimited ? 'unlimited' : 'unknown'}</span>${w.unlimited ? '' : `<span class="dim">${escapeHtml(resetText(w))}</span>`}</div>`
+  : `<div class="qw ${qLevel(w.usedPercent)}"><span>${escapeHtml(w.name)}</span><span class="qbar"><i style="width:${Math.min(100, w.usedPercent)}%"></i></span><span>${Math.round(w.usedPercent)}%</span><span class="dim">${escapeHtml(resetText(w))}</span></div>`);
+// API credit per org (api-credit.js): spent / budget / left this month, or how to add the missing admin key
+function apiCreditHtml(c) {
+  if (!c?.orgs?.length) return '<div class="qsec">API credit</div><div class="qplan"><div class="mnote">reading the Admin API cost report…</div></div>';
+  const month = new Date(`${c.month}-01T12:00:00Z`).toLocaleDateString([], { month: 'long' });
+  return `<div class="qsec">API credit · ${escapeHtml(month)}</div>${c.orgs.map((o) => {
+    const has = o.spentUsd != null;
+    const lvl = qLevel(o.usedPercent ?? null);
+    return `<div class="qplan qcredit" data-org="${escapeHtml(o.org)}">
+      <div class="qh"><b>${escapeHtml(o.label)}</b><span class="dim">${o.budgetUsd ? `${qUsd(o.budgetUsd)} / month` : 'no budget set'}</span></div>
+      ${has ? `<div class="qw ${lvl}"><span>spent</span><span class="qbar"><i style="width:${Math.min(100, o.usedPercent ?? 0)}%"></i></span><span>${qUsd(o.spentUsd)}</span>${o.leftUsd != null ? `<span class="dim">${o.leftUsd < 0 ? `${qUsd(-o.leftUsd)} over` : `${qUsd(o.leftUsd)} left`}</span>` : ''}</div>` : ''}
+      ${o.note ? `<div class="mnote">${escapeHtml(o.note)}</div>` : ''}
+      ${o.error ? `<div class="mnote${o.noKey ? '' : ' warn'}">${escapeHtml(o.error)}</div>` : ''}
+      ${has ? `<div class="mnote">${escapeHtml(o.source || '')}${o.refreshedAt ? `, data to ${atText(o.refreshedAt)}` : ''}${o.stale ? ' (not live)' : ''}</div>` : ''}
+    </div>`;
+  }).join('')}`;
+}
+function accountBlock(a) {
+  const m = a.mark && a.mark.until > Date.now() ? a.mark : null;
+  return `<div class="qplan qacc${a.active ? ' on' : ''}${a.exhausted ? ' out' : ''}" data-acct="${escapeHtml(a.id)}">
+    <div class="qh"><b>${escapeHtml(a.label)}</b>${a.active ? '<span class="qon">&#9679; active</span>' : '<span class="dim">standby</span>'}</div>
+    ${m ? `<div class="mnote warn">limit until ${escapeHtml(atText(m.until))}${m.reason ? ` — ${escapeHtml(m.reason)}` : ''}</div>` : ''}
+    ${(a.windows || []).length ? a.windows.map(winRow).join('') : '<div class="qw na"><span>-</span><span>no reading yet (no session has run on it)</span></div>'}
+    ${a.at ? `<div class="mnote">read ${atText(a.at)}</div>` : ''}
+  </div>`;
+}
+let quotaRerender = null;
 function openQuota() {
   const q = state.quota;
   if (!q) return;
   openSheet('Subscription quota', ({ body, foot, close }) => {
+    body.closest('.sheet-back').classList.add('center');
+    body.closest('.sheet').classList.add('quota-sheet');
     foot.classList.remove('hidden');
     foot.innerHTML = '<span class="grow"></span><button class="sbtn" data-a="close">close</button>';
     foot.onclick = (e) => { if (e.target.closest('[data-a="close"]')) close(); };
-    body.innerHTML = q.plans.map((p) => `
+    const render = () => {
+      if (!body.isConnected) { quotaRerender = null; return; }
+      const plans = state.quota?.plans || [];
+      const claude = plans.find((p) => p.plan === 'claude' && p.accounts?.length);
+      body.innerHTML = apiCreditHtml(state.apiCredit)
+        + (claude ? `<div class="qsec">Claude accounts</div>${claude.accounts.map(accountBlock).join('')}` : '')
+        + `<div class="qsec">Plans</div>${plans.filter((p) => p !== claude).map((p) => `
       <div class="qplan">
         <div class="qh"><b>${escapeHtml(p.label)}</b><span class="dim">${escapeHtml(p.planName || p.price)}</span></div>
         ${p.expires ? `<div class="mnote">plan expires ${new Date(p.expires).toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' })}</div>` : ''}
-        ${p.windows.map((w) => w.usedPercent == null
-          ? `<div class="qw na"><span>${escapeHtml(w.name)}</span><span>${w.unlimited ? 'unlimited' : 'unknown'}</span>${w.unlimited ? '' : `<span class="dim">${escapeHtml(resetText(w))}</span>`}</div>`
-          : `<div class="qw ${qLevel(w.usedPercent)}"><span>${escapeHtml(w.name)}</span><span class="qbar"><i style="width:${Math.min(100, w.usedPercent)}%"></i></span><span>${Math.round(w.usedPercent)}%</span><span class="dim">${escapeHtml(resetText(w))}</span></div>`).join('')}
+        ${p.windows.map(winRow).join('')}
         ${p.note ? `<div class="mnote">${escapeHtml(p.note)}</div>` : ''}
         ${p.error ? `<div class="mnote warn">${escapeHtml(p.error)}</div>` : ''}
-        <div class="mnote">${escapeHtml(p.source)}${p.at ? `, read ${new Date(p.at).toLocaleString([], { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' })}` : ''}${p.stale && p.windows.length ? ' (not live)' : ''}</div>
-      </div>`).join('');
+        <div class="mnote">${escapeHtml(p.source)}${p.at ? `, read ${atText(p.at)}` : ''}${p.stale && p.windows.length ? ' (not live)' : ''}</div>
+      </div>`).join('')}`;
+    };
+    quotaRerender = render;
+    render();
+    if (!state.apiCredit) fetch('/api/api-credit').then((r) => r.json()).then((c) => { if (c?.ok) { state.apiCredit = c; render(); } }).catch(() => {});
   });
 }
 els.quota.onclick = openQuota;
