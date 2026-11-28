@@ -3,7 +3,7 @@
 // Why a new file instead of a wider sheet: the sheet was doing four jobs at once (range tabs, view tabs, three filters and every
 // section at once) inside a modal, which is why "usage and cost is too small". This file is pure HTML builders over the SAME
 // payloads the sheet reads (/api/usage, /api/jev-ai, /api/manager/scorecard) and reuses the helpers in usage.js. No DOM, no fetch,
-// so it is unit tested like leases-view.js. The sheet stays untouched: /?usage=1 opens the page, the More menu keeps both.
+// so it is unit tested like leases-view.js. The sheet stays untouched: /?usage-page=1 (or /?usage=1) opens the page, the More menu keeps both.
 //
 // Cost is always API-equivalent (list prices), never money spent, and never 0 for an unpriced model (— instead).
 import { icon } from './icons.js';

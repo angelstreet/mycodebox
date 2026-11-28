@@ -4327,7 +4327,7 @@ function openUsage() {
 }
 els.usageBtn.onclick = openUsagePage;   // one entry: the full page; the compact sheet is its "classic view" button
 
-// ----- Usage & cost page (/?usage=1): public/usage-view.js is loaded on first use.
+// ----- Usage & cost page (/?usage-page=1, alias /?usage=1): public/usage-view.js is loaded on first use.
 // The sheet above stays as it was; this is the readable full-width version (owner request 2026-10-21: "usage and cost is too small").
 async function openUsagePage() {
   let uv;
@@ -6206,7 +6206,7 @@ if ('serviceWorker' in navigator) {
   if (new URLSearchParams(location.search).get('decisions')) openDecisions();
   if (new URLSearchParams(location.search).get('decided')) openDecidedView();
   if (new URLSearchParams(location.search).get('leases')) openLeasesView();
-  if (new URLSearchParams(location.search).get('usage-page')) openUsagePage();
+  if (['usage-page', 'usage'].some((k) => new URLSearchParams(location.search).get(k))) openUsagePage();   // /?usage=1 is the documented alias
   if (new URLSearchParams(location.search).get('integration')) openIntegrationView();
   if (new URLSearchParams(location.search).get('voice')) openVoiceMode();
   const openPlat = ['platforms', 'deploys'].some((k) => new URLSearchParams(location.search).get(k));

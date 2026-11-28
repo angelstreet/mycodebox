@@ -1494,7 +1494,7 @@ tokens but re-reads ~200K of cached context), so sessions are ranked by calls; n
   `window` / `h24` with `byModel` `m3` | `flash` | `other` (a row without a model field is `other`), `share` (% of the window's calls),
   `top`, `manager`, `pollLoop`.
 - Status payload: `minimax: {calls, share, pollLoop, top}` on MiniMax sessions; the card shows a "N calls" chip (amber "possible poll loop").
-- Usage page (`/?usage=1`) has a **MiniMax** view: the plan's 5h bar, sessions ranked by call share, manager sessions marked, top consumer highlighted.
+- Usage page (`/?usage-page=1`, alias `/?usage=1`) has a **MiniMax** view: the plan's 5h bar, sessions ranked by call share, manager sessions marked, top consumer highlighted.
 - **Poll loop**: at least `minimaxPollLoopCalls` (40) calls in the last `minimaxPollLoopMinutes` (10) with fewer than `minimaxPollLoopMaxNewTokens` (300) new tokens per call on average.
 - **Share push**: once per session and window, when one session has more than `minimaxSharePct` (40) % of the window's calls and the window has at least
   `minimaxShareMinCalls` (50) calls: an interrupt push. All five keys live in `manager.json`.
