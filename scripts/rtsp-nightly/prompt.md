@@ -17,3 +17,5 @@ Then:
 5. If a public source you know is good is missing from config/rtsp-pool.json, or a pool source failed its probe, do not edit the pool tonight: report it.
 
 Stop with `STATUS: done — rtsp-nightly <mode>: <n> checked, <n> ok, <n> down, <n> replaced · bugs: none | reported <id>` (the full `closing review:` clause is not needed for this report session). Do not close your own session, do not ask the owner anything.
+
+Waiting without the model (token audit 2026-11-28): every model call re-reads your whole context and counts against the plan, and 40% of past nightly calls were polls. Never poll a run every few seconds: start a long command in the background and wait to be woken, or sleep at least 10 minutes between checks (double it each time nothing changed, up to 30 minutes), read one status line only (grep -c, tail -n 3), cap every output with head or cut.

@@ -14,6 +14,8 @@ export const FILE_NAME = 'context-advisory.json';
 
 // Pure: the event for one finding. startedBy: 'manager' | 'owner' | 'unknown'.
 export const SUB_KIND = 'subagent-advisory';
+export const MGR_KIND = 'manager-restart-advisory';
+export const HANDOVER_FILE = '~/vpt-manager/docs/manager-handover.log';
 export function advisoryEvent(f, startedBy = 'unknown', at = new Date().toISOString()) {
   if (f.kind === 'subagent-heavy') {
     const who = startedBy === 'manager' ? 'started by the manager' : 'not started by the manager';
@@ -23,6 +25,16 @@ export function advisoryEvent(f, startedBy = 'unknown', at = new Date().toISOStr
       body: `Advisory, no action required. ${f.detail}. Saving #3 of the token audit: give each subagent a narrow prompt (one question, the files to read, an output cap of about 10 lines), prefer Sonnet or Haiku for read-only lookups, and do not spawn one for work of a few tool calls. Brief text for the session owner: "Subagents: one question each, named files, answer in 10 lines, no whole-repo reads." Finding ${f.id}, cost $${f.cost ?? '?'} in the window.`,
       url: `/?s=${encodeURIComponent(f.session)}`,
       advisory: { findingId: f.id, kind: f.kind, share: f.value, startedBy, account: f.account || null, agent: f.agent || null },
+    };
+  }
+  if (startedBy === 'self' && f.kind === 'high-avg-context') {
+    const k = Math.round((f.value || 0) / 1e3);
+    return {
+      at, key: `${f.session}:${MGR_KIND}`, priority: 'low', session: f.session,
+      title: `${f.session}: advisory, restart yourself fresh (avg context ${k}k per call)`,
+      body: `Advisory, no action required now. Your own context averages ${k}k per call (limit 300k, ${f.detail || ''}). Rule: at your next natural stop (no turn running, no draft, no deploy in progress, never mid-wake), (1) append ONE handover line to ${HANDOVER_FILE}: UTC time | open items and who each waits on | decisions pending | last-seen event time | anything you promised; (2) then run scripts/manager-fresh.sh (reason "context ${k}k"); the fresh manager reads that last line first. Finding ${f.id}.`,
+      url: `/?s=${encodeURIComponent(f.session)}`,
+      advisory: { findingId: f.id, kind: 'manager-restart', avgContext: f.value, startedBy, account: f.account || null, agent: f.agent || null },
     };
   }
   const who = startedBy === 'manager' ? 'started by the manager' : startedBy === 'owner' ? 'started by the owner (or a worker, not the manager)' : 'starter unknown';

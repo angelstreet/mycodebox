@@ -64,3 +64,14 @@ test('subagent-heavy finding -> its own advisory key with the narrow-prompt brie
   assert.match(ev.body, /narrow prompt/);
   assert.equal(ev.priority, 'low');
 });
+
+test('manager session over 300k -> restart-yourself advisory with the handover-line step', () => {
+  const f = { kind: 'high-avg-context', id: 'm1', session: 'manager', value: 340000, detail: 'avg context 340k per call over 120 calls' };
+  const ev = advisoryEvent(f, 'self');
+  assert.equal(ev.key, 'manager:manager-restart-advisory');
+  assert.match(ev.body, /natural stop/);
+  assert.match(ev.body, /manager-handover\.log/);
+  assert.match(ev.body, /manager-fresh\.sh/);
+  assert.equal(ev.priority, 'low');
+  assert.match(readFileSync(new URL('../scripts/manager-fresh.sh', import.meta.url), 'utf8'), /manager-handover\.log/);
+});
