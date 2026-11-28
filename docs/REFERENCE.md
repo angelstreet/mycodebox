@@ -877,6 +877,7 @@ fable, only then it comes to me if technical". A session the owner started that 
 
 | Step | Result |
 |---|---|
+| A VirtualPyTest dev -> prod userinterface publish (publish + prod + a node / edge / tree word or a tree name such as `stb-orchtnet`), with nothing else owner-only once the publish words and its confirm phrase are removed (`labPublish`, owner 2026-11-28 Q310) | The manager, no model call; its item says: never type into the session's MCP confirm form, send `Escape`, then tell it to publish through the HTTP route with `require_evidence=true` |
 | The ask hits the owner floor (`doubt.js` `ownerOnly`, the suggestion floors: money, customers, publishing, credentials, deleting data, physical action ...) or an approval the owner reserved (a confirmation a tool accepts only from a person such as `reply with <x> to confirm` / `user_ok`, names and renames, mockups and looks, "you asked me to approve") | The owner, at once, no model call |
 | One Opus call (`claude -p --model opus`, no tools, the ask and the last 2000 characters of the closing text as data) answers `MANAGER` | A `<session>:needs-manager` manager item; the owner is not told; a "Decided for you" line with the question text; when the manager answers through `/api/send` (`by: manager-agent`) a second line with the answer |
 | Opus answers `OWNER` | The owner |

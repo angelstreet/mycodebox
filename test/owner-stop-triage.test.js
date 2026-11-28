@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createOwnerStopTriage, ownerKeeps, parseVerdict, FILE_NAME } from '../owner-stop-triage.js';
+import { createOwnerStopTriage, ownerKeeps, labPublish, parseVerdict, FILE_NAME } from '../owner-stop-triage.js';
 import { isOwnersTurn } from '../public/ask-model.js';
 
 const TECH = 'should I retry the flaky edge with a 2 s wait or raise its timeout to 20 s? I recommend the wait.';
@@ -50,7 +50,7 @@ test('a technical stop goes to the manager: the owner alert is dropped, Decided 
 test('floor and owner-reserved approvals reach the owner without asking Opus (a tool\'s person-only confirm included)', async () => {
   const h = harness();
   try {
-    for (const [name, q] of [['pub', PUBLISH], ['conf', 'reply with yes-go to confirm the run on stb3'], ['money', 'should I buy the $20 plan?'],
+    for (const [name, q] of [['conf', 'reply with yes-go to confirm the run on stb3'], ['money', 'should I buy the $20 plan?'],
       ['del', 'can I delete the old recordings on vpt-pi1?'], ['plug', 'please replug the S7 cable'], ['names', 'approve the rename of the scripts to the new naming convention?'],
       ['userok', 'the backend needs user_ok for this step']]) {
       h.t.check(name, { question: q });
@@ -60,7 +60,7 @@ test('floor and owner-reserved approvals reach the owner without asking Opus (a 
     assert.equal(h.calls.ask, 0);
     assert.equal(h.calls.manager.length, 0);
     const recs = h.lines();
-    assert.equal(recs.length, 7);
+    assert.equal(recs.length, 6);
     assert.ok(recs.every((r) => r.verdict === 'owner' && ['floor', 'reserved'].includes(r.source)));
     assert.equal(recs.find((r) => r.session === 'conf').what, 'human confirmation');
     assert.equal(ownerKeeps(TECH), null);
@@ -153,4 +153,25 @@ test('Opus hesitates: Fable decides; Fable MANAGER -> the manager, anything else
     const h = harness({ reply, second: { ok: true, text: 'MANAGER - x' } });
     try { h.t.check('s', { question: TECH }); for (let i = 0; i < 5; i++) await tick(); assert.equal(h.calls.second, 0); } finally { h.cleanup(); }
   }
+});
+
+test('a dev -> prod userinterface publish goes to the manager with no model call, its confirm phrase included (owner 2026-11-28, Q310)', async () => {
+  const q310 = 'Publish the 2 menu-language items of stb-orchtnet to production? The server only accepts this confirmation from a person.';
+  const h = harness();
+  try {
+    for (const [name, q] of [['ui-audit', PUBLISH], ['q310', q310], ['plain', 'publish the dev userinterface web-rougetel to prod with the 3 edges that passed?']]) {
+      h.t.check(name, { question: q });
+      assert.equal(h.t.stateOf(name), 'manager', name);
+      assert.equal(h.t.takeAlert(name, () => { throw new Error('the owner must not hear of it'); }), true, name);
+    }
+    assert.equal(h.calls.ask, 0);
+    assert.deepEqual(h.calls.manager.map((m) => m.source), ['lab-publish', 'lab-publish', 'lab-publish']);
+    assert.equal(h.calls.decided[0].question, PUBLISH);
+    assert.ok(h.lines().every((r) => r.verdict === 'manager' && r.source === 'lab-publish'));
+  } finally { h.cleanup(); }
+  // other publishing, or a publish that also touches another floor, stays the owner's
+  for (const q of ['publish the video to YouTube?', 'publish the package to npm?', 'publish the new app version to production?',
+    'publish the edges to production and delete the old recordings on vpt-pi1?', 'publish the nodes to production and tell the customer?',
+    'reply with yes-go to confirm the run on stb3']) assert.equal(labPublish(q), null, q);
+  assert.ok(labPublish(PUBLISH));
 });

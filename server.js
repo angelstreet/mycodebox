@@ -1325,15 +1325,18 @@ const ownerStopTriageMode = () => { try { return JSON.parse(readFileSync(manager
 const ownerStopTriage = createOwnerStopTriage({ stateDir: STATE_DIR, mode: ownerStopTriageMode, timeoutMs: 420000,   // Opus (180 s) then Fable on a doubt (180 s), then the owner anyway
   ask: (prompt) => askOpusOnAccounts(prompt, { system: OWNER_STOP_SYSTEM, accounts: () => usableAccounts(STATE_DIR), onLimit: (a, next) => { recordSwitch(STATE_DIR, a, next, 'owner-stop-triage'); if (a) claudeAccounts.markExhausted(a.id, { reason: 'usage limit in owner-stop triage' }).catch(() => {}); } }),
   askSecond: (prompt) => askOpusOnAccounts(prompt, { system: OWNER_STOP_SYSTEM, model: 'fable', accounts: () => usableAccounts(STATE_DIR), onLimit: (a, next) => { recordSwitch(STATE_DIR, a, next, 'owner-stop-triage-fable'); if (a) claudeAccounts.markExhausted(a.id, { reason: 'usage limit in owner-stop triage (Fable)' }).catch(() => {}); } }),
-  toManager: ({ session, question, why }) => {
-    const tail = ` [model check: technical (${String(why || '').slice(0, 80)}). You answer: POST /api/send/${session} {"keys":"...","by":"${MANAGER_ACTOR}"}; owner-only after all: manager-ask.js --source ${session}]`;
+  toManager: ({ session, question, why, source }) => {
+    const tail = source === 'lab-publish'
+      // never type the name into the open MCP confirm form (only a person may fill it): Escape it, then the HTTP route with the evidence gate
+      ? ` [dev -> prod userinterface publish: yours, not the owner's (owner 2026-11-28). Never type into its confirm form: POST /api/send/${session} {"keys":"Escape","by":"${MANAGER_ACTOR}"}, then tell it to publish via POST /server/userinterface/publish/<dev id> with require_evidence=true and its exclude list (virtualpytest PUBLISH_DELTA.md)]`
+      : ` [model check: technical (${String(why || '').slice(0, 80)}). You answer: POST /api/send/${session} {"keys":"...","by":"${MANAGER_ACTOR}"}; owner-only after all: manager-ask.js --source ${session}]`;
     managerEvents.record({ key: `${session}:needs-manager`, title: `${session}: a technical question for you (asked the owner)`, url: `/?s=${encodeURIComponent(session)}`, priority: 'default',
       body: `${`${session} asked the owner: ${String(question).replace(/\s+/g, ' ')}`.slice(0, Math.max(60, 300 - tail.length))}${tail}` }).catch((e) => console.error('[owner-stop-triage] event', e.message));
   },
   decided: ({ session, question, why, answer, kind }) => fileDecision(join(STATE_DIR, 'manager-decisions.jsonl'), { session,
     decision: kind === 'answered' ? `${session} asked you "${String(question).slice(0, 200)}": the manager answered "${String(answer).replace(/\s+/g, ' ').slice(0, 120)}"`
       : `${session} asked you "${String(question).slice(0, 200)}": routed to the manager (technical)`,
-    why: `the Opus / Fable check read it as technical${why ? ` (${String(why).slice(0, 100)})` : ''}; technical calls are the manager's (owner 2026-11-28).`,
+    why: /^a dev -> prod/.test(why || '') ? `${why}; the owner said it should not need them.` : `the Opus / Fable check read it as technical${why ? ` (${String(why).slice(0, 100)})` : ''}; technical calls are the manager's (owner 2026-11-28).`,
     undo: `Answer ${session} yourself, and tell the manager if this kind of question is yours.` }).catch((e) => console.error('[owner-stop-triage] decision', e.message)) });
 // The owner's yes / no to an item the Opus triage parked with the owner (dashboard NEEDS YOU "suggestions" chip). Only the owner's browser answers it.
 // A yes becomes a new round for the session (told at once; a Mac row or a closed session: the manager is told instead).
@@ -1415,7 +1418,7 @@ function managerChoice(session, open, payload) {
 }
 // What a delivered send says about the open suggestions: the owner's dashboard, or the manager for a session it started. Nobody else.
 function recordChoice(req, session, by, payload) {
-  if (by === MANAGER_ACTOR) ownerStopTriage.managerAnswered(session, payload.keys ?? payload.key);   // a routed stop: its answer joins "Decided for you"
+  if (by === MANAGER_ACTOR && !NAMED_KEYS.has(String(payload.keys ?? payload.key ?? ''))) ownerStopTriage.managerAnswered(session, payload.keys ?? payload.key);   // a routed stop: its answer joins "Decided for you"
   if (payload.key !== undefined) return;
   if (fromOwnerUi(req, by)) ownerAnswered(session, String(payload.keys || ''), 'dashboard');
   else if (by === MANAGER_ACTOR && managerOwned(session) && suggestions.openOf(session).length) ownerAnswered(session, String(payload.keys || ''), 'send', 'manager');
