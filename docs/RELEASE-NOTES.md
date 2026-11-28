@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **An MCP input form shows its real question** — when an MCP server asks for input ("Type the name 'x' to confirm"), the stall parser stopped at the form's `❯ *` field as if it were the owner's last prompt and showed the key hint "Esc to cancel · ↑/↓ to navigate" as the question; the field is now part of the closing text and the hint and button rows are skipped. · area: status
+
 - **A needs-owner stop stays a needs-you after a session resume** — Claude Code prints its own notices under a finished turn ("Artifact comment monitor ... didn't resume", "/remote-control is active"); they pushed the turn marker and the STATUS line out of the parsed closing text, so a needs-owner stop showed idle with a grey LED and no NEEDS YOU chip. Those trailing notice paragraphs are now cut from the pane body (`noticeEnd` in `stall.js`) before the turn and the status are read. · area: status
 
 - **Header shows the API spend of each Anthropic org** — the quota row only showed the Claude extra-usage budget; it now also shows one chip per org with an admin key, `<org> $spent` this month (budget in the hover title) (amber at 80 %, red at 95 %, dimmed when not live), from `api-credit.js`. It updates when the server pushes `apiCredit` and when the quota popup's refresh is pressed. Test in `test/anthropic-spend.test.js` · area: usage

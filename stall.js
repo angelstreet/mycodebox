@@ -146,7 +146,7 @@ export function closingLines(plain, n = 16) {
       if (!/^[…─━]+$/.test(l.trim())) body[i - 1] = body[i - 1].replace(/\s+$/, '') + l.trim();
       continue;
     }
-    if (/^\s*[❯›]\s+\S/.test(l) && !/^\s*[❯›]\s+\d+[.)]\s/.test(l)) break;   // the owner's previous prompt (not a menu cursor)
+    if (/^\s*[❯›]\s+\S/.test(l) && !/^\s*[❯›]\s+(?:\d+[.)]|\*)\s/.test(l)) break;   // the owner's previous prompt (not a menu cursor, not an MCP form's required field "❯ * ...")
     out.unshift(l.replace(/^\s*[⏺●•]\s+/, '').replace(/\s+$/, ''));
   }
   return out;
@@ -199,6 +199,7 @@ function lastParagraph(lines, { stripTools = true } = {}) {
 // Only the agent CLI's own error lines, not prose that mentions a limit.
 export const ERROR_RE = /^\s*(?:⎿\s*)?(?:You'?ve hit your|.*\busage limit (?:reached|·|\|)|.*\blimit reached\b.*resets|API Error\b|.*\boverloaded_error\b|.*\brate_limit_error\b|Credit balance is too low|Request timed out|■ (?:You'?ve hit|stream error|unexpected status))/i;
 const PERMISSION_RE = /Do you want to (?:proceed|make this edit|create|run|allow|overwrite)|Would you like to (?:run|allow|make)|Yes, and don'?t ask again|Allow (?:command|this|once|always)|Apply (?:this )?(?:patch|changes)\?|Run this command\?|Approve\?/i;
+const BUTTON_ROW_RE = /^\s*(?:(?:Accept|Decline|Cancel|Submit|Yes|No)\s*)+$/i;
 const LIVE_MENU_RE = /Enter to (?:select|confirm)|↑\/↓ to navigate|Esc to cancel/i;
 const OPTION_RE = /^\s*(?:[❯›>]\s*)?(\d+)[.)]\s+(.*)$/;
 const RECOMMENDED_RE = /\(recommended\)|\brecommended\b\s*[:)]?$|^recommended\b/i;
@@ -1057,7 +1058,9 @@ export function classifyStall({ plain, raw = null, state, fromReport = false, sc
   if (state === 'waiting') {
     const block = close.slice(-14);
     const opts = menuOptions(block);
-    out.question = (block.slice().reverse().find((l) => /\?\s*$/.test(l) && !OPTION_RE.test(l)) || block[block.length - 1] || '').trim();
+    // fallback: the last line that is not the menu's key hint ("Esc to cancel · ↑/↓ to navigate") or a button row ("Accept  Decline")
+    const asked = block.filter((l) => !LIVE_MENU_RE.test(l) && !BUTTON_ROW_RE.test(l));
+    out.question = (block.slice().reverse().find((l) => /\?\s*$/.test(l) && !OPTION_RE.test(l)) || asked[asked.length - 1] || block[block.length - 1] || '').replace(/^\s*[❯›]\s+\*\s+/, '').replace(/\s*Type something…\s*$/, '').trim();
     const rec = opts.find((o) => RECOMMENDED_RE.test(o.text));
     if (PERMISSION_RE.test(block.join('\n'))) out.case = 'permission';
     else if (rec && (LIVE_MENU_RE.test(block.join('\n')) || opts.length >= 2)) { out.case = 'menu_recommended'; out.answer = { key: String(rec.n) }; }
