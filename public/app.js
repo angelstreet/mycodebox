@@ -18,7 +18,7 @@ import { fitAction, fitSatisfied } from '/fit-policy.js';
 import { fitFont, canShrinkFont, isSettling } from '/fit-font.js';
 import { registerFileLinks, registerUrlLinks } from '/term-links.js';
 import { jevTabHtml, jevRowHtml, creditRowHtml, filtersHtml, decisionsHtml, creditChip } from '/jev-view.js';
-import { anthropicChips, apiCreditChips } from '/anthropic-chips.js';
+import { apiCreditChips } from '/anthropic-chips.js';
 import { audioChipHtml, wireAudioChips } from '/audio-chip.js';
 import { copyPromptButtonHtml, wireCopyPrompt } from '/copy-prompt.js';
 import { readerCopyButtonHtml, wireReaderCopy } from '/reader-copy.js';
@@ -1089,8 +1089,6 @@ function connectStatus() {
         onDisk(msg.disk);
       } else if (msg.type === 'quota') {
         onQuota(msg.quota); quotaRerender?.();
-      } else if (msg.type === 'anthropic') {
-        state.anthropic = msg.anthropic; onQuota(state.quota);
       } else if (msg.type === 'credits') {
         state.credits = msg.credits; onQuota(state.quota);
       } else if (msg.type === 'apiCredit') {
@@ -3594,27 +3592,28 @@ async function cyclePriority(n) {
   try { await metaPost(n, { priority: next }); renderAll(); } catch (err) { toast(`failed: ${err.message}`, 2500); }
 }
 
-// Quota row: "codex 5h 2% · wk 32% · claude ? · minimax 5h 2% wk ∞". Amber >= 80 %, red >= 95 %.
+// Quota row: one group per plan, "CODEX 2% 5h 32% wk". Amber >= 80 %, red >= 95 %.
 const qLevel = (p) => (p == null ? 'na' : p >= 95 ? 'crit' : p >= 80 ? 'warn' : 'ok');
 const winShort = (n) => (n === 'week' ? 'wk' : n === 'month' ? 'mo' : n);
 function onQuota(q) {
   state.quota = q;
   const el = els.quota;
-  const chip = [creditChip(state.credits), apiCreditChips(state.apiCredit), anthropicChips(state.anthropic)].filter(Boolean).join('<i class="sep">&middot;</i>');
-  if (!q || !q.plans?.length) { if (chip) { el.className = `quota ok${el.classList.contains('inbar') ? ' inbar' : ''}`; el.innerHTML = chip; } else el.classList.add('hidden'); return; }
-  const parts = q.plans.map((p) => {
-    const short = p.plan;
-    if (!p.windows.length) return `<span class="qi na" title="${escapeHtml(p.error || 'no reading yet')}"><b>${short}</b> ${/login|expired/i.test(p.error || '') ? 'login expired' : '?'}</span>`;
-    const ws = p.windows.map((w) => {
-      if (w.usedPercent == null) return `<span class="qi na">${winShort(w.name)} ${w.unlimited ? '&infin;' : '?'}</span>`;
-      return `<span class="qi ${qLevel(w.usedPercent)}${p.stale ? ' old' : ''}">${winShort(w.name)} ${Math.round(w.usedPercent)}%</span>`;
-    });
-    return `<b>${short}</b> ${ws.join(' ')}`;
+  const chip = creditChip(state.credits) + apiCreditChips(state.apiCredit);
+  const plans = q?.plans || [];
+  if (!plans.length && !chip) { el.classList.add('hidden'); return; }
+  const parts = plans.map((p) => {
+    const group = (title, html) => `<span class="qg"${title ? ` title="${escapeHtml(title)}"` : ''}><b>${p.plan}</b>${html}</span>`;
+    if (!p.windows.length) return group(p.error || 'no reading yet', `<span class="qi na">${/login|expired/i.test(p.error || '') ? 'login expired' : '?'}</span>`);
+    // an unlimited window never changes: left out unless it is all the plan has (the popup lists it)
+    const limited = p.windows.filter((w) => !(w.unlimited && w.usedPercent == null));
+    const ws = (limited.length ? limited : p.windows).map((w) => (w.usedPercent == null
+      ? `<span class="qi na">${w.unlimited ? '&infin;' : '?'}<small>${winShort(w.name)}</small></span>`
+      : `<span class="qi ${qLevel(w.usedPercent)}${p.stale ? ' old' : ''}">${Math.round(w.usedPercent)}%<small>${winShort(w.name)}</small></span>`));
+    return group('', ws.join(''));
   });
-  if (chip) parts.push(chip);
-  const worst = ['crit', 'warn'].find((l) => q.plans.some((p) => p.windows.some((w) => qLevel(w.usedPercent) === l)) || (state.credits?.balance != null && (l === 'crit' ? state.credits.balance <= 0 : state.credits.balance <= 2))) || 'ok';
-  el.className = `quota ${worst}${el.classList.contains('inbar') ? ' inbar' : ''}`;
-  el.innerHTML = parts.join('<i class="sep">&middot;</i>');
+  const worst = ['crit', 'warn'].find((l) => plans.some((p) => p.windows.some((w) => qLevel(w.usedPercent) === l)) || (state.credits?.balance != null && (l === 'crit' ? state.credits.balance <= 0 : state.credits.balance <= 2))) || 'ok';
+  el.className = `quota ${plans.length ? worst : 'ok'}${el.classList.contains('inbar') ? ' inbar' : ''}`;
+  el.innerHTML = parts.join('') + chip;
 }
 const resetText = (w) => {
   if (w.expired) return 'window has reset';

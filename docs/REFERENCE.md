@@ -1408,8 +1408,9 @@ logged to `stalls.jsonl` as `{type:'pause'|'resume', session, by:'owner'}`. Ghos
 starts sessions on its own.
 
 **Quota.** `quota.js` runs every 60 s, Codex and MiniMax are really asked only every 5 minutes (cached in between) (`GET /api/quota`, also pushed on `/ws/status` as `{type:'quota'}`);
-the row under the health strip reads `codex 5h 0% wk 32% . claude ? . minimax 5h 2% wk ∞`, amber from 80 %, red
-from 95 %, tap for reset times. One push alert when a window crosses 80 %, re-armed below 70 % (the first
+the quota strip shows one block per plan (`CODEX 0% 5h 32% wk`, `MINIMAX 2% 5h`; an unlimited window is left out unless
+it is the only one), amber from 80 %, red from 95 %, tap for reset times. In the desktop top bar it wraps to a second row
+rather than clip; the health strip shows its details (`/6`, `20G free`) only on an amber or red value (always in the tooltip). One push alert when a window crosses 80 %, re-armed below 70 % (the first
 reading after a restart only seeds, it does not alert).
 
 | plan | source | notes |
@@ -2391,13 +2392,13 @@ repository, run by the server in its own clone, one request at a time per repo (
 
 ### Anthropic money chips (owner, 2026-10-27)
 
-`anthropic-spend.js` pulls at most once an hour (the disk cache `anthropic-spend.json` survives a restart): the Claude Max account's monthly extra-usage budget (`extra €180 left`, from `api.anthropic.com/api/oauth/usage` with the Claude Code login token, read in the server only). `GET /api/anthropic-spend` returns the cached reading; a failed pull keeps the last good one, marked stale; an expired Claude login shows no chip.
+`anthropic-spend.js` pulls at most once an hour (the disk cache `anthropic-spend.json` survives a restart): the Claude Max account's monthly extra-usage budget (not in the quota strip since 2026-11-28; from `api.anthropic.com/api/oauth/usage` with the Claude Code login token, read in the server only). `GET /api/anthropic-spend` returns the cached reading; a failed pull keeps the last good one, marked stale; an expired Claude login gives no reading.
 
 ### Quota popup: API credit and every Claude account (owner, 2026-11-28)
 
 The quota button opens a centred dialog (`.sheet-back.center`, `.quota-sheet`), not a bottom sheet. Top to bottom:
 
-- **Header chip** (`apiCreditChips`, `public/anthropic-chips.js`): the quota row also shows `<org> $spent` per org with a reading (budget and left in the title; amber 80 %, red 95 % of the budget) (label without "API org"), before `extra €… left`; orgs without a key are left out.
+- **Header chip** (`apiCreditChips`, `public/anthropic-chips.js`): the quota strip shows `Claude API 94/200$` (org `max`: spent / budget) and `Claude team API 212$` (org `team`: spent), whole dollars, cents and budget left in the title; amber 80 %, red 95 % of the budget; `?` when never read. Another org shows its label and spend once it has a reading (owner, 2026-11-28).
 - **API credit · <month>**: one row per Anthropic org from `api-credit.js`: spent this month (UTC month start), budget, left, a bar. Source:
   `GET api.anthropic.com/v1/organizations/analytics/cost` (beta `analytics-usage-cost-2026-08-24`; amounts are cents strings, data lands 4 to 24 h
   late), falling back to `/v1/organizations/cost_report` on 404/400. The key (an `sk-ant-admin` key or an organization-scoped key) is read per request from `~/.config/anthropic/<org>.admin.key`,

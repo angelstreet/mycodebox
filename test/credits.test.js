@@ -63,8 +63,8 @@ test('views: red balance, key limits, not-available text, quota chip, tab shows 
   assert.doesNotMatch(creditHtml(normalizeCredits(body(40))), /used up/);
   assert.match(creditHtml({ ok: false, status: 404 }), /not available until the server is updated/);
   assert.match(creditHtml(null), /not available until the server is updated/);
-  assert.equal(creditChip(c), '<span class="qi crit" title="OpenRouter credit">openrouter -$0.21</span>');
-  assert.match(creditChip(normalizeCredits(body(1))), /qi warn.*openrouter \$1\.00/);
+  assert.equal(creditChip(c), '<span class="qg" title="OpenRouter credit left"><b>openrouter</b><span class="qi crit">-$0.21</span></span>');
+  assert.match(creditChip(normalizeCredits(body(1))), /openrouter.*qi warn">\$1\.00</);
   assert.equal(creditChip({ ok: false }), '');
   const tab = jevTabHtml({ windowDays: 14, usageKey: 'text.decision', logged: true, queued: 0, credits: c,
     manager: { days: [], total: { calls: 0, failed: 0, cost: 0 }, health: { state: 'none' } }, reviewer: { days: [], total: { calls: 0, failed: 0, cost: 0 }, health: { state: 'none' } }, product: { available: false } });

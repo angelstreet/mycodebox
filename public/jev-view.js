@@ -25,7 +25,8 @@ export function creditHtml(c) {
 // the short line for the quota row; '' without a reading
 export function creditChip(c) {
   if (!c || !c.ok || c.balance == null) return '';
-  return `<span class="qi ${c.balance <= 0 ? 'crit' : c.balance <= 2 ? 'warn' : 'ok'}" title="OpenRouter credit">openrouter ${usd(c.balance)}</span>`;
+  const lv = c.balance <= 0 ? 'crit' : c.balance <= 2 ? 'warn' : 'ok';
+  return `<span class="qg" title="OpenRouter credit left"><b>openrouter</b><span class="qi ${lv}">${usd(c.balance)}</span></span>`;
 }
 
 // ---- Jev inside the usage Overview (replaces the old third tab) ----

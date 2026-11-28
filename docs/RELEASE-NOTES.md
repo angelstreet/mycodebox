@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The top bar is shorter and easier to read** — one block per source; the quota strip now reads `CLAUDE 5% wk · MINIMAX 8% 5h · OPENROUTER -$0.20 · CLAUDE API 94/200$ · CLAUDE TEAM API 212$` and wraps to a second row instead of clipping; the extra-usage "left" chip and unlimited windows are gone from it; CPU / RAM / disk details show only on an amber or red value (always in the tooltip); amber values are no longer bigger than the rest (an unrelated `.warn` style leaked in) · area: dashboard
+
 - **A restart no longer breaks the UI review** — a ghosty restart left the running review alive, and the resumed request rebuilt the same tree under it. The old preview then wrote a real `frontend/node_modules` folder there, so the new review did not link the packages and the lane said "the preview did not start" (`Cannot find package '@vitejs/plugin-react'`): one frontend merge was returned and one live page got no delivered verdict on 2026-11-28. The lane now stops the leftover review's process group before it touches that request's trees. Test in `test/ui-review-leftover.test.js` · area: integration lane
 
 - **New Claude sessions run on Sonnet** — "i prefer to have sonnet" (owner 2026-11-28). `cbsession` without `-m` and `POST /api/sessions` without a model now pass `--model sonnet`; a chosen model and an `AGENT_CMD_CLAUDE` override win, and resume keeps the conversation's own model. Also fixed: crash resume put the pane footer's model name on the command line (`--model Opus 5.5`, a stray `5.5` prompt) and now passes only the launch line's `--model` · area: sessions
