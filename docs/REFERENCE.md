@@ -2786,6 +2786,7 @@ later reader view: [READER-SUMMARY](READER-SUMMARY.md).
   gesture on Safari. Missing summaries and unavailable transcripts are disabled; failed clipboard writes show a retryable
   message. The menu supports arrows, Home/End, Escape, Tab and outside dismissal, with native popover/invoker support and
   fallbacks. The shared HTTP clipboard fallback restores focus and removes its temporary textarea even after failure.
+  Native popup state is recorded synchronously so a conversation refresh cannot replace an open copy menu.
 - `scripts/reader-copy-check.js <baseUrl> [outDir]` (`PLAYWRIGHT_CORE`): headless desktop and phone proof of all three copy
   payloads, complete-history loading, keyboard/focus behavior, viewport placement and missing/failed sources. All API calls
   and WebSockets are answered with synthetic fixtures: live panes, layout, send and TTS are never touched.
