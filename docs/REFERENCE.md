@@ -1613,6 +1613,13 @@ startedBy, account, agent}`. The rule in the text: the manager restarts only a s
 never an owner-started session. `scripts/manager-event-filter.sh` lets it through deferred (`d: true`, never urgent): it rides
 with the next wake. Tests: `test/context-advisory.test.js`, `test/manager-event-filter.test.js`.
 
+**Two more advisories from the same module (2026-11-28).** A `subagent-heavy` finding becomes `<session>:subagent-advisory`
+(narrow-prompt brief: one question per subagent, named files, 10-line answers, Sonnet/Haiku for read-only lookups). A
+`high-avg-context` finding on a manager session (`loadManagerSessions`, startedBy `self`) becomes
+`<session>:manager-restart-advisory`: at the next natural stop append one handover line to
+`~/vpt-manager/docs/manager-handover.log`, then run `scripts/manager-fresh.sh`; the fresh kickoff reads the last line of that
+log first. Advisory only, same 24 h cooldown. Usage page: `.uv-root` is `width:100%` and `.spark` shrinks so no tab overflows a 390 px phone.
+
 **1-hour prompt cache TTL (#5), default off.** For Claude sessions whose turns are more than 5 minutes apart (the 5-minute
 cache expires and every turn re-writes the context). The Claude Code switches, verified in the installed Claude Code 2.1.332
 binary: `CLAUDE_CODE_PROMPT_CACHE_TTL=1h` (main conversation; unset = automatic, 1 h on a subscription within its limits,
