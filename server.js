@@ -222,6 +222,7 @@ import { createQuotaResumer } from './quota-resume.js';
 import { createIntegrationDeploys } from './integration-deploys.js';
 import { createDeployLive } from './deploy-live.js';
 import { createMockups } from './mockups.js';
+import { createContextAdvisory } from './context-advisory.js';
 import { createVoice, feedActions, stopItem as voiceStopItem, decidedFor as voiceDecidedFor } from './voice.js';
 
 const exec = promisify(execFile);
@@ -4044,7 +4045,11 @@ server.listen(PORT, HOST, async () => {
   setInterval(() => decidedDigestTick().catch((e) => console.error('[decided-digest]', e.message)), 60000).unref?.();   // "Decided for you today", once a day
   healthTick();
   setInterval(healthTick, HEALTH_MS);
-  const usageTick = () => usage.get().catch(() => {});   // one small file read per 30 s keeps the status field cheap
+  // token audit saving #2: high-avg-context waste findings -> one advisory manager event per finding id (24 h cooldown)
+  const contextAdvisory = createContextAdvisory({ stateDir: STATE_DIR, getSummary: () => usage.get(), record: (e) => managerEvents.record(e),
+    startedBy: (n) => (managerOwned(n) ? 'manager' : (sessionMeta.startedBy(n) || history.instances().some((i) => i.name === n)) ? 'owner' : 'unknown'),
+    isLive: (n) => !!latest?.status?.[n] });
+  const usageTick = () => usage.get().then(() => contextAdvisory.tick()).catch(() => {});   // one small file read per 30 s keeps the status field cheap
   usageTick();
   setInterval(usageTick, 30000);
   const quotaTick = () => claudeAccountsRefresh().then(() => quota.poll()).then(() => { reevaluateHolds(); latest = null; }).catch((e) => console.error('[quota]', e.message));

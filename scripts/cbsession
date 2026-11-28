@@ -79,6 +79,12 @@ export CLAUDE_CONFIG_DIR=$(q "$ACC_DIR")
 export GHOSTY_CLAUDE_ACCOUNT=$(q "$ACC_ID")"
   fi
 fi
+# 1-hour prompt cache TTL (token audit #5, DEFAULT OFF): env CBSESSION_CACHE_1H=1 or the name in $GHOSTY_STATE_DIR/cache-1h.json (cache-ttl.js).
+if [ "$PROV" = claude ] && command -v node >/dev/null 2>&1; then
+  C1H=$(node "$(dirname "$(readlink -f "$0")")/../cache-ttl.js" "$NAME" 2>/dev/null || true)
+  [ -n "$C1H" ] && ACC_EXPORT="$ACC_EXPORT
+$C1H"
+fi
 # No workers by default (owner 2026-11-13): a session started by cbsession exports CBSESSION_PARENT (and CBSESSION_WORKERS_OK=1 with -K).
 if [ -n "${CBSESSION_PARENT:-}" ] && [ "${CBSESSION_WORKERS_OK:-}" != 1 ] && [ "$AUTOMATION" = 0 ]; then
   echo "cbsession: refused: session '$CBSESSION_PARENT' was not started with workers allowed (owner 2026-11-13: a session does all the work itself). Do the work yourself; the owner or the brief must say 'workers: allowed' (cbsession -K) first." >&2; exit 2
