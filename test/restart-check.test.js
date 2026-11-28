@@ -98,3 +98,30 @@ test('tick: a coalesced restart reads the waiter request exit; skipped/launch_fa
     assert.ok(out.every((o) => o.ok));
   } finally { h.cleanup(); }
 });
+
+test('tick: a waiter that exited before this process started is recorded unwatched: no item, not judged live', async () => {
+  const reqs = [
+    { id: 'int-old', selfDeploy: sd({ restart: 'scheduled', exit: '/r/int-old.exit' }) },
+    { id: 'int-new', selfDeploy: sd({ restart: 'scheduled', exit: '/r/int-new.exit' }) },
+  ];
+  const dir = mkdtempSync(join(tmpdir(), 'restart-check-'));
+  const items = [], logged = [];
+  const startedAt = T0 + 60e3;
+  const exits = { '/r/int-old.exit': { code: 0, at: T0 + 30e3 }, '/r/int-new.exit': { code: 0, at: T0 + 90e3 } };
+  const rc = createRestartCheck({ stateDir: dir, startedAt, listDeployed: async () => reqs, changedPaths: async () => ['usage/loops.js'],
+    unitStartMs: async () => T0 - 7200e3,                                 // both units look stale
+    readExit: async (f) => exits[f] ?? null, managerItem: (e) => items.push(e), now: () => T0 + 600e3,
+    log: { log: (...a) => logged.push(a.join(' ')), error() {} } });
+  try {
+    const out = await rc.tick();
+    const old = out.find((o) => o.id === 'int-old'), fresh = out.find((o) => o.id === 'int-new');
+    assert.equal(old.ok, null);
+    assert.equal(old.unwatched, true);
+    assert.equal(fresh.ok, false);                                         // watched: judged, and stale
+    assert.deepEqual(items.map((i) => i.key), ['integration:int-new:not-live']);
+    assert.ok(!logged.some((l) => l.includes('int-old')));
+    const saved = JSON.parse(readFileSync(join(dir, 'integration', FILE_NAME), 'utf8'));
+    assert.deepEqual(saved['int-old'], { at: T0 + 600e3, ok: null, unwatched: true });
+    assert.deepEqual(await rc.tick(), []);                                 // recorded once
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

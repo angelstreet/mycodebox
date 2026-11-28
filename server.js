@@ -4081,7 +4081,8 @@ server.listen(PORT, HOST, async () => {
       const et = Number((await exec('ps', ['-o', 'etimes=', '-p', String(pid)], { timeout: 5000 })).stdout.trim());
       return Number.isFinite(et) ? Date.now() - et * 1000 : null;
     },
-    readExit: async (f) => { try { const n = parseInt(await readFile(f, 'utf8'), 10); return Number.isInteger(n) ? n : null; } catch { return null; } },
+    readExit: async (f) => { try { const n = parseInt(await readFile(f, 'utf8'), 10); return Number.isInteger(n) ? { code: n, at: (await stat(f)).mtimeMs } : null; } catch { return null; } },
+    startedAt: Date.now() - process.uptime() * 1000,
     managerItem: (e) => managerEvents.record(e) });
   setTimeout(() => restartCheck.tick(), 60000).unref?.();
   setInterval(() => restartCheck.tick(), 120000).unref?.();
