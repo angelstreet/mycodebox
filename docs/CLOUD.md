@@ -3,6 +3,57 @@
 Owner request 2026-11-28: code fixes for mycodebox and VirtualPyTest can run in Claude Code cloud sessions
 (claude.ai/code, `claude --cloud`) instead of on the codebox VM, several in parallel. This page is the runbook.
 
+## How it works
+
+```
+codebox                                   GitHub                         Anthropic cloud VM
+-------                                   ------                         ------------------
+1. push the branch to fix  ─────────────▶  branch
+2. scripts/cloud-start ── claude --cloud ─────────────────────────────▶  fresh VM clones the branch
+                                                                          3. bash scripts/cloud-setup.sh
+                                                                          4. edit, run the tests
+                                           claude/<slug>  ◀───────────── 5. push its own branch
+6. integrate request claude/<slug> --mac cloud-<label>
+7. the lane merges, tests, deploys (on codebox, as for any branch)
+```
+
+The VM gets the repository and nothing else. It cannot reach codebox, the tailnet, the lab or production, so every
+step that needs them (steps 6 and 7) stays on codebox. The dashboard's **Cloud** view lists each session started
+with `cloud-start`.
+
+## What you can and cannot do there
+
+| Can (code only) | Cannot (stays on codebox) |
+|---|---|
+| Read and edit the code of the branch | Read `.env`, the state dir, `~/.ssh`, `~/.config` or any secret: none is in the VM |
+| Install packages from public registries (npm, PyPI, GitHub) | Reach the dashboard, the lane, the tailnet, lab hosts, devices, databases or production servers |
+| Run unit tests, typecheck, lint (`npm test`; VirtualPyTest `pytest tests/rollout tests/shared`, `tsc`) | Deploy, restart a service, take a lease, run a device or a validation, query or migrate a DB |
+| Run several sessions in parallel, each in its own VM | Run `integrate`, `found-bug` or any ghosty API (none is reachable) |
+| Push its own `claude/<slug>` branch | Push `main` (branch-protected) or anyone else's branch |
+| Answer follow-up messages; be taken over locally (`claude --teleport`) | Tests that need a live service, a device, a GPU or a real key: run those on codebox after the hand-off |
+
+## How secrets stay out
+
+- **Nothing secret is in git.** `.env`, `certs/*.pem`, the state dir and logs are never tracked (AGENTS.md "never leak"),
+  so the clone the VM receives has none. The tests run on fakes and temp state dirs: they need no real key.
+- **Nothing secret is in the environment.** The *Default* environment has no variables and no network secrets; never add
+  any. `cloud-start` sends only the repo, the branch and the task text (write no secret in a task).
+- **No GitHub token in the VM.** It pushes through Anthropic's GitHub connection of the default login; no token was
+  created and none is copied in.
+- **No path into our network.** Network *Limited* (package registries, GitHub). There is no Tailscale in the VM.
+- **The agent knows where it runs.** `CLAUDE_CODE_REMOTE=true`, and each repo's `AGENTS.md` "Cloud sessions" forbids
+  secrets, deploys, leases, devices and DB there.
+- **What comes back is reviewed like any branch.** Code from a cloud VM reaches codebox only as a `claude/*` branch that
+  the lane merges, tests and deploys under its normal checks.
+
+Known limits (2026-11-28):
+- The code itself is copied to Anthropic VMs while a session runs (VirtualPyTest is private): the same trust as using
+  Claude Code on codebox.
+- claude.ai connectors (MCP) on the account bypass the network allowlist: keep those that reach our data off for cloud work.
+- The settings above are a convention: a person editing the environment could add a secret or widen the network. Never do.
+- A key once committed stays in git history even after the file is cleaned, and every clone carries it: rotate such a
+  key, deleting the file is not enough (VirtualPyTest TASK-08 §4 tracks such a rotation).
+
 ## What is offloaded, what is not
 
 | Offloaded to the cloud VM | Not offloaded |
