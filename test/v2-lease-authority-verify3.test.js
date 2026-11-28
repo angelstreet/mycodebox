@@ -94,7 +94,9 @@ test('self-heal never applies to a .break whose pid is alive on this host (pid r
     for (let i = 0; i < 2; i++) assert.equal((await auth.acquire(R, opts('a'))).code, 'E_UNAVAILABLE', JSON.stringify(binfo));
     assert.ok(realFs.existsSync(bp) && realFs.existsSync(lp), JSON.stringify(binfo));
     await unlink(bp);
-    assert.ok((await auth.acquire(R, opts('a'))).ok, JSON.stringify(binfo));
+    // the call that must succeed waits longer: on a loaded host breaking the stale lock alone can use up 200 ms
+    const patient = createLeaseAuthority({ backend: fileBackend({ dir, lockWaitMs: 5000, staleLockMs: 10 }) });
+    assert.ok((await patient.acquire(R, opts('a'))).ok, JSON.stringify(binfo));
   }
 });
 

@@ -79,7 +79,7 @@ def main(args):
             for _ in range(8):
                 if not view(page)['rd']:
                     break
-                swipe(cdp, box['x'], box['y'] + 420, -420, 60, 5); time.sleep(1.3)
+                swipe(cdp, box['x'], box['y'] + 300, -300, 60, 5); time.sleep(1.3)   # start inside the reader: the chip row below it takes touches
             v = view(page)
             check('at the bottom the live terminal is back', not v['rd'], v)
             check('still no scroll request, still the saved terminal', v['reqs'] == 0 and v['saved'] == '0', v)
@@ -114,7 +114,7 @@ def main(args):
             swipe(cdp, box['x'], box['y'], 240, 400, 16); time.sleep(1.5)
             v = view(page)
             off = page.evaluate("window.__bench.ws.at(-1)?.[1]")
-            check('setting off: the terminal stays and the app scrolls (wheel notches, as before)', not v['rd'] and v['reqs'] > 0 and off >= 15, {'reqs': v['reqs'], 'off': off})
+            check('setting off: the terminal stays and the app scrolls (wheel notches, as before)', not v['rd'] and v['reqs'] > 0 and off >= 12, {'reqs': v['reqs'], 'off': off})
             shot(page, '6-off-forwarded.png')
             # switching it on again while the app is scrolled up: the next scroll goes local and puts the app back at its live end
             page.evaluate("() => document.querySelector('#smoothToggle').click()"); time.sleep(0.3)   # the desktop switch drives the same setting

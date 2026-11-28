@@ -81,7 +81,7 @@ class Rig:
         tui = os.path.join(ROOT, 'test', 'fixtures', 'fake-fullscreen-tui.mjs')
         node = shutil.which('node')
         subprocess.check_call([self.tmux, 'new-session', '-d', '-s', 'bench', '-x', '80', '-y', '30',
-                               f'TUI_LINES={LINES} TUI_STEP=1 TUI_REDRAW_MS={redraw_ms} {node} {tui}'])
+                               f'TUI_LINES={LINES} TUI_STEP=1 TUI_HINT=1 TUI_REDRAW_MS={redraw_ms} {node} {tui}'])
         self.port = free_port()
         state, home = os.path.join(self.tmp, 'state'), os.path.join(self.tmp, 'home')
         os.makedirs(state); os.makedirs(home)

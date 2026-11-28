@@ -6,6 +6,12 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The temp-folder cleanup list covers the lane log test** — `test/integration-log.test.js` creates `intlog-` folders that `TMP_PREFIXES` did not name, so `health-watch.test.js` failed on main and returned merges (2026-11-28) · area: tests
+
+- **Two lease-lock tests no longer fail on a busy host** — the calls that must succeed had 150 to 200 ms, and `lock()` checks that limit right after breaking a stale lock, so a slow host reported "busy" with the lock free and the lane returned a merge (2026-11-28). Those calls now wait up to 5 s; the calls that must be refused keep the short wait. Test-only change · area: tests
+
+- **The copy icon in the manager question popup is no longer a red circle** — the popup's button rule also styled the copy icon, so it looked like an alert (owner screenshot, 2026-11-28). It now has the same quiet style as every other copy icon. The phone-width scroll check (`scripts/scroll-bench/verify.py`) is reliable again: its swipes start inside the reader, and its test app shows Claude Code's "Jump to bottom" hint, without which a slow run failed · area: dashboard
+
 - **`page publish folder/index.md` is named after the folder** — every lone `index.md` / `index.html` was published as `/p/index/`, so the next one replaced it · area: pages
 
 - **Cloud branches are read before the lane runs them** — a security review found that a branch pushed from a Claude Code cloud session was installed and tested on codebox like any other, with the dev user's files and the tailnet in reach. A request queued with `--mac cloud-<label>` now goes to the manager first and runs only after the manager approves that exact commit. `cloud-start` also writes its log line as real JSON in a private file, refuses odd labels and a task starting with `-`, and the cloud setup installs an exact Node version. · area: lane

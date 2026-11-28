@@ -144,9 +144,12 @@ test('pid veto: a lock naming a live pid on this host is never broken (holder ab
   // same pid but recorded for another host: liveness cannot be judged here, the age + holder rules decide
   await writeFile(lp, JSON.stringify({ nonce: 'x', pid: process.pid, host: 'other-host.invalid' }));
   await ageFile(lp);
-  const r = await auth.acquire(R, opts('a'));
+  // a long wait for the call that must succeed: lock() checks its deadline after breaking the stale lock, so on a loaded host
+  // 150 ms can run out with the lock already free
+  const patient = createLeaseAuthority({ backend: fileBackend({ dir, lockWaitMs: 5000, staleLockMs: 10 }) });
+  const r = await patient.acquire(R, opts('a'));
   assert.ok(r.ok);
-  assert.ok((await auth.release(r.lease)).ok);
+  assert.ok((await patient.release(r.lease)).ok);
   await unlink(lp).catch(() => {});
 });
 
