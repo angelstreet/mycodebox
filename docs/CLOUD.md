@@ -38,19 +38,30 @@ with `cloud-start`.
   so the clone the VM receives has none. The tests run on fakes and temp state dirs: they need no real key.
 - **Nothing secret is in the environment.** The *Default* environment has no variables and no network secrets; never add
   any. `cloud-start` sends only the repo, the branch and the task text (write no secret in a task).
-- **No GitHub token in the VM.** It pushes through Anthropic's GitHub connection of the default login; no token was
-  created and none is copied in.
+- **None of our GitHub tokens in the VM.** It pushes through Anthropic's GitHub connection of the default login; we
+  created no token and copy none in. The platform does put its own credential variables in the VM (`GH_TOKEN`,
+  `GITHUB_TOKEN`, cloud-provider names; seen by name only in the 2026-11-28 review): their reach is the GitHub
+  connection's, so keep that connection limited to the repos cloud work needs.
 - **No path into our network.** Network *Limited* (package registries, GitHub). There is no Tailscale in the VM.
 - **The agent knows where it runs.** `CLAUDE_CODE_REMOTE=true`, and each repo's `AGENTS.md` "Cloud sessions" forbids
   secrets, deploys, leases, devices and DB there.
-- **What comes back is reviewed like any branch.** Code from a cloud VM reaches codebox only as a `claude/*` branch that
-  the lane merges, tests and deploys under its normal checks.
+- **What comes back is read before it runs.** Code from a cloud VM reaches codebox only as a `claude/*` branch queued
+  with `--mac cloud-<label>`. The lane returns such a request for manager approval before it installs or tests anything
+  (its install and tests run on codebox, where the dev user's files and the tailnet are in reach); the manager reads the
+  diff and approves that exact commit (a new push needs a new approval).
+- **Treat a cloud branch as untrusted code**: a confused or prompt-injected agent needs no secret to do harm, only a
+  pushed branch. Write no secret and no internal detail in a task (`cloud-start` logs its first line, private file).
 
 Known limits (2026-11-28):
 - The code itself is copied to Anthropic VMs while a session runs (VirtualPyTest is private): the same trust as using
   Claude Code on codebox.
 - claude.ai connectors (MCP) on the account bypass the network allowlist: keep those that reach our data off for cloud work.
 - The settings above are a convention: a person editing the environment could add a secret or widen the network. Never do.
+- VirtualPyTest CI runs on self-hosted lab runners. Its "Deploy harness" workflow ran on every pushed branch, cloud
+  branches included (fixed in the workflow 2026-11-28: `main` and PRs to `main` only), and a branch can still change a
+  workflow file in its own push. Closing that needs GitHub settings (runner group limited to `main`, secrets in an
+  environment restricted to `main`): an owner item.
+- The pushed branch is public at once on mycodebox (a public repo), before any review: nothing private in a cloud task.
 - A key once committed stays in git history even after the file is cleaned, and every clone carries it: rotate such a
   key, deleting the file is not enough (VirtualPyTest TASK-08 §4 tracks such a rotation).
 
@@ -129,7 +140,10 @@ The cloud cannot reach the lane. The session that started the cloud session (or 
 integrate request claude/fix-foo --repo mycodebox --mac cloud-fix-foo      # or --repo virtualpytest
 ```
 
-The lane merges, tests and deploys as for any branch (add `--deploy ...` when needed). The result is written to
+The lane first returns it with `needs manager approval: cloud branch (cloud-<label>)` and a manager item: nothing of the
+branch runs on codebox until the manager has read the diff and approved that commit with
+`integrate request claude/fix-foo --repo ... --mac cloud-fix-foo --approved-by manager`. Then it merges, tests and deploys
+as for any branch (add `--deploy ...` when needed). The result is written to
 `<state>/integration/external-results/<id>.txt` and raised as the manager event `<id>:external-result`; the manager
 relays it and acks (`integrate ack <id>`), else the owner is pushed after 10 min. A returned request is fixed by a
 follow-up message to the same cloud session, which pushes the same branch again; then request it again.

@@ -43,6 +43,8 @@ export const DEFAULT_DEPLOY_COALESCE_MS = 300_000;
 const MAX_SETTLE_MS = 3_600_000;
 const MAX_PUSH_TRIES = 3;
 const MIGRATION_REASON = /^touches a migration: /;   // the path-based floor line the effect-based migration reasons replace
+// A request queued for a cloud session (`--mac cloud-<label>`): see evaluate().
+export const isCloudRequest = (r) => r?.origin === 'external' && /^cloud-/i.test(String(r.externalLabel || ''));
 export const INSTALL_CMD = 'npm ci --no-audit --no-fund';
 const coded = (code, message, extra) => Object.assign(new Error(message), { code, ...extra });
 // Remote URLs may carry credentials: never let them into a tail, a reason or a notice.
@@ -657,6 +659,16 @@ const resolvable = (c) => [...new Set([...c.conventions, ...(c.unionFiles || [])
 
   // The merge floor against the current remote target. Re-run whenever the target moved (a re-merge), not only once.
   async function evaluate(r, c) {
+    // Cloud branches (owner 2026-11-28, security review): code written on an Anthropic cloud VM or a cloud agent host is
+    // untrusted, and the lane runs its install and tests on codebox with the dev user's files and the tailnet in reach. No run
+    // before a manager has read the diff of this exact commit (an approval is SHA-bound: a new push needs a new one).
+    if (isCloudRequest(r) && !r.approvedBy) {
+      const st = await G(r, c, ['diff', '--stat', `${c.remote}/${c.target}...${r.branchSha}`]);
+      const stat = tailOf(st.out || st.err || '');
+      const reason = `needs manager approval: cloud branch (${r.externalLabel}); read the diff before the lane runs its code on codebox`;
+      try { managerItem({ kind: 'merge', id: r.id, repo: r.repo, branch: r.branch, session: r.session, diffStat: stat, text: `${reason}\n${stat}\nRead: git diff ${c.target}...${String(r.branchSha).slice(0, 12)}\nApprove (covers commit ${String(r.branchSha).slice(0, 12)}): integrate request ${r.branch} --repo ${r.repo} --mac ${r.externalLabel} --approved-by manager` }); } catch (err) { log('manager item failed', err?.message); }
+      throw new Ret(reason, stat, { outcome: 'needs_approval', cloud: true });
+    }
     const ev = await step(r, 'evaluate', async () => {
       const e = await mergeEval({ cwd: c.clone, branch: r.branch, branchSha: r.branchSha, target: c.target, remote: c.remote, conventionFiles: resolvable(c), repo: r.repo, session: r.session, approveInfra: !!r.approvedBy, migrationApplied: !!r.migrationApplied, optOut: optOutList() });
       const reasons = Array.isArray(e?.reasons) ? e.reasons : [];

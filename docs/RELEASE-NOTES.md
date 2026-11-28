@@ -6,6 +6,7 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **Cloud branches are read before the lane runs them** — a security review found that a branch pushed from a Claude Code cloud session was installed and tested on codebox like any other, with the dev user's files and the tailnet in reach. A request queued with `--mac cloud-<label>` now goes to the manager first and runs only after the manager approves that exact commit. `cloud-start` also writes its log line as real JSON in a private file, refuses odd labels and a task starting with `-`, and the cloud setup installs an exact Node version. · area: lane
 - **Click an option in the NEEDS YOU question list to answer it** — "i shoud be able toclick to seelct a decision" (owner 2026-11-28). The options in the strip popup were plain text; each is now a button that sends the same answer as the bottom-right popup, marks the choice, says when a send failed, and the popup stays open for the next question · area: dashboard
 
 - **Cloud sessions start on Sonnet too** — `scripts/cloud-start` now passes `--model sonnet` instead of leaving the model to the account's default; the new `-m <model>` chooses another one · area: cloud sessions

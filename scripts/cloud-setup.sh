@@ -10,13 +10,15 @@ cd "$(dirname "$0")/.."
 # tests failed only there. The npm registry is on the cloud's package-manager allowlist (nodejs.org may not be), so the binary
 # comes from the node-linux-<arch> package; the VM's `node` is then pointed at it. Root only (the VM); elsewhere it only warns.
 want_node=${CLOUD_NODE_MAJOR:-24}
+# Exact version (security review 2026-11-28): a new release of the package is not installed as root unseen; bump on purpose.
+node_ver=${CLOUD_NODE_VERSION:-24.22.3}
 cur_node=$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)
 if [ "$cur_node" -lt "$want_node" ]; then
   case $(uname -m) in x86_64) arch=x64 ;; aarch64|arm64) arch=arm64 ;; *) arch= ;; esac
   pre=${CLOUD_NODE_PREFIX:-/opt/node$want_node}
   bin=$pre/node_modules/node-linux-$arch/bin/node
   if [ -n "$arch" ] && { [ "$(id -u)" = 0 ] || [ -n "${CLOUD_NODE_PREFIX:-}" ]; } \
-     && { [ -x "$bin" ] || npm install --prefix "$pre" --no-save --no-audit --no-fund --loglevel=error "node-linux-$arch@$want_node" >/dev/null; } \
+     && { [ -x "$bin" ] || npm install --prefix "$pre" --no-save --no-audit --no-fund --loglevel=error "node-linux-$arch@$node_ver" >/dev/null; } \
      && "$bin" -v >/dev/null; then
     ln -sf "$bin" "$(command -v node)"
     hash -r
