@@ -19,6 +19,7 @@ Start here to choose the right guide. Examples use placeholders; replace them lo
 | Configure native HTTPS | [Certificates](../certs/README.md) | Certificate files, trust and renewal |
 | Try or upgrade to V2 (opt-in task engine) | [README roadmap](../README.md#current-capabilities--v2-roadmap), [Migration](v2/MIGRATION.md), [Scoring](v2/SCORING.md) | What is shipped vs planned, upgrade and rollback notes, per-model scoring report |
 - [Disk cleanup](DISK-CLEANUP.md): the daily dry-run-first cleanup timer, the disk measurement table and the 90 % disk push.
+- [Node1 hard-stop findings (2026-11-28)](PROXMOX-NODE1-CRASHES-2026-11-28.md): journal and netconsole evidence, lockup sysctls applied, staged hardware watchdog, owner-held items.
 - [Review: the stb3 variant hour, 2026-11-13](reviews/2026-11-13-stb3-variant-hour.md): why 3 small frontend edits took an hour (timeline, slices, causes); the unpushed-branch check of `integrate request` and the lane's "nothing new" result.
 - [Harness pass 2, 2026-11-11](HARNESS-PASS2-2026-11-11.md): STATUS honesty (`failed`, done-but-failed, proof evidence), grant notice, session guard hook, fix claims; design, replay numbers, Mac vs codebox.
 - [Harness map 2026-11-28](HARNESS.md): every actor and model, the process per request type as the code runs it, a proposed phase/model split with a verification matrix, the instruction-file and first-call context audit, top 10 issues, PR-sized next steps.
