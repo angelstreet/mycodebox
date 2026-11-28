@@ -30,6 +30,14 @@ export function codexModels(cache, configToml = '') {
   return { models: out, default: out[0] || null };
 }
 
+// The model a NEW session starts with: the chosen one, else the Claude default (Sonnet, owner 2026-11-28), passed explicitly because
+// /model in any session rewrites the shared Claude Code default. An AGENT_CMD_CLAUDE override wins verbatim: nothing is added to it.
+// Never used on resume: a conversation keeps its own model.
+export function startModel(agent, model, override) {
+  if (model) return model;
+  return agent === 'claude' && override === undefined ? DEFAULT_MODELS.claude : null;
+}
+
 const q = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 
 // The agent command line with the chosen model and, when given, the first prompt read from a file (so no quoting of the text

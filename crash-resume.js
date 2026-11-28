@@ -64,13 +64,14 @@ export function parseCrashCommand(line, fallbackName) {
   return { name, model, line };
 }
 
-export function buildCrashResumeCommand({ base, crash, model, claudeSessionId } = {}) {
+// --model only when the launch line named one. Never the pane footer's display name ("Opus 5.5": a broken command line, and a switch of
+// model); without the flag `claude --resume` keeps the conversation's own model (verified on 2.1.332, 2026-11-28).
+export function buildCrashResumeCommand({ base, crash, claudeSessionId } = {}) {
   if (!base || !crash?.name || !claudeSessionId) return null;
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(claudeSessionId)) return null;
   const q = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
   const parts = [base];
-  const chosenModel = model || crash.model;
-  if (chosenModel && !/--model(?:=|\s)/.test(base)) parts.push('--model', chosenModel);
+  if (crash.model && !/--model(?:=|\s)/.test(base)) parts.push('--model', crash.model);
   if (!/--remote-control\b/.test(base)) parts.push('--remote-control', q(crash.name), '-n', q(crash.name));
   parts.push('--resume', claudeSessionId);
   return parts.join(' ');
@@ -89,13 +90,13 @@ export function decideCrashResume({ state, consecutiveNoAgent = 0, managerSessio
   const bareScan = scan ? null : scanBareAbort(state.lines);
   const crash = scan
     ? parseCrashCommand(scan.line, state.tmuxName || state.name)
-    : bareScan && { name: state.tmuxName || state.name, model: state.model || null, line: bareScan.line };
+    : bareScan && { name: state.tmuxName || state.name, model: null, line: bareScan.line };
   if (!crash) return { ok: false, reason: 'no-exact-job-message' };
   const bare = !!bareScan;
   // The session's directory is gone (deleted worktree): resuming there would fail or run in the wrong place. Needs the owner/manager.
   if ((scan || bareScan).cwdGone || /\(deleted\)\s*$/.test(state.cwd || '')) return { ok: false, reason: 'cwd-gone', crash, bare };
   if (lastResumeAt != null && now - lastResumeAt < intervalMs) return { ok: false, reason: 'throttled' };
-  const command = buildCrashResumeCommand({ base: state.base, crash, model: state.model, claudeSessionId: state.claudeSessionId });
+  const command = buildCrashResumeCommand({ base: state.base, crash, claudeSessionId: state.claudeSessionId });
   return command ? { ok: true, command, crash, bare } : { ok: false, reason: 'missing-resume-data', crash, bare };
 }
 

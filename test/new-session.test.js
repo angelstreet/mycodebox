@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { pickableProject, launchArgs, codexModels, projectFromCwd } from '../new-session.js';
+import { pickableProject, startModel, launchArgs, codexModels, projectFromCwd } from '../new-session.js';
 
 const H = '/home/u';
 
@@ -9,6 +9,14 @@ test('picker keeps repos under home and drops tmp, scratchpad, lane and hidden-f
   for (const p of ['/home/u', '/tmp/claude-1000/x/scratchpad/wt', '/home/u/tmp-tests/lane-1/dev', '/home/u/tmp/x', '/home/u/temp',
     '/home/u/.local/state/ghosty/integration/wt/int-1', '/home/u/.local/share/game-dispatch/repo', '/home/u/.claude/worktrees/a', '/home/uv/x'])
     assert.equal(pickableProject(p, H), false, p);
+});
+
+test('start model: a new Claude session defaults to sonnet; a chosen model and an AGENT_CMD_CLAUDE override win', () => {
+  assert.equal(startModel('claude', undefined, undefined), 'sonnet');
+  assert.equal(startModel('claude', '', undefined), 'sonnet');
+  assert.equal(startModel('claude', 'opus', undefined), 'opus');
+  assert.equal(startModel('claude', undefined, 'claude --model haiku'), null);
+  assert.equal(startModel('codex', undefined, undefined), null);
 });
 
 test('launch args carry the model per CLI and read the prompt from a file', () => {

@@ -12,7 +12,7 @@ Scope: the AI-agent harness on codebox, meaning mycodebox (this repo, `ghosty-se
 | ghosty server | Lists tmux sessions, sends keys, receives hook reports, emits manager events | none | `server.js`, `docs/MAP.md:10-20` |
 | Manager agent | Claude Code session `manager`. Answers `needs-manager`, starts workers, closes the sessions it started | Sonnet (`launch-config.js:45-47`) | kickoff `scripts/manager-fresh.sh:102`, manual `~/vpt-manager/docs/tasks/TASK-44-MANAGER.md` (6.2k words) + `-REF.md` (5.2k) |
 | Stop watcher | Classifies each stop and proposes or sends safe replies. This is rules, not an LLM | Jev on the VPT server (OpenRouter); MiniMax fallback; AI triage `simulate` by default | `manager.js:1-18`, `:90` |
-| Workers | Coding sessions in tmux with Goal / Done when / Time box, started by `cbsession` | Claude Code default = Opus (`~/.claude/settings.json:12`); subagents Sonnet (`scripts/cbsession:54-55`); Fable only with `-F` (`:51-53`) | `scripts/cbsession` |
+| Workers | Coding sessions in tmux with Goal / Done when / Time box, started by `cbsession` | Sonnet unless `-m` (owner 2026-11-28, after this audit; REFERENCE "Default model"); subagents Sonnet (`scripts/cbsession:54-55`); Fable only with `-F` (`:51-53`) | `scripts/cbsession` |
 | Dashboard "New session" | Same as a worker, two clicks | Sonnet preselected, Fable offered without a gate (`new-session.js:14,17`) | `new-session.js` |
 | V2 task engine | Contract → developer → checks → independent reviewer → integrate | routed per risk (`orchestration/router.js:23`) | `orchestration/`. On (`GHOSTY_V2=1`) but **unused**: 3 tasks, last 2026-10-14 (`~/.local/state/ghosty/v2`) |
 | Integration lane | `integrate request` → merge floor → tests → UI review → push → CI → deploy → notify | **none** (regex and git only) | `integration-lane.js`, `merge-policy.js:680-695` |
@@ -44,7 +44,7 @@ STATUS: done ──> done-check (regex): closing review · release note · proof
 | **Question** (owner → session) | The session it was typed into | That session's model | None | STATUS line |
 | **Question** (session → someone) | `needs-manager` → manager; floor topic → owner ask; manager-started sessions never ask the owner (`AGENTS.md:149-157`) | Manager Sonnet; Opus via ask-opus on doubt (`TASK-44-MANAGER.md:208-218`) | Owner-floor regex (`owner-asks.js:270`) | Answer typed back |
 | **Doc** | One session, `docs/` branch | Session model | Time box 30 min (`scripts/cbsession:264-274`); lane docs-only fast path: no CI, no deploy (`integration-lane.js:1147-1162`); no review | done-check; closing review lists docs |
-| **New task / feature** | One session, no workers unless `-K` (`AGENTS.md:86-90`) | Opus by default (cbsession) or Sonnet (dashboard) | Done when required (`cbsession:254-262`); touched tests (`scripts/test-run.js:1-8`); lane merge floor; **no code review**; VPT UI review on `frontend/src`; proof by risk; goal check; reflection | `done` + closing review; then suggestions; closed by manager or left open |
+| **New task / feature** | One session, no workers unless `-K` (`AGENTS.md:86-90`) | Sonnet by default (owner 2026-11-28) | Done when required (`cbsession:254-262`); touched tests (`scripts/test-run.js:1-8`); lane merge floor; **no code review**; VPT UI review on `frontend/src`; proof by risk; goal check; reflection | `done` + closing review; then suggestions; closed by manager or left open |
 | **Bug, inside own task** | The finder fixes it, never files it (`AGENTS.md:51`) | Same | As feature | `bugs: fixed — <what>` |
 | **Bug, unrelated** | Small: finder fixes it in its own worktree. Large: `found-bug` with proof (`scripts/found-bug:4-11`) → manager sends it back or starts a worker | Manager picks: "MiniMax with a Sonnet gate, else Sonnet" (`TASK-44-MANAGER.md:170`) | `--checked-main`, `--tried`, `--why-not-fixed` | `found-bug --resolve` |
 | **Bug drain** | Timer 5×/day | MiniMax ≤80% window, else Sonnet (`bug-drain-tick.js:26-27`) | - | **Dry: logs "started", starts nothing** |
@@ -57,7 +57,7 @@ STATUS: done ──> done-check (regex): closing review · release note · proof
 2. **Backend changes have no proof requirement.** proof-risk applies only when web UI files changed (`docs/REFERENCE.md:2688`). A backend bug fix ends `done` with no API smoke.
 3. **"Run tests yourself" vs "run no tests".** The VPT ship rule says to run the touched tests yourself (`vpt:AGENTS.md:5`). VPT DECISIONS says a small change runs **no** tests by hand (`vpt:docs/agent/DECISIONS.md:101-103`).
 4. **Manager model.** Code runs Sonnet (`launch-config.js:45-47`). The manual says "Sonnet by default" (`TASK-44-MANAGER.md:3`) and also tells you to launch with `--model opus` and that "Opus 5.5 minimum" (`:11`, `:15`, `:24`).
-5. **Two defaults for a new session.** cbsession inherits Opus (`settings.json:12`), the dashboard preselects Sonnet (`new-session.js:17`). Fable is gated in cbsession (`:51-53`) but not in the dashboard (`new-session.js:14`).
+5. **Two defaults for a new session.** *Fixed 2026-11-28: cbsession and the dashboard both start on Sonnet.* Still open: Fable is gated in cbsession but not in the dashboard (`new-session.js` `CLAUDE_MODELS`).
 6. **Reflection rule differs per repo.** mycodebox has Opus triage and manager-answers-for-its-sessions (`AGENTS.md:147`, `:149-157`). VPT still says "Only the owner answers ... a manager never does" (`vpt:AGENTS.md:118`).
 7. **Owner-started sessions never close.** No tick closes a session (`worker-auto-close.js:7-10`, `AGENTS.md:180-184`). Only manager-started sessions get `ready-to-close`.
 8. **Bug drain is shipped but dry.** The policy text reads as if it were live.
@@ -172,7 +172,7 @@ T1 + T3 + T5 bring a VPT worker's first call from ~56k to about 42-45k plus guar
 | 3 | Backend fixes need no proof | `docs/REFERENCE.md:2688` | Extend proof-risk: backend diff → one API call on the deployed host, quoted | code |
 | 4 | Conflicting test rule in VPT | `vpt:AGENTS.md:5` vs `DECISIONS.md:101-103` | Ship rule: "run the touched tests unless the change is small (DECISIONS)" | manager |
 | 5 | Manager model documented three ways | `launch-config.js:45-47`, `TASK-44-MANAGER.md:3,11,15` | Owner picks one; fix the manual | owner → manager |
-| 6 | Model defaults split between cbsession (Opus) and dashboard (Sonnet); Fable ungated in the dashboard | `settings.json:12`, `new-session.js:14,17`, `cbsession:51-53` | One default (Sonnet), Fable behind the same gate | code |
+| 6 | Fable ungated in the dashboard (the split model default was fixed 2026-11-28) | `settings.json:12`, `new-session.js:14,17`, `cbsession:51-53` | Fable behind the same gate | code |
 | 7 | Reflection rule stale in VPT | `vpt:AGENTS.md:118` vs `AGENTS.md:147-157` | Replace with a pointer to one text | manager |
 | 8 | Owner-started sessions are never closed; idle ones keep context, worktrees and leases | `worker-auto-close.js:7-10`, `AGENTS.md:180-184` | Script close for accepted `done` with nothing open, as an owner opt-in per session | owner |
 | 9 | Shipped-but-off components: V2 engine (3 tasks, last 2026-10-14), bug drain `dry`, `router.js` "SHADOW ONLY" (`:1-3`) but imported by `decide-policy.js:11`, `merge-policy.js:9` and `manager.js:56` | state dir, `docs/BUG-DRAIN.md:11` | Mark each "live / dry / retired" in MAP.md; retire V2 or route one task kind to it | owner + manager |
@@ -187,7 +187,7 @@ Also noted: the goal check is regex word overlap (`goal-check.js:130`), so a rep
 | 1 | Committed `CLAUDE.md` (`@AGENTS.md`) in mycodebox; cbsession check greps rule text, not the index line | S | code |
 | 2 | VPT AGENTS.md: fix the ship-rule test conflict and the stale reflection line | S | manager (VPT repo) |
 | 3 | Manager manual: one model, matching `launch-config.js` | XS | manager |
-| 4 | One session default (Sonnet) and one Fable gate for cbsession and the dashboard | S | code |
+| 4 | One Fable gate for cbsession and the dashboard (one Sonnet default: done 2026-11-28) | S | code |
 | 5 | cbsession `--kind` → time box, verification level (matrix 3.2) and review flag written into the brief | M | code |
 | 6 | proof-risk backend rule: API smoke evidence for backend diffs | M | code |
 | 7 | Lane code-review step (cross-family, diff only, size threshold, `dry` first, then `live`); candidate reviewer `ocr`, trial first (§7, T1) | M | code + owner switch |

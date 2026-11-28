@@ -25,8 +25,8 @@ test('bare abort with no wrapper job line is a crash of this session', () => {
   const d = decideCrashResume({ state: state({ lines: ['Aborted (core dumped)', 'bash$'] }), consecutiveNoAgent: 2 });
   assert.equal(d.ok, true);
   assert.equal(d.bare, true);
-  assert.deepEqual(d.crash, { name: 'pane', model: 'opus', line: 'Aborted (core dumped)' });
-  assert.equal(d.command, `${base} --model opus --remote-control 'pane' -n 'pane' --resume sid`);
+  assert.deepEqual(d.crash, { name: 'pane', model: null, line: 'Aborted (core dumped)' });
+  assert.equal(d.command, `${base} --remote-control 'pane' -n 'pane' --resume sid`);
 });
 
 test('bare abort still needs two absent polls, a dead shell and a live cwd', () => {
@@ -38,7 +38,12 @@ test('bare abort still needs two absent polls, a dead shell and a live cwd', () 
 });
 
 test('builds resume with real remote name, model, base, and id', () => {
-  assert.equal(buildCrashResumeCommand({ base, crash: { name: 'real-name', model: 'sonnet' }, model: 'opus', claudeSessionId: 'sid' }), "claude --dangerously-skip-permissions --model opus --remote-control 'real-name' -n 'real-name' --resume sid");
+  assert.equal(buildCrashResumeCommand({ base, crash: { name: 'real-name', model: 'sonnet' }, claudeSessionId: 'sid' }), "claude --dangerously-skip-permissions --model sonnet --remote-control 'real-name' -n 'real-name' --resume sid");
+});
+
+test('the footer model name never reaches the resume command: only the launch line\'s --model does', () => {
+  const d = decideCrashResume({ state: state({ model: 'Opus 5.5', lines: ['launch.sh: line 3: 123 Aborted  env claude --remote-control real-name -n real-name ', 'bash$'] }), consecutiveNoAgent: 2 });
+  assert.equal(d.command, `${base} --remote-control 'real-name' -n 'real-name' --resume sid`);
 });
 
 test('resumer sends literal text then Enter separately and throttles', async () => {
