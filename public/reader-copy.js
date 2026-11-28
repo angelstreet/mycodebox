@@ -59,8 +59,11 @@ export function wireReaderCopy({ replyOf, summaryOf, fullOf } = {}) {
       menu.firstElementChild.setAttribute('role', 'menu');
       menu.querySelectorAll('[data-copy-kind]').forEach((b) => { b.setAttribute('role', 'menuitem'); b.tabIndex = -1; });
     }
-    menu.addEventListener('toggle', (e) => {
+    // toggle is queued: a transcript repaint can otherwise replace an already-open menu before aria catches up.
+    menu.addEventListener('beforetoggle', (e) => {
       trigger.setAttribute('aria-expanded', String(e.newState === 'open'));
+    });
+    menu.addEventListener('toggle', (e) => {
       if (e.newState === 'open') {
         position(menu, trigger);
         if (current?.menu === menu && current.keyboard) focusItem(menu, 0);

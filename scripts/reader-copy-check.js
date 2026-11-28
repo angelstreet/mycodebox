@@ -74,6 +74,10 @@ try {
     const trigger = page.locator('.reader .rd-copy-trigger').first();
     await trigger.waitFor({ timeout: 20000 });
     const menu = page.locator('.reader .rd-copy-pop').first();
+    // The reader's repaint guard needs the open state before the queued toggle event runs.
+    assert.equal(await trigger.evaluate((b) => { b.click(); return b.getAttribute('aria-expanded'); }), 'true', 'opening synchronously protects the menu from transcript repaints');
+    await menu.waitFor({ state: 'visible' });
+    await page.keyboard.press('Escape'); await menu.waitFor({ state: 'hidden' });
     const open = async () => { await trigger.click(); await menu.waitFor({ state: 'visible' }); };
     const waitFull = () => page.waitForFunction(() => !document.querySelector('.rd-copy-pop [data-copy-kind="full"]').disabled);
     const copy = async (kind, text) => {

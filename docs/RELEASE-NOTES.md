@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **Reader copy keeps its focus while history loads** — opening the clipboard menu now protects it from a conversation repaint immediately, preserving keyboard focus when an early copy overlaps the history load. · area: reader
+
 - **One reader clipboard icon copies the reply, full session, or summary** — the icon beside the audio controls now opens three choices. Reply always copies the latest answer, full session loads the unbounded transcript, and summary copies only its lines. Missing or failed sources stay unavailable, copy failures can be retried, and keyboard and HTTP clipboard fallbacks preserve focus. · area: reader
 
 - **Quota popup refresh pulls API credit now** — a newly added admin key showed only after the next 15 min pull. The popup's new **refresh** button sends `GET /api/api-credit?force=1`, which pulls the Admin API cost report at once (at most once a minute). USAGE.md's troubleshooting row now says which key types work (`sk-ant-admin01`) and how the others fail (401 / 403). Test in `test/api-credit.test.js` · area: usage
