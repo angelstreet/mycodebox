@@ -3045,7 +3045,8 @@ body.fv-page{ margin:0; background:var(--bg); }
   .alertrow .attention{ max-width:45%; }
   .alertrow .deployban{ max-width:40%; }
   .alertrow .leasebar{ flex:1 1 0; }
-  .alertrow .attention.none{ display:none; }
+  /* the quiet suggestions chip is not counted, but it is the only way to answer them: keep the strip while it is there (2026-11-28) */
+  .alertrow .attention.none:not(:has([data-parked])){ display:none; }
 }
 
 /* owner 2026-11-25: compact Parked list - time since the last message on every row, Resume only on hover (always shown where there is no hover), a search box */
