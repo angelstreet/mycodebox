@@ -37,6 +37,7 @@ const LIMIT_RE = /\b(?:claude(?: ai)? usage limit reached|usage limit reached|(?
 // start with "❯" and the UI (the limit menu, the status bar) carries none of them.
 const AGENT_OUT_RE = /^\s*[●⏺⎿◐]/;
 const TAIL = 12;
+export const isLimitText = (t) => LIMIT_RE.test(String(t || ''));
 export function scanClaudeLimit(lines) {
   const tail = (Array.isArray(lines) ? lines : String(lines || '').split('\n')).map((x) => String(x ?? '')).filter((l) => l.trim()).slice(-TAIL);
   let stop = -1;
@@ -154,6 +155,39 @@ export function activeAccount(stateDir, { home = homedir(), id = null } = {}) {
   try { cfg = normalize(JSON.parse(readFileSync(join(stateDir, 'claude-accounts.json'), 'utf8')), home); } catch { return null; }
   const a = cfg.accounts.find((x) => x.id === (id || cfg.active));
   return a?.configDir && hasLogin(a) ? a : null;
+}
+
+// The accounts a one-shot `claude -p` (suggestion triage, ask-opus) may run on, best first, read from disk so a script outside the server
+// sees the same choice: the active account first, then the others in list order; an account marked used up, over its limit in its own
+// rate file, or without a login is skipped. None usable: [] (the caller then runs on the active one anyway). -> [{ id, configDir|null }]
+export function usableAccounts(stateDir, { home = homedir(), now = Date.now, exclude = [] } = {}) {
+  let cfg;
+  try { cfg = normalize(JSON.parse(readFileSync(join(stateDir, 'claude-accounts.json'), 'utf8')), home); } catch { return []; }
+  const t = now();
+  const ok = cfg.accounts.filter((a) => !exclude.includes(a.id) && hasLogin(a)).filter((a) => {
+    let windows = [];
+    try { windows = windowsOf(JSON.parse(readFileSync(rateFile(stateDir, a.id), 'utf8')), t); } catch { /* no reading yet: usable */ }
+    return !accountState({ windows, mark: cfg.marks[a.id], now: t }).exhausted;
+  });
+  return [...ok.filter((a) => a.id === cfg.active), ...ok.filter((a) => a.id !== cfg.active)].map((a) => ({ id: a.id, configDir: a.configDir || null }));
+}
+// The child environment for an account: its CLAUDE_CONFIG_DIR, or none for the default account.
+export function envFor(acct, base = process.env) {
+  const env = { ...base };
+  if (acct?.configDir) env.CLAUDE_CONFIG_DIR = acct.configDir; else delete env.CLAUDE_CONFIG_DIR;
+  return env;
+}
+// Runs run(env, acct) on the usable accounts in order; on a limit error (r.error text) it tries the next account, once (two tries at most).
+// onLimit(acct) lets the caller mark the account used up. run -> { ok, text } | { ok:false, error }; no account: one try on the process env.
+export async function onAccounts(accts, run, { onLimit = () => {}, base = process.env, tries = 2 } = {}) {
+  const list = accts.length ? accts.slice(0, tries) : [null];
+  let r = null;
+  for (const a of list) {
+    r = await run(a ? envFor(a, base) : base, a);
+    if (r?.ok || !isLimitText(r?.error)) return { ...r, account: a?.id ?? null };
+    try { onLimit(a); } catch { /* best effort */ }
+  }
+  return { ...r, account: list[list.length - 1]?.id ?? null };
 }
 
 // The account a running claude process was started on (its environment). Default when unset or unreadable.

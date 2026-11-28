@@ -130,7 +130,7 @@ import { createSharedCheckoutGuard, expandHome } from './shared-checkout-guard.j
 import { createFoundBugs, sessionOfRequest, unreportedBugOf, sendBackOf, sendBackText, sweepGroups, equivalentFreeOf } from './found-bugs.js';
 import { goalOf as goalOfPrompt, blockedOrUnknownStatus, lastStatus } from './status-honesty.js';
 import { createGoalGate, createGoalStore, approvedRound, worthAGoal } from './goal-check.js';
-import { createSuggestionTriage, claudeOpus } from './suggestion-triage.js';
+import { createSuggestionTriage, askOpusOnAccounts } from './suggestion-triage.js';
 import { createSuggestions, createTypedLog, isOwnerTyped, answersOf, ambiguousAnswer, bareNumbersOk } from './suggestions.js';
 import { createManagerOwned, forManagerSession, MANAGER_ACTOR } from './manager-owned.js';
 import { createFinalAccept, isTaskActor, isTaskMessage } from './final-accept.js';
@@ -170,7 +170,7 @@ import { uploadTarget } from './upload-kind.js';
 import { createHistoryView } from './history-view.js';
 import { createQuota, defaults as quotaDefaults } from './quota.js';
 import { createManagerRotation, parisTime } from './manager-rotation.js';
-import { createClaudeAccounts, rateFile as claudeRateFile, accountOfPid, scanClaudeLimit, DEFAULT_ID as CLAUDE_DEFAULT_ACCOUNT } from './claude-accounts.js';
+import { createClaudeAccounts, rateFile as claudeRateFile, accountOfPid, scanClaudeLimit, usableAccounts, DEFAULT_ID as CLAUDE_DEFAULT_ACCOUNT } from './claude-accounts.js';
 import { createMinimaxMeter, meterConfig, newShareAlerts } from './minimax-meter.js';
 import { createCredits } from './credits.js';
 import { createAnthropicSpend } from './anthropic-spend.js';
@@ -1295,8 +1295,8 @@ function suggestionHold(name, text, doneAt = null) {
 // owner floor goes to the owner, as a table row, and the session does not wait on it. manager.json `suggestionTriage` live (default) | off.
 const suggestionTriageMode = () => { try { return JSON.parse(readFileSync(managerConfigFile, 'utf8')).suggestionTriage === 'off' ? 'off' : 'live'; } catch { return 'live'; } };
 const suggestionTriage = createSuggestionTriage({ stateDir: STATE_DIR, ledger: suggestions, logEvent: (e) => logEvent(e),
-  // on the active Claude account (claude-accounts.js), like a new session; the binary is found outside the service's PATH (claudeBin)
-  ask: (prompt) => { const a = claudeAccounts.active(); return claudeOpus(prompt, { env: { ...process.env, ...(a?.configDir ? { CLAUDE_CONFIG_DIR: a.configDir } : {}) } }); },
+  // on a Claude account with headroom (claude-accounts.js usableAccounts: active first, used-up ones skipped), the next one once on a limit error; the binary is found outside the service's PATH (claudeBin)
+  ask: (prompt) => askOpusOnAccounts(prompt, { accounts: () => usableAccounts(STATE_DIR), onLimit: (a) => { claudeAccounts.markExhausted(a.id, { reason: 'usage limit in suggestion triage' }).catch(() => {}); } }),
   mode: () => (suggestionTriageMode() === 'live' && reflectionMode() === 'live' ? 'live' : 'off'),
   goalOf: (name) => goalForSession(name).catch(() => ''),
   apply: async (name, decisions) => {
@@ -4111,6 +4111,7 @@ server.listen(PORT, HOST, async () => {
   startWakesLogger({ stateDir: STATE_DIR });   // keeps manager-wakes.jsonl current (it silently stopped 2026-10-04)
   setInterval(() => stopAnswerTick().catch((e) => console.error('[stop-answer]', e.message)), 60000).unref?.();   // a stop the manager left unanswered is sent back once (stop-answer.js)
   setInterval(() => wakeOutcomeTick().catch((e) => console.error('[wake-outcome]', e.message)), 60000).unref?.();
+  setInterval(() => { try { suggestionTriage.sweep(); } catch (e) { console.error('[triage] sweep', e.message); } }, 5 * 60000).unref?.();   // a triage that errored is retried, not left unanswered
   setInterval(quotaTick, 60000);
   setInterval(() => {   // tell the owner before the window is gone: one session past sharePct of the window's calls
     try {
