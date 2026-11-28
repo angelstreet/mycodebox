@@ -8,9 +8,8 @@ next time; this file is the deep dive of row 14.
 
 ## Verdict (best evidence, not proof)
 
-A **silent stop of the whole machine** (power loss or a whole-chip freeze), **not the kernel and not a software shutdown**.
-The leading hypothesis is power delivery / whole-chip hang, ahead of an ordinary CPU hang: the hardware watchdog was armed
-and did not reset the box. Node1 is a bare-metal Ryzen 9 3900 on a B565D4-V1L board (BIOS L0.34, 2024-08), 128 GB
+A **silent power loss of the whole machine** (confirmed: the owner found it off), **not the kernel and not a software shutdown**.
+The hardware watchdog was armed and could not help: a box without power cannot be reset. Node1 is a bare-metal Ryzen 9 3900 on a B565D4-V1L board (BIOS L0.34, 2024-08), 128 GB
 (4 x 32 GB ECC, 89 % used), AMD microcode loaded (`0x8701034`), `processor.max_cstate=1` in effect (only POLL and C1 exist).
 The 7.0.14-26-pve kernel is **not** the cause: the same "crash" rows exist on 6.17.4 since January.
 
@@ -43,9 +42,11 @@ The 7.0.14-26-pve kernel is **not** the cause: the same "crash" rows exist on 6.
 
 ## How it came back
 
-The owner revived it at 08:43Z with a Hetzner Robot hardware reset (the reset button), 95 min after the stop: nothing (watchdog, panic reboot, Hetzner) brought it back on its own.
+At 08:43Z the owner found it **already powered off** in Hetzner Robot and started it, 95 min after the stop: nothing (watchdog, panic reboot, Hetzner) brought it back on its own.
 On 2026-11-17 a Robot hardware reset did not revive it either; only a Hetzner cold power cycle did (register row 13).
-So this time the board was powered but frozen, in a state the 10 s watchdog could not clear.
+So the machine lost power, and the OS did not ask for it: no shutdown record, no power-button event, the journal cut mid-run.
+That also explains Nov 17 (a reset cannot revive a box with no power). Left: power supply, board power circuit or rack feed;
+no BMC/IPMI log is exposed and the CPU reset-reason line is not logged on this Zen 2, so only Hetzner can say which.
 
 ## Proposal
 
