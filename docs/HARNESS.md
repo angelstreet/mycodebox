@@ -190,9 +190,27 @@ Also noted: the goal check is regex word overlap (`goal-check.js:130`), so a rep
 | 4 | One session default (Sonnet) and one Fable gate for cbsession and the dashboard | S | code |
 | 5 | cbsession `--kind` → time box, verification level (matrix 3.2) and review flag written into the brief | M | code |
 | 6 | proof-risk backend rule: API smoke evidence for backend diffs | M | code |
-| 7 | Lane code-review step (cross-family, diff only, size threshold, `dry` first, then `live`) | M | code + owner switch |
+| 7 | Lane code-review step (cross-family, diff only, size threshold, `dry` first, then `live`); candidate reviewer `ocr`, trial first (§7, T1) | M | code + owner switch |
 | 8 | Scripted goal check: run Done when lines that are commands or URLs; Haiku only for observations | M | code |
 | 9 | mycodebox AGENTS.md to ≤1,500 words, the rest to REFERENCE | M | manager |
 | 10 | Skills split (T3/T4) and worker launch without claude.ai connectors (T5), measured before and after with the `claude -p` probe of §4.1 | S | owner (personal skills) + code |
 | 11 | MAP.md "live / dry / retired" column for V2, bug drain, router, triage | XS | manager |
 | 12 | Owner decision: opt-in auto-close for owner-started sessions | - | owner |
+
+## 7. Outside tools: borrow, don't rebuild [proposal, owner 2026-11-28]
+
+Checked on GitHub on 2026-11-28 so the plan above does not rebuild what already exists.
+
+| Tool | What it is | Decision |
+|---|---|---|
+| [alibaba/open-code-review](https://github.com/alibaba/open-code-review) (`ocr`, Apache-2.0) | Code reviewer: plain code picks the files and context, the model only judges; about 1/9 of the tokens of a Claude Code review | Candidate for the lane review step (§6 #7). Trial T1 first. |
+| [ChromeDevTools/chrome-devtools-mcp](https://github.com/ChromeDevTools/chrome-devtools-mcp) (Google, Apache-2.0) | MCP server: console, network, performance trace, Lighthouse, Chrome only | Playwright stays the merge gate (scripted, near zero tokens, same result every time). DevTools MCP only on demand to debug a failed web check, `--slim --headless --isolated`, inside a subagent, never installed globally (it would add to every first call). Trial T2. |
+| [deepseek-ai/dsh-superagent-prototype](https://github.com/deepseek-ai/dsh-superagent-prototype) / deepseek-harness | Router plus one worker per ticket, research prototype | Do not migrate. Borrow: owner-attention first, a ticket stage table, one model per role (matches §3.1), background-work rules, record-only proactive mode. |
+
+**To do, in order:**
+
+| # | When | Trial | Pass if |
+|---|---|---|---|
+| T1 | 2026-11-29 | `ocr` on the last 10 merged lane branches, pinned npm version, against `review:reviewer` on the same diffs | It finds the real problems `review:reviewer` finds (or more), with few false alarms, at clearly fewer tokens. Then it becomes the reviewer in §6 #7, `dry` first. |
+| T2 | after T1 | One real VPT check both ways: page load plus "the tile plays", Playwright (`vpt-headless-verify`) and DevTools MCP | Record time, tokens, and what each caught. If DevTools MCP catches problems Playwright misses, it becomes the debug tool for failed web checks in §3.2. |
+| T3 | with §6 #5 | Ticket stage table and per-role models from dsh, written into the cbsession brief | No new framework; only the fields the brief already lacks. |
