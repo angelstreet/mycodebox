@@ -55,3 +55,12 @@ test('tick never throws when the summary is missing', async () => {
   const a = createContextAdvisory({ stateDir: tmp('ghosty-ctxadv-'), getSummary: async () => null, record: async () => { throw new Error('no'); } });
   assert.equal(await a.tick(), 0);
 });
+
+test('subagent-heavy finding -> its own advisory key with the narrow-prompt brief', () => {
+  const f = { kind: 'subagent-heavy', id: 'x1', session: 'ui-audit', value: 59, detail: 'subagents read 590M of 1046M context tokens (59%)', cost: 12 };
+  assert.equal(dueFindings([f], {}, 1).length, 1);
+  const ev = advisoryEvent(f, 'owner');
+  assert.equal(ev.key, 'ui-audit:subagent-advisory');
+  assert.match(ev.body, /narrow prompt/);
+  assert.equal(ev.priority, 'low');
+});
