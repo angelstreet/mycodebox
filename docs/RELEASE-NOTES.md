@@ -67,6 +67,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The reader's play button works after the reader repaints** — the chip was wired only on the reader's first paint, so a chip painted later (after "no reply yet", or after a smooth-scroll swap) did nothing on tap. Every reader rebuild now wires its chips (`public/app.js` paintReader, test `test/reader-chip-wiring.test.js`) · area: reader
+
 - **The suggestion-triage owner floor matches real data deletion, not the word "drops"** — on 2026-11-28 a dashboard suggestion ("the state frame drops managerAsk") went to the owner as "owner floor (\"drops\")". The data floor now needs a deletion verb aimed at data (tables, rows, records, history, logs, recordings, backups, branches, sessions...) or `rm -rf` / `drop table`; "drops" / "remove" / "delete" in a UI, journal or code sense is no floor, and the other ownerOnly floors see those words masked. On the live ledger this changes three past items only (the two "drops" items and one "overwrites" item). `suggestion-triage.js` `isDataDeletion`, `maskNonData` · tests: `test/suggestion-triage.test.js` · area: harness
 
 - **The board says why a session needs the manager** — the status frame now carries `stall.managerAsk` for needs-manager sessions (cut to 600 chars), and the board row line 2 and the sidebar dot title show "needs the manager: <ask>". `manager.js` `stallOf`, `public/state.js` `managerReasonOf`, `public/app.js` · tests: `test/manager-reason.test.js` · area: dashboard
