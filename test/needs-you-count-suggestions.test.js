@@ -14,3 +14,9 @@ test('renderAttention total does not count the suggestions chip', () => {
   assert.doesNotMatch(m, /parked/);
   assert.match(app, /parkedChipHtml\(parked\)/);   // the chip itself is still drawn
 });
+
+test('a count of 0 does not hide the strip that holds the suggestions chip (desktop)', () => {
+  const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'public', 'style.css'), 'utf8');
+  assert.match(css, /\.alertrow \.attention\.none:not\(:has\(\[data-parked\]\)\)\{ display:none; \}/);
+  assert.doesNotMatch(css, /\.alertrow \.attention\.none\{ display:none; \}/);
+});

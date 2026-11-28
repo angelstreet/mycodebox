@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **Parked suggestions can be answered on desktop again** — with nothing else waiting, NEEDS YOU counted 0 and the whole strip was hidden, taking the "suggestions" button with it. The strip now stays while that button is there and is still hidden when empty (2026-11-28) · area: dashboard
+
 - **A dashboard restart waits for a running UI review** — a restart threw the review away and the request started it over (one started over about 5 times while other changes deployed). `scripts/safe-restart.sh` now waits for it, 10 minutes at most (`GHOSTY_REVIEW_WAIT_MIN`, 0 = off), then restarts anyway; the deploy guard is unchanged and read again before the restart. Tests in `test/safe-restart.test.js` · area: integration lane
 
 - **The temp-folder cleanup list covers the lane log test** — `test/integration-log.test.js` creates `intlog-` folders that `TMP_PREFIXES` did not name, so `health-watch.test.js` failed on main and returned merges (2026-11-28) · area: tests
