@@ -61,6 +61,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **Test servers get 60 s to start, and two flaky tests are steady** — `npm test` on a loaded box showed ~24 "server did not start" failures after ~15 s. Ten test files carried their own 15 s poll; they now share `test/helpers/wait-server.js` (default 60 s, `TEST_START_TIMEOUT_MS` overrides, the error carries the server log and the time waited). Also fixed: `triage-acct-` was missing from `TMP_PREFIXES` (health-watch cleanup), and the `tts.test.js` queue-order assertion no longer depends on `stat()` timing under load (2026-11-28). Tests: `test/helpers/wait-server.js` users, `test/health-watch.test.js`, `test/tts.test.js` · area: tests
+
 - **Fewer model wakes for waiting** — token audit 2026-11-28 point d (poll-size calls were 10.8% of Claude calls, $105 / 48 h). `scripts/manager-wait.sh` holds a non-urgent batch until `MANAGER_WAIT_MIN_S` (default 300 s) after the previous delivery (urgent lines unchanged, `0` = off); `integrate status` on a request that is not final says to run one `integrate wait` in the background instead of polling (the wait was already a server-held long-poll; client scripts v10), and AGENTS.md says so; a MiniMax session whose calls are mostly polls gets a deferred `<session>:minimax-poll` manager event with its poll share (advisory, nothing stopped). Tests: `test/manager-wait.test.js`, `test/integrate-wait.test.js`, `test/minimax-meter.test.js`, `test/manager-event-filter.test.js` · area: harness
 
 - **Fullscreen terminal scrolling stays in the terminal by default** — Smooth scroll had switched the card to Reader on any upward scroll; the optional setting is now off by default · area: dashboard
