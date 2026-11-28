@@ -382,6 +382,7 @@ body{ display:flex; flex-direction:column; }
 }
 .reader .rd-actions .copy-prompt{ float:none; margin:0; }   /* override the mdbody float-right so the chip + button sit on one row */
 .reader .rd-actions .audio-chip{ flex:0 0 auto; }
+.reader .rd-actions .rd-nosum{ flex:0 0 auto; font-size:12px; color:var(--muted); font-style:italic; }   /* no Summary: block: nothing to play */
 .card-pane.sl-r .cell{ animation: slin-r 220ms ease-out; }
 .card-pane.sl-l .cell{ animation: slin-l 220ms ease-out; }
 /* QF-04: same slide-in feedback when swiping a focused row in list mode. */
