@@ -5613,6 +5613,7 @@ function openRules() {
   });
 }
 $('#rulesBtn').onclick = openRules;
+$('#pagesBtn').onclick = () => { window.open('/p/', '_blank', 'noopener'); };   // shared pages (pages.js): agents' pages, any Claude account
 
 // ----- Session log (⋮ menu): one session's stats, the owner's prompts, its STATUS lines and the manager's events in time order -----
 function openSessionLog(name) {

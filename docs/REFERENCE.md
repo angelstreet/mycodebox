@@ -2165,6 +2165,17 @@ whose reply approves the plan around the question (round 9 `approvedAction`).
   next stop: a logged stop whose STATUS is `done` / `running` / `waiting` (not `needs-*`, `blocked`, `failed`, not a wait that names the ask id or the owner)
   and is later than the ask (30 s) appends `{state:"resolved", via:"session-moved-on", reason, at}` (`resolveMovedOn` in `owner-asks.js`, called from `manager.js`
   through `onAskMovedOn`). **Second trigger, the item acted on**: the session's own integration request reaching `merged` / `deployed` (a real merge, not `alreadyMerged`) calls `onMerged` in `integration-notify.js`, which resolves the session's older open asks with the branch in the reason; the open view, `manager-ask-scan.sh`, the stale list and the ask fold read the ledger, so the item is gone from all of them.
+- **Shared pages** (`pages.js`, `scripts/page`, owner 2026-11-28): claude.ai Artifacts and Claude Docs are private to the Claude account that made
+  them (three logins), so agents publish pages here instead and the Artifact tool is off for the three logins (`"enableArtifact": false` in each
+  `settings.json`). `page publish <file.html|file.md|folder> [--slug s] [--title t] [--asset f ...]` copies the page into
+  `<state>/pages/<slug>/site/` (Markdown rendered to a phone-width HTML page; files the page names by a relative path are copied beside it; a folder
+  is copied whole, dot files and symlinks skipped; 200 files / 50 MB at most) with `meta.json` (`title`, `session`, `account`, `version`, times), and
+  prints `<PUBLIC_URL>/p/<slug>/`. The same slug again replaces the files atomically: the URL stays. `page list`, `page url <slug>`.
+  Routes: `GET /p/` (the list, server-made, no script; More menu > Pages), `GET /p/<slug>/<path>`, `GET /api/pages` (`{ base, pages }`).
+  HTML and SVG there and under `/files/` carry `PAGE_CSP`: `sandbox` without `allow-same-origin` (opaque origin) plus `connect-src 'none'`,
+  `form-action 'none'`, `worker-src 'none'`: scripts run, images / CSS / fonts / CDN scripts load, but no fetch, XHR, WebSocket, beacon or form
+  reaches the dashboard (and a write would also fail the Origin and JSON content-type checks). A page that needs data carries it inline.
+  `POST /api/mockups` with a `/p/<slug>/` url (path or full URL) lints the published file; a needs-owner UI review reads it too (`ui-review-ask.js`).
 - **Mockup-first** (`mockups.js`; `mockupFirst`, `mockupWindowMin` default 10): `POST /api/mockups` (loopback + reporter token) records a feed item
   `kind: mockup` with a link and a deadline ([a session the manager started](#sessions-the-manager-started-owner-2026-11-26): a manager event instead); a stop asking to show the mockup before building is answered "post it to the feed and build"; the owner's
   "Object" (notification button or `POST /api/mockups/<id>/object`) sends the session "The owner objects to the mockup: wait for their notes."

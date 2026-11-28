@@ -3,6 +3,8 @@
 The release note of this repo (owner 2026-11-13). Every merged code change (not docs-only) adds one entry at the top of
 `## Unreleased`; the done-check reads the merged diff for this file (REFERENCE "Closing review"). Entry form: one line,
 
+- **Shared pages: one dashboard link for every agent page** — claude.ai Artifacts are private to the Claude account that made them, and sessions run on three accounts, so the owner had to share each one by hand. `page publish <file.html|file.md|folder> [--slug s]` (`scripts/page`, `pages.js`) copies the page and the files it links to into `<state>/pages/<slug>/` and prints `<dashboard>/p/<slug>/`; publishing the same slug again updates it at the same URL. `/p/` lists the pages (More menu > Pages). Pages (and `/files/` mockups) are served sandboxed with `connect-src 'none'` and `form-action 'none'`: a page's script cannot call the dashboard API. Mockup lint and the UI review read a `/p/<slug>/` URL. Test in `test/pages.test.js` · area: pages
+
 - **The live check only judges restarts it watched** — on its first run the lane's live check marked about 30 older self-deploys "live" although their restarts finished before it existed. A request whose safe-restart waiter exited before the dashboard process started is now recorded `ok: null, unwatched: true`: no manager item, never logged live.
 
 - **`/?usage=1` opens the usage page** — the comments and REFERENCE named `/?usage=1`, but only `/?usage-page=1` was wired; both now open it.

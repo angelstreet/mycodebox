@@ -227,6 +227,7 @@ import { createClaudeRotation } from './claude-rotation.js';
 import { createIntegrationDeploys } from './integration-deploys.js';
 import { createDeployLive } from './deploy-live.js';
 import { createMockups } from './mockups.js';
+import { PAGE_CSP, indexHtml, listPages, resolvePageFile } from './pages.js';
 import { createContextAdvisory, lastFired } from './context-advisory.js';
 import { createRestartCheck } from './restart-check.js';
 import { createVoice, feedActions, stopItem as voiceStopItem, decidedFor as voiceDecidedFor } from './voice.js';
@@ -2999,11 +3000,25 @@ async function handleHttp(req, res) {
       return json(res, 404, { ok: false, error: 'no such session' });
     }
   }
+  if (req.method === 'GET' && (p === '/p' || p === '/p/')) {   // the list of shared pages (pages.js; More menu > Pages)
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': "default-src 'self'; style-src 'unsafe-inline'; script-src 'none'" });
+    return res.end(indexHtml(listPages(STATE_DIR)));
+  }
+  if (req.method === 'GET' && p === '/api/pages') return json(res, 200, { ok: true, base: PUBLIC_URL || null, pages: listPages(STATE_DIR) });
+  if (req.method === 'GET' && p.startsWith('/p/')) {   // a shared page or one of its files: sandboxed, no API access (pages.js)
+    const r = resolvePageFile(STATE_DIR, p.slice(3));
+    if (r.redirect) { res.writeHead(301, { location: r.redirect }); return res.end(); }
+    if (!r.file) { res.writeHead(r.status, { 'content-type': 'text/plain; charset=utf-8' }); return res.end(r.error); }
+    const h = { 'content-type': r.type, 'content-length': r.size, 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff' };
+    if (r.sandbox) h['content-security-policy'] = PAGE_CSP;
+    res.writeHead(200, h);
+    return createReadStream(r.file).on('error', () => { try { res.end(); } catch {} }).pipe(res);
+  }
   if (req.method === 'GET' && p.startsWith('/files/')) {   // an agent's picture / mockup for the reader (files-route.js)
     const r = resolveServedFile(p.slice('/files'.length), { home: homedir() });
     if (!r.file) { res.writeHead(r.status, { 'content-type': 'text/plain; charset=utf-8' }); return res.end(r.error); }
     const h = { 'content-type': r.type, 'content-length': r.size, 'cache-control': 'private, max-age=300', 'x-content-type-options': 'nosniff' };
-    if (r.sandbox) h['content-security-policy'] = 'sandbox allow-scripts allow-popups allow-forms';
+    if (r.sandbox) h['content-security-policy'] = PAGE_CSP;   // the same box as a shared page: no fetch / form to the API
     res.writeHead(200, h);
     return createReadStream(r.file).on('error', () => { try { res.end(); } catch {} }).pipe(res);
   }
