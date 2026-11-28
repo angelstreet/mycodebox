@@ -3,6 +3,10 @@
 The release note of this repo (owner 2026-11-13). Every merged code change (not docs-only) adds one entry at the top of
 `## Unreleased`; the done-check reads the merged diff for this file (REFERENCE "Closing review"). Entry form: one line,
 
+- **The live check only judges restarts it watched** — on its first run the lane's live check marked about 30 older self-deploys "live" although their restarts finished before it existed. A request whose safe-restart waiter exited before the dashboard process started is now recorded `ok: null, unwatched: true`: no manager item, never logged live.
+
+- **`/?usage=1` opens the usage page** — the comments and REFERENCE named `/?usage=1`, but only `/?usage-page=1` was wired; both now open it.
+
 - **"Deployed live" is checked after the restart** — the lane reported "deployed live, restart scheduled" before any restart ran and nobody looked afterwards, so two usage fixes ran nowhere for hours. Once a self-deploy's safe-restart waiter exits (or the waiter it was coalesced with), the dashboard (`restart-check.js`, every 2 min) checks that each unit running the changed code started after the restart was scheduled: `ghosty-sessions` always, `ghosty-usage` when the tailer's paths changed (a unit not installed is skipped). A failed restart or a unit still on old code becomes one high manager item `integration:<id>:not-live`; each request is checked once (`integration/restart-check.json`).
 
 - **The usage page says when its numbers come from older code** — the usage tailer stamps every summary with `writer` (`pid`, `startedAt`, `sha`, `usage/code-version.js`), and `GET /api/usage` adds `writer.behind`: true when the tailer's own files changed between its commit and the live checkout. The usage page then shows a short amber note (the tailer has not restarted since its code changed).

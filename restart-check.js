@@ -30,9 +30,11 @@ export function verdict({ exitCode, starts, restartAt }) {
 }
 
 // listDeployed() -> lane.list({ state: 'deployed' }) ; getReq(id) -> lane.get(id) ; changedPaths(live, from, to) -> [paths] ;
-// unitStartMs(unit) -> ms | null ; readExit(file) -> number | null (null = waiter still running / no file).
+// unitStartMs(unit) -> ms | null ; readExit(file) -> { code, at } | number | null (null = waiter still running / no file; at = the
+// exit file's mtime). startedAt = this process start (ms): a waiter that exited before it ran its restart unwatched, so the
+// request is recorded `ok: null, unwatched: true` (no item, never logged live) instead of being judged after the fact.
 export function createRestartCheck({ stateDir, listDeployed, getReq = () => null, changedPaths, unitStartMs, readExit, managerItem = () => {},
-  now = Date.now, fs = fsp, log = console } = {}) {
+  startedAt = null, now = Date.now, fs = fsp, log = console } = {}) {
   const file = join(stateDir, 'integration', FILE_NAME);
   let done = null, busy = false;
   async function load() { try { const j = JSON.parse(await fs.readFile(file, 'utf8')); done = j && typeof j === 'object' ? j : {}; } catch { done = {}; } }
@@ -48,8 +50,14 @@ export function createRestartCheck({ stateDir, listDeployed, getReq = () => null
         if (!sd || done[r.id] || !Number.isFinite(at) || t - at > MAX_AGE_MS) continue;
         if (sd.restart !== 'scheduled' && sd.restart !== 'coalesced') continue;
         const exitFile = sd.restart === 'scheduled' ? sd.exit : getReq(sd.restartWaiter)?.selfDeploy?.exit;
-        const exitCode = exitFile ? await readExit(exitFile) : null;
-        if (exitCode === null) continue;                                  // the waiter has not finished: look again next tick
+        const ex = exitFile ? await readExit(exitFile) : null;
+        const exitCode = ex !== null && typeof ex === 'object' ? ex.code : ex, exitAt = ex !== null && typeof ex === 'object' ? ex.at : null;
+        if (!Number.isInteger(exitCode)) continue;                         // the waiter has not finished: look again next tick
+        if (Number.isFinite(startedAt) && Number.isFinite(exitAt) && exitAt < startedAt) {
+          done[r.id] = { at: t, ok: null, unwatched: true };               // finished before this process: not watched, not judged
+          out.push({ id: r.id, ok: null, unwatched: true, units: [], reason: 'restart finished before this check started' });
+          continue;
+        }
         let changed = [];
         try { changed = await changedPaths(sd.live, sd.prevSha, sd.expectedSha || sd.newSha); } catch { /* unknown: the base units only */ }
         const starts = {};
