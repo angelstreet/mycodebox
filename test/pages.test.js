@@ -11,7 +11,7 @@ import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { tmp } from './helpers-tmp.js';
 import { waitServer } from './helpers/wait-server.js';
-import { PAGE_CSP, indexHtml, listPages, localRefs, markdownToHtml, publishPage, resolvePageFile, slugify } from '../pages.js';
+import { PAGE_CSP, accountOf, indexHtml, listPages, localRefs, markdownToHtml, publishPage, resolvePageFile, slugify } from '../pages.js';
 import { loadMockupHtml } from '../mockups.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -64,6 +64,7 @@ test('publishPage: html with its files, update keeps the URL, md is rendered, tr
   assert.equal(resolvePageFile(state, 'wk/%2e%2e/%2e%2e/meta.json').status, 403);
   assert.equal(resolvePageFile(state, 'nope/').status, 404);
   assert.doesNotMatch(indexHtml([{ slug: 'a', title: '<b>x</b>', updatedAt: 0 }]), /<b>x/);
+  assert.match(indexHtml([{ slug: 'a', title: 'A', session: 's1', account: 'personal', updatedAt: 0 }], { now: 0 }), /<span class="m">s1 · personal · /);
 });
 
 test('publishPage: a folder is copied whole, dot files and symlinks skipped', () => {
@@ -84,6 +85,13 @@ test('loadMockupHtml reads a shared page by path or full URL (mockup lint)', asy
   publishPage(state, path.join(src, 'm.html'));
   assert.equal(await loadMockupHtml('/p/m/', { stateDir: state }), '<h1>mock</h1>');
   assert.equal(await loadMockupHtml('https://box.example.ts.net/p/m', { stateDir: state }), '<h1>mock</h1>');
+});
+
+test('accountOf: the Claude login a page came from', () => {
+  assert.equal(accountOf({ CLAUDE_CONFIG_DIR: '/h/.claude-accounts/team2/' }), 'team2');
+  assert.equal(accountOf({ CLAUDE_CONFIG_DIR: '/h/.claude' }), 'personal');
+  assert.equal(accountOf({ CLAUDECODE: '1' }), 'personal');
+  assert.equal(accountOf({}), '');
 });
 
 test('the page command publishes and prints the URL', () => {

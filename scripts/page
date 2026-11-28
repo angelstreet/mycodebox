@@ -11,8 +11,8 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, join } from 'node:path';
-import { listPages, publishPage, readMeta } from '../pages.js';
+import { join } from 'node:path';
+import { accountOf, listPages, publishPage, readMeta } from '../pages.js';
 
 const STATE_DIR = process.env.GHOSTY_STATE_DIR || join(homedir(), '.local', 'state', 'ghosty');
 const die = (m, code = 1) => { process.stderr.write(`page: ${m}\n`); process.exit(code); };
@@ -34,7 +34,7 @@ function sessionName() {
   if (process.env.TMUX) { try { return execFileSync('tmux', ['display-message', '-p', '#S'], { encoding: 'utf8' }).trim(); } catch { /* not in tmux */ } }
   return process.env.FOUND_BUG_SESSION || '';
 }
-const account = () => (process.env.CLAUDE_CONFIG_DIR ? basename(process.env.CLAUDE_CONFIG_DIR) : '');
+const account = () => accountOf(process.env);
 
 const [cmd, ...args] = process.argv.slice(2);
 if (!cmd || cmd === '--help' || cmd === '-h') { console.log(USAGE); process.exit(cmd ? 0 : 2); }

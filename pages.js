@@ -128,6 +128,9 @@ export function listPages(stateDir) {
 }
 
 // src: a .html / .htm / .md file, or a folder with index.html (or index.md). -> { slug, created, files, meta }. Throws a plain Error.
+// The Claude login a page came from: team1 / team2 from CLAUDE_CONFIG_DIR; a Claude Code session without one is on the personal login.
+export const accountOf = (env) => (env.CLAUDE_CONFIG_DIR ? basename(env.CLAUDE_CONFIG_DIR.replace(/\/+$/, '')).replace(/^\.claude$/, 'personal') : env.CLAUDECODE ? 'personal' : '');
+
 export function publishPage(stateDir, src, { slug, title, session = '', account = '', assets = [], now = Date.now() } = {}) {
   const abs = resolve(src);
   let st; try { st = statSync(abs); } catch { throw new Error(`no such file: ${src}`); }
@@ -214,7 +217,7 @@ export function resolvePageFile(stateDir, rest) {
 const ago = (ms, now) => { const m = Math.round((now - ms) / 60e3); return m < 1 ? 'now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`; };
 // The list at /p/: server-made, titles escaped, no script.
 export function indexHtml(pages, { now = Date.now() } = {}) {
-  const rows = pages.map((m) => `<li><a href="/p/${esc(m.slug)}/"><span class="t">${esc(m.title || m.slug)}</span><span class="m">${esc([m.session, ago(m.updatedAt, now), m.version > 1 ? `v${m.version}` : ''].filter(Boolean).join(' · '))}</span></a></li>`).join('\n');
+  const rows = pages.map((m) => `<li><a href="/p/${esc(m.slug)}/"><span class="t">${esc(m.title || m.slug)}</span><span class="m">${esc([m.session, m.account, ago(m.updatedAt, now), m.version > 1 ? `v${m.version}` : ''].filter(Boolean).join(' · '))}</span></a></li>`).join('\n');
   return `<!doctype html>\n<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pages</title>
 <style>${PAGE_STYLE}
 ul{list-style:none;padding:0;margin:0}li a{display:flex;flex-direction:column;gap:2px;padding:12px 14px;border:1px solid var(--line);border-radius:10px;margin-bottom:8px;text-decoration:none;color:var(--fg);background:var(--card)}

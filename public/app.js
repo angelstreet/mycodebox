@@ -1062,6 +1062,8 @@ function connectSession(session) {
   state.ws.set(session, ws);
 }
 
+function statusRetryDelay(tries) { return Math.min(15000, 1000 * Math.pow(1.6, Math.max(0, tries - 1))); }
+
 function connectStatus() {
   if (state.statusWs && (state.statusWs.readyState === 0 || state.statusWs.readyState === 1)) return;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -1096,7 +1098,9 @@ function connectStatus() {
       }
     } catch {}
   };
-  ws.onclose = () => { state.statusWs = null; setTimeout(connectStatus, 2000); };
+  ws.onopen = () => { state.statusTries = 0; };
+  // back off while the server is away (a restart, a deploy): 1 s, 1.6 s, 2.6 s ... up to 15 s, like the session sockets
+  ws.onclose = () => { state.statusWs = null; setTimeout(connectStatus, statusRetryDelay(state.statusTries = (state.statusTries || 0) + 1)); };
   ws.onerror = () => { try { ws.close(); } catch {} };
   state.statusWs = ws;
 }
