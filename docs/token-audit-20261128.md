@@ -149,7 +149,7 @@ Wait loops, checked in the transcripts: `manager-wait.sh` runs went from about 1
 | Subagent watch, context / subagent / manager-restart advisories, advisory feed fixes | merged; `advisories` in `/api/usage` shows the last fire per kind (subagent advisory has not fired: its only finding, `userinterface-audit`, is not a live session, by design) |
 | Usage page phone fixes, `ui-overflow` daily check | merged |
 | `integrate status` polling | already answered in the tool: a non-final status prints "do not poll status, run ONE integrate wait in the background" |
-| Loop detector counted commands older than the window (cached file items had no time) | fixed in this round (`usage/loops.js`, test `test/usage-loops.test.js`) |
+| Loop detector inflated counts: cached file items had no time, and `api-request-blob` lines (request snapshots without a timestamp) were read as turns, so they bypassed the window (manager transcript: 81 waits listed, 48 real) | fixed in this round, two merges (`usage/loops.js`, tests `test/usage-loops.test.js`); the `loops` list of `/api/usage` before 28 Nov 14:00 UTC overstates repeats |
 | 1 h cache TTL (proposal 5) | switch built (`cache-ttl.js`, default off); measured below; owner question with a proposed answer |
 | Manager restarts at 09:16 and 09:45 | why not: account rotation at the weekly limit (owner rule 2026-11-06), not a harness loop |
 | `userinterface-audit` / `mcp-server-audit` prompts, the task263 night overseer, the coc-daily / rtsp nightly sleeps, the codex sessions' polling | why not: not harness code; started by hand or by the session owners; token rules handed to them (`~/handovers/*token-rules-20261128.md`) |

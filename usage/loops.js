@@ -37,6 +37,9 @@ export function itemsOfLine(line, sinceMs = 0, withAt = false) {
   const isTool = line.includes('"name":"Bash"'), isUser = line.includes('"role":"user"');
   if (!isTool && !isUser) return [];
   let o; try { o = JSON.parse(line); } catch { return []; }
+  // only real turns: Claude Code also writes `api-request-blob` lines (request snapshots, no timestamp) that repeat earlier
+  // messages, which slipped past the window and doubled loop counts (a manager transcript: 81 waits counted, 48 real in 48 h)
+  if (o.type && o.type !== 'user' && o.type !== 'assistant') return [];
   if (sinceMs && o.timestamp && Date.parse(o.timestamp) < sinceMs) return [];
   const content = o?.message?.content, out = [], at = withAt && o.timestamp ? Date.parse(o.timestamp) : NaN;
   if (o?.message?.role === 'assistant' && Array.isArray(content)) {

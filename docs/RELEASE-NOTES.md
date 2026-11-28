@@ -3,6 +3,8 @@
 The release note of this repo (owner 2026-11-13). Every merged code change (not docs-only) adds one entry at the top of
 `## Unreleased`; the done-check reads the merged diff for this file (REFERENCE "Closing review"). Entry form: one line,
 
+- **Loop findings count real turns only** — the usage loop detector also read Claude Code's `api-request-blob` lines (request snapshots with no timestamp that repeat earlier turns), so they slipped past the 48 h window and inflated counts (a manager transcript: 81 `manager-wait.sh` runs listed, 48 real in the window; the earlier "73 inside the window" figure counted them too). Only `user` / `assistant` lines count now (`usage/loops.js`, test in `test/usage-loops.test.js`) · area: usage
+
 - **Loop findings follow the 48 h window** — the usage loop detector cached each transcript's commands without their time, so a session whose transcript stopped growing kept counting commands older than 48 h until the file's mtime left the window (seen while re-measuring: a manager transcript last written 28 Nov 00:10 still listed 81 waits, 73 of them inside the window). Cached items now carry their time and are cut to the window on every pass (`usage/loops.js`, test in `test/usage-loops.test.js`) · area: usage
 
 - **Usage & cost is wide and centered, table cells no longer overlap** — the full usage page sat in the 560px sheet; it now opens up to 1180px wide, centered (`.sheet.uv-sheet` in `public/style.css`), and the agent name / plan label in the "Where it goes" table shrink with an ellipsis instead of running over the Tokens column.

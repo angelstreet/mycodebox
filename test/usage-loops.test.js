@@ -62,3 +62,11 @@ test('scanner: a cached file that stopped growing is re-cut to the moving window
   assert.deepEqual(await scan(), []);
   assert.equal((await createLoopScanner({ claudeDir: dir, now: () => t, opts: { windowH: 48, minCommand: 4 } })())[0]?.count, 4);
 });
+
+test('itemsOfLine: api-request-blob snapshots (no timestamp, repeat earlier turns) are not counted', () => {
+  const blob = JSON.stringify({ type: 'api-request-blob', hash: 'x', sessionId: 's', message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Bash', input: { command: 'scripts/manager-wait.sh' } }] } });
+  assert.deepEqual(itemsOfLine(blob, Date.parse('2026-11-28')), []);
+  assert.deepEqual(itemsOfLine(blob), []);
+  const real = JSON.stringify({ type: 'assistant', timestamp: '2026-11-28T01:00:00Z', message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Bash', input: { command: 'scripts/manager-wait.sh' } }] } });
+  assert.equal(itemsOfLine(real, Date.parse('2026-11-28')).length, 1);
+});
