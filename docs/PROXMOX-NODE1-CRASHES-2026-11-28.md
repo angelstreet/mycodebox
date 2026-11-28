@@ -56,9 +56,10 @@ no BMC/IPMI log is exposed and the CPU reset-reason line is not logged on this Z
 - Do **not** add a systemd `RuntimeWatchdogSec`: it would race `watchdog-mux` for the device at boot and break HA fencing.
 
 Owner-only items (credential, money, physical):
-1. **Hetzner hardware ticket of 2026-11-17** ("Server - Not Stable", full CPU/RAM/PSU/board check, already sent): record the
-   answer and test date in the register; if nothing was tested, chase it with rows 13 and 14. Ask for a BIOS newer than L0.34
-   and Power Supply Idle Control = Typical Current Idle. A replacement or server swap is a money decision.
+1. **Hetzner hardware check (answer to the 2026-11-17 ticket, pasted 2026-11-28): all OK**: CPU, 4 DIMMs, 2 NVMe (SMART and
+   error counters), NIC, stress test, system log. It has no power supply or board power line, so the power-loss suspect is
+   untested. Next: ask Hetzner, on the same ticket, for a power supply replacement or test, or a move to another server
+   (money decision). Full report: crash register, `PROXMOX_NODE_DOWN.md`.
 2. **Watchdog test**: with approval, in a deploy window, trigger the watchdog once on purpose to prove it can reset this board.
 
 ## Applied, then removed, 2026-11-28 (no reboot)
