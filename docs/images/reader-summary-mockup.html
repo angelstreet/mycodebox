@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reader summary mockup</title>
+<style>
+  :root{
+    --bg:#191919; --bg-2:#1f1f1f; --bg-3:#2b2b2a; --line:rgba(255,255,255,.08); --line-2:rgba(255,255,255,.15);
+    --ink:#efefef; --ink-2:#aeaca3; --ink-3:#85837b; --accent:#e89a4a;
+    --working:#3fcf7a; --waiting:#ff5f5f; --done:#6aa8ff; --manager:#4fd6c8; --deploy:#a070ff;
+  }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:#0e0e0e; color:var(--ink); font:15px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif; padding:16px; }
+  .row{ display:flex; gap:24px; flex-wrap:wrap; justify-content:center; }
+  .frame{ width:390px; max-width:100%; }
+  .tag{ color:var(--ink-3); font-size:12px; margin:0 0 6px 4px; letter-spacing:.04em; text-transform:uppercase; }
+  .phone{ width:100%; height:780px; background:var(--bg); border:1px solid var(--line-2); border-radius:22px; overflow:hidden; display:flex; flex-direction:column; }
+  .hd{ display:flex; align-items:center; gap:8px; padding:10px 14px; border-bottom:1px solid var(--line); font-size:14px; }
+  .dot{ width:9px; height:9px; border-radius:50%; }
+  .hd .name{ font-weight:600; }
+  .hd .agent{ color:#d97757; font-size:12px; }
+  .hd .sp{ flex:1; }
+  .seg{ display:flex; background:var(--bg-2); border-radius:8px; padding:2px; font-size:12px; }
+  .seg span{ padding:3px 8px; border-radius:6px; color:var(--ink-3); }
+  .seg span.on{ background:var(--bg-3); color:var(--accent); }
+  .rd{ flex:1; overflow:hidden; padding:12px 14px; display:flex; flex-direction:column; gap:10px; }
+  .me{ background:#1c3054; border-radius:10px; padding:8px 10px; font-size:14px; }
+  .p{ margin:0; font-size:14px; color:var(--ink); }
+  .work{ color:var(--ink-3); font-size:12.5px; border-left:2px solid var(--line-2); padding-left:8px; }
+  .ai{ color:var(--ink-3); font-size:12.5px; background:var(--bg-2); border-radius:8px; padding:5px 8px; }
+  .ai b{ color:var(--ink-2); font-weight:600; }
+  .sum{ background:var(--bg-2); border:1px solid var(--line-2); border-radius:12px; padding:10px 12px; }
+  .sum h4{ margin:0 0 6px; font-size:12px; color:var(--ink-3); text-transform:uppercase; letter-spacing:.06em; display:flex; align-items:center; gap:8px; }
+  .sum h4 .sp{ flex:1; }
+  .sum ul{ margin:0; padding-left:18px; font-size:14px; }
+  .sum li{ margin:2px 0; }
+  .play{ display:inline-flex; align-items:center; gap:4px; border:1px solid var(--line-2); border-radius:999px; padding:2px 9px; color:var(--ink); font-size:12px; text-transform:none; letter-spacing:0; }
+  .muted{ color:var(--ink-3); font-size:13px; font-style:italic; }
+  .st{ border-top:1px solid var(--line-2); padding:10px 14px 14px; background:var(--bg); }
+  .st .w{ display:inline-block; font-weight:700; font-size:13px; padding:2px 10px; border-radius:999px; color:#111; }
+  .st .t{ font-size:14px; margin-top:6px; }
+  .st .more{ color:var(--ink-3); font-size:12px; margin-top:4px; }
+</style>
+</head>
+<body>
+<div class="row">
+  <div class="frame">
+    <p class="tag">Proposed · with summary</p>
+    <div class="phone">
+      <div class="hd"><span class="dot" style="background:var(--done)"></span><span class="name">fix-resume</span><span class="agent">claude</span><span class="sp"></span>
+        <span class="seg"><span class="on">Brief</span><span>All</span><span>&gt;_</span></span></div>
+      <div class="rd">
+        <div class="me">Resume fails on parked sessions. Fix it.</div>
+        <div class="work">▸ 23 steps</div>
+        <div class="ai"><b>Lane</b> · tests red, 1 failing</div>
+        <div class="work">▸ 4 steps</div>
+        <div class="ai"><b>Lane</b> · merged and deployed</div>
+        <p class="p">Resume works again for parked sessions.</p>
+        <div class="sum">
+          <h4>Summary<span class="sp"></span><span class="play">▶ Play</span></h4>
+          <ul>
+            <li>Resume failed when the folder was gone.</li>
+            <li>390 parked sessions had that problem.</li>
+            <li>Resume now rebuilds the folder first.</li>
+            <li>Merged and live since 14:20.</li>
+            <li>Please try Resume on one parked session.</li>
+          </ul>
+        </div>
+      </div>
+      <div class="st"><span class="w" style="background:var(--done)">done</span>
+        <div class="t">Resume fix merged and deployed</div>
+        <div class="more">▸ checks and evidence</div></div>
+    </div>
+  </div>
+  <div class="frame">
+    <p class="tag">Older session · no summary</p>
+    <div class="phone">
+      <div class="hd"><span class="dot" style="background:var(--manager)"></span><span class="name">token-audit</span><span class="agent" style="color:#7aa7ff">codex</span><span class="sp"></span>
+        <span class="seg"><span class="on">Brief</span><span>All</span><span>&gt;_</span></span></div>
+      <div class="rd">
+        <div class="me">Audit token use per account.</div>
+        <div class="work">▸ 41 steps</div>
+        <p class="p">The audit table is in the docs folder.</p>
+        <p class="p">Two accounts use most of the plan.</p>
+        <div class="sum">
+          <h4>Summary<span class="sp"></span><span class="play">▶ Play status</span></h4>
+          <p class="muted">No summary in this reply.</p>
+        </div>
+      </div>
+      <div class="st"><span class="w" style="background:var(--manager)">needs-manager</span>
+        <div class="t">Pick the cap for the night account</div>
+        <div class="more">▸ details</div></div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
