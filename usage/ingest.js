@@ -20,6 +20,9 @@ import { createJudge } from './judge.js';
 import { parseManagerLine } from './manager-parse.js';
 import { createSessionHistory } from '../session-history.js';
 import { buildScorecard, langfuseScoreEvents, scorecardTraceId, foldRuns } from '../scorecard.js';
+import { createLoopScanner } from './loops.js';
+import { buildWaste, burnVsLimit, wasteLine, readLimits, foldAccounts } from './waste.js';
+import { accountOfPid } from '../claude-accounts.js';
 
 const exec = promisify(execFile);
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -45,6 +48,7 @@ export function defaults(env = process.env) {
     offsetsFile: join(stateDir, 'usage-offsets.json'),
     ledgerFile: join(stateDir, 'usage-ledger.jsonl'),
     summaryFile: join(stateDir, 'usage-summary.json'),
+    accountsFile: join(stateDir, 'session-accounts.json'),   // sessionId -> [{account, at}]: which Claude account a session ran on (read from the process env while it lives)
     evalStateFile: join(stateDir, 'lfeval-state.json'),   // scores + dataset the eval sync already sent (its own file: the tailer's offsets are never touched)
     evalEnabled: env.LFEVAL !== '0',
     judgeStateFile: join(stateDir, 'lfeval-judge.json'),
@@ -687,9 +691,48 @@ export function createIngester(cfg, hooks = {}) {
     } catch (e) { console.error('[usage] eval sync:', e.message); return null; }
   }
 
+  // Live Claude sessions -> account (the process env, GHOSTY_CLAUDE_ACCOUNT), folded into the persisted history.
+  async function scanAccounts() {
+    let map = {};
+    try { map = JSON.parse(await fs.readFile(cfg.accountsFile, 'utf8')); } catch { /* first run */ }
+    const seen = {};
+    try {
+      for (const n of await fs.readdir(cfg.claudeSessionsDir)) {
+        if (!n.endsWith('.json')) continue;
+        try { const j = JSON.parse(await fs.readFile(join(cfg.claudeSessionsDir, n), 'utf8')); if (j.sessionId && j.pid) seen[j.sessionId] = accountOfPid(j.pid); } catch { /* gone */ }
+      }
+    } catch { /* no dir */ }
+    const next = foldAccounts(map, seen, cfg.now());
+    if (JSON.stringify(next) !== JSON.stringify(map)) await atomicWrite(cfg.accountsFile, JSON.stringify(next));
+    return next;
+  }
+
+  // Test / retest and wait loops from the transcripts, at most every 10 minutes (the scan re-reads only files that grew).
+  let loopScan = null, loopAt = 0, loopCache = [];
+  async function loopsNow(records) {
+    if (cfg.loopsOff) return [];
+    if (!loopScan) loopScan = createLoopScanner({ claudeDir: cfg.claudeDir, now: cfg.now });
+    if (cfg.now() - loopAt > 10 * 60e3 || !loopAt) { loopCache = await loopScan(); loopAt = cfg.now(); }
+    const label = new Map();
+    for (const r of records) if (r.agent === 'claude' && r.label) label.set(r.session, r.label);
+    return loopCache.map((l) => ({ ...l, label: label.get(l.session) || l.session.slice(0, 8) }));
+  }
+
   async function summary() {
     if (!state) await init(false);
-    const s = buildSummary([...byId.values()], cfg.now(), cfg.backfillDays);
+    const now = cfg.now(), records = [...byId.values()];
+    const s = buildSummary(records, now, cfg.backfillDays);
+    try {
+      const map = await scanAccounts();
+      const w = buildWaste(records, now, {}, map);
+      s.waste = w; s.perAccount = w.perAccount;
+      s.burn = burnVsLimit(await readLimits(cfg.stateDir, fs, join), w.hourly, now);
+      s.loops = await loopsNow(records);
+      s.wasteLine = wasteLine(w, s.loops);
+      // the waste detectors feed the outlier list: the usage view marks these sessions
+      const seen = new Set(s.outliers.map((o) => o.id));
+      for (const f of w.findings) if (f.id && !seen.has(f.id) && f.kind !== 'cache-churn' && f.kind !== 'subagent-heavy') { seen.add(f.id); s.outliers.push({ session: f.session, id: f.id, agent: f.agent, kind: f.kind, costToday: f.cost, reason: `${f.kind}: ${f.detail}` }); }
+    } catch (e) { console.error('[usage] waste:', e.message); }
     await atomicWrite(cfg.summaryFile, JSON.stringify(s, null, 1));
     return s;
   }
