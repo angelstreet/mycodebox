@@ -1595,6 +1595,35 @@ The `session:` tag is the tmux session name (matched from the pane's current pat
   session card when running, otherwise the stop's text.
 - Tests: `test/jev-decisions.test.js`.
 
+### Token audit fixes: context advisory and 1-hour cache TTL (2026-11-28)
+
+From `docs/token-audit-20261128.md`, savings #2 and #5 (manager decisions).
+
+**Context advisory (#2).** Every usage tick (30 s) `context-advisory.js` reads the `high-avg-context` findings of
+`usage/waste.js` (average context over 300k per call over at least 30 calls, `/api/usage` `waste.findings`; the detector is
+not redone) and writes one `<session>:context-advisory` event (priority low) to `manager-events.jsonl` per finding id (the
+session's trace id), for live sessions only, then nothing for that id for 24 h (`<state>/context-advisory.json`). The event
+says it is advisory, and whether the session was started by the manager, the owner (or a non-manager session), or unknown
+(`manager-owned.js`, `sessions.json` startedBy, session history); the field `advisory` carries `{findingId, avgContext,
+startedBy, account, agent}`. The rule in the text: the manager restarts only a session it started itself, at a natural stop,
+never an owner-started session. `scripts/manager-event-filter.sh` lets it through deferred (`d: true`, never urgent): it rides
+with the next wake. Tests: `test/context-advisory.test.js`, `test/manager-event-filter.test.js`.
+
+**1-hour prompt cache TTL (#5), default off.** For Claude sessions whose turns are more than 5 minutes apart (the 5-minute
+cache expires and every turn re-writes the context). The Claude Code switches, verified in the installed Claude Code 2.1.332
+binary: `CLAUDE_CODE_PROMPT_CACHE_TTL=1h` (main conversation; unset = automatic, 1 h on a subscription within its limits,
+5 min on an API key, Bedrock, Vertex) and `ENABLE_PROMPT_CACHING_1H=1` (subagents and helpers). `cache-ttl.js` exports both
+for a selected session, nothing otherwise:
+
+- env `CBSESSION_CACHE_1H=1` when running `cbsession` (that session), or in the ghosty service env (every V2 Claude run);
+- `<GHOSTY_STATE_DIR>/cache-1h.json`: `{"sessions": ["<tmux session name or V2 task id>"]}` (`"all": true` = every Claude session).
+
+`scripts/cbsession` (claude provider) appends the `export` lines to the launch file; `orchestration/v2-runtime.js` passes them
+as the run's explicit env to the V2 Claude adapter (`o.env`, which `buildEnv` keeps). 1-hour cache writes are billed higher
+than 5-minute ones: turn it on per session and compare `cache_write_1h` / `cache_read` in the usage ledger before widening.
+Note: subscription sessions may already get 1 h automatically (Claude Code's own default); the switch matters most on
+API-key billing (`-b NAME`). Tests: `test/cache-ttl.test.js`.
+
 ### Usage view (UI)
 
 The bar-chart icon in the topbar (next to the robot) opens **Usage - API-equivalent**: tabs **Today** (UTC day)

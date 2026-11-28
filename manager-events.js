@@ -19,6 +19,7 @@
 //   <a>+<b>:overlap                          → kind = 'overlap', items [paths], overlap {pair,paths,destructive,firstSeen} (overlap-guard.js: two sessions change the same file; the manager picks the area owner)
 //   <session>:no-progress                    → kind = 'no-progress', items [evidence], progress {kind, workingMin, ...} (progress-watch.js: a working session with no trace of work, or a repeated tool call)
 //   <checkout>:shared-checkout-dirty         → kind = 'shared-checkout-dirty', items [paths], sharedCheckout {checkout,reasons,sig,files,sessions} (shared-checkout-guard.js: someone works in a shared checkout instead of a worktree)
+//   <session>:context-advisory               → kind = 'context-advisory', advisory {findingId,avgContext,startedBy,...} (context-advisory.js: a high-avg-context waste finding; advisory, priority low)
 //   openrouter:credits                           → kind = 'credits'
 //   manager-agent:<tag|title>                    → skipped (the agent's own POST /api/alert)
 //   anything else                                → kind = 'other'
@@ -139,6 +140,7 @@ export function createManagerEvents({ stateDir, managerSessions = () => [], fs: 
     if (cls.kind === 'overlap' && event.overlap && typeof event.overlap === 'object') rec.overlap = event.overlap;
     if (cls.kind === 'shared-checkout-dirty' && event.sharedCheckout && typeof event.sharedCheckout === 'object') rec.sharedCheckout = event.sharedCheckout;
     if (cls.kind === 'bug' && event.bug && typeof event.bug === 'object') rec.bug = event.bug;
+    if (cls.kind === 'context-advisory' && event.advisory && typeof event.advisory === 'object') rec.advisory = event.advisory;
     if (cls.kind === 'no-progress' && event.progress && typeof event.progress === 'object') rec.progress = event.progress;
     if (typeof event.handled === 'string' && event.handled) rec.handled = event.handled.slice(0, 40);   // 'session': already delivered to the session (integration-notify.js); the wake filter skips it
     rec.title = typeof event.title === 'string' ? event.title : '';
