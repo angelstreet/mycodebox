@@ -1340,6 +1340,17 @@ button.prio{ cursor:pointer; }
 .qw.warn .qbar i{ background:var(--accent); } .qw.crit .qbar i{ background:var(--waiting); }
 .qplan .dim, .qh .dim, .qw .dim{ color:var(--ink-3); font-size:11px; }
 .qw.na > span:last-child{ flex:1; min-width:0; }
+/* quota popup: a centred dialog (owner 2026-11-28) with API credit per org, every Claude account, then the other plans */
+.sheet-back.center .sheet.quota-sheet{ max-height:min(88dvh, 780px); }
+.sheet.quota-sheet .sheet-body{ overflow-y:auto; }
+.qsec{ padding:10px 14px 2px; font-size:10.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-3); }
+.qacc.on{ box-shadow:inset 3px 0 0 var(--accent); }
+.qacc.out .qh b{ color:var(--waiting); }
+.qon{ color:var(--accent); font-size:11px; font-weight:600; }
+.qcredit .qw > span:nth-child(3){ min-width:64px; }
+.quota-sheet .qw.warn, .quota-sheet .mnote.warn{ margin:0; line-height:1.4; }
+.quota-sheet .qw.warn{ font-size:12px; }
+.quota-sheet .mnote.warn{ font-size:11px; }
 
 /* usage view + cost chip (TASK-44 phase 3) */
 .utabs{ display:flex; gap:8px; }

@@ -1,0 +1,10 @@
+{
+  "data": [
+    { "starting_at": "2026-11-01T00:00:00Z", "ending_at": "2026-11-02T00:00:00Z",
+      "results": [ { "currency": "USD", "amount": "250.5", "cost_type": "tokens", "description": "Claude Opus usage" },
+                   { "currency": "USD", "amount": "49.5", "cost_type": "web_search" } ] },
+    { "starting_at": "2026-11-02T00:00:00Z", "ending_at": "2026-11-03T00:00:00Z", "results": [] }
+  ],
+  "has_more": true,
+  "next_page": "page_2"
+}

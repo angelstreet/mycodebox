@@ -226,3 +226,27 @@ test('false stop: a limit stop seen in a pane does not exhaust an account whose 
     assert.equal(m.view().accounts.find((a) => a.id === 'team1').exhausted, false);
   } finally { await rm(home, { recursive: true, force: true }); }
 });
+
+test('view: three accounts each read from their own rate file, the active one flagged, a limit mark carried with until + reason', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'cacct-v-'));
+  try {
+    const file = join(dir, 'claude-accounts.json');
+    const until = NOW + 2 * 3600e3;
+    await writeFile(file, JSON.stringify({ auto: false, active: 'team2',
+      accounts: [{ id: 'default', label: 'Default (~/.claude)' }, { id: 'team1', label: 'Team A', configDir: join(dir, 'c1') }, { id: 'team2', label: 'Team B', configDir: join(dir, 'c2') }],
+      marks: { team1: { until, reason: 'weekly limit', at: NOW } } }));
+    await writeFile(rateFile(dir, 'default'), JSON.stringify(rl(5, 40)));
+    await writeFile(rateFile(dir, 'team1'), JSON.stringify({ ...rl(100, 100), at: NOW - 60e3 }));
+    await writeFile(rateFile(dir, 'team2'), JSON.stringify(rl(22, 61)));
+    const ca = createClaudeAccounts({ file, stateDir: dir, home: dir, now: () => NOW });
+    await ca.refresh();
+    const v = ca.view();
+    assert.deepEqual(v.accounts.map((a) => a.id), ['default', 'team1', 'team2']);
+    assert.deepEqual(v.accounts.map((a) => a.active), [false, false, true]);
+    assert.deepEqual(v.accounts.map((a) => a.windows.map((w) => [w.name, w.usedPercent])), [[['5h', 5], ['week', 40]], [['5h', 100], ['week', 100]], [['5h', 22], ['week', 61]]]);
+    assert.deepEqual({ until: v.accounts[1].mark.until, reason: v.accounts[1].mark.reason }, { until, reason: 'weekly limit' });
+    assert.equal(v.accounts[1].exhausted, true);
+    assert.equal(v.accounts[0].mark, null);
+    assert.equal(v.accounts[2].mark, null);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
