@@ -392,7 +392,10 @@ check counts it as no ask of the day. The manager fixes it by filing the questio
 
 **What the owner reads (owner, 2026-10-25).** The ask id, a one-line "what it is", why it is his, the recommendation - in
 that order - in the NEEDS YOU strip, the answer popup, the push and the voice (`public/manager-ask.js` `askSummary`,
-`askLine`). The options come after: they are how he answers. The manager's own report of the open asks is a table with the
+`askLine`). The options come after: they are how he answers. In the strip's question list each option is a button (owner, 2026-11-28; `askOptionButtonsHtml` /
+`wireAskOptions`): it sends the popup's exact answer wording to the ask's running session, else the manager (`answerTarget`), marks
+the choice and locks that row; a failed send says so and can be tapped again. The list (`#askListPop`) stays open across strip
+redraws and closes on a tap outside. The manager's own report of the open asks is a table with the
 same four columns: `Ask | What it is | Why it reached you | My view/recommendation`.
 
 **A question is closed only by another question** (`owner-asks.js` `supersedeOlder`). A question may only be marked `superseded` when the

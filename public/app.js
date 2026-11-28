@@ -34,7 +34,7 @@ import { fmtTok, fmtUsd, sessionRows, topEntries, dayBars, summaryFresh, manager
 import '/tip.js';
 import { mountAskPopup } from '/ask-popup.js';
 import { isOwnersTurn, unattachedAsks } from '/ask-model.js';
-import { askSummary, askLine } from '/manager-ask.js';
+import { askSummary, askLine, askOptionButtonsHtml, wireAskOptions } from '/manager-ask.js';
 import { parkedChipHtml, parkedRowsHtml } from '/parked-view.js';
 import { reloadGuard } from '/sw-update.js';
 import { listHtml, detailHtml, newFormHtml, scorecardHtml } from '/tasks-view.js';
@@ -1651,7 +1651,7 @@ function markAttentionOverflow() {
     for (const b of pop.querySelectorAll('button')) b.onclick = () => { pop.remove(); hidden[Number(b.dataset.i)].click(); };
   };
 }
-document.addEventListener('pointerdown', (e) => { if (!e.target.closest('#attnPop, .anmore')) document.getElementById('attnPop')?.remove(); if (!e.target.closest('#parkPop, [data-parked], [data-parked-chip]')) document.getElementById('parkPop')?.remove(); });
+document.addEventListener('pointerdown', (e) => { if (!e.target.closest('#attnPop, .anmore')) document.getElementById('attnPop')?.remove(); if (!e.target.closest('#askListPop, [data-mgr], [data-hasq]')) document.getElementById('askListPop')?.remove(); if (!e.target.closest('#parkPop, [data-parked], [data-parked-chip]')) document.getElementById('parkPop')?.remove(); });
 if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => markAttentionOverflow()).observe(els.attention);
 function renderAttention() {
   // the same predicate as the answer popup and the red rows (ask-model.js)
@@ -1709,7 +1709,7 @@ function renderAttention() {
 }
 // Suggestions the Opus triage parked with the owner (suggestion-triage.js): a yes / no each, sent to POST /api/suggestions/owner
 function showParked(anchor) {
-  document.getElementById('attnPop')?.remove(); document.getElementById('parkPop')?.remove();
+  document.getElementById('attnPop')?.remove(); document.getElementById('parkPop')?.remove(); document.getElementById('askListPop')?.remove();
   const pop = document.createElement('div');
   pop.id = 'parkPop'; pop.className = 'attnpop qpop';   // its own id: a strip redraw (markAttentionOverflow) must not close it between two answers
   pop.innerHTML = parkedRowsHtml(state.parked || [], { name: displayName });
@@ -1754,11 +1754,13 @@ function syncAlertRowVisibility() {
   $('#alertRow')?.classList.toggle('alert-empty', attEmpty && leaseEmpty && depEmpty);
 }
 
-// a small panel with the manager's open questions for one session: the text, the options, what it recommends
+// a small panel with the manager's open questions for one session: the text, what it recommends, the options to tap.
+// Its own id (not #attnPop): the strip redraws after each answer and must not close it before the next one.
+const askSent = new Map();   // ask id -> option number sent from this page
 function showOwnerAsks(anchor, sess, qs, presetAudioText) {
-  document.getElementById('attnPop')?.remove();
+  document.getElementById('attnPop')?.remove(); document.getElementById('askListPop')?.remove(); document.getElementById('parkPop')?.remove();
   const pop = document.createElement('div');
-  pop.id = 'attnPop'; pop.className = 'attnpop qpop';
+  pop.id = 'askListPop'; pop.className = 'attnpop qpop';
   const exists = state.sessions.some((s) => s.name === sess);
   // Read aloud the question list + recommendation in one breath. Options are listed in the popover
   // visually; the audio just says the question + the recommendation so the owner can decide
@@ -1772,12 +1774,15 @@ function showOwnerAsks(anchor, sess, qs, presetAudioText) {
   // What the owner reads, in the order he asked for (2026-10-25): the id, the one-line what, why it is his,
   // the recommendation. The options come after: they are how he answers.
   pop.innerHTML = `<div class="qrow-audio">${audioChipHtml({ text: audioText, label: `Read ${displayName(sess)} questions aloud` })}</div>`
-    + qs.map((q, qi) => { const s = askSummary(q); return `<div class="qrow1 mdbody">${copyPromptButtonHtml({ text: qsrcs[qi], label: `Copy question ${escapeHtml(q.id)}` })}<b>${escapeHtml(q.id)}</b> ${renderMd(s.what)}${s.why ? `<div class="qwhy">Why you: ${escapeHtml(s.why)}</div>` : ''}${s.rec ? `<div class="qrec">My view: ${escapeHtml(s.rec)}</div>` : ''}${q.options?.length ? `<div class="qopts">${q.options.map((o, i) => `<span>${i + 1}. ${escapeHtml(o)}</span>`).join('')}</div>` : ''}</div>`; }).join('')
+    + qs.map((q, qi) => { const s = askSummary(q); return `<div class="qrow1 mdbody">${copyPromptButtonHtml({ text: qsrcs[qi], label: `Copy question ${escapeHtml(q.id)}` })}<b>${escapeHtml(q.id)}</b> ${renderMd(s.what)}${s.why ? `<div class="qwhy">Why you: ${escapeHtml(s.why)}</div>` : ''}${s.rec ? `<div class="qrec">My view: ${escapeHtml(s.rec)}</div>` : ''}${askOptionButtonsHtml(q, askSent.get(String(q.id)) ?? null)}</div>`; }).join('')
     + (exists ? `<button class="qgo" data-session="${escapeHtml(sess)}">Open ${escapeHtml(displayName(sess))}</button>` : '');
   const r = anchor.getBoundingClientRect();
   pop.style.top = `${r.bottom + 4}px`; pop.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - 440))}px`;
   document.body.appendChild(pop);
   pop.querySelector('.qgo')?.addEventListener('click', () => { pop.remove(); openCard(sess); });
+  // postSend throws when the server refuses; unlike askSend it does not move the view away from what the owner reads
+  wireAskOptions(pop, qs, { statuses: () => state.status, sent: askSent, send: (n, text) => postSend(n, { keys: sanitizeForAgent(text) }),
+    onSent: (n, q) => { toast(`${q.id} sent \u2192 ${displayName(n)}`, 1500); setTimeout(pollOwnerAsks, 1500); } });
   wireAudioChips(pop);
 }
 

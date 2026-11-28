@@ -9,7 +9,7 @@
 
 import { icon } from './icons.js';
 import { audioChipHtml, wireAudioChips } from './audio-chip.js';
-import { askOptions, looseRecommendation, answerText, askSummary } from './manager-ask.js';
+import { askOptions, looseRecommendation, answerText, askSummary, answerTarget } from './manager-ask.js';
 import { renderMd } from './md.js';
 import { copyPromptButtonHtml } from './copy-prompt.js';
 import { deriveButtons, lastQuestion, listQuestions, displayQuestion, reflowPane, parseManagerItems, extractRecommendation } from './buttons.js';
@@ -267,7 +267,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
   function answerManagerAsk(btn) {
     const item = cur(); const a = item?.ask; if (!a) return;
     const opt = askOptions(a)[Number(btn.dataset.mopt)]; if (!opt) return;
-    const target = a.session && state.status?.[a.session] ? a.session : (state.status?.manager ? 'manager' : null);
+    const target = answerTarget(a, state.status);
     if (!target) { btn.classList.add('muted'); btn.title = 'The manager session is not running'; return; }
     for (const b of body.querySelectorAll('[data-mopt]')) b.disabled = true;
     Promise.resolve(askSend(target, a.id, { text: answerText(a, opt) }, null)).then(() => { dismissed.add(item.key); saveDismissed(); curKey = null; render(true); });
@@ -279,7 +279,7 @@ export function mountAskPopup({ state, openCard, prefillDock, askSend, confirmTh
     const input = body.querySelector('[data-free]');
     const txt = String(input?.value || '').trim();
     if (!txt) { input?.focus(); return; }
-    const target = a.session && state.status?.[a.session] ? a.session : (state.status?.manager ? 'manager' : null);
+    const target = answerTarget(a, state.status);
     if (!target) { input.title = 'The manager session is not running'; return; }
     input.disabled = true;
     Promise.resolve(askSend(target, a.id, { text: `Owner answer to ${a.id || 'your question'}: ${txt}` }, null)).then(() => { freeDraft.delete(item.key); dismissed.add(item.key); saveDismissed(); curKey = null; render(true); });

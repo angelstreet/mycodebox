@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **Click an option in the NEEDS YOU question list to answer it** — "i shoud be able toclick to seelct a decision" (owner 2026-11-28). The options in the strip popup were plain text; each is now a button that sends the same answer as the bottom-right popup, marks the choice, says when a send failed, and the popup stays open for the next question · area: dashboard
+
 - **Cloud sessions start on Sonnet too** — `scripts/cloud-start` now passes `--model sonnet` instead of leaving the model to the account's default; the new `-m <model>` chooses another one · area: cloud sessions
 
 - **Disk cleanup frees space again, and `--help` no longer deletes** — merged worktrees were kept only for tsc's `*.tsbuildinfo` (and one generated API spec), so the run freed 0 items while `/` was at 93 % and new sessions were paused; both now count as cache (`.env` and every other ignored file still keep a worktree). `--help` ran a live cleanup: it now prints usage, and an unknown flag is refused. The run also collects reviewer exports a killed UI review left behind (about 170 MB each, idle over 24 h) · area: harness

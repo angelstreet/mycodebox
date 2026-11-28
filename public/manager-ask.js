@@ -26,6 +26,52 @@ export function answerText(ask, opt) {
   return `Owner answer to ${ask?.id || 'your question'} — option ${opt.n}: ${opt.label}`;
 }
 
+// Where a tapped answer goes: the session the ask is about while it runs, else the manager; null when neither runs.
+export function answerTarget(ask, statuses) {
+  return ask?.session && statuses?.[ask.session] ? ask.session : (statuses?.manager ? 'manager' : null);
+}
+
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+// The options of one row in the strip's question list, as buttons (owner, 2026-11-28: "i should be able to click to select a
+// decision"). `picked` is the number already sent: it stays marked and the row takes no second answer.
+export function askOptionButtonsHtml(ask, picked = null) {
+  const opts = askOptions(ask);
+  if (!opts.length) return '';
+  const done = picked !== null;
+  return `<div class="qopts" data-ask="${esc(ask.id)}">${opts.map((o, i) => `<button type="button" class="qopt${o.rec ? ' rec' : ''}${done && o.n === picked ? ' picked' : ''}" data-opt="${i}" aria-pressed="${done && o.n === picked}"${done ? ' disabled' : ''}>${esc(o.n)}. ${esc(o.label)}</button>`).join('')}<div class="qsent" role="status">${done ? `Sent: option ${esc(picked)}` : ''}</div></div>`;
+}
+
+// Wire those buttons. `send(target, text)` must reject when the answer was not delivered: the row then says so and takes
+// another tap. `sent` (ask id -> option number) outlives the popup, so reopening it cannot send a second answer.
+export function wireAskOptions(root, asks, { statuses, send, sent, onSent }) {
+  for (const row of root.querySelectorAll('.qopts[data-ask]')) {
+    const ask = asks.find((a) => String(a.id) === row.dataset.ask);
+    const buttons = [...row.querySelectorAll('button[data-opt]')];
+    const note = row.querySelector('.qsent');
+    for (const b of buttons) b.onclick = async (e) => {
+      e.stopPropagation();
+      const opt = ask && askOptions(ask)[Number(b.dataset.opt)];
+      if (!opt || sent.has(String(ask.id))) return;
+      const target = answerTarget(ask, statuses());
+      if (!target) { note.textContent = 'Not sent: the manager session is not running'; note.className = 'qsent bad'; return; }
+      sent.set(String(ask.id), opt.n);
+      for (const x of buttons) x.disabled = true;
+      b.classList.add('picked'); b.setAttribute('aria-pressed', 'true');
+      note.textContent = 'Sending\u2026'; note.className = 'qsent';
+      try {
+        await send(target, answerText(ask, opt));
+        note.textContent = `Sent: option ${opt.n}`;
+        onSent?.(target, ask, opt);
+      } catch (err) {
+        sent.delete(String(ask.id));
+        for (const x of buttons) x.disabled = false;
+        b.classList.remove('picked'); b.setAttribute('aria-pressed', 'false');
+        note.textContent = `Not sent: ${err.message}. Tap to try again`; note.className = 'qsent bad';
+      }
+    };
+  }
+}
+
 // ---- what the owner reads (owner, 2026-10-25) ----
 // The owner asked for four things, in this order: the ask id, a one-line "what it is", why it is his, and the
 // recommendation. The strip, the answer popup, the push and the voice all read this one shape, so they cannot
