@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **Cloud branches are read before the lane runs them** — a security review found that a branch pushed from a Claude Code cloud session was installed and tested on codebox like any other, with the dev user's files and the tailnet in reach. A request queued with `--mac cloud-<label>` now goes to the manager first and runs only after the manager approves that exact commit. `cloud-start` also writes its log line as real JSON in a private file, refuses odd labels and a task starting with `-`, and the cloud setup installs an exact Node version. · area: lane
+
 - **The lane's request log records only what changed** — every save appended the whole request with all its step output, so `integration/requests.jsonl` reached 444 MB. It now writes a full line on a change of state (and after a restart) and only the changes otherwise; existing lines stay as they are. Replaying the real history this way: 427 MB becomes 89 MB, with the same requests rebuilt · area: harness
 
 - **Click an option in the NEEDS YOU question list to answer it** — "i shoud be able toclick to seelct a decision" (owner 2026-11-28). The options in the strip popup were plain text; each is now a button that sends the same answer as the bottom-right popup, marks the choice, says when a send failed, and the popup stays open for the next question · area: dashboard

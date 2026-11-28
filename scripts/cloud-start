@@ -16,6 +16,9 @@ done
 [ -n "$TASK" ] || usage
 # The model goes into the tmux command line below: ids and aliases only.
 [[ $MODEL =~ ^[A-Za-z0-9._-]+$ ]] || { echo "cloud-start: bad model name" >&2; exit 2; }
+# The label becomes the lane's --mac cloud-<label>: same charset. A task starting with - would be read as a claude option.
+[ -z "$LABEL" ] || [[ $LABEL =~ ^[A-Za-z0-9._-]{1,50}$ ]] || { echo "cloud-start: label: letters, digits, . _ - only (max 50)" >&2; exit 2; }
+[[ $TASK != -* ]] || { echo "cloud-start: the task must not start with -" >&2; exit 2; }
 cd "$DIR"
 BR=$(git rev-parse --abbrev-ref HEAD)
 REM=$(git ls-remote origin "refs/heads/$BR" | cut -f1)
@@ -34,7 +37,9 @@ done
 id=${url##*/}
 repo=$(basename "$(git remote get-url origin)" .git)
 mkdir -p "$STATE"
-printf '{"at":"%s","id":"%s","url":"%s","repo":"%s","base":"%s","label":"%s","by":"%s","task":"%s"}\n' \
-  "$(date -u +%FT%TZ)" "$id" "$url" "$repo" "$BR" "${LABEL:-$id}" "${MYCODEBOX_SESSION:-$(tmux display-message -p '#S' 2>/dev/null || echo cli)}" \
-  "$(printf '%s' "$TASK" | head -n 1 | cut -c1-160 | sed 's/\\/\\\\/g; s/"/\\"/g')" >> "$STATE/cloud-sessions.jsonl"
+# One JSON line, encoded by node (every field escaped); the file is private to the user (umask 077 on creation).
+(umask 077; AT=$(date -u +%FT%TZ) ID=$id URL=$url REPO=$repo BASE=$BR LABEL=${LABEL:-$id} \
+  BY=${MYCODEBOX_SESSION:-$(tmux display-message -p '#S' 2>/dev/null || echo cli)} TASK1=$(printf '%s' "$TASK" | head -n 1 | cut -c1-160) \
+  node -e 'const e=process.env; console.log(JSON.stringify({at:e.AT,id:e.ID,url:e.URL,repo:e.REPO,base:e.BASE,label:e.LABEL,by:e.BY,task:e.TASK1}))' \
+  >> "$STATE/cloud-sessions.jsonl"; chmod 600 "$STATE/cloud-sessions.jsonl")
 echo "$url"
