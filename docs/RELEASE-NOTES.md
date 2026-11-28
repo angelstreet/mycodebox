@@ -3,7 +3,10 @@
 The release note of this repo (owner 2026-11-13). Every merged code change (not docs-only) adds one entry at the top of
 `## Unreleased`; the done-check reads the merged diff for this file (REFERENCE "Closing review"). Entry form: one line,
 
-- **The Waste tab shows when each advisory last reached the manager, and a phone-width check now guards every view** — one line per advisory kind ("5 h ago · session" or "never"); a single list of advisory kinds with a drift test; a daily 390 px overflow check over the page map; the manager restart log prints the handover line it reads.
+- **The reader's "last reply only" button stays in view** — it was the first line of the scrolling conversation, so after scrolling down it took a long scroll back up to reach it. The switch ("last reply only" / "earlier conversation") is now sticky at the top of the reader. `public/style.css`.
+
+- **NEEDS YOU shows 0 when only suggestions are open** — the headline count added 1 for the "suggestions · N" chip, so the strip read "NEEDS YOU 1" while nothing needed the owner. The chip stays, the count no longer includes it. `public/app.js` `renderAttention`.
+
 - **Resuming a parked session whose worktree was cleaned up now works** — 390 of 658 parked sessions pointed at a merged, removed worktree and Resume failed with "cwd must be an existing directory". Resume now recreates the folder at the same path (a detached worktree of the main checkout it was named after, else an empty folder; only under $HOME), so `claude --resume` finds its transcript. `cwd-gone.js` `restoreGoneCwd`, `server.js` resume `validate`.
 
 - **A Claude account switch after a limit error leaves a record, and /api/health says when every account is used up** — `ask-opus.js` now shares the server's retry helper (`onAccounts`), each switch writes a `claude-account-switch` row (from, to, source) to `manager-asks.jsonl`, and `/api/health` carries `claudeAccounts: { total, usable, allUsedUp }` (true only when accounts are configured and none has headroom). `claude-accounts.js` `accountsHealth` / `recordSwitch`.
@@ -65,6 +68,14 @@ The release note of this repo (owner 2026-11-13). Every merged code change (not 
 what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
+
+- **The Waste tab shows when each advisory last reached the manager, and a phone-width check now guards every view** — one line per advisory kind ("5 h ago · session" or "never"); a single list of advisory kinds with a drift test; a daily 390 px overflow check over the page map; the manager restart log prints the handover line it reads.
+- **The reader's play button reads the agent's summary only** — owner: "has to be the summary only". It no longer falls back to the STATUS line; a turn without a `Summary:` block has no play button (`public/app.js` paintReader, `test/reader-chip-wiring.test.js`) · area: reader
+- **The reader's play button works after the reader repaints** — the chip was wired only on the reader's first paint, so a chip painted later (after "no reply yet", or after a smooth-scroll swap) did nothing on tap. Every reader rebuild now wires its chips (`public/app.js` paintReader, test `test/reader-chip-wiring.test.js`) · area: reader
+
+- **The suggestion-triage owner floor matches real data deletion, not the word "drops"** — on 2026-11-28 a dashboard suggestion ("the state frame drops managerAsk") went to the owner as "owner floor (\"drops\")". The data floor now needs a deletion verb aimed at data (tables, rows, records, history, logs, recordings, backups, branches, sessions...) or `rm -rf` / `drop table`; "drops" / "remove" / "delete" in a UI, journal or code sense is no floor, and the other ownerOnly floors see those words masked. On the live ledger this changes three past items only (the two "drops" items and one "overwrites" item). `suggestion-triage.js` `isDataDeletion`, `maskNonData` · tests: `test/suggestion-triage.test.js` · area: harness
+
+- **The board says why a session needs the manager** — the status frame now carries `stall.managerAsk` for needs-manager sessions (cut to 600 chars), and the board row line 2 and the sidebar dot title show "needs the manager: <ask>". `manager.js` `stallOf`, `public/state.js` `managerReasonOf`, `public/app.js` · tests: `test/manager-reason.test.js` · area: dashboard
 
 - **Agents write a short summary for the owner, and the play button reads it** — a turn that ends done / failed / blocked / needs-manager / needs-owner now carries `Summary:` and 1 to 10 plain lines before `Verification:` and the STATUS (AGENTS.md, the `cbsession` brief). `GET /api/reply/<s>` gives `summary` and `status` (`public/reader-summary.js`, `conversation.js` `lastReplyText`), the reader's play button reads the summary when there is one, and a new done-check (R) asks once for a missing or too long one, joined to the closing-review push; `manager.json` `summaryCheck` is `dry` (journal only) until the owner switches it · area: reader
 
