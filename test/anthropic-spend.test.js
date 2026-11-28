@@ -42,30 +42,26 @@ test('an expired or missing Claude login is an error, never a fetch', async () =
   let calls = 0; const s = createAnthropicSpend({ stateDir: d, credentialsFile: f, fetchFn: async () => { calls++; return resp(usage); } });
   assert.equal((await s.get()).extra.error, 'Claude login expired'); assert.equal(calls, 0);
 });
-test('API spend groups: the owner\'s names, spent/budget for the Claude API, spent only for the team, warn at 80 %, stale marked', () => {
+test('API spend: one "Claude API" group, spent/credit per org, spent/limit and red once the limit is reached', () => {
   assert.equal(apiCreditChips(null), '');
-  const c = { ok: true, orgs: [
-    { org: 'max', label: 'Virtualpytest API org', budgetUsd: 200, spentUsd: 94.27, leftUsd: 105.73, usedPercent: 47 },
-    { org: 'team', label: 'AngelStreet API org', budgetUsd: 1000, spentUsd: 850.5, leftUsd: 149.5, usedPercent: 85.05, stale: true, error: 'timeout' },
-    { org: 'x', label: 'No key', budgetUsd: 50, spentUsd: null, noKey: true },
-  ] };
-  const h = apiCreditChips(c);
-  assert.match(h, /<b>Claude API<\/b><span class="qi ok">94\/200\$</);
-  assert.match(h, /<b>Claude team API<\/b><span class="qi warn old">851\$</);
-  assert.match(h, /\$850\.50 of the \$1000\.00 limit/, 'the title keeps the cents');
-  assert.doesNotMatch(h, /No key/);
-  assert.match(apiCreditChips({ ok: true, orgs: [{ org: 'max', label: 'm', budgetUsd: 200, spentUsd: null }] }), /qi na">\?\/200\$</);
-  assert.match(apiCreditChips({ ok: true, orgs: [{ org: 'm', label: '<b>', spentUsd: 3.5 }] }), /<b>&lt;b&gt;<\/b><span class="qi ok">4\$</);
-});
-test('API spend groups with credit: spent / credit left, red at the limit or with no credit, limit and credit in the title', () => {
   const h = apiCreditChips({ ok: true, orgs: [
-    { org: 'max', label: 'Virtualpytest API org', budgetUsd: 1000, spentUsd: 94.27, leftUsd: 905.73, usedPercent: 9.4, creditLeftUsd: 945.09 },
-    { org: 'team', label: 'AngelStreet API org', budgetUsd: 200, spentUsd: 200.2, leftUsd: -0.2, usedPercent: 100.1, creditLeftUsd: 10.85 },
-    { org: 'dry', label: 'Dry org', budgetUsd: 1000, spentUsd: 10, usedPercent: 1, creditLeftUsd: -2.4 },
+    { org: 'max', label: 'Virtualpytest API org', budgetUsd: 1000, spentUsd: 94.27, usedPercent: 9.4, creditLeftUsd: 945.09 },
+    { org: 'team', label: 'AngelStreet API org', budgetUsd: 200, spentUsd: 200.2, usedPercent: 100.1, creditLeftUsd: 10.85 },
+    { org: 'x', label: 'No key', budgetUsd: 50, spentUsd: null, noKey: true },
   ] });
-  assert.match(h, /<b>Claude API<\/b><span class="qi ok">94\/945\$</);
-  assert.match(h, /title="AngelStreet API org: API spend this month \$200\.20 of the \$200\.00 limit \(100%, API calls stopped until the 1st\), credit left about \$10\.85"><b>Claude team API<\/b><span class="qi crit">200\/11\$</);
-  assert.match(h, /<b>Dry org<\/b><span class="qi crit">10\/-2\$</);
+  assert.equal((h.match(/class="qg"/g) || []).length, 1);
+  assert.match(h, /^<span class="qg"><b>Claude API<\/b><span class="qi ok" title="Virtualpytest API org: [^"]*\$94\.27 of the \$1000\.00 limit \(9%\), credit left about \$945\.09">94\/945<\/span><i class="dim">-<\/i><span class="qi crit" title="AngelStreet API org: [^"]*\$200\.20 of the \$200\.00 limit \(100%, API calls stopped until the 1st\), credit left about \$10\.85">200\/200<\/span><\/span>$/);
+  assert.doesNotMatch(h, /No key|\d\$/);
+});
+test('API spend values without credit: spent/limit, spent alone, "?" before the first reading, amber at 80 %, red with no credit, stale marked', () => {
+  const v = (o) => apiCreditChips({ ok: true, orgs: [{ label: 'L', ...o }] });
+  assert.match(v({ org: 'max', budgetUsd: 200, spentUsd: 94.27, usedPercent: 47 }), /qi ok"[^>]*>94\/200</);
+  assert.match(v({ org: 'team', spentUsd: 211.6 }), /qi ok"[^>]*>212</);
+  assert.match(v({ org: 'max', budgetUsd: 200, spentUsd: null }), /qi na"[^>]*>\?\/200</);
+  assert.match(v({ org: 'team', budgetUsd: 1000, spentUsd: 850.5, usedPercent: 85.05, stale: true, error: 'timeout' }), /qi warn old" title="[^"]*\$850\.50 of the \$1000\.00 limit[^"]*not live: timeout">851\/1000</);
+  assert.match(v({ org: 'dry', budgetUsd: 1000, spentUsd: 10, usedPercent: 1, creditLeftUsd: -2.4 }), /qi crit"[^>]*>10\/-2</);
+  assert.match(v({ org: 'm', label: '<b>', spentUsd: 3.5 }), /title="&lt;b&gt;: /);
+  assert.equal(v({ org: 'other', spentUsd: null }), '');
 });
 test('static: wired in server.js and the app, precached', () => {
   const rd = (p) => readFileSync(new URL(p, import.meta.url), 'utf8');

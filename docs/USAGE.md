@@ -74,7 +74,7 @@ Review stops, Platforms, Jev decisions, Usage & cost, Alerts and Install app. Th
 do not change settings or sessions. Use the existing menu items for the live panels.
 
 Usage/quota may be unavailable until the relevant CLI or tailer is configured. Costs are estimates at API-equivalent prices, not subscription invoices.
-The quota button opens a centred dialog: API credit this month per Anthropic org (spent / limit / left and the prepaid credit left, shown in the header as `<org> $spent/$credit`; needs an admin or organization-scoped key in `~/.config/anthropic/<org>.admin.key`, limits and the Console credit reading in `<state>/quota-budgets.json`), every Claude account with its 5h / week windows and limit mark, then the other plans.
+The quota button opens a centred dialog: API credit this month per Anthropic org (spent / limit / left and the prepaid credit left, shown in the header as `Claude API 94/945 - 200/200`: spent / credit left per org, spent / limit once the limit is reached; needs an admin or organization-scoped key in `~/.config/anthropic/<org>.admin.key`, limits and the Console credit reading in `<state>/quota-budgets.json`), every Claude account with its 5h / week windows and limit mark, then the other plans.
 The AI manager panel shows its effective state at the top and places unrated stops in the review queue. Expand
 Automatic replies to choose routine cases, AI reviewer to choose Suggest or Auto and any AI reply types, and Deploys
 to inspect the runner. AI Auto sends only when the reviewer is configured, automatic replies are on, and an eligible

@@ -1,20 +1,25 @@
-// Quota-row groups for the monthly API spend per Anthropic org (api-credit.js), in the owner's words (2026-11-28):
-// "Claude API 94/200$" and "Claude team API 212$"; with a credit reading both show spent / prepaid credit left, "Claude API 94/945$"
-// ("show spending / credit ... we round numbers", 2026-11-28). Red at 95 % of the org's monthly limit (its API calls stop there) or with
-// no credit left. An org never read shows "?"; the popup says how to add its key.
+// Quota-row group for the monthly API spend of the Anthropic orgs (api-credit.js). One group, one value per org, in the owner's words
+// (2026-11-28: "we take too much spaces ... Claude API 94/945 - 200/200 since 200 is max"): spent / prepaid credit left, whole dollars;
+// once an org has reached its monthly limit (its API calls stop until the 1st) the value is spent / limit, red. Without a credit reading:
+// spent / limit, or spent alone without a limit. Red also with no credit left, amber at 80 % of the limit. The org and the cents are in
+// each value's title. An org never read shows "?"; the popup says how to add its key.
 const level = (usedPct) => (usedPct >= 95 ? 'crit' : usedPct >= 80 ? 'warn' : 'ok');
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const amount = (x) => (x == null ? '?' : String(Math.round(Number(x))));   // the title has the cents
-const ORGS = { max: { name: 'Claude API', budget: true }, team: { name: 'Claude team API', budget: false } };
+const amount = (x) => (x == null ? '?' : String(Math.round(Number(x))));
 const exact = (x) => `$${Number(x).toFixed(2)}`;
+const KNOWN = ['max', 'team'];   // shown (with "?") even before their first reading
+
+function value(o) {
+  const credit = o.creditLeftUsd, pct = o.usedPercent ?? 0, capped = o.budgetUsd && pct >= 100;
+  const lv = o.spentUsd == null ? 'na' : capped || (credit != null && credit <= 0) ? 'crit' : o.budgetUsd ? level(pct) : 'ok';
+  const of = capped || credit == null ? o.budgetUsd : credit;
+  const tip = `${o.label}: API spend this month ${o.spentUsd == null ? 'not read' : exact(o.spentUsd)}${o.spentUsd != null && o.budgetUsd ? ` of the ${exact(o.budgetUsd)} limit (${Math.round(pct)}%${capped ? ', API calls stopped until the 1st' : ''})` : ''}${credit != null ? `, credit left about ${exact(credit)}` : ''}${o.stale || o.error ? `, not live: ${o.error || 'last pull failed'}` : ''}${o.note ? ` — ${o.note}` : ''}`;
+  return `<span class="qi ${lv}${o.stale ? ' old' : ''}" title="${esc(tip)}">${amount(o.spentUsd)}${of != null ? `/${amount(of)}` : ''}</span>`;
+}
+
 export function apiCreditChips(c) {
   if (!c?.ok || !Array.isArray(c.orgs)) return '';
-  return c.orgs.filter((o) => ORGS[o.org] || o.spentUsd != null).map((o) => {
-    const { name, budget } = ORGS[o.org] || { name: String(o.label || o.org), budget: false };
-    const credit = o.creditLeftUsd;
-    const lv = o.spentUsd == null ? 'na' : credit != null && credit <= 0 ? 'crit' : o.budgetUsd ? level(o.usedPercent ?? 0) : 'ok';
-    const tip = `${o.label}: API spend this month ${o.spentUsd == null ? 'not read' : exact(o.spentUsd)}${o.spentUsd != null && o.budgetUsd ? ` of the ${exact(o.budgetUsd)} limit (${Math.round(o.usedPercent ?? 0)}%${(o.usedPercent ?? 0) >= 100 ? ', API calls stopped until the 1st' : ''})` : ''}${credit != null ? `, credit left about ${exact(credit)}` : ''}${o.stale || o.error ? `, not live: ${o.error || 'last pull failed'}` : ''}${o.note ? ` — ${o.note}` : ''}`;
-    const value = `${amount(o.spentUsd)}${credit != null ? `/${amount(credit)}` : budget && o.budgetUsd ? `/${amount(o.budgetUsd)}` : ''}$`;
-    return `<span class="qg" title="${esc(tip)}"><b>${esc(name)}</b><span class="qi ${lv}${o.stale ? ' old' : ''}">${value}</span></span>`;
-  }).join('');
+  const orgs = c.orgs.filter((o) => KNOWN.includes(o.org) || o.spentUsd != null);
+  if (!orgs.length) return '';
+  return `<span class="qg"><b>Claude API</b>${orgs.map(value).join('<i class="dim">-</i>')}</span>`;
 }

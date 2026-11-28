@@ -2400,7 +2400,7 @@ repository, run by the server in its own clone, one request at a time per repo (
 
 The quota button opens a centred dialog (`.sheet-back.center`, `.quota-sheet`), not a bottom sheet. Top to bottom:
 
-- **Header chip** (`apiCreditChips`, `public/anthropic-chips.js`): the quota strip shows `Claude API 94/945$` (org `max`) and `Claude team API 200/11$` (org `team`): spent this month / prepaid credit left, whole dollars (owner, 2026-11-28: "show spending / credit"); without a credit reading `max` falls back to spent / limit and `team` to spent. Cents, limit and credit in the title; amber 80 %, red 95 % of the limit or no credit left; `?` when never read. Another org shows its label and spend once it has a reading.
+- **Header chip** (`apiCreditChips`, `public/anthropic-chips.js`): one group `Claude API 94/945 - 200/200` (owner, 2026-11-28: "we take too much spaces"), one value per org (`max`, `team`, then any other org with a reading): spent this month / prepaid credit left, whole dollars; once the org reached its monthly limit (API calls stopped until the 1st) spent / limit, red. Without a credit reading spent / limit, or spent alone. Org, cents, limit and credit in each value's title; amber 80 %, red 95 % of the limit or no credit left; `?` when never read.
 - **API credit · <month>**: one row per Anthropic org from `api-credit.js`: spent this month (UTC month start), the org's monthly spend limit, left, a bar, and the prepaid credit left. Source:
   `GET api.anthropic.com/v1/organizations/analytics/cost` (beta `analytics-usage-cost-2026-08-24`; amounts are cents strings, data lands 4 to 24 h
   late), falling back to `/v1/organizations/cost_report` on 404/400. The key (an `sk-ant-admin` key or an organization-scoped key) is read per request from `~/.config/anthropic/<org>.admin.key`,
@@ -2410,8 +2410,7 @@ The quota button opens a centred dialog (`.sheet-back.center`, `.quota-sheet`), 
   the 1st). Credit (owner 2026-11-28): no Admin API endpoint returns the prepaid balance (`spend_limits` answers "not supported for this organization
   type"), so `creditUsd` is the Console's "Organization credits" read at `creditAt`, and `creditLeftUsd` = that minus the cost recorded since
   `creditAt` (one more analytics query; the 4 to 24 h data lag makes it read a little high). After a top-up, put the new Console figure and time in the
-  file. Header chip: `<org> $94/$945` = spent / credit left, whole dollars (`$94` alone without a credit reading); red at 95% of the limit or with
-  no credit left, limit and exact figures in its title. Pulled at most every 15 min (the popup's **refresh** button sends `GET /api/api-credit?force=1`, which pulls now unless the last pull is under a minute old, so a new key shows at once), cached in `<state>/api-credit.json` (a restart reads it); a failure keeps the
+  file. Pulled at most every 15 min (the popup's **refresh** button sends `GET /api/api-credit?force=1`, which pulls now unless the last pull is under a minute old, so a new key shows at once), cached in `<state>/api-credit.json` (a restart reads it); a failure keeps the
   last figure with `stale` + `error`. `GET /api/api-credit`, pushed as `apiCredit` on `/ws/status`. No local estimate: the usage ledger has no
   billing field, so API-key (`cbsession -b`) spend cannot be told apart from subscription use.
 - **Claude accounts**: one block per account of `claude-accounts.json` (`claudeAccounts.view()`, now with `mark: {until, reason}`): 5h and week

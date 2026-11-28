@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **API spend takes one short group in the top bar** — "we take too much spaces ... Claude API 94/945 - 200/200 since 200 is max" (owner 2026-11-28). The two org groups (`Claude API 94/945$`, `Claude team API 200/11$`) become one `Claude API 94/945 - 200/200`: spent / credit left per org, and spent / limit, red, once an org has reached its monthly limit (its API calls are stopped, so the credit does not matter). The org and exact figures are in each value's title · area: usage
+
 - **The Anthropic cache audit can be run again** — `scripts/anthropic-cache-audit.py` prints cache use and cost per organisation, API key, model and day or hour from the Admin API reports (read-only, keys never printed); the steps and traps are in [ANTHROPIC-CACHE-AUDIT](ANTHROPIC-CACHE-AUDIT.md).
 
 - **API credit shows spend / credit left, with the real limits** — "better show spending / credit ... 94/945 we round numbers" (owner 2026-11-28). The header reads `Claude API 94/945$ · Claude team API 200/11$`: spent this month / prepaid credit left, whole dollars, red when the org hit its monthly limit or has no credit left. The Admin API has no balance endpoint, so the credit is the Console figure written in `quota-budgets.json` (`creditUsd`, `creditAt`) minus the cost recorded since; the popup shows it with the limit. The budgets had the two orgs' limits swapped (AngelStreet is capped at $200 and stopped until Dec 1, not $1000) · area: usage
