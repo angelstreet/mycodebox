@@ -3009,10 +3009,13 @@ async function handleHttp(req, res) {
     const r = resolvePageFile(STATE_DIR, p.slice(3));
     if (r.redirect) { res.writeHead(301, { location: r.redirect }); return res.end(); }
     if (!r.file) { res.writeHead(r.status, { 'content-type': 'text/plain; charset=utf-8' }); return res.end(r.error); }
-    const h = { 'content-type': r.type, 'content-length': r.size, 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff' };
+    const h = { 'content-type': r.type, 'content-length': r.size, 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff', 'accept-ranges': 'bytes' };
     if (r.sandbox) h['content-security-policy'] = PAGE_CSP;
-    res.writeHead(200, h);
-    return createReadStream(r.file).on('error', () => { try { res.end(); } catch {} }).pipe(res);
+    const rg = parseRange(req.headers.range, r.size);   // Safari (iPhone, Mac) plays a <video> only with 206 answers
+    if (rg === 'bad') { res.writeHead(416, { ...h, 'content-length': 0, 'content-range': `bytes */${r.size}` }); return res.end(); }
+    if (rg) res.writeHead(206, { ...h, 'content-length': rg.end - rg.start + 1, 'content-range': `bytes ${rg.start}-${rg.end}/${r.size}` });
+    else res.writeHead(200, h);
+    return createReadStream(r.file, rg || {}).on('error', () => { try { res.end(); } catch {} }).pipe(res);
   }
   if (req.method === 'GET' && p.startsWith('/files/')) {   // an agent's picture / mockup for the reader (files-route.js)
     const r = resolveServedFile(p.slice('/files'.length), { home: homedir() });
