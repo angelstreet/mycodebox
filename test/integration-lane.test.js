@@ -606,7 +606,8 @@ test('red node tests: the reason names the failing tests and the tail keeps the 
   const w = makeWorld();
   w.branch('feat', { 't/x.test.js': "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\ntest('fine', () => {});\n"
     + "test('the widget counts', () => { assert.equal(1 + 1, 3); });\ntest('other breaks', () => { throw new Error('other-boom'); });\n" });
-  const noisy = 'node --test t/x.test.js; rc=$?; i=0; while [ $i -lt 120 ]; do echo trailing noise $i; i=$((i+1)); done; exit $rc';
+  // --test-reporter=spec: Node 22 prints TAP, not the ✖ block, when stdout is not a TTY (cloud VMs run Node 22)
+  const noisy = 'node --test --test-reporter=spec t/x.test.js; rc=$?; i=0; while [ $i -lt 120 ]; do echo trailing noise $i; i=$((i+1)); done; exit $rc';
   const { lane } = mk(w, { cfg: { test: noisy } });
   const r = await go(lane, { branch: 'feat' });
   assert.equal(r.state, 'returned');

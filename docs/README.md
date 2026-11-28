@@ -9,6 +9,7 @@ Start here to choose the right guide. Examples use placeholders; replace them lo
 | Understand the product | [README](../README.md), [goals](GOALS.md) | Overview and quick start; what the product is for and what is shipped |
 | Install or configure a machine | [Installation](INSTALL.md) | Prerequisites, Tailscale, service, verification, updates and removal |
 | Use the dashboard | [Usage](USAGE.md) | First session, sending replies, pause, notifications and troubleshooting |
+| Run coding agents in Anthropic's cloud | [Cloud sessions](CLOUD.md) | Account, environment, setup scripts, code-only rules, starting parallel sessions, branch hand-off to the lane |
 | V2 Phase-0 baseline (historical) | [Baseline inventory](v2/CURRENT_STATE.md) | Source observations before V2 was built; line references are stale |
 | Find implementation code | [Repository map](MAP.md) | Components, data flow, state and test locations |
 | Work as an agent | [AGENTS.md](../AGENTS.md), then [agent contract](CONTRACT.md) | Safety invariants, workflow, completion evidence and the one rule text for merge, push, deploy, restart, closing sessions and the hard floor ([Who may do what](CONTRACT.md#who-may-do-what-one-rule-text)) |

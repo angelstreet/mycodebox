@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# cloud-start: start one Claude Code cloud session (Anthropic-hosted VM) from codebox and print its URL. docs/CLOUD.md.
+#   cloud-start -C <repo checkout> [-l <label>] (-t "task" | -f task-file)
+# The VM clones the checkout's GitHub remote at its CURRENT BRANCH as pushed (not local changes): push it first.
+# Creating a cloud session is interactive only (CLI 2.1.332: "--cloud cannot be combined with --print"), so
+# `claude --cloud` runs in a detached tmux on a private socket (no dashboard card); we read its "View:" line and close it.
+# The session keeps running in the cloud. Each start is one line in $GHOSTY_STATE_DIR/cloud-sessions.jsonl.
+# Follow-up message to a running session: claude -p "<text>" --cloud <session-id>
+set -euo pipefail
+usage() { sed -n '2,3p' "$0" | sed 's/^# //' >&2; exit 2; }
+DIR=. LABEL= TASK= FILE=
+while getopts "C:l:t:f:h" o; do
+  case $o in C) DIR=$OPTARG ;; l) LABEL=$OPTARG ;; t) TASK=$OPTARG ;; f) FILE=$OPTARG ;; *) usage ;; esac
+done
+[ -n "$FILE" ] && TASK=$(cat "$FILE")
+[ -n "$TASK" ] || usage
+cd "$DIR"
+BR=$(git rev-parse --abbrev-ref HEAD)
+REM=$(git ls-remote origin "refs/heads/$BR" | cut -f1)
+[ "$REM" = "$(git rev-parse HEAD)" ] || { echo "cloud-start: $BR is not pushed as is (origin ${REM:-none}): git push -u origin $BR first" >&2; exit 1; }
+STATE=${GHOSTY_STATE_DIR:-$HOME/.local/state/ghosty}
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"; tmux -L cloud-start kill-session -t "$name" 2>/dev/null || true' EXIT
+printf '%s' "$TASK" > "$tmp/task"
+name=cs-$$
+tmux -L cloud-start new-session -d -s "$name" -x 220 -y 50 -c "$PWD" "claude --cloud \"\$(cat '$tmp/task')\"; sleep 30"
+url=
+for _ in $(seq 1 60); do
+  url=$(tmux -L cloud-start capture-pane -p -t "$name" 2>/dev/null | tr -d '\n' | grep -o 'https://claude.ai/code/session_[A-Za-z0-9]*' | head -n 1) || true
+  [ -n "$url" ] && break; sleep 2
+done
+[ -n "$url" ] || { echo "cloud-start: no session URL after 120 s; the pane said:" >&2; tmux -L cloud-start capture-pane -p -t "$name" >&2 || true; exit 1; }
+id=${url##*/}
+repo=$(basename "$(git remote get-url origin)" .git)
+mkdir -p "$STATE"
+printf '{"at":"%s","id":"%s","url":"%s","repo":"%s","base":"%s","label":"%s","by":"%s","task":"%s"}\n' \
+  "$(date -u +%FT%TZ)" "$id" "$url" "$repo" "$BR" "${LABEL:-$id}" "${MYCODEBOX_SESSION:-$(tmux display-message -p '#S' 2>/dev/null || echo cli)}" \
+  "$(printf '%s' "$TASK" | head -n 1 | cut -c1-160 | sed 's/\\/\\\\/g; s/"/\\"/g')" >> "$STATE/cloud-sessions.jsonl"
+echo "$url"

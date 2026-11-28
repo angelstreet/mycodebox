@@ -76,6 +76,15 @@ must match the actual configuration until they are migrated.
 - Never commit `certs/*.pem`, `.env`, anything from the state dir, or `stalls.jsonl`-style logs.
 - Read `git diff --staged` before every commit and check for the above.
 
+## Cloud sessions (claude.ai/code, `claude --cloud`; owner 2026-11-28)
+
+`CLAUDE_CODE_REMOTE=true` means you run in an Anthropic-hosted VM, not on codebox. There: code only.
+- First run `bash scripts/cloud-setup.sh` (idempotent), then `npm test`.
+- No secrets, `.env`, state dir, tailnet, lab or production host; no deploy, lease, device run, DB, `integrate`, `found-bug`
+  or ghosty API (none is reachable, and none may be made reachable).
+- Push only your own branch (`claude/<slug>`), never `main`; end with the branch name. Codebox queues it
+  (`integrate request <branch> --repo mycodebox --mac cloud-<slug>`): [docs/CLOUD.md](docs/CLOUD.md).
+
 ## Which rule wins
 
 The dated owner decisions in this file win over older task docs, handovers and session briefs where they differ. A task
