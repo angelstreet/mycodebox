@@ -868,6 +868,25 @@ would auto-answer (all safety gates above already passed), the policy decides `a
 
 A hold is stored in `sessions.json` as `held:{by:'manager',reason,at}`, separate from the owner's `paused`,
 
+### Needs-owner stops are checked first (owner / manager 2026-11-28)
+
+Owner: "sometimes when technical i should not be asked to make decision"; "if sonnet hesitate he should ask opus, if opus hesitate should ask
+fable, only then it comes to me if technical". A session the owner started that ends `STATUS: needs-owner: <ask>` is checked by the server
+(`owner-stop-triage.js`, called from the status tick) before any owner push, NEEDS YOU row or popup:
+
+| Step | Result |
+|---|---|
+| The ask hits the owner floor (`doubt.js` `ownerOnly`, the suggestion floors: money, customers, publishing, credentials, deleting data, physical action ...) or an approval the owner reserved (a confirmation a tool accepts only from a person such as `reply with <x> to confirm` / `user_ok`, names and renames, mockups and looks, "you asked me to approve") | The owner, at once, no model call |
+| One Opus call (`claude -p --model opus`, no tools, the ask and the last 2000 characters of the closing text as data) answers `MANAGER` | A `<session>:needs-manager` manager item; the owner is not told; a "Decided for you" line with the question text; when the manager answers through `/api/send` (`by: manager-agent`) a second line with the answer |
+| Opus answers `OWNER` | The owner |
+| Opus answers `DOUBT` | One Fable call with the same prompt: `MANAGER` = the manager, anything else = the owner |
+| Switch off, an error, a timeout (7 min for both calls), a reply that is not one clean verdict line | The owner (the held alert is sent) |
+
+While the check runs, the owner alerts of that session are held and the row carries `ownerStop: 'pending'` (not the owner's turn in
+`public/ask-model.js` `isOwnersTurn`); a technical one keeps `ownerStop: 'manager'`. A new turn drops the check. Every verdict, with the question
+text, is a line of `<stateDir>/owner-stop-triage.jsonl`; the daily harness health check counts them (`needs-owner stops checked`) and flags a day
+with more than 3 stops that reached the owner unchecked (error / timeout / unreadable). Switch: `manager.json` `"ownerStopTriage": "off"`.
+
 ### Merge decisions and mixed questions (owner, 2026-10-14)
 
 "If there is no reason not to merge, you should." A merge is no longer a hard forbidden topic: `stall.js` splits the

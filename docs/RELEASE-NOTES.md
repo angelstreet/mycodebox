@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **Technical needs-owner stops go to the manager first** — "sometimes when technical i should not be asked to make decision" (owner 2026-11-28). A needs-owner stop of a session the owner started is checked before the owner hears of it: owner-floor items and approvals the owner reserved (a confirmation a tool accepts only from a person, names, looks) go to the owner at once; otherwise Opus decides, and Fable decides when Opus is unsure; a technical stop goes to the manager and shows under "Decided for you" with its question. Any error, timeout or unclear reply still reaches the owner; switch `ownerStopTriage: off` in `manager.json`. The daily harness health check counts the stops and flags the unchecked ones. AGENTS.md and the status wording now say a reversible technical step with evidence ends needs-manager. `owner-stop-triage.js`, tests `test/owner-stop-triage.test.js`, `test/harness-health-check.test.js` · area: harness
+
 - **Header shows the API spend of each Anthropic org** — the quota row only showed the Claude extra-usage budget; it now also shows one chip per org with an admin key, `<org> $spent` this month (budget in the hover title) (amber at 80 %, red at 95 %, dimmed when not live), from `api-credit.js`. It updates when the server pushes `apiCredit` and when the quota popup's refresh is pressed. Test in `test/anthropic-spend.test.js` · area: usage
 
 - **Reader copy keeps its focus while history loads** — opening the clipboard menu now protects it from a conversation repaint immediately, preserving keyboard focus when an early copy overlaps the history load. · area: reader

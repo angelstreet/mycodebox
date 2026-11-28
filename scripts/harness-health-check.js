@@ -14,6 +14,7 @@
 //   manager-decisions.jsonl   one line per decision the manager took for the owner
 //   integration/requests.jsonl one line per state change; latest record per id wins
 //   ci-watch.jsonl            {at,type,red?} per tick; type 'green' closes a red streak
+//   owner-stop-triage.jsonl   {at,session,question,verdict,source} per needs-owner stop checked (owner-stop-triage.js); missing = no stop yet
 //   /proc/loadavg, /proc/meminfo, statfs('/')  box
 //   GET ${GHOSTY_URL:-http://127.0.0.1:7777}/api/sessions  {sessions[], status{name:{state}}}, best effort
 //
@@ -36,6 +37,7 @@ export const LANE_RETURNED_MAX = 5;
 export const CI_RED_MIN_MAX = 120;
 export const DISK_PCT_MAX = 90;
 export const MEM_MIN_MB = 2048;
+export const OWNER_STOP_UNCHECKED_MAX = 3;
 export const FINAL_STATES = ['merged', 'deployed', 'returned', 'merged_ci_red', 'merged_ci_superseded', 'deploy_failed', 'returned_after_deploy', 'cancelled'];
 
 export const stateDir = () => process.env.GHOSTY_STATE_DIR || join(homedir(), '.local/state/ghosty');
@@ -272,6 +274,25 @@ export function unitState(unit, execImpl = execFileSync) {
 // ---- collect (io) ---------------------------------------------------------------------------------------------------
 const readLines = (p) => { try { return { lines: readFileSync(p, 'utf8').split('\n').filter(Boolean), ok: true }; } catch { return { lines: [], ok: false }; } };
 
+// ---- needs-owner stops (pure, owner-stop-triage.js) -----------------------------------------------------------------
+// Each needs-owner stop of an owner-started session is checked once: to the manager (technical) or to the owner, with the reason
+// (floor, reserved, opus = Opus said OWNER / DOUBT, error / timeout / unparsed = never checked). An unchecked stop reached the owner
+// whatever it asked, so those are the technical asks that may have reached the owner anyway; their questions are kept for the report.
+export function ownerStopStats(lines, { now, hours = HOURS }) {
+  const out = { checked: 0, toManager: 0, toOwner: 0, ownerBy: {}, unchecked: 0, uncheckedQuestions: [] };
+  for (const line of lines) {
+    let r; try { r = JSON.parse(line); } catch { continue; }
+    if (!r || !inWindow(r.at, now, hours) || (r.verdict !== 'manager' && r.verdict !== 'owner')) continue;
+    out.checked++;
+    if (r.verdict === 'manager') { out.toManager++; continue; }
+    out.toOwner++;
+    const by = String(r.source || 'unknown');
+    out.ownerBy[by] = (out.ownerBy[by] || 0) + 1;
+    if (by === 'error' || by === 'timeout' || by === 'unparsed') { out.unchecked++; if (out.uncheckedQuestions.length < 3) out.uncheckedQuestions.push(`${r.session}: ${String(r.question || '').slice(0, 80)}`); }
+  }
+  return out;
+}
+
 export function collect({ stateDir: dir = stateDir(), now = Date.now(), hours = HOURS, box = boxStats(), transcriptDir, failover } = {}) {
   const win = { now, hours };
   const notFound = [];
@@ -281,9 +302,10 @@ export function collect({ stateDir: dir = stateDir(), now = Date.now(), hours = 
   const lane = laneStats(src(join('integration', 'requests.jsonl')), win);
   const ci = ciStats(src('ci-watch.jsonl'), win);
   const h = hiddenAgentStats({ dir: transcriptDir, now, hours });
+  const ownerStops = ownerStopStats(readLines(join(dir, 'owner-stop-triage.jsonl')).lines, win);   // no file = no stop checked yet, not a missing source
   const unit = failoverUnit();
   const fo = failover !== undefined ? failover : (unit ? { unit, state: unitState(unit) } : null);
-  return { date: new Date(now).toISOString().slice(0, 10), ...asks, decisions, ...lane, ci, box, hiddenAgentWork: h.count, hiddenAgentNames: h.names, failover: fo, notFound };
+  return { date: new Date(now).toISOString().slice(0, 10), ...asks, decisions, ...lane, ci, box, hiddenAgentWork: h.count, hiddenAgentNames: h.names, failover: fo, ownerStops, notFound };
 }
 
 // ---- summarize (pure) -----------------------------------------------------------------------------------------------
@@ -314,6 +336,8 @@ export function summarize(today, prev) {
   if (today.box?.diskPct != null && today.box.diskPct > DISK_PCT_MAX) add('disk', `root disk ${today.box.diskPct} %`, `Above ${DISK_PCT_MAX} % on /. health-watch cleans its share; the rest is worktrees, tmp and caches.`);
   if (today.box?.memAvailableMb != null && today.box.memAvailableMb < MEM_MIN_MB) add('memory', `${today.box.memAvailableMb} MB MemAvailable`, `Below ${MEM_MIN_MB} MB. New sessions and parking both need headroom; load 1 min was ${n(today.box?.load1)}.`);
   if ((today.hiddenAgentWork || 0) > 0) add('hidden-agent-work', `hidden-agent-work: ${today.hiddenAgentWork}`, `${today.hiddenAgentWork} manager Agent-tool subagent(s) returned fix/recommend results with no cbsession start in the same turn: ${(today.hiddenAgentNames || []).join(', ')}. Work that changes something must be a named session on the dashboard (manual §5).`);
+  const os = today.ownerStops;
+  if ((os?.unchecked || 0) > OWNER_STOP_UNCHECKED_MAX) add('owner-stops-unchecked', `${os.unchecked} needs-owner stops reached the owner unchecked`, `The Opus check failed (error, timeout or unreadable reply) on ${os.unchecked} of ${os.checked} stops, so technical asks may have reached the owner: ${os.uncheckedQuestions.join(' | ')}`);
   const fo = today.failover;
   if (fo?.unit && fo.state && !FAILOVER_OK.includes(fo.state)) add('manager-failover', `${fo.unit} is ${fo.state}`, `With every Claude account used up, the MiniMax standby (mm-manager) cannot take over: the manager waits for the reset. Fix: sudo systemctl enable --now ${fo.unit} (REFERENCE "Manager failover").`);
   if ((today.approvalRefused || 0) > 0) add('approval-refused', `${today.approvalRefused} lane approval(s) refused`, `${today.approvalRefused} integration request(s) carried approvalRefused: the lane was asked to push or deploy and stopped. A refusal is a floor stop, not a bug — but a day with several means the autonomy switches disagree with the requesters.`);
@@ -333,6 +357,7 @@ export function summarize(today, prev) {
     ['disk /', `${n(today.box.diskPct)} %`, p ? `${n(p.box?.diskPct)} %` : 'n/a'],
     ['hidden-agent-work', n(today.hiddenAgentWork), p ? n(p.hiddenAgentWork) : 'n/a'],
     ['manager failover unit', today.failover ? `${today.failover.unit} ${n(today.failover.state)}` : 'not checked', p ? (p.failover ? n(p.failover.state) : 'not checked') : 'n/a'],
+    ['needs-owner stops checked', os ? `${os.checked} (${os.toManager} to the manager, ${os.toOwner} to the owner${os.toOwner ? `: ${Object.entries(os.ownerBy).map(([k, v]) => `${k} ${v}`).join(', ')}` : ''})` : 'n/a', p?.ownerStops ? `${n(p.ownerStops.checked)} (${n(p.ownerStops.toManager)} to the manager)` : 'n/a'],
     ['sessions (needs you)', `${n(today.sessions)} (${n(today.needsYou)})`, p ? `${n(p.sessions)} (${n(p.needsYou)})` : 'n/a'],
   ];
   const report = ['| metric | today (24 h) | previous day |', '| --- | --- | --- |',
