@@ -2359,7 +2359,7 @@ The quota button opens a centred dialog (`.sheet-back.center`, `.quota-sheet`), 
   late), falling back to `/v1/organizations/cost_report` on 404/400. The key (an `sk-ant-admin` key or an organization-scoped key) is read per request from `~/.config/anthropic/<org>.admin.key`,
   sent only in `x-api-key` to api.anthropic.com, never cached or logged. No key: the row says `no admin key: add ~/.config/anthropic/<org>.admin.key`
   and no request is made; a refused key shows the API's own 401 reason. Budgets: `<state>/quota-budgets.json` (`{"max":{"label":"Max account","budgetUsd":200,"period":"month"},"team":{...}}`),
-  defaults max 200 / team 1000 USD. Pulled at most every 15 min, cached in `<state>/api-credit.json` (a restart reads it); a failure keeps the
+  defaults max 200 / team 1000 USD. Pulled at most every 15 min (the popup's **refresh** button sends `GET /api/api-credit?force=1`, which pulls now unless the last pull is under a minute old, so a new key shows at once), cached in `<state>/api-credit.json` (a restart reads it); a failure keeps the
   last figure with `stale` + `error`. `GET /api/api-credit`, pushed as `apiCredit` on `/ws/status`. No local estimate: the usage ledger has no
   billing field, so API-key (`cbsession -b`) spend cannot be told apart from subscription use.
 - **Claude accounts**: one block per account of `claude-accounts.json` (`claudeAccounts.view()`, now with `mark: {until, reason}`): 5h and week

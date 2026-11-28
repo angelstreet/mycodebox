@@ -3647,8 +3647,16 @@ function openQuota() {
     body.closest('.sheet-back').classList.add('center');
     body.closest('.sheet').classList.add('quota-sheet');
     foot.classList.remove('hidden');
-    foot.innerHTML = '<span class="grow"></span><button class="sbtn" data-a="close">close</button>';
-    foot.onclick = (e) => { if (e.target.closest('[data-a="close"]')) close(); };
+    foot.innerHTML = '<button class="sbtn" data-a="refresh">refresh</button><span class="grow"></span><button class="sbtn" data-a="close">close</button>';
+    // refresh pulls the API credit now (?force=1, at most once a minute server-side) so a newly added admin key shows at once
+    const pullCredit = (force) => fetch(`/api/api-credit${force ? '?force=1' : ''}`).then((r) => r.json()).then((c) => { if (c?.ok) { state.apiCredit = c; render(); } });
+    foot.onclick = (e) => {
+      if (e.target.closest('[data-a="close"]')) return close();
+      const b = e.target.closest('[data-a="refresh"]');
+      if (!b || b.disabled) return;
+      b.disabled = true; b.textContent = 'refreshing…';
+      pullCredit(true).catch(() => {}).finally(() => { if (b.isConnected) { b.disabled = false; b.textContent = 'refresh'; } });
+    };
     const render = () => {
       if (!body.isConnected) { quotaRerender = null; return; }
       const plans = state.quota?.plans || [];
@@ -3667,7 +3675,7 @@ function openQuota() {
     };
     quotaRerender = render;
     render();
-    if (!state.apiCredit) fetch('/api/api-credit').then((r) => r.json()).then((c) => { if (c?.ok) { state.apiCredit = c; render(); } }).catch(() => {});
+    if (!state.apiCredit) pullCredit(false).catch(() => {});
   });
 }
 els.quota.onclick = openQuota;
