@@ -2,6 +2,9 @@
 
 The release note of this repo (owner 2026-11-13). Every merged code change (not docs-only) adds one entry at the top of
 `## Unreleased`; the done-check reads the merged diff for this file (REFERENCE "Closing review"). Entry form: one line,
+what changed and why it matters, ending with `· area: <area>`.
+
+## Unreleased
 
 - **The live check only judges restarts it watched** — on its first run the lane's live check marked about 30 older self-deploys "live" although their restarts finished before it existed. A request whose safe-restart waiter exited before the dashboard process started is now recorded `ok: null, unwatched: true`: no manager item, never logged live.
 
@@ -87,9 +90,6 @@ The release note of this repo (owner 2026-11-13). Every merged code change (not 
 - **A server deploy warns, and waits up to 10 min, for the `vpt-lease run` tasks it would cut** — before a `server` / `full` deploy restarts the server, the runner names the running tasks (`server restart will lose N running task(s): <lease ids / holders>`, plan log plus a `deploy:<id>:warning` manager event), gives a progressing run up to 10 min (30 s polls) to end, then proceeds and warns again; never forced, hosts-only deploys unaffected (incident 2026-11-24: a restart lost task 3a6273b2 and its lease sat 40 min). First real server deploy that meets a vpt-lease run: check ~/.local/state/ghosty/deploys/<id>.log for the warning line (real end-to-end deploy not run: waived by manager, tests + fake-server replay) · area: deploy
 
 - **A run that stopped progressing no longer looks active to the lease service** — `vpt-lease run` gives the wrapped command `$VPT_LEASE_PROGRESS_FILE`; `vpt_run.py` keeps its mtime at the last answer of the server. When it is older than 5 min (`VPT_LEASE_PROGRESS_STALE_S`) the heartbeat goes `active:false` with `stalled: "<task id>, server not answering"`, the idle clock stops being reset, the lease shows `stalled`, and the nudge text names `lease held, run not progressing: <task id>, server …` (incident 2026-11-24: 40 min of 502 held a device lease, heartbeating active) · area: lease
-what changed and why it matters, ending with `· area: <area>`.
-
-## Unreleased
 
 - **A parser that drops input lines is not "deleting data"** — suggestion triage sent "a regression test that the ingest parser drops request-snapshot lines" to the owner ("snapshot" read as data). "drop" is no data floor when a parser-like part (parser, filter, ingest, reader, scanner, tokenizer, decoder, extractor, matcher) drops input lines / entries / blocks / events / chunks / fields and the same sentence names no old or stored data, table, database or disk; delete / remove / purge and every other drop count as before. `suggestion-triage.js` `filtersInput` · tests: `test/suggestion-triage.test.js` · area: harness
 
