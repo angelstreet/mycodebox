@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile, chmod } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, chmod } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -106,4 +106,16 @@ test('ask-opus: an unreadable reply is an error, bad usage exits 2', async () =>
   const r = await askOpus(['--question', 'tabs or dropdown?'], 'maybe');
   assert.deepEqual([r.status, r.out.verdict], [1, 'error']);
   assert.equal((await askOpus([], 'x')).status, 2);
+});
+
+test('ask-opus: the output and the record name the Claude account it ran on (2026-11-28)', async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'doubt-cli-'));
+  const dir = join(stateDir, 'team1');
+  await mkdir(dir, { recursive: true }); await writeFile(join(dir, '.credentials.json'), '{}');
+  await writeFile(join(stateDir, 'claude-accounts.json'), JSON.stringify({ auto: true, active: 'team1', accounts: [{ id: 'default' }, { id: 'team1', configDir: dir }] }));
+  const bin = join(stateDir, 'claude');
+  await writeFile(bin, `#!/bin/sh\ncat >/dev/null\necho 'ANSWER: go ahead.'\n`); await chmod(bin, 0o755);
+  const r = spawnSync('node', [join(root, 'scripts', 'ask-opus.js'), '--session', 's1', '--question', 'tabs or dropdown?'], { encoding: 'utf8', env: { ...process.env, GHOSTY_STATE_DIR: stateDir, CLAUDE_BIN: bin } });
+  assert.equal(JSON.parse(r.stdout).account, 'team1');
+  assert.equal(JSON.parse((await readFile(join(stateDir, 'manager-asks.jsonl'), 'utf8')).trim()).account, 'team1');
 });
