@@ -15,6 +15,7 @@ phone/laptop on Tailscale
                                  -> stall + manager -> log / proposed reply / guarded action
 Claude reporter -> loopback + token -> reporter.js -> structured turn facts
 usage transcripts -> usage/ingest.js -> ledger + summary -> usage-view.js
+             (+ usage/waste.js detectors / per-account / burn vs limit, usage/loops.js repeated-command scan -> summary `waste`, `perAccount`, `burn`, `loops`)
 GHOSTY_V2=1: /api/v2/* -> orchestration/v2-runtime.js -> http.js + intake + task store ($GHOSTY_STATE_DIR/v2)
              + goal loop (controller lease, recover, scheduler) -> worktrees under GHOSTY_V2_WORK_ROOT
 ```
