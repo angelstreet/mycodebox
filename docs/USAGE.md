@@ -72,6 +72,7 @@ Review stops, Platforms, Jev decisions, Usage & cost, Alerts and Install app. Th
 do not change settings or sessions. Use the existing menu items for the live panels.
 
 Usage/quota may be unavailable until the relevant CLI or tailer is configured. Costs are estimates at API-equivalent prices, not subscription invoices.
+The quota button opens a centred dialog: API credit this month per Anthropic org (spent / budget / left; needs an admin or organization-scoped key in `~/.config/anthropic/<org>.admin.key`, budgets in `<state>/quota-budgets.json`), every Claude account with its 5h / week windows and limit mark, then the other plans.
 The AI manager panel shows its effective state at the top and places unrated stops in the review queue. Expand
 Automatic replies to choose routine cases, AI reviewer to choose Suggest or Auto and any AI reply types, and Deploys
 to inspect the runner. AI Auto sends only when the reviewer is configured, automatic replies are on, and an eligible
@@ -130,6 +131,7 @@ The view polls every few seconds while it is open and does nothing otherwise. Ro
 | Settings in `.env` ignored | Node does not load it automatically; check the service's EnvironmentFile path and use the guarded restart procedure |
 | Reporter events missing | New Claude session loaded the plugin; loopback URL/port correct; same state directory or token-file override; token readable by that user |
 | Usage/quota missing | Optional tailer/CLI authentication and feature settings; unknown or stale data is not zero usage |
+| API credit row says "no admin key" or "key refused" | Put an Admin API key (Console > Settings > Admin keys) for that org in `~/.config/anthropic/<org>.admin.key`, chmod 600; the row refreshes within 15 min |
 | Old UI after update | Reload; close/reopen installed app; inspect service-worker update before clearing browser storage |
 
 Use local logs for diagnosis, but redact session text, keys and infrastructure details before sharing an issue.
