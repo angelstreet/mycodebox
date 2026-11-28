@@ -324,3 +324,12 @@ test('deploy restart warnings open no wake (either phase); a failed deploy still
   const out = r.stdout.split('\n').filter(Boolean).map((l) => JSON.parse(l));
   assert.deepEqual(out.map((o) => [o.l.state, o.u, o.d]), [['failed', true, false]]);
 });
+
+// 2026-11-28 (token audit point d): the MiniMax poll-share advisory (minimax-meter.js newPollAlerts) never wakes the manager by itself
+test('a <session>:minimax-poll advisory is deferred (d), not urgent', () => {
+  const dir = tmp('ghosty-filt-mmpoll-'); const env = { ...process.env, GHOSTY_STATE_DIR: dir };
+  const o = run(env, ev({ key: 'rtsp-nightly-x:minimax-poll', kind: 'minimax-poll', session: 'rtsp-nightly-x', title: 'MiniMax: 40% of rtsp-nightly-x\'s calls are polls', body: 'advisory', priority: 'default' }))
+    .stdout.split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  assert.equal(o.length, 1);
+  assert.equal(o[0].d, true); assert.equal(o[0].u, false);
+});

@@ -7,6 +7,9 @@
 # Deferred lines (`d: true` from the filter: a non-blocking bug filing; owner 2026-11-12, TASK-239 G6) do not open the window: they are printed with
 # the next real event, or alone after MANAGER_WAIT_DEFER seconds (default 3600); a held deferred line is also written to `.deferred-held` beside the cursor, so a killed wait does not lose it.
 # 40 wakes on 2026-11-11 carried only such a filing; 33 did nothing.
+# Minimum spacing (token audit 2026-11-28 point d: manager-wait.sh re-run 20-81 times per session, most wakes tiny): a non-urgent batch is not
+# delivered sooner than MANAGER_WAIT_MIN_S seconds (default 300) after the previous delivery (`.last-delivery` beside the cursor), so a trickle of
+# routine events becomes one wake every few minutes instead of one per event. An urgent line still closes the batch after the grace; 0 turns it off.
 # Run it with Bash run_in_background: it has no 30-min expiry like a Monitor, so the agent wakes ONLY on a real event.
 #   scripts/manager-wait.sh [filter-command]
 # Default (no argument): reads manager-events.jsonl from a stored byte offset (<state dir>/manager-reports/.cursor), feeds the
@@ -34,6 +37,7 @@ cursor_file = os.path.join(state, 'manager-reports', '.cursor')
 poll = float(os.environ.get('MANAGER_WAIT_POLL', '0.5'))
 grace = float(os.environ.get('MANAGER_WAIT_GRACE', '2'))
 window = max(grace, float(os.environ.get('MANAGER_WAIT_WINDOW', '60')))
+min_s = float(os.environ.get('MANAGER_WAIT_MIN_S', '300'))        # minimum seconds between two deliveries, unless a line is urgent
 defer_max = float(os.environ.get('MANAGER_WAIT_DEFER', '3600'))   # a deferred line (`d: true`) never opens the window: it rides with the next real event, or goes out alone after this long
 
 def urgent(line):
@@ -130,6 +134,11 @@ def cursored():
     except OSError: prior = []
     seen_held = set(prior)
     urgent_at = None                                 # the first urgent line: the window closes `grace` after it
+    last_file = os.path.join(os.path.dirname(cursor_file), '.last-delivery')
+    try:
+        with open(last_file) as f: last_at = float(f.read().strip())
+    except (OSError, ValueError): last_at = 0.0
+    not_before = min(last_at + min_s, time.time() + min_s) if min_s > 0 else 0   # a clock jump never holds a batch longer than min_s
     alive = True
     prev_off = off                                   # what `off` was at the last pump; if a tick fed nothing, the filter has had a full poll to react
     while alive:
@@ -154,7 +163,7 @@ def cursored():
             out.append(text + '\n')
             if first_at is None: first_at = time.time()
             if urgent_at is None and urgent(text): urgent_at = time.time()
-        if first_at is not None and time.time() - first_at >= window: break
+        if first_at is not None and time.time() - first_at >= window and time.time() >= not_before: break
         if urgent_at is not None and time.time() - urgent_at >= grace: break
         if first_at is None and defer_at is not None and time.time() - defer_at >= defer_max: break
         if p.poll() is not None and not alive: break
@@ -174,6 +183,11 @@ def cursored():
     sys.stdout.flush()
     if out:
         try: os.remove(held_file)
+        except OSError: pass
+        try:
+            tmp = last_file + '.tmp.' + str(os.getpid())
+            with open(tmp, 'w') as f: f.write('%.3f\n' % time.time())
+            os.replace(tmp, last_file)
         except OSError: pass
 
 if filt and os.path.realpath(filt) != os.path.realpath(os.environ['MANAGER_WAIT_DEFAULT_FILTER']): legacy()

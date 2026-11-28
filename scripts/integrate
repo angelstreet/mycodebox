@@ -9,7 +9,10 @@
 #                                                                                        --no-push-check (or INTEGRATE_NO_PUSH_CHECK=1) skips it
 #   integrate status [<id>]                                                              one request, or the latest ten
 #   integrate wait <id> [--timeout MIN]                                                  block until the request is final (default 60);
-#                                                                                        an unreachable service is retried until the timeout
+#                                                                                        an unreachable service is retried until the timeout.
+#                                                                                        The server holds each call until the state changes (long-poll), so ONE
+#                                                                                        `integrate wait` run with run_in_background costs no model call until the
+#                                                                                        result; never poll `integrate status` in a loop (token audit 2026-11-28)
 #   integrate cancel <id>                                                                only while it is still queued
 #   integrate self-update                                                                fetch the current scripts/integrate + scripts/found-bug from the dashboard host (same token), verify the sha256,
 #                                                                                        install into ${MYCODEBOX_BIN_DIR:-~/.local/bin} atomically (old copy kept as <name>.bak); idempotent
@@ -17,7 +20,7 @@
 # `lease-token.js add <name> --integrate`), as for the Mac Stop hook; on the codebox with neither: loopback + the reporter token.
 # Exit: 0 merged / deployed / CI superseded, 1 error, 3 returned (reason printed) or cancelled, 4 merged but CI red / deploy failed, 5 service unreachable.
 
-CLIENT_SCRIPTS_VERSION=9   # bump with every change to scripts/integrate or scripts/found-bug (same number in both); the server compares it
+CLIENT_SCRIPTS_VERSION=10  # bump with every change to scripts/integrate or scripts/found-bug (same number in both); the server compares it
 
 CFG_DIR="${MYCODEBOX_CONFIG_DIR:-$HOME/.config/mycodebox}"
 cfg() { [ -r "$CFG_DIR/config" ] && sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$CFG_DIR/config" | tail -n 1 | sed 's/[[:space:]]*$//; s/^"\(.*\)"$/\1/'; }
@@ -195,11 +198,12 @@ case "$cmd" in
     _sv=$(val clientScripts); case "$_sv" in ""|*[!0-9]*) ;; *) [ "$_sv" -gt "$CLIENT_SCRIPTS_VERSION" ] && printf 'client scripts are old (v%s, server v%s): run integrate self-update\n' "$CLIENT_SCRIPTS_VERSION" "$_sv" ;; esac
     command -v found-bug >/dev/null 2>&1 || printf 'found-bug is not installed here: run integrate self-update (then found-bug --help)\n'
     if [ "$WAIT" = 1 ]; then do_wait "$ID" 60; fi
-    printf 'Integration %s queued. Keep working on anything that does not depend on it; end the turn with STATUS: waiting: integration %s only when nothing else is left.\n' "$ID" "$ID" ;;
+    printf 'Integration %s queued. Keep working on anything that does not depend on it; end the turn with STATUS: waiting: integration %s only when nothing else is left. The lane wakes you: never poll integrate status (one integrate wait %s in the background if you must block).\n' "$ID" "$ID" "$ID" ;;
   status)
     if [ -n "$1" ]; then
       api GET "/api/integration/requests/$(urlenc "$1")?format=kv"; [ "$CODE" = 200 ] || fail_http
       printf '%s\n' "$(val text)"; _r=$(val reason); [ -n "$_r" ] && printf 'reason: %s\n' "$_r"; _tl=$(val timeline); [ -n "$_tl" ] && printf 'timeline: %s\n' "$_tl"; tail_of
+      [ "$(val final)" = true ] || printf 'Not final yet: do not poll status. Run ONE integrate wait %s in the background (run_in_background), or end the turn with STATUS: waiting: integration %s (the lane wakes you).\n' "$1" "$1"
     else
       api GET "/api/integration/requests?limit=10&format=kv"; [ "$CODE" = 200 ] || fail_http
       tail_of
@@ -219,5 +223,5 @@ case "$cmd" in
     [ -n "$1" ] || die "usage: integrate ack <id>   (manager: the external result was relayed)"
     api POST "/api/integration/external-results/$(urlenc "$1")/ack?format=kv" "{}"; [ "$CODE" = 200 ] || fail_http
     printf 'Integration %s external result acknowledged.\n' "$1" ;;
-  *) printf 'usage: integrate request [<branch>] [--repo KEY] [--deploy SCOPE] [--note TEXT] [--approved-by WHO] [--migration-applied] [--wait] [--for SESSION] [--mac LABEL] [--no-push-check] | ack <id> | status [<id>] | wait <id> [--timeout MIN] | cancel <id> | self-update\n' >&2; exit 1 ;;
+  *) printf 'usage: integrate request [<branch>] [--repo KEY] [--deploy SCOPE] [--note TEXT] [--approved-by WHO] [--migration-applied] [--wait] [--for SESSION] [--mac LABEL] [--no-push-check] | ack <id> | status [<id>] | wait <id> [--timeout MIN] (one, in the background; never poll status) | cancel <id> | self-update\n' >&2; exit 1 ;;
 esac

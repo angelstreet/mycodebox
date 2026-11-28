@@ -172,7 +172,7 @@ import { createHistoryView } from './history-view.js';
 import { createQuota, defaults as quotaDefaults } from './quota.js';
 import { createManagerRotation, parisTime } from './manager-rotation.js';
 import { createClaudeAccounts, rateFile as claudeRateFile, accountOfPid, scanClaudeLimit, usableAccounts, DEFAULT_ID as CLAUDE_DEFAULT_ACCOUNT } from './claude-accounts.js';
-import { createMinimaxMeter, meterConfig, newShareAlerts } from './minimax-meter.js';
+import { createMinimaxMeter, meterConfig, newShareAlerts, newPollAlerts } from './minimax-meter.js';
 import { createCredits } from './credits.js';
 import { createAnthropicSpend } from './anthropic-spend.js';
 import { createUsage, usageFile } from './usage-view.js';
@@ -1671,6 +1671,7 @@ const quota = createQuota({
 const minimaxMeterConfig = () => { try { return meterConfig(JSON.parse(readFileSync(managerConfigFile, 'utf8'))); } catch { return meterConfig({}); } };
 const minimaxMeter = createMinimaxMeter({ ledgerFile: join(STATE_DIR, 'usage-ledger.jsonl'), quota: () => quota.get(), config: minimaxMeterConfig, isManager: (n) => loadOwnerHiddenSessions().includes(n) });
 const minimaxToldShare = new Map();   // session -> ms of its last share alert (minimax-meter.js newShareAlerts)
+const minimaxToldPoll = new Map();    // session -> ms of its last poll-share advisory (minimax-meter.js newPollAlerts)
 
 // The voice item of a session's open stop right now (voice.js), or null. Reads the manager's live view, not `latest` (notifySession runs mid-poll).
 function voiceItemOf(session, kind, stateHint = null) {
@@ -4085,6 +4086,12 @@ server.listen(PORT, HOST, async () => {
       const snap = minimaxMeter.snapshot();
       for (const x of newShareAlerts(snap, minimaxMeterConfig(), minimaxToldShare)) {
         alert(`minimax:share:${x.name}`, { title: `MiniMax: ${x.name} has ${Math.round(x.share)}% of the 5h window`, body: `${x.name} made ${x.window.calls} of ${snap.window.calls} model calls this window (${Math.round(x.share)}%)${snap.plan?.usedPercent != null ? `; the plan is ${Math.round(snap.plan.usedPercent)}% used` : ''}.${x.pollLoop ? ' It looks like a poll loop.' : ''}`, url: '/', tier: 'interrupt' }, 3600000);
+      }
+      // token audit 2026-11-28 point d: a session whose calls are mostly polls (the plan counts calls) is named to the manager; advisory, deferred by the filter
+      for (const x of newPollAlerts(snap, minimaxMeterConfig(), minimaxToldPoll)) {
+        managerEvents.record({ key: `${x.name}:minimax-poll`, title: `MiniMax: ${Math.round(x.pollShare)}% of ${x.name}'s calls are polls`,
+          body: `${x.name}: ${x.polls} of its ${x.window.calls} MiniMax calls this 5h window wrote under ${minimaxMeterConfig().pollMaxOutput} tokens (${Math.round(x.pollShare)}%)${x.pollLoop ? '; a tight poll loop right now' : ''}. Advisory: a longer sleep or one blocking wait (run_in_background) per check saves plan calls. Nothing was stopped.`,
+          url: `/?s=${encodeURIComponent(x.name)}`, priority: 'default' }).catch(() => {});
       }
     } catch (e) { console.error('[minimax-meter]', e.message); }
   }, 60000).unref?.();

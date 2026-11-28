@@ -433,7 +433,7 @@ the next append would push it past 5 MB. A freshly-started agent catches up via
 **Wake batch window and event policy (owner, 2026-11-02).** On 2026-11-01 the manager woke 652 times, one wake per filtered event, and
 84 % of the wakes did nothing (`GET /api/manager/wakes`): every wake re-reads the whole context, so idle wakes were most of the manager's
 tokens. `scripts/manager-wait.sh` now keeps collecting for `MANAGER_WAIT_WINDOW` seconds (default 60) after the first delivered event, so
-one wake carries the batch; an **urgent** event closes the window `MANAGER_WAIT_GRACE` seconds (default 2) after it arrived. Which events are
+one wake carries the batch; an **urgent** event closes the window `MANAGER_WAIT_GRACE` seconds (default 2) after it arrived. Since 2026-11-28 (token audit point d) a non-urgent batch is also held until `MANAGER_WAIT_MIN_S` seconds (default 300) have passed since the previous delivery (`<state>/manager-reports/.last-delivery`), so a trickle of routine events is one wake every 5 min, not one per event; urgent lines ignore it, `0` turns it off. Which events are
 urgent, routine or ignored is a table, not code: `scripts/manager-event-policy.json` (repo defaults) merged with
 `<state dir>/manager-event-policy.json` (the owner's copy wins per key), `'<kind>'` or `'<kind>:<state>'` -> `pass | ignore | urgent`.
 `ignore` drops the event before the built-in filter rules; `pass` keeps it even where a built-in rule would drop it (for example
@@ -1487,6 +1487,10 @@ tokens but re-reads ~200K of cached context), so sessions are ranked by calls; n
 - **Poll loop**: at least `minimaxPollLoopCalls` (40) calls in the last `minimaxPollLoopMinutes` (10) with fewer than `minimaxPollLoopMaxNewTokens` (300) new tokens per call on average.
 - **Share push**: once per session and window, when one session has more than `minimaxSharePct` (40) % of the window's calls and the window has at least
   `minimaxShareMinCalls` (50) calls: an interrupt push. All five keys live in `manager.json`.
+- **Poll share advisory** (token audit 2026-11-28 point d): a call that wrote under `minimaxPollMaxOutput` (150) tokens is a poll; once per window, a
+  non-manager session with at least `minimaxPollShareMinCalls` (100) window calls whose polls pass `minimaxPollSharePct` (25) % (or that is in a poll loop)
+  gets a `<session>:minimax-poll` manager event naming the session and its poll share. The event filter defers it (it rides with the next wake); nothing
+  is stopped (`newPollAlerts`, `minimax-meter.js`).
 
 ## Usage (Langfuse)
 
