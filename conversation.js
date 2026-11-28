@@ -100,6 +100,33 @@ export async function readConversation(file, { maxChars = MAX_CHARS, maxScan = M
   } finally { await fh.close(); }
 }
 
+// The agent's last reply: its text blocks since the owner's last prompt (a queued prompt counts; harness notices, tool results and
+// sidechains do not), from the newest `bytes` of the session file. The source of the owner's summary for a Claude session (docs/READER-SUMMARY.md).
+export function lastReplyOf(jsonl) {
+  let out = [];
+  for (const line of String(jsonl).split('\n')) {
+    if (!line.trim() || !worth(line)) continue;
+    let o; try { o = JSON.parse(line); } catch { continue; }
+    if (!o || o.isSidechain || o.isMeta) continue;
+    if (o.type === 'attachment') { if (o.attachment?.type === 'queued_command' && strip(o.attachment.prompt || '')) out = []; continue; }
+    const texts = blocks(o.message?.content).filter((b) => b.type === 'text').map((b) => strip(b.text)).filter(Boolean);
+    if (o.type === 'user') { if (texts.length) out = []; continue; }
+    if (o.type === 'assistant') out.push(...texts);
+  }
+  return out.join('\n\n');
+}
+export async function lastReplyText(file, bytes = 1024 * 1024) {
+  let fh;
+  try {
+    fh = await fsp.open(file, 'r');
+    const { size } = await fh.stat(), len = Math.min(size, bytes), buf = Buffer.alloc(len);
+    await fh.read(buf, 0, len, size - len);
+    let s = buf.toString('utf8');
+    if (len < size) s = s.slice(s.indexOf('\n') + 1);   // the first line is cut
+    return lastReplyOf(s);
+  } catch { return ''; } finally { await fh?.close().catch(() => {}); }
+}
+
 // The reasoning effort Claude Code runs with ("low" ... "max"): every api-request-shape record carries `"effort":"<level>"`; the last one in the file's tail wins.
 export async function effortOf(file, bytes = 256 * 1024) {
   let fh;

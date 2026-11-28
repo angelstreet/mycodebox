@@ -25,6 +25,7 @@ import { uploadOne, uploadType, UPLOAD_ACCEPT, UPLOAD_HINT } from '/upload.js';
 import { renderMd } from '/md.js';
 import { decideReaderPaint, autoFullDue, autoFullDone } from '/reader-paint.js';
 import { spokenStatusOf } from '/status-line.js';
+import { spokenSummaryOf } from '/reader-summary.js';
 import { localScrollEnters, localScrollExits, flingVelocity, flingStep, ENTER_PX } from '/local-scroll.js';
 import { chipModel, machinesOf, holdingsOf, blocksDeploy, shortResource, ttlText, shortRef, leaseHostSummary } from '/platforms.js';
 import { displayStateOf, STATE_RANK, STATE_LABEL, isRoutineAlert } from '/state.js';
@@ -2821,6 +2822,7 @@ function syncReader(cell, n) {
       .then((d) => {
         // keep the last good reply when the server has none right now (tool line is last)
         if (d.reply) c.text = String(d.reply);
+        if ('summary' in d) { c.summary = Array.isArray(d.summary) ? d.summary : null; c.status = d.status || null; }   // docs/READER-SUMMARY.md: the play button reads these
         const prevHash = c.hash;
         c.failed = false; c.hash = hash;
         if (c.full != null && (hash !== prevHash || hash !== '')) return loadTranscript(n, c);   // not every 5 s on a session with no reply hash: the file can be MBs
@@ -2863,9 +2865,11 @@ function paintReader(cell, n, opts = {}) {
   const audioText = String(text || '').trim();
   // The play button reads the STATUS line only, never the reply (owner 2026-11-28, docs/READER-SUMMARY.md): the whole loaded conversation of a
   // Claude card was over tts.js MAX_TEXT, so the chip spun and failed. The newest STATUS wins: the last reply first, else the conversation's end.
-  const spoken = spokenStatusOf(c?.text || '') || spokenStatusOf(audioText.slice(-8000));
+  // The agent's own `Summary:` lines (from /api/reply) win over the STATUS line when the turn has them.
+  const fromSummary = spokenSummaryOf(c?.summary);
+  const spoken = fromSummary || spokenStatusOf(c?.text || '') || spokenStatusOf(audioText.slice(-8000));
   const actions = audioText
-    ? `<div class="rd-actions">${copyPromptButtonHtml({ text: audioText, label: 'Copy reply' })}${spoken ? audioChipHtml({ text: spoken, label: 'Read status aloud' }) : ''}</div>`
+    ? `<div class="rd-actions">${copyPromptButtonHtml({ text: audioText, label: 'Copy reply' })}${spoken ? audioChipHtml({ text: spoken, label: fromSummary ? 'Read summary aloud' : 'Read status aloud' }) : ''}</div>`
     : '';
   const more = full && c.fullPartial ? '<button class="rd-more" data-act="older">\u2191 older conversation</button>' : '';
   const html = `<button class="rd-more" data-act="${full ? 'less' : 'more'}">${full ? 'last reply only' : '\u2191 earlier conversation'}</button>${more}${body}${actions}`;

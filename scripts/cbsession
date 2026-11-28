@@ -166,6 +166,7 @@ Ship rule (owner 2026-11-11): after a change run the touched tests/typecheck you
    or a trailing &): you are woken when they end. After \`integrate request\` keep working on anything that does not depend
    on it; the lane tells you the result.
 End every turn with one STATUS line (the AGENTS.md table; needs-owner only for the hard floor).
+Before \`Verification:\` and the STATUS line, write \`Summary:\` and 1 to 10 short plain-language lines for the owner (what happened, what it means, what they must do); no ids, paths or commands. The reader and the play button show only that summary.
 EOF
   else cat > "$P" <<EOF
 You are picking up work in a fresh session on this host. Working directory: $DIR.
@@ -207,6 +208,7 @@ End every turn with one STATUS line, one of the seven words of the table at the 
 \`closing review: docs <updated list|none needed> · leftovers <none|filed ids> · unverified <none|list> · bugs: none | fixed <what> | reported <id>\`
 (without it ghosty pushes once): before it, update every doc your change makes stale, fix or found-bug each leftover,
 and name what you did not verify (AGENTS.md "Closing review"). Improvement ideas are not part of it: you are asked once your done is accepted.
+Before \`Verification:\` and the STATUS line, write \`Summary:\` and 1 to 10 short plain-language lines for the owner (what happened, what it means, what they must do); no ids, paths or commands. The reader and the play button show only that summary.
 EOF
   fi
   [ "$WAIT" = 1 ] && printf '\nReview only (owner asked): after step 2, propose the next step and stop; do not start step 3.\n' >> "$P"

@@ -2727,6 +2727,28 @@ leftovers push only fired on leftovers the closing text already admitted. Now a 
   `scripts/manager-status-scan.sh` prints `<session>: done-without-closing-review`.
 - Reach: AGENTS.md of this repo and of VirtualPyTest, and `scripts/cbsession` prompts (`-H`, `-f`, `-t`).
 
+### Owner summary before the STATUS (owner, 2026-11-28)
+
+A closing turn (`done`, `failed`, `blocked`, `needs-manager`, `needs-owner`) carries `Summary:` and 1 to 10 plain lines of at most 160
+characters, before `Verification:` and the STATUS line (AGENTS.md "Summary before the STATUS", the `cbsession` brief). Design and the
+later reader view: [READER-SUMMARY](READER-SUMMARY.md).
+
+- `public/reader-summary.js` (pure, server and browser): `summaryOf(text)` -> `{ lines, lineCount, tooLong }` for the last `Summary:`
+  block (`**Summary:**` too), ended by `Verification:`, a STATUS line, or a blank line not followed by a list item; a pane row indented
+  deeper than the block's first line and not a new bullet joins the line above. `spokenSummaryOf(lines)` is what the play button reads.
+- `public/status-line.js` (pure): `lastStatus`, `headlineOf` (moved from `status-honesty.js`, which re-exports them) and
+  `spokenStatusOf` ("Status: <word>. <claim>").
+- `GET /api/reply/<s>` adds `summary: string[] | null` and `status: { kind, headline } | null`, read from a Claude session's own file
+  (`conversation.js` `lastReplyText`: the assistant text since the owner's last prompt), else the pane's closing text (the one the
+  done-check reads), else the reply (a Mac session's last stop).
+- The reader's play button reads the summary when the turn has one, else the STATUS line; never the reply or the conversation. No
+  STATUS either: no play button.
+- `done-check.js` (R) `summaryGapOf` / `summaryMessage`: a closing turn with no summary or a too long one gets one push per distinct
+  STATUS line, at most `SUMMARY_PUSHES_PER_DAY` (2) a day, while idle, no draft, the host quiet. When the closing-review push (C) fires
+  for the same line, it carries the ask ("Also: ..."), so the session gets one message. The first run records the lines it finds and
+  pushes none (the rollout never reopens an old turn). The manager is not checked. `manager.json` `summaryCheck`: `dry` (default,
+  journal `done-check.jsonl` `summary`), `live`, `off`. `/api/done-check` lists `missingSummary`.
+
 ### Release note and bug record after a code fix (owner, 2026-11-13)
 
 A session ended `closing review: docs updated (...) · bugs: none` after three fix integrations with no release-note entry and no bug record; the
