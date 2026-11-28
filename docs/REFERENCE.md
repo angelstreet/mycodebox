@@ -2366,6 +2366,7 @@ Opus call (`claude -p --model opus`, no tools, empty cwd, async; one at a time p
   the owner's turn and gets no answer buttons (a live prompt in the pane still wins). An Opus failure turns it back to `open`.
 - **Context:** Opus reads the closing text the items came from (`context` in the ledger record, the last 2,000 characters, as data), with
   the session's goal.
+- **Account:** the Opus call runs on the first Claude account with headroom (`usableAccounts`: active first; used-up, over-limit or login-less accounts skipped; `CLAUDE_CONFIG_DIR` set for the child) and retries once on the next after a limit error, marking the first used up. `scripts/ask-opus.js` does the same. A 5-minute `sweep()` retries lists whose triage errored after the cool-down.
 - **Record:** one `manager-asks.jsonl` line per item (`point: suggestion-triage`, verdict, opus, proposed, why, floor, source `opus`), the
   actions log (`suggestion-triage`, `suggestions-answered` by `opus`), `suggestions.jsonl`, and "Decided for you" for the yes / no.
 - **Fallback:** an Opus error is recorded (`verdict: error`) and leaves the items open for the old flow below; the same items are tried
