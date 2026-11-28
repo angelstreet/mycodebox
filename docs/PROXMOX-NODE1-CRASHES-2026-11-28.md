@@ -62,3 +62,21 @@ Through the NOPASSWD `tee` on node1:
   `ShutdownWatchdogSec=10min` in `/etc/systemd/system.conf.d/90-hw-watchdog.conf`, arming the SP5100 hardware watchdog.
 - Rollback: delete both files; `echo 0 > /proc/sys/kernel/{softlockup_panic,hardlockup_panic}` as root.
 - Side effect to know: a soft lockup under heavy load now reboots the host (10 s) instead of recovering on its own.
+
+## Correction after an independent (Opus) review, same day
+
+Corrections to the text above:
+- **The hardware watchdog was already armed.** `watchdog-mux` (Proxmox HA) holds the SP5100 watchdog (`state=active`, timeout 10 s) and held
+  it during the dead boot. `hardlockup_panic` was also already set from the Oct 29 forensics changes. The box neither panicked, reset in
+  10 s, nor came back for 95 min, and `bootstatus=0`: either the watchdog cannot reset this board or the whole chip froze or lost power.
+  This makes "power delivery / whole-chip hang" the leading hypothesis, ahead of an ordinary CPU hang.
+- **The staged `RuntimeWatchdogSec` drop-in was removed** (it would have raced `watchdog-mux` for the device at boot and broken HA
+  fencing). The "arm the hardware watchdog" proposal and the "applied" watchdog line above no longer stand. The live sysctls remain (harmless).
+- AMD microcode **is** loaded (`0x8701034`); the blacklist file is inert. `max_cstate=1` takes effect (only POLL and C1 exist).
+- Host RAM is 128 GB (4 x 32 GB ECC, 89 % used), not 64 GB. The two netconsole call traces are container cgroup OOM kills.
+- Death window is 07:08:09Z to 07:09:27Z (vitals sample 07:08:01Z, ssh answered 07:08:09Z); Nov 17 alive at 19:06:01Z.
+  Vitals gaps give uptimes of 3.2 d (Oct 28), 13.8 d (Nov 17), 7.0 d (Nov 28), a different hour each time, no vzdump / md check / scrub / VM start.
+
+New owner-only items: (a) in Robot, whether each outage shows as a "reset" of a live box or a "power on" (hang vs power loss);
+(b) ask Hetzner for a PSU and board check and BIOS options (Power Supply Idle Control = Typical Current Idle, Global C-state Control, newer than L0.34);
+(c) with approval in a deploy window, trigger the watchdog once on purpose to prove it can reset this board.
