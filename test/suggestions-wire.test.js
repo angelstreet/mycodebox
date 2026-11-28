@@ -11,6 +11,7 @@ import { tmp } from './helpers-tmp.js';
 import { displayState } from '../public/state.js';
 import { isOwnersTurn } from '../public/ask-model.js';
 import { hashToken } from '../lease-routes.js';
+import { waitServer } from './helpers/wait-server.js';
 
 const MAC = 'tok-wire-0123456789abcdef';   // leak-scan: allow (fake test token)
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -57,7 +58,7 @@ done
   const child = spawn(process.execPath, ['server.js'], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
   cleanups.push(() => child.kill('SIGKILL'));
   let log = ''; child.stdout.on('data', (d) => { log += d; }); child.stderr.on('data', (d) => { log += d; });
-  for (let i = 0; ; i++) { try { if ((await fetch(`${url}/api/sessions`)).ok) break; } catch { /* not up */ } if (i > 150) throw new Error(`no server:\n${log}`); await sleep(100); }
+  await waitServer(`${url}`, () => log);
   await sleep(4000);
   const post = async (path, body, headers = {}) => { const r = await fetch(url + path, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) }); const out = { status: r.status, body: await r.json() }; if (process.env.WIRE_LOG) console.log(path, body.keys || body.event, JSON.stringify(out)); return out; };
   const record = async () => (await (await fetch(`${url}/api/suggestions`)).json()).sessions['worker-session'];
