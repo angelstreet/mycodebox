@@ -6,6 +6,8 @@ what changed and why it matters, ending with `· area: <area>`.
 
 ## Unreleased
 
+- **The copy icon in the manager question popup is no longer a red circle** — the popup's button rule also styled the copy icon, so it looked like an alert (owner screenshot, 2026-11-28). It now has the same quiet style as every other copy icon. The phone-width scroll check (`scripts/scroll-bench/verify.py`) is reliable again: its swipes start inside the reader, and its test app shows Claude Code's "Jump to bottom" hint, without which a slow run failed · area: dashboard
+
 - **Click an option in the NEEDS YOU question list to answer it** — "i shoud be able toclick to seelct a decision" (owner 2026-11-28). The options in the strip popup were plain text; each is now a button that sends the same answer as the bottom-right popup, marks the choice, says when a send failed, and the popup stays open for the next question · area: dashboard
 
 - **Cloud sessions start on Sonnet too** — `scripts/cloud-start` now passes `--model sonnet` instead of leaving the model to the account's default; the new `-m <model>` chooses another one · area: cloud sessions
