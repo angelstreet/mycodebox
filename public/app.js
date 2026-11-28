@@ -2836,6 +2836,19 @@ function syncReader(cell, n) {
   }
   paintReader(cell, n);
 }
+// "last reply only" / "earlier conversation" / "older conversation": from the reader's own button and from the one under the composer
+async function switchReaderMode(n, act) {
+  const cc = state.replies.get(n), cell = cardCell(n), el = cell?.querySelector('.reader');
+  if (!cc || !el) return;
+  if (act === 'older') { await loadOlderConversation(n); return; }
+  if (act === 'more') { cc.wantFull = true; await loadTranscript(n, cc); } else { cc.full = null; cc.wantFull = false; cc.fullPartial = false; cc.tseqDone = (cc.tseq || 0) + 1; }   // answers still on their way are dropped
+  el.dataset.h = '';
+  el.dataset.pending = '';
+  el._busyUntil = 0; el.scrollTop = el.scrollHeight;   // a paint is deferred while the reader is scrolled up: from the bottom it rebuilds at once
+  paintReader(cell, n);
+  el.scrollTop = act === 'more' ? el.scrollHeight : 0;
+  syncDockModel(n);
+}
 function paintReader(cell, n, opts = {}) {
   const c = state.replies.get(n);
   const el = cell.querySelector('.reader');
@@ -2854,6 +2867,7 @@ function paintReader(cell, n, opts = {}) {
     loadTranscript(n, c).then((ok) => { autoFullDone(c, ok); if (!ok) return; el.dataset.h = ''; el.dataset.pending = ''; paintReader(cell, n); el.scrollTop = el.scrollHeight; });
   }
   const full = c && c.full != null;
+  if (n === state.active) syncDockModel(n);
   if (full && c.full) text = c.full;
   if (!state.toolOpen.has(n)) state.toolOpen.set(n, new Set());
   const body = text && text.trim() ? withFileLinks(renderReply(text, sendersOf(n), state.toolOpen.get(n), n), n) : '<div class="rd-empty">' + (!c || c.busy || c.failed ? (c && c.failed ? 'could not load \u2014 retrying\u2026' : 'loading\u2026') : 'no reply yet \u2014 tap &gt;_ for terminal') + '</div>';
@@ -2897,15 +2911,7 @@ function paintReader(cell, n, opts = {}) {
       const b = e.target.closest('.rd-more');
       if (!b) return;
       e.stopPropagation();
-      const cc = state.replies.get(n);
-      if (!cc) return;
-      if (b.dataset.act === 'older') { await loadOlderConversation(n); return; }
-      if (b.dataset.act === 'more') { cc.wantFull = true; await loadTranscript(n, cc); } else { cc.full = null; cc.wantFull = false; cc.fullPartial = false; cc.tseqDone = (cc.tseq || 0) + 1; }   // answers still on their way are dropped
-      el.dataset.h = '';
-      el.dataset.pending = '';
-      el._busyUntil = 0; el.scrollTop = el.scrollHeight;   // a paint is deferred while the reader is scrolled up: from the bottom it rebuilds at once
-      paintReader(cell, n);
-      el.scrollTop = b.dataset.act === 'more' ? el.scrollHeight : 0;
+      await switchReaderMode(n, b.dataset.act);
     });
     const busy = () => { el._busyUntil = Date.now() + 1200; };
     // Chat 1792615055496-11750f: when the user was mid-scroll, the reader was
@@ -4981,12 +4987,16 @@ function syncDock() {
 const PROVIDER_LABEL = { claude: 'Claude', codex: 'Codex', minimax: 'MiniMax' };
 function syncDockModel(n) {
   const a = n ? agentOf(n) : '', st = n ? state.status[n] || {} : {}, m = [st.model, st.effort].filter(Boolean).join(' \u00b7 ');   // "Fable 5.2 · medium"
-  const html = PROVIDER_LABEL[a] ? `<span class="dp ${a}">${PROVIDER_LABEL[a]}</span>${m ? `<span class="dm">${escapeHtml(m)}</span>` : ''}` : '';
+  // the reader's mode switch, left of the model label where it is always in reach (owner 2026-11-28)
+  const rc = n && !dock.multi && readerOn(n) ? state.replies.get(n) : null;
+  const sw = rc ? `<button class="rd-mode" data-act="${rc.full != null ? 'less' : 'more'}" data-n="${escapeHtml(n)}">${rc.full != null ? 'last reply only' : '\u2191 earlier conversation'}</button>` : '';
+  const html = PROVIDER_LABEL[a] ? `${sw}<span class="dp ${a}">${PROVIDER_LABEL[a]}</span>${m ? `<span class="dm">${escapeHtml(m)}</span>` : ''}` : '';
   if (dk.dmodel.dataset.h === html) return;
   dk.dmodel.dataset.h = html;
   dk.dmodel.innerHTML = html;
   dk.dmodel.classList.toggle('hidden', !html);
 }
+dk.dmodel.onclick = (e) => { const b = e.target.closest('.rd-mode'); if (b) switchReaderMode(b.dataset.n, b.dataset.act); };
 
 function renderMultiRow() {
   const list = sortedByNeed();
