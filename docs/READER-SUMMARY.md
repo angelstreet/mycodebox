@@ -51,6 +51,16 @@ written between tool calls.
 The reader gets three views in one segmented control in the card header: **Brief** (new, the default), **All** (today's
 reader, unchanged) and **`>_`** (terminal). The choice is saved per browser like the current toggle.
 
+**The reply / conversation switch is always reachable (owner addendum, 2026-11-28).** Today's "last reply only" /
+"earlier conversation" button was the first line of the scrolling text, so after scrolling down it took a long scroll back
+to reach it. It is now sticky at the top of the reader (`public/style.css`, merged b01ac09); that stays until step 2.
+Is one button enough? No: a toggle whose label names the *other* mode does not show which mode you are in, and in step 2
+it would sit next to Brief / All / `>_`. Step 2 replaces it with a second, always visible segmented control in the card
+header, outside the scroll area: **Reply | Conversation** (scope: the last turn, or every loaded turn). Scope and view
+are separate choices: Brief + Conversation is the question-and-summary list of older turns, All + Reply is today's
+default. The active segment is filled, both are one tap from any scroll position, and "↑ older conversation" stays at
+the top of the loaded text, as today. The choice is saved per browser like the view.
+
 | Item | Brief view | Why |
 |---|---|---|
 | Owner's own prompts (blue) | **keep** | the question the answer belongs to |
@@ -175,7 +185,7 @@ const actions = `<div class="rd-actions">${copyPromptButtonHtml({ text: audioTex
 | File | Change |
 |---|---|
 | `public/reader-summary.js` (new) | `summaryOf`, `briefOf` (pure) |
-| `public/app.js` | `paintReader`: Brief / All / `>_` control, summary card, pinned STATUS card, spoken text; `renderReply` draws `briefOf` segments in Brief; `toggleReader` becomes a three-way choice saved in `localStorage['ghosty.readerView']` (an old `ghosty.reader` value maps to Brief or `>_`) |
+| `public/app.js` | `paintReader`: Brief / All / `>_` control and the Reply / Conversation control (replaces the sticky `rd-more` button), summary card, pinned STATUS card, spoken text; `renderReply` draws `briefOf` segments in Brief; `toggleReader` becomes a three-way choice saved in `localStorage['ghosty.readerView']` (an old `ghosty.reader` value maps to Brief or `>_`) |
 | `public/style.css` | `.rd-sum`, `.rd-status`, `.rd-steps`, `.rd-ai-line`, segmented control; the reader's bottom padding for the pinned STATUS |
 | `public/icons.js` | no new icon (play, chevrons exist) |
 | `status-honesty.js` | `lastStatus` and `headlineOf` moved to `public/status-line.js` (pure) and re-exported here, so the browser can import them |
