@@ -164,18 +164,16 @@ shipped as `dry` for one day (journal only), then `live`.
 Today (`public/app.js` `paintReader`): `audioText = String(text || '').trim()`, where `text` is the shown reply or the
 whole loaded conversation; `audioChipHtml({ text: audioText, label: 'Read reply aloud' })`.
 
-Change, all in `paintReader`:
+Built (step 1, owner 2026-11-28: "has to be the summary only"), in `paintReader`:
 
 ```js
-const sum = c?.summary;                       // from /api/reply (section 4)
-const st = c?.status;
-const spoken = sum?.length ? sum.join('. ').replace(/\.\.+/g, '.')
-  : st ? `Status: ${st.kind}. ${st.headline}` : '';
+const spoken = spokenSummaryOf(c?.summary);   // /api/reply `summary` lines (section 4); never the STATUS line or the reply
 const actions = `<div class="rd-actions">${copyPromptButtonHtml({ text: audioText, label: 'Copy reply' })}${
-  spoken ? audioChipHtml({ text: spoken, label: sum?.length ? 'Read summary aloud' : 'Read status aloud' }) : ''}</div>`;
+  spoken ? audioChipHtml({ text: spoken, label: 'Read summary aloud' }) : ''}</div>`;
 ```
 
-- The chip moves into the summary card header (mockup); "Copy reply" stays in the All view.
+- No summary in the turn: no play button. The STATUS headline is not read either.
+- Step 2: the chip moves into the summary card header (mockup); "Copy reply" stays in the All view.
 - `tts.js`, `audio-chip.js` and the `/api/tts` routes do not change: a summary of 10 lines of 160 characters is at most
   1 600 characters, well under `MAX_TEXT`, and the hash cache works as before (same summary, same audio file).
 - Voice mode (`voice.js`, `public/voice-view.js`) does not read session replies today and is out of scope.
