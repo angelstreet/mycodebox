@@ -133,6 +133,9 @@ test('server: /p/ list, /p/<slug>/ sandboxed with no API access, /api/pages', as
   assert.equal(page.headers.get('content-security-policy'), PAGE_CSP);
   assert.match(PAGE_CSP, /^sandbox (?!.*allow-same-origin)/); assert.match(PAGE_CSP, /connect-src 'none'/); assert.match(PAGE_CSP, /form-action 'none'/);
   assert.equal((await fetch(`${base}/p/report/a.png`)).status, 200);
+  const part = await fetch(`${base}/p/report/a.png`, { headers: { range: 'bytes=1-2' } });   // video on Safari needs ranges
+  assert.equal(part.status, 206); assert.equal(part.headers.get('content-range'), 'bytes 1-2/3'); assert.equal(await part.text(), 'NG');
+  assert.equal((await fetch(`${base}/p/report/a.png`, { headers: { range: 'bytes=9-' } })).status, 416);
   assert.equal((await fetch(`${base}/p/report/../../manager.json`)).status, 404);
   // a sandboxed page has the opaque origin "null": every write to the API is refused even if a request got out
   const post = await fetch(`${base}/api/send/zz-none`, { method: 'POST', headers: { origin: 'null', 'content-type': 'application/json' }, body: '{"keys":"x"}' });
